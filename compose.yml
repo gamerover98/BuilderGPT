@@ -1,0 +1,21 @@
+services:
+  builder-gpt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: builder-gpt
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      # Inject common framework variable names dynamically just in case cynia_agents requires them natively
+      - GOOGLE_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-${GEMINI_API_KEY:-}}
+      - API_KEY=${GEMINI_API_KEY:-${OPENAI_API_KEY:-}}
+    volumes:
+      # Mount output directory to persist generated .schem and .mcfunction files
+      - ./generated:/app/generated
+      # Mount temporary uploads directory
+      - ./temp_uploads:/app/temp_uploads
+    restart: unless-stopped

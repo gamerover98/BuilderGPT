@@ -7,3 +7,6 @@ immutable_views
 quickjs
 mcschematic
 cynia-agents
+setuptools<71.0.0
+requests
+openai

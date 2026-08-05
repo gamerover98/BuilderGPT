@@ -11,9 +11,13 @@ from streamlit.components.v1 import html
 
 from cynia_agents import artifact_manager
 from cynia_agents.component_base import BaseComponent
-from cynia_agents.utils import LLM
-from . import core
-from .app.preview import PreviewOptions, build_preview
+import requests
+try:
+    from . import core
+    from .app.preview import PreviewOptions, build_preview
+except ImportError:
+    import core
+    from app.preview import PreviewOptions, build_preview
 
 class BuilderGPTComponent(BaseComponent):
     name = "BuilderGPT"
@@ -33,12 +37,10 @@ class BuilderGPTComponent(BaseComponent):
         if BuilderGPTComponent._initialized:
             if BuilderGPTComponent._instance:
                 # Copy attributes from existing instance
-                self.llm = BuilderGPTComponent._instance.llm
                 self.prompts = BuilderGPTComponent._instance.prompts
                 self.block_id_list = BuilderGPTComponent._instance.block_id_list
                 return
         
-        self.llm = LLM()
         with open(os.path.join(os.path.dirname(__file__), "prompts.json"), "r") as f:
             raw_prompts = json.load(f)
             # Convert list prompts to strings
@@ -58,9 +60,55 @@ class BuilderGPTComponent(BaseComponent):
             BuilderGPTComponent._initialized = True
             BuilderGPTComponent._instance = self
 
-    def generate(self, description, version, export_type, image_path=None, progress=None):
+    def call_llm(self, provider, model, api_key, base_url, sys_prompt, user_prompt, image_path=None):
+        import openai
+        
+        if provider == "Google Gemini":
+            url = base_url or "https://generativelanguage.googleapis.com/v1beta/openai/"
+            client = openai.OpenAI(api_key=api_key if api_key and api_key.strip() else "none", base_url=url)
+        elif provider == "OpenCode":
+            url = base_url or "https://console.opencode.ai/inference/openai/v1"
+            client = openai.OpenAI(api_key=api_key if api_key and api_key.strip() else "none", base_url=url)
+        elif provider == "OpenAI":
+            url = base_url or "https://api.openai.com/v1"
+            client = openai.OpenAI(api_key=api_key if api_key and api_key.strip() else "none", base_url=url)
+        else:
+            url = base_url
+            client = openai.OpenAI(api_key=api_key if api_key and api_key.strip() else "none", base_url=url)
+
+        messages = [{"role": "system", "content": sys_prompt}]
+        
+        user_content = []
+        if user_prompt:
+            user_content.append({"type": "text", "text": user_prompt})
+            
+        if image_path and os.path.exists(image_path):
+            with open(image_path, "rb") as img_f:
+                b64_img = base64.b64encode(img_f.read()).decode("utf-8")
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}
+            })
+            
+        if len(user_content) > 0:
+            messages.append({"role": "user", "content": user_content})
+            
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.2
+            )
+            return resp.choices[0].message.content
+        except Exception as e:
+            raise Exception(f"LLM API Error: {str(e)}")
+
+    def generate(self, provider, model, api_key, base_url, description, version, export_type, image_path=None, progress=None):
         # Build the new JS-based prompt
-        from .core import format_version_for_prompt
+        try:
+            from .core import format_version_for_prompt
+        except ImportError:
+            from core import format_version_for_prompt
         human_version = format_version_for_prompt(version)
         sys_prompt = (
             self.prompts["SYS_GEN"]
@@ -69,16 +117,13 @@ class BuilderGPTComponent(BaseComponent):
             .replace("%BLOCK_TYPES_LIST%", self.block_id_list)
         )
         # Keep user prompt minimal to satisfy providers that require both roles
-        user_prompt = ""
+        user_prompt = "Generate the structure."
         
         if progress:
             progress.progress(0.2)
         
         # Call LLM with optional image
-        if image_path:
-            response = self.llm.ask(sys_prompt, user_prompt, image_path=image_path)
-        else:
-            response = self.llm.ask(sys_prompt, user_prompt)
+        response = self.call_llm(provider, model, api_key, base_url, sys_prompt, user_prompt, image_path)
             
         if progress:
             progress.progress(0.6)
@@ -86,7 +131,7 @@ class BuilderGPTComponent(BaseComponent):
         if progress:
             progress.progress(0.8)
             
-        raw_name = self.llm.ask(self.prompts["SYS_GEN_NAME"], self.prompts["USR_GEN_NAME"].replace("%DESCRIPTION%", description))
+        raw_name = self.call_llm(provider, model, api_key, base_url, self.prompts["SYS_GEN_NAME"], self.prompts["USR_GEN_NAME"].replace("%DESCRIPTION%", description))
         name = f"{raw_name}-{uuid.uuid4()}"
         version_tag = core.input_version_to_mcs_tag(version)
         if not os.path.isdir("generated"):
@@ -132,6 +177,32 @@ class BuilderGPTComponent(BaseComponent):
             progress.progress(1.0)
         return path
 
+    @staticmethod
+    @st.cache_data(show_spinner=False, ttl=3600)
+    def _fetch_opencode_models() -> Optional[list]:
+        try:
+            resp = requests.get("https://console.opencode.ai/inference/openai/v1/models", timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                models = []
+                for item in data.get("data", []):
+                    model_id = item.get("id", "")
+                    if not model_id: continue
+                    
+                    category = "A pagamento"
+                    if "-free" in model_id.lower() or "free" in model_id.lower():
+                        category = "Gratuito"
+                        
+                    if "think" in model_id.lower() or "reason" in model_id.lower():
+                        category += " | Thinking"
+                        
+                    models.append((model_id, f"{model_id} ({category})"))
+                models.sort(key=lambda x: x[0])
+                return models
+        except Exception:
+            pass
+        return None
+
     def _load_viewer_template(self) -> str:
         if BuilderGPTComponent._viewer_template is None:
             viewer_dir = os.path.join(os.path.dirname(__file__), "app", "viewer")
@@ -160,7 +231,45 @@ class BuilderGPTComponent(BaseComponent):
     def render(self):
         st.title("BuilderGPT")
 
+        # LLM Provider Configuration
+        with st.expander("🤖 LLM Provider Configuration", expanded=True):
+            col_prov, col_mod = st.columns(2)
+            llm_provider = col_prov.selectbox("Provider", ["OpenAI", "Google Gemini", "OpenCode", "Custom (OpenAI Compatible)"])
+            
+            default_model = "gpt-4o"
+            if llm_provider == "Google Gemini":
+                default_model = "gemini-2.5-pro"
+            elif llm_provider == "Custom (OpenAI Compatible)":
+                default_model = ""
+                
+            if llm_provider == "OpenCode":
+                opencode_models = self._fetch_opencode_models()
+                if opencode_models:
+                    model_ids = [m[0] for m in opencode_models]
+                    format_func = dict(opencode_models).get
+                    
+                    # Try to set default to mimo-v2.5-free if available
+                    default_idx = 0
+                    if "mimo-v2.5-free" in model_ids:
+                        default_idx = model_ids.index("mimo-v2.5-free")
+                        
+                    llm_model = col_mod.selectbox("Model Name", model_ids, index=default_idx, format_func=format_func)
+                else:
+                    llm_model = col_mod.text_input("Model Name", value="mimo-v2.5-free", help="API fetch failed, type model manually")
+                    
+                llm_api_key = st.text_input("API Key (Optional for free models)", type="password", help="Your OpenCode API Key")
+            else:
+                llm_model = col_mod.text_input("Model Name", value=default_model)
+                llm_api_key = st.text_input("API Key", type="password", help="Your API Key for the selected provider")
+            
+            llm_base_url = ""
+            if llm_provider == "Custom (OpenAI Compatible)":
+                llm_base_url = st.text_input("Base URL", placeholder="https://api.openai.com/v1")
+                
+            st.caption("Settings configured here override environment variables and use a direct API connection.")
+
         # Game version and export type selection
+        st.divider()
         versions = [attr.name for attr in mcschematic.Version]
         version = st.selectbox("Game Version", versions)
         export_type = st.radio("Export Type", ["schem", "mcfunction"])
@@ -271,17 +380,32 @@ class BuilderGPTComponent(BaseComponent):
                 gen_clicked = st.button("Generate", disabled=not description.strip())
 
         if gen_clicked:
-            if description.strip():
+            if not llm_api_key.strip() and llm_provider != "OpenCode":
+                st.error("Please provide an API Key in the LLM Provider Configuration section.")
+            elif description.strip():
                 progress = st.progress(0.0)
-                path = self.generate(description, version, export_type, image_path, progress)
-                if path:
-                    st.success(f"File saved to {path} and added to Artifact Center")
-                    if export_type == "schem":
-                        self._render_preview(path, resource_pack_bytes, preview_options)
-                        # Remember last rendered schem path for Re-render
-                        st.session_state["bgpt_last_schem_path"] = path
-                else:
-                    st.error("Failed to generate schematic")
+                try:
+                    path = self.generate(
+                        provider=llm_provider,
+                        model=llm_model,
+                        api_key=llm_api_key,
+                        base_url=llm_base_url,
+                        description=description,
+                        version=version,
+                        export_type=export_type,
+                        image_path=image_path,
+                        progress=progress
+                    )
+                    if path:
+                        st.success(f"File saved to {path} and added to Artifact Center")
+                        if export_type == "schem":
+                            self._render_preview(path, resource_pack_bytes, preview_options)
+                            # Remember last rendered schem path for Re-render
+                            st.session_state["bgpt_last_schem_path"] = path
+                    else:
+                        st.error("Failed to generate schematic")
+                except Exception as e:
+                    st.error(f"Generation failed: {str(e)}")
 
                 # Clean up temporary image file
                 if image_path and os.path.exists(image_path):

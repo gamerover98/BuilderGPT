@@ -4,9 +4,6 @@ import re
 import mcschematic
 from typing import Dict, List, Optional, Tuple
 from cynia_agents.log_writer import logger
-from cynia_agents.utils import LLM
-
-llm = LLM()
 
 VERSION = "3.0.0"
 

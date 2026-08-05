@@ -1,9 +1,25 @@
 __pycache__
 generated/*
 temp/*
+temp_uploads/*
 build/*
 logs/*
 test.py
 _config.yaml
 
 dev/*
+
+# Environment variables
+.env
+!.env.example
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# VS Code
+.vscode/
+*.code-workspace

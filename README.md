@@ -48,9 +48,45 @@ After enabling, a new **BuilderGPT** page appears in the sidebar. Select your Mi
 
 ## Features
 
-- Generate structures using natural language
+- Generate structures using natural language and optional reference images
 - Export as `.schem` or `.mcfunction`
-- Works entirely within Cynia Agents
+- Runs standalone via Docker or within the Cynia Agents framework
+
+## Docker Container Setup
+
+You can run BuilderGPT inside a Docker container without setting up local Python dependencies manually.
+
+### 1. Configure Environment Variables
+Copy the `.env.example` file to `.env` and fill in your AI provider API key:
+```bash
+cp .env.example .env
+```
+
+Edit `.env` to set your credentials (e.g., `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY`) and preferred LLM model:
+```env
+OPENAI_API_KEY=your_actual_api_key_here
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o
+```
+
+### 2. Run with Docker Compose
+```bash
+docker compose up -d --build
+```
+Access the application UI at [http://localhost:8501](http://localhost:8501).
+
+Generated schematics and functions will be persisted in the local `./generated/` folder.
+
+## AI Model Connection & Schematic Generation Pipeline
+
+BuilderGPT generates Minecraft structures using LLMs through the following pipeline:
+
+1. **LLM Connection Layer**: Uses `cynia_agents.utils.LLM` to interface with supported AI model providers (OpenAI, Google Gemini, Anthropic Claude).
+2. **System Prompting**: Injects Minecraft version rules, user description, and allowed block IDs (`block_id_list.txt`) into prompt templates (`prompts.json`).
+3. **JavaScript Program Synthesis**: The AI model writes JavaScript code implementing a `buildCreation(startX, startY, startZ)` function containing structure placement logic (`safeSetBlock`, `safeFill`).
+4. **Embedded JS Sandbox**: [`core.py`](file:///h:/Progetti/java/other/BuilderGPT/core.py) executes the generated JS code safely via `quickjs`, intercepting block placement calls in Python callbacks.
+5. **Schematic Export**: Placed blocks are saved into `.schem` files using `mcschematic` or as `.mcfunction` command scripts in the `generated/` directory.
+
 
 ## Credits
 

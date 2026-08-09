@@ -49,8 +49,15 @@
   let container: HTMLDivElement;
   let error = $state<string | null>(null);
 
+  /**
+   * `scene` is reactive while its siblings are not, because the GLB effect
+   * below reads it. As a plain `let` that effect captured `undefined` if it
+   * ever ran before `onMount` and, having no reactive dependency to re-trigger
+   * on, would drop that GLB permanently. It works today only because `onMount`
+   * happens to run first; this makes it true by construction instead.
+   */
   let renderer: THREE.WebGLRenderer | undefined;
-  let scene: THREE.Scene | undefined;
+  let scene = $state<THREE.Scene | undefined>(undefined);
   let camera: THREE.PerspectiveCamera | undefined;
   let controls: OrbitControls | undefined;
   let sun: THREE.DirectionalLight | undefined;
@@ -221,6 +228,37 @@
     if (loaded) applyWireframe(loaded, wireframe);
   });
 
+  /**
+   * Catches the one failure mode GLTFLoader refuses to report.
+   *
+   * `loadTextureImage` ends in `.catch(() => null)`: if the embedded PNG cannot
+   * be decoded, the texture silently becomes null, `material.map` is never
+   * assigned, and the model draws in default white with `onLoad` reporting
+   * success. That is indistinguishable from a resource pack that resolved
+   * nothing -- which is why it went unnoticed until someone asked why their
+   * schematic was a white block. The pipeline always emits a baseColorTexture,
+   * so a map-less standard material here means the decode failed.
+   */
+  function untexturedReason(root: THREE.Object3D): string | null {
+    let meshes = 0;
+    let mapless = 0;
+    root.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const material of materials) {
+        meshes += 1;
+        if ((material as THREE.MeshStandardMaterial).map == null) mapless += 1;
+      }
+    });
+    if (meshes === 0 || mapless < meshes) return null;
+    return (
+      "The model loaded but its textures did not decode, so it is drawn untextured. " +
+      "This is usually the renderer's Content-Security-Policy blocking the blob: URL " +
+      "three.js reads the embedded texture from — check connect-src in index.html."
+    );
+  }
+
   $effect(() => {
     const bytes = glb;
     if (!scene || !bytes || bytes.length === 0) return;
@@ -245,7 +283,7 @@
         target.add(loaded);
         applyWireframe(loaded, wireframe);
         fitCameraToObject(loaded);
-        error = null;
+        error = untexturedReason(loaded);
       },
       (err) => {
         error = err instanceof Error ? err.message : String(err);
@@ -261,9 +299,11 @@
       Preview unavailable.<br />
       <small>{error}</small>
     </div>
-  {:else if !glb}
-    <div class="empty">No preview yet — generate a structure or render an existing .schem.</div>
-  {:else}
+  {:else if glb}
+    <!--
+      No placeholder for the empty state: an empty viewport is self-evidently
+      empty, and a card in the middle of it was noise rather than information.
+    -->
     <div class="overlay">Left: pan · Right: rotate · Wheel: zoom · R: reset</div>
   {/if}
 </div>
@@ -297,8 +337,7 @@
     pointer-events: none;
   }
 
-  .error,
-  .empty {
+  .error {
     position: absolute;
     top: 50%;
     left: 50%;
@@ -310,9 +349,5 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     pointer-events: none;
-  }
-
-  .empty {
-    color: var(--text-dim);
   }
 </style>

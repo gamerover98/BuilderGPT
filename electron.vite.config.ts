@@ -5,14 +5,14 @@ import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import type { Plugin } from "vite";
 
 /**
- * `src/renderer/index.html` ships a deliberately strict CSP -- notably
- * `connect-src 'none'`, which is the enforcement of ARCHITECTURE.md §3's rule
- * that the renderer makes zero network calls. Vite's dev server needs one
- * exception to that: its HMR websocket.
+ * `src/renderer/index.html` ships a deliberately strict CSP -- `connect-src`
+ * allows only `blob:`, which names no host, so the renderer can reach no
+ * network at all (ARCHITECTURE.md §3). Vite's dev server needs one exception:
+ * its HMR websocket.
  *
  * Rather than weakening the shipped policy, this plugin patches the directive
  * only while `electron-vite dev` is serving. The built output in `out/renderer`
- * keeps `connect-src 'none'` verbatim -- verifiable by grepping the built
+ * keeps `connect-src blob:` verbatim -- verifiable by grepping the built
  * index.html.
  */
 function relaxCspForDevServer(): Plugin {
@@ -21,12 +21,22 @@ function relaxCspForDevServer(): Plugin {
     apply: "serve",
     transformIndexHtml(html: string) {
       // Anchored to the meta element's content attribute on purpose: the same
-      // literal `connect-src 'none'` also appears in the explanatory comment
-      // above it, and a bare string replace patches the comment instead.
-      return html.replace(
-        /(<meta\s+http-equiv="Content-Security-Policy"\s+content="[^"]*?)connect-src 'none'/,
-        "$1connect-src 'self' ws: wss:",
+      // literal also appears in the explanatory comment above it, and a bare
+      // string replace patches the comment instead. `blob:` is preserved, not
+      // replaced -- dropping it would break texture decoding in dev only,
+      // which is the worst place for a difference to hide.
+      const patched = html.replace(
+        /(<meta\s+http-equiv="Content-Security-Policy"\s+content="[^"]*?)connect-src blob:/,
+        "$1connect-src blob: 'self' ws: wss:",
       );
+      if (patched === html) {
+        throw new Error(
+          "relaxCspForDevServer: the CSP meta tag did not match. index.html's " +
+            "connect-src directive changed shape -- update this plugin, or HMR " +
+            "will be blocked with no obvious cause.",
+        );
+      }
+      return patched;
     },
   };
 }

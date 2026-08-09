@@ -258,6 +258,17 @@ export function meshToGlb(mesh: MeshBuffers, atlas: AtlasResult): GLBResult {
           metallicFactor: 0.0,
           roughnessFactor: 1.0,
         },
+        // Without these the material is OPAQUE and single-sided, which is what
+        // made glass and glass panes render as solid tiles: the alpha channel
+        // of the texture was simply ignored. MASK rather than BLEND because
+        // Minecraft textures are cut-outs, not translucency, and BLEND would
+        // need back-to-front sorting to look right.
+        alphaMode: "MASK",
+        alphaCutoff: 0.5,
+        // Required by the thin geometry: a pane, a ladder or a flower's cross
+        // quads are visible from both sides, and a single-sided material makes
+        // them vanish when viewed from behind.
+        doubleSided: true,
       },
     ],
     samplers: [

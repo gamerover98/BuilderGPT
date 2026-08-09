@@ -156,6 +156,13 @@
 
   async function patchPreview(patch: Partial<PreviewSettings>): Promise<void> {
     await patchSettings({ preview: { ...settings.preview, ...patch } });
+    // Every other preview setting is applied by the viewer on the GLB it
+    // already has. The two tints are baked into the texture atlas, so they are
+    // the ones that need the mesh rebuilt.
+    const rebuilds = patch.biomeColor !== undefined || patch.waterColor !== undefined;
+    if (rebuilds && lastSchemPath && !busy) {
+      await runPreview(lastSchemPath);
+    }
   }
 
   async function saveKey(provider: Provider, apiKey: string): Promise<void> {

@@ -22,7 +22,11 @@
 import { createHash } from "crypto";
 import { readFile } from "fs/promises";
 
-import type { PreviewSettings } from "../../shared/settings.js";
+import {
+  DEFAULT_BIOME_COLOR,
+  DEFAULT_WATER_COLOR,
+  type PreviewSettings,
+} from "../../shared/settings.js";
 import { buildAtlas } from "../pipeline/atlas.js";
 import { meshToGlb } from "../pipeline/gltf_builder.js";
 import { loadStructure } from "../pipeline/loader.js";
@@ -103,9 +107,17 @@ function cacheKey(
   schemBytes: Uint8Array,
   resourcePackPath: string | null,
   fallbackResourcePackPath: string | null,
+  biomeColor: string,
+  waterColor: string,
 ): string {
   const hash = createHash("sha256");
   hash.update(schemBytes);
+  // The tints are baked into the atlas, so they change the GLB — unlike the
+  // rest of PreviewSettings, which the viewer applies without a rebuild.
+  hash.update(biomeColor);
+  hash.update(SEPARATOR);
+  hash.update(waterColor);
+  hash.update(SEPARATOR);
   // The pack paths, not their bytes: the bundled pack is 17 MB and hashing it
   // on every preview would cost more than the mesh build this cache exists to
   // avoid. Paths are stable identifiers here — the bundled one ships with the
@@ -133,6 +145,10 @@ export interface BuildPreviewOptions {
    * pack paths above: this module imports no Electron.
    */
   legacyBlocksPath?: string | null;
+  /** `#rrggbb`; see `PreviewSettings.biomeColor`. */
+  biomeColor?: string;
+  /** `#rrggbb`; see `PreviewSettings.waterColor`. */
+  waterColor?: string;
 }
 
 export interface BuildPreviewOutcome extends PreviewResult {
@@ -166,7 +182,15 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
   }
   const fallbackResourcePackPath = options.fallbackResourcePackPath ?? null;
 
-  const key = cacheKey(schemBytes, options.resourcePackPath, fallbackResourcePackPath);
+  const biomeColor = options.biomeColor ?? DEFAULT_BIOME_COLOR;
+  const waterColor = options.waterColor ?? DEFAULT_WATER_COLOR;
+  const key = cacheKey(
+    schemBytes,
+    options.resourcePackPath,
+    fallbackResourcePackPath,
+    biomeColor,
+    waterColor,
+  );
   const hit = cache.get(key);
   if (hit) {
     // Refresh recency (Map preserves insertion order, so re-insert = MRU).
@@ -185,7 +209,12 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
   // `normalize_palette` did whenever PyMCTranslate wasn't installed.
   const normalized = normalizePalette(structure, undefined);
 
-  const baker = await ModelBaker.create(options.resourcePackPath, fallbackResourcePackPath);
+  const baker = await ModelBaker.create(
+    options.resourcePackPath,
+    fallbackResourcePackPath,
+    biomeColor,
+    waterColor,
+  );
   const faces = await culledFaces(normalized, baker);
   const atlas = buildAtlas(baker.textures);
   const mesh = buildMesh(faces, atlas.uvRects);

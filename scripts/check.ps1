@@ -5,12 +5,13 @@
 
 .DESCRIPTION
     Runs, in order:
-      * typecheck  — tsc over main/preload/shared, svelte-check over the renderer
-      * hello      — smallest possible proof the QuickJS/WASM sandbox loads
-      * smoke      — end-to-end pipeline: JS build script -> blocks, .schem -> GLB
-      * sandbox    — RULEBOOK.md section 3 containment guarantees
-      * services   — main-process services, incl. the schematic write/read round-trip
-      * schematics — Sponge v2/v3 and MCEdit all decode to the same voxel grid
+      * typecheck   — tsc over main/preload/shared, svelte-check over the renderer
+      * hello       — smallest possible proof the QuickJS/WASM sandbox loads
+      * smoke       — end-to-end pipeline: JS build script -> blocks, .schem -> GLB
+      * sandbox     — RULEBOOK.md section 3 containment guarantees
+      * services    — main-process services, incl. the schematic write/read round-trip
+      * schematics  — Sponge v2/v3 and MCEdit all decode to the same voxel grid
+      * blocks       — block geometry: shapes, culling, texture orientation
 
     Unlike build.ps1, this does NOT stop at the first failure: a test runner that
     aborts early hides how much else is broken. Every suite runs, results are
@@ -33,6 +34,7 @@ $steps = @(
     @{ Name = 'sandbox';   Script = 'smoke:sandbox' }
     @{ Name = 'services';   Script = 'smoke:services' }
     @{ Name = 'schematics'; Script = 'smoke:schematics' }
+    @{ Name = 'blocks';     Script = 'smoke:blocks' }
 )
 
 $failed = @()

@@ -27,7 +27,6 @@ export const PROVIDER_DEFAULT_BASE_URL: Readonly<Record<Provider, string>> = {
   // the one its own model registry declares for the `opencode` provider
   // (models.dev -> `api`), and it is where `/models` is documented to live.
   OpenCode: "https://opencode.ai/zen/v1",
-
   "Custom (OpenAI Compatible)": "",
 };
 
@@ -53,6 +52,19 @@ export function providerRequiresApiKey(provider: Provider): boolean {
  * sliders. `math.radians` was applied at the call site (component.py:331-332);
  * here the conversion happens in the main process, at the same boundary.
  */
+/**
+ * Plains grass — the colour Minecraft tints grass, leaves and vines with in the
+ * biome most schematics are built for.
+ */
+export const DEFAULT_BIOME_COLOR = "#91bd59";
+
+/**
+ * Plains water. A separate number from the grass tint on purpose — Minecraft
+ * tints water from its own biome colour, and `water_still.png` is as greyscale
+ * as `grass_block_top.png`.
+ */
+export const DEFAULT_WATER_COLOR = "#3f76e4";
+
 export interface PreviewSettings {
   sunAzimuthDeg: number;
   sunElevationDeg: number;
@@ -62,6 +74,14 @@ export interface PreviewSettings {
   showGrid: boolean;
   wireframe: boolean;
   ambientOcclusion: boolean;
+  /**
+   * `#rrggbb` multiplied into the greyscale textures Minecraft tints per
+   * biome. Unlike every other field here this one is consumed by the *mesher*,
+   * not the viewer, so changing it rebuilds the GLB rather than applying live.
+   */
+  biomeColor: string;
+  /** `#rrggbb` for water; see `DEFAULT_WATER_COLOR`. Also rebuilds the mesh. */
+  waterColor: string;
 }
 
 /** component.py:319-328 slider/checkbox defaults, verbatim. */
@@ -74,6 +94,8 @@ export const DEFAULT_PREVIEW_SETTINGS: PreviewSettings = {
   showGrid: true,
   wireframe: false,
   ambientOcclusion: true,
+  biomeColor: DEFAULT_BIOME_COLOR,
+  waterColor: DEFAULT_WATER_COLOR,
 };
 
 /** Slider bounds from component.py:319-328, reused by the renderer's inputs. */
@@ -128,7 +150,6 @@ export const DEFAULT_SETTINGS: Settings = {
   // whatever you last chose, and that wins on every subsequent launch.
   provider: "OpenCode",
   model: PROVIDER_DEFAULT_MODEL.OpenCode,
-
   baseUrl: "",
   version: "JE_1_20_4",
   exportType: "schem",

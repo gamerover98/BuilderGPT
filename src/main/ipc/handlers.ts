@@ -223,6 +223,8 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         // so the test suite can drive them headlessly.
         fallbackResourcePackPath: await defaultResourcePackPath(),
         legacyBlocksPath: legacyBlocksPath(),
+        biomeColor: req.settings.biomeColor,
+        waterColor: req.settings.waterColor,
       });
       const sun = sunAnglesRadians(req.settings);
       emitProgress(window, {

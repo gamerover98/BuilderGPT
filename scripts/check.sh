@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Runs every automated check for BuilderGPT: typecheck plus the five test suites.
 #
-#   typecheck  tsc over main/preload/shared, svelte-check over the renderer
-#   hello      smallest possible proof the QuickJS/WASM sandbox loads
-#   smoke      end-to-end pipeline: JS build script -> blocks, .schem -> GLB
-#   sandbox    RULEBOOK.md section 3 containment guarantees
-#   services   main-process services, incl. the schematic write/read round-trip
-#   schematics Sponge v2/v3 and MCEdit all decode to the same voxel grid
+#   typecheck   tsc over main/preload/shared, svelte-check over the renderer
+#   hello       smallest possible proof the QuickJS/WASM sandbox loads
+#   smoke       end-to-end pipeline: JS build script -> blocks, .schem -> GLB
+#   sandbox     RULEBOOK.md section 3 containment guarantees
+#   services    main-process services, incl. the schematic write/read round-trip
+#   schematics  Sponge v2/v3 and MCEdit all decode to the same voxel grid
+#   blocks      block geometry: shapes, culling, texture orientation
 #
 # Unlike build.sh, this does NOT stop at the first failure: a test runner that
 # aborts early hides how much else is broken. Every suite runs, results are
@@ -24,8 +25,8 @@ set +e
 
 install_dependencies_if_missing
 
-STEP_NAMES=(typecheck hello smoke sandbox services schematics)
-STEP_SCRIPTS=(typecheck smoke:hello smoke smoke:sandbox smoke:services smoke:schematics)
+STEP_NAMES=(typecheck hello smoke sandbox services schematics blocks)
+STEP_SCRIPTS=(typecheck smoke:hello smoke smoke:sandbox smoke:services smoke:schematics smoke:blocks)
 STEP_RESULTS=()
 
 # ASCII only, to stay readable in terminals that are not UTF-8.

@@ -124,7 +124,12 @@ function pasteInto(dest: RgbaImage, src: RgbaImage, x: number, y: number): void 
  */
 export function buildAtlas(
   images: Record<string, RgbaImage>,
-  tileSize = 32,
+  // Raised from atlas.py's 32. The bundled pack is 64x, so 32 threw away half
+  // of every texture before it was ever drawn; and block-entity sheets (a bed,
+  // a chest) address themselves in 1/16ths, which at 32px left two pixels per
+  // cell. 64 matches the pack natively and still packs ~100 textures into a
+  // sub-megapixel atlas.
+  tileSize = 64,
   padding = 6,
 ): AtlasResult {
   const keys = Object.keys(images);

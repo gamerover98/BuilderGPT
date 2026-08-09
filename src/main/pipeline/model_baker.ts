@@ -30,6 +30,8 @@ import { createHash } from "node:crypto";
 import AdmZip from "adm-zip";
 import { PNG } from "pngjs";
 
+import { DEFAULT_BIOME_COLOR, DEFAULT_WATER_COLOR } from "../../shared/settings.js";
+import { shapeFor, type BlockShape, type BoxRotation, type UvWindow } from "./block_shapes.js";
 import type { BakedFace, PaletteEntry, RgbaImage } from "./types.js";
 import { paletteEntryCacheKey } from "./types.js";
 
@@ -41,12 +43,37 @@ import { paletteEntryCacheKey } from "./types.js";
  * `Object.freeze`), applied uniformly here, not re-litigated per class.
  */
 export interface BakedBlock {
+  /**
+   * The six cube faces, by direction name. Only populated for full cubes --
+   * they are the only shape whose faces can be culled against a neighbour.
+   */
   readonly faces: Record<string, BakedFace>;
+  /**
+   * Geometry emitted unconditionally: every box of a multi-box shape, and the
+   * two quads of a cross. A staircase has faces at coordinates its neighbours
+   * do not cover, so culling them against a neighbour would be wrong.
+   */
+  readonly extraFaces: readonly BakedFace[];
   readonly textureKey: string;
+  /** False for anything that is not one solid 0..16 box. */
+  readonly isFullCube: boolean;
 }
 
 const FACE_ORDER = ["north", "south", "east", "west", "up", "down"] as const;
 const HORIZONTAL_FACES = ["north", "south", "east", "west"] as const;
+
+/** Suffixes naming a *shape* cut from a material, not a texture of its own. */
+const SHAPE_SUFFIXES = [
+  "_stairs",
+  "_slab",
+  "_fence_gate",
+  "_fence",
+  "_wall",
+  "_pane",
+  "_button",
+  "_pressure_plate",
+  "_carpet",
+] as const;
 
 /**
  * inventory.tsv row `_SPECIAL_FACE_RULES` (model_baker.py:29-71): the inner
@@ -74,18 +101,219 @@ const SPECIAL_FACE_RULES: Record<string, SpecialFaceRule> = {
   crimson_nylium: { top: ["crimson_nylium"], side: ["crimson_nylium_side"], bottom: ["netherrack"] },
   warped_nylium: { top: ["warped_nylium"], side: ["warped_nylium_side"], bottom: ["netherrack"] },
   snow_block: { top: ["snow"], side: ["snow"], bottom: ["snow"] },
+
+  // Fluids: the block is `water`, the texture is `water_still`. None of the
+  // generic candidates (`water_side`, `water_top`, `water`) exists, so water
+  // used to fall through to the hashed-colour cube — whose hash for
+  // `minecraft:water[level=0]` happens to be a vivid green.
+  water: { top: ["water_still"], side: ["water_still"], bottom: ["water_still"] },
+  flowing_water: { top: ["water_still"], side: ["water_flow"], bottom: ["water_flow"] },
+  bubble_column: { top: ["water_still"], side: ["water_still"], bottom: ["water_still"] },
+  lava: { top: ["lava_still"], side: ["lava_still"], bottom: ["lava_still"] },
+  flowing_lava: { top: ["lava_still"], side: ["lava_flow"], bottom: ["lava_flow"] },
 };
 
-/** Unit-cube face geometry, counter-clockwise winding — model_baker.py:283-290. */
-const FACE_DEFINITIONS: Record<string, { positions: Float32Array; normal: readonly [number, number, number] }> = {
-  north: { positions: new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]), normal: [0.0, 0.0, -1.0] },
-  south: { positions: new Float32Array([1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1]), normal: [0.0, 0.0, 1.0] },
-  west: { positions: new Float32Array([0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1]), normal: [-1.0, 0.0, 0.0] },
-  east: { positions: new Float32Array([1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0]), normal: [1.0, 0.0, 0.0] },
-  down: { positions: new Float32Array([0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0]), normal: [0.0, -1.0, 0.0] },
-  up: { positions: new Float32Array([0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1]), normal: [0.0, 1.0, 0.0] },
-};
-const UNIT_UVS = new Float32Array([0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
+/**
+ * Face geometry for an arbitrary box, in place of model_baker.py:283-290's
+ * hardcoded unit cube.
+ *
+ * Positions reproduce the old `_FACE_DEFINITIONS` exactly when the box is
+ * 0..1, so full cubes are unchanged. **UVs are not**: the old `_UNIT_UVS`
+ * mapped the world-bottom of a face to V=0, but glTF puts V=0 at the *top* of
+ * the image, so every side texture was drawn upside down -- visible on
+ * `grass_block`, whose green overhang appeared along the bottom edge. The
+ * formulas below put V=0 at the top, deliberately diverging from the Python
+ * original, which had the same inversion.
+ *
+ * Deriving UVs from the box coordinates rather than a fixed 0..1 quad is what
+ * keeps a slab's side showing the bottom half of its texture instead of the
+ * whole tile squashed into half the height.
+ */
+interface FaceGeometry {
+  readonly positions: Float32Array;
+  readonly uvs: Float32Array;
+  readonly normal: readonly [number, number, number];
+}
+
+function boxFaceGeometry(
+  box: readonly [number, number, number, number, number, number],
+): Record<string, FaceGeometry> {
+  const [x0, y0, z0, x1, y1, z1] = box;
+  const quad = (...p: number[]) => new Float32Array(p);
+  const uv = (...p: number[]) => new Float32Array(p);
+  return {
+    north: {
+      positions: quad(x0, y0, z0, x1, y0, z0, x1, y1, z0, x0, y1, z0),
+      uvs: uv(x0, 1 - y0, x1, 1 - y0, x1, 1 - y1, x0, 1 - y1),
+      normal: [0, 0, -1],
+    },
+    south: {
+      positions: quad(x1, y0, z1, x0, y0, z1, x0, y1, z1, x1, y1, z1),
+      uvs: uv(1 - x1, 1 - y0, 1 - x0, 1 - y0, 1 - x0, 1 - y1, 1 - x1, 1 - y1),
+      normal: [0, 0, 1],
+    },
+    west: {
+      positions: quad(x0, y0, z1, x0, y0, z0, x0, y1, z0, x0, y1, z1),
+      uvs: uv(1 - z1, 1 - y0, 1 - z0, 1 - y0, 1 - z0, 1 - y1, 1 - z1, 1 - y1),
+      normal: [-1, 0, 0],
+    },
+    east: {
+      positions: quad(x1, y0, z0, x1, y0, z1, x1, y1, z1, x1, y1, z0),
+      uvs: uv(z0, 1 - y0, z1, 1 - y0, z1, 1 - y1, z0, 1 - y1),
+      normal: [1, 0, 0],
+    },
+    down: {
+      positions: quad(x0, y0, z1, x1, y0, z1, x1, y0, z0, x0, y0, z0),
+      uvs: uv(x0, z1, x1, z1, x1, z0, x0, z0),
+      normal: [0, -1, 0],
+    },
+    up: {
+      positions: quad(x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1),
+      uvs: uv(x0, 1 - z0, x1, 1 - z0, x1, 1 - z1, x0, 1 - z1),
+      normal: [0, 1, 0],
+    },
+  };
+}
+
+const UNIT_BOX = [0, 0, 0, 1, 1, 1] as const;
+
+/**
+ * Textures Minecraft ships **greyscale** and tints at render time with the
+ * biome's grass or foliage colour. Left untinted they come out a flat grey,
+ * which is what made grass tops, leaves and vines look washed out next to
+ * correctly-coloured dirt and planks. Matched by suffix so modded and
+ * per-wood variants are covered without listing every one.
+ */
+const BIOME_TINTED: readonly string[] = [
+  "block/grass_block_top",
+  "block/grass_block_side_overlay",
+  "block/short_grass",
+  "block/grass",
+  "block/tall_grass_top",
+  "block/tall_grass_bottom",
+  "block/fern",
+  "block/large_fern_top",
+  "block/large_fern_bottom",
+  "block/vine",
+  "block/lily_pad",
+  "block/sugar_cane",
+  "block/attached_melon_stem",
+  "block/attached_pumpkin_stem",
+  "block/melon_stem",
+  "block/pumpkin_stem",
+];
+
+/**
+ * Water ships greyscale too, but takes the biome's **water** colour, which is
+ * a different number from the grass/foliage one — hence two settings rather
+ * than one. Lava is not tinted: its texture is already orange.
+ */
+const WATER_TINTED: readonly string[] = [
+  "block/water_still",
+  "block/water_flow",
+  "block/water_overlay",
+];
+
+/** Which of the two tints a texture takes, if any. */
+function tintKindFor(textureKey: string): "foliage" | "water" | null {
+  const path = textureKey.slice(textureKey.indexOf(":") + 1);
+  if (WATER_TINTED.includes(path)) {
+    return "water";
+  }
+  return path.endsWith("_leaves") || BIOME_TINTED.includes(path) ? "foliage" : null;
+}
+
+function parseHexColor(value: string): [number, number, number] {
+  const match = /^#?([0-9a-f]{6})$/i.exec(value.trim());
+  if (!match) {
+    return parseHexColor(DEFAULT_BIOME_COLOR);
+  }
+  const n = parseInt(match[1], 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+
+/**
+ * Minecraft stores an animated block texture as its frames stacked vertically
+ * in one file — `lantern.png` is 16x48, three frames of 16x16 — with the
+ * timing in a sibling `.mcmeta`. Anything downstream that treats the file as a
+ * single image gets a squashed, unusable strip: the atlas resizes it to a
+ * square tile, so a lantern's UV windows then address the wrong pixels
+ * entirely. Taking frame 0 is the still-image equivalent and is what a preview
+ * wants.
+ *
+ * Detected by shape rather than by reading the `.mcmeta`: block textures are
+ * square by convention, so a height that is an exact multiple of the width is
+ * the animation layout and nothing else.
+ */
+function firstAnimationFrame(image: RgbaImage): RgbaImage {
+  const { width, height } = image;
+  if (height <= width || height % width !== 0) {
+    return image;
+  }
+  return { width, height: width, data: image.data.slice(0, width * width * 4) };
+}
+
+/**
+ * Applies a vanilla model element's `rotation` to a baked face.
+ *
+ * Boxes are axis-aligned by construction, so a tilt cannot be expressed in the
+ * box bounds — it has to move the vertices. Normals are rotated with them, or
+ * a leaning wall torch would be lit as though it stood upright.
+ */
+function tiltFace(face: BakedFace, rotation: BoxRotation): BakedFace {
+  const radians = (rotation.angle * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  // The origin is stated in the model's 0..16 units; positions are 0..1.
+  const [ox, oy, oz] = rotation.origin.map((n) => n / 16);
+
+  const spin = (x: number, y: number, z: number): [number, number, number] => {
+    switch (rotation.axis) {
+      case "x":
+        return [x, y * cos - z * sin, y * sin + z * cos];
+      case "y":
+        return [x * cos + z * sin, y, -x * sin + z * cos];
+      default:
+        return [x * cos - y * sin, x * sin + y * cos, z];
+    }
+  };
+
+  const positions = new Float32Array(face.positions.length);
+  for (let i = 0; i < face.positions.length; i += 3) {
+    const [x, y, z] = spin(
+      face.positions[i] - ox,
+      face.positions[i + 1] - oy,
+      face.positions[i + 2] - oz,
+    );
+    positions[i] = x + ox;
+    positions[i + 1] = y + oy;
+    positions[i + 2] = z + oz;
+  }
+  const normal = spin(face.normal[0], face.normal[1], face.normal[2]);
+  return { positions, uvs: face.uvs.slice(), normal, textureKey: face.textureKey };
+}
+
+/** Multiplies RGB by the tint, the same operation the game's shader performs. */
+function applyTint(image: RgbaImage, tint: readonly [number, number, number]): RgbaImage {
+  const data = new Uint8Array(image.data.length);
+  for (let i = 0; i < image.data.length; i += 4) {
+    data[i] = (image.data[i] * tint[0]) / 255;
+    data[i + 1] = (image.data[i + 1] * tint[1]) / 255;
+    data[i + 2] = (image.data[i + 2] * tint[2]) / 255;
+    data[i + 3] = image.data[i + 3];
+  }
+  return { width: image.width, height: image.height, data };
+}
+
+/**
+ * A vanilla model's explicit `uv` window, `[u0, v0, u1, v1]` in the tile's
+ * 0..16 space with V already running downward, expanded to the four corners in
+ * the same vertex order `boxFaceGeometry` emits.
+ */
+function windowUvsFrom(window: readonly [number, number, number, number]): Float32Array {
+  const [u0, v0, u1, v1] = window.map((n) => n / 16) as [number, number, number, number];
+  return new Float32Array([u0, v1, u1, v1, u1, v0, u0, v0]);
+}
 
 /**
  * Thin wrapper around either a directory or `.zip` resource pack.
@@ -272,7 +500,11 @@ export class ResourcePackTextures {
           // pngjs decode only — PNG.sync.read always decodes to RGBA8,
           // matching the source's `img.convert("RGBA")`.
           const png = PNG.sync.read(Buffer.from(data));
-          rgba = { width: png.width, height: png.height, data: new Uint8Array(png.data) };
+          rgba = firstAnimationFrame({
+            width: png.width,
+            height: png.height,
+            data: new Uint8Array(png.data),
+          });
         } catch {
           continue;
         }
@@ -305,20 +537,34 @@ export class ModelBaker {
   private readonly textureCache: Record<string, RgbaImage> = {};
   private readonly textureSource: ResourcePackTextures;
 
-  private constructor(textureSource: ResourcePackTextures) {
+  private readonly biomeTint: readonly [number, number, number];
+  private readonly waterTint: readonly [number, number, number];
+
+  private constructor(
+    textureSource: ResourcePackTextures,
+    biomeTint: readonly [number, number, number],
+    waterTint: readonly [number, number, number],
+  ) {
     this.textureSource = textureSource;
+    this.biomeTint = biomeTint;
+    this.waterTint = waterTint;
   }
 
   /**
    * Async factory — construction needs `ResourcePackTextures.create`'s I/O
    * (see that class's doc comment for why it can't be a plain constructor).
+   *
+   * `biomeColor` is a `#rrggbb` string; see `BIOME_TINTED` for what it is
+   * multiplied into and why those textures are grey without it.
    */
   static async create(
     resourcePackPath: string | null = null,
     fallbackResourcePackPath: string | null = null,
+    biomeColor: string = DEFAULT_BIOME_COLOR,
+    waterColor: string = DEFAULT_WATER_COLOR,
   ): Promise<ModelBaker> {
     const textureSource = await ResourcePackTextures.create(resourcePackPath, fallbackResourcePackPath);
-    return new ModelBaker(textureSource);
+    return new ModelBaker(textureSource, parseHexColor(biomeColor), parseHexColor(waterColor));
   }
 
   get textures(): Readonly<Record<string, RgbaImage>> {
@@ -346,6 +592,13 @@ export class ModelBaker {
   }
 
   private async bakeFallback(entry: PaletteEntry): Promise<BakedBlock> {
+    const shape = shapeFor(entry);
+    if (shape.kind === "invisible") {
+      // Nothing to draw and nothing to cull against — `barrier` is the reason
+      // this exists (see block_shapes.ts).
+      return { faces: {}, extraFaces: [], textureKey: "", isFullCube: false };
+    }
+
     const texturedFaces = await this.cubeFaceTextures(entry);
     if (texturedFaces !== null) {
       // inventory.tsv row `_cube_face_textures` (6-way first-non-null-wins
@@ -360,14 +613,108 @@ export class ModelBaker {
         texturedFaces.up ??
         texturedFaces.down;
       if (primaryKey) {
-        const cubeFaces = ModelBaker.unitCubeFaces(primaryKey, texturedFaces);
-        return { faces: cubeFaces, textureKey: primaryKey };
+        return await this.bakeShape(shape, primaryKey, texturedFaces);
       }
     }
-    return this.hashedColorCube(entry);
+    return await this.hashedColorCube(entry, shape);
   }
 
-  private hashedColorCube(entry: PaletteEntry): BakedBlock {
+  /**
+   * Resolves a `ShapeBox`'s own texture (a beacon's glass shell, say). Falls
+   * back to the block's texture if the pack does not have it, so an override
+   * can never make a block disappear.
+   */
+  private async resolveBoxTexture(name: string | undefined, fallback: string): Promise<string> {
+    if (name === undefined) {
+      return fallback;
+    }
+    const key = ModelBaker.normalizeTextureKey(name);
+    return (await this.ensureTextureCached(key)) ? key : fallback;
+  }
+
+  /** Turns a `BlockShape` into geometry, once its textures are known. */
+  private async bakeShape(
+    shape: BlockShape,
+    primaryKey: string,
+    faceKeys: Record<string, string>,
+  ): Promise<BakedBlock> {
+    if (shape.kind === "cube") {
+      return {
+        faces: ModelBaker.boxFaces(UNIT_BOX, primaryKey, faceKeys),
+        extraFaces: [],
+        textureKey: primaryKey,
+        isFullCube: true,
+      };
+    }
+
+    if (shape.kind === "cross") {
+      return {
+        faces: {},
+        extraFaces: ModelBaker.crossFaces(primaryKey),
+        textureKey: primaryKey,
+        isFullCube: false,
+      };
+    }
+
+    if (shape.kind !== "boxes") {
+      // `invisible` is handled before textures are ever resolved; reaching
+      // here would mean a new shape kind was added without a branch.
+      return { faces: {}, extraFaces: [], textureKey: primaryKey, isFullCube: false };
+    }
+
+    const extraFaces: BakedFace[] = [];
+    for (const part of shape.boxes) {
+      // block_shapes.ts works in Minecraft's 0..16 model units; the mesher
+      // works in 0..1 block units.
+      const scaled: [number, number, number, number, number, number] = [
+        part.box[0] / 16,
+        part.box[1] / 16,
+        part.box[2] / 16,
+        part.box[3] / 16,
+        part.box[4] / 16,
+        part.box[5] / 16,
+      ];
+      const boxKey = await this.resolveBoxTexture(part.texture, primaryKey);
+      // A box with its own texture uses it on every face; a face override map
+      // aimed at the block's own textures would not apply to it.
+      const boxFaceKeys = part.texture === undefined ? faceKeys : {};
+      const all = ModelBaker.boxFaces(scaled, boxKey, boxFaceKeys, part.uv);
+      for (const name of part.omit ?? []) {
+        delete all[name];
+      }
+      const built = Object.values(all);
+      extraFaces.push(
+        ...(part.rotation ? built.map((face) => tiltFace(face, part.rotation!)) : built),
+      );
+    }
+    return { faces: {}, extraFaces, textureKey: primaryKey, isFullCube: false };
+  }
+
+  /**
+   * Two diagonal quads, vanilla's shape for flowers, grass and saplings. They
+   * are drawn from both sides — the glTF material is `doubleSided` — so a
+   * flower is not invisible from half the compass.
+   */
+  private static crossFaces(textureKey: string): BakedFace[] {
+    const s = Math.SQRT1_2;
+    const uvs = new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]);
+    return [
+      {
+        positions: new Float32Array([0, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0]),
+        uvs: uvs.slice(),
+        normal: [-s, 0, s],
+        textureKey,
+      },
+      {
+        positions: new Float32Array([1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 0]),
+        uvs: uvs.slice(),
+        normal: [-s, 0, -s],
+        textureKey,
+      },
+    ];
+  }
+
+  private async hashedColorCube(entry: PaletteEntry, shape: BlockShape): Promise<BakedBlock> {
     const textureKey = paletteEntryCacheKey(entry);
     if (!(textureKey in this.textureCache)) {
       const color = ModelBaker.colorFromKey(textureKey);
@@ -381,8 +728,9 @@ export class ModelBaker {
       this.textureCache[textureKey] = { width: 16, height: 16, data: tile };
     }
 
-    const cubeFaces = ModelBaker.unitCubeFaces(textureKey);
-    return { faces: cubeFaces, textureKey };
+    // The colour stands in for a texture, but the *shape* is still known, so a
+    // fence whose texture could not be resolved is at least fence-shaped.
+    return await this.bakeShape(shape, textureKey, {});
   }
 
   private static colorFromKey(key: string): [number, number, number, number] {
@@ -406,12 +754,14 @@ export class ModelBaker {
    * Current signature only accepts `undefined`/omission; an explicit
    * `null` argument is a type error, not silently treated as "no override".
    */
-  private static unitCubeFaces(
+  private static boxFaces(
+    box: readonly [number, number, number, number, number, number],
     textureKey: string,
     faceOverrides?: Record<string, string>,
+    uvOverrides?: Readonly<Record<string, UvWindow>>,
   ): Record<string, BakedFace> {
     const faces: Record<string, BakedFace> = {};
-    for (const [name, definition] of Object.entries(FACE_DEFINITIONS)) {
+    for (const [name, definition] of Object.entries(boxFaceGeometry(box))) {
       // inventory.tsv row `_unit_cube_faces` nested-default-chain: written
       // as explicit statements (per-face override, else the generic "side"
       // override, else the plain texture key), NOT a nested ternary, so the
@@ -425,9 +775,13 @@ export class ModelBaker {
       } else {
         key = textureKey;
       }
+      const window = uvOverrides?.[name];
       faces[name] = {
         positions: definition.positions.slice(),
-        uvs: UNIT_UVS.slice(),
+        // An explicit window replaces the coordinate-derived UVs entirely: it
+        // is given in the tile's own 0..16 space, in glTF's V-down convention,
+        // exactly as a vanilla model states it.
+        uvs: window ? windowUvsFrom(window) : definition.uvs.slice(),
         normal: definition.normal,
         textureKey: key,
       };
@@ -452,7 +806,7 @@ export class ModelBaker {
     const faces: Record<string, string> = {};
 
     for (const face of FACE_ORDER) {
-      const candidates = ModelBaker.faceCandidates(baseName, face);
+      const candidates = ModelBaker.faceCandidates(entry, baseName, face);
       for (const candidate of candidates) {
         const textureKey = ModelBaker.normalizeTextureKey(candidate);
         if (await this.ensureTextureCached(textureKey)) {
@@ -500,8 +854,63 @@ export class ModelBaker {
     return faces;
   }
 
-  private static faceCandidates(baseName: string, face: string): string[] {
+  /**
+   * Blocks whose texture is not derivable from their name at all, because
+   * Minecraft draws them as block *entities* rather than from a baked model:
+   * their art lives under `textures/entity/`, in a layout and with colours
+   * this code has no way to compose. The stand-ins below are the closest
+   * plain block texture — a red bed reads as red wool. Without them these
+   * blocks fell through to the hashed-colour cube, which is what put the
+   * magenta and cyan patches on the render.
+   */
+  private static entityTextureAlias(entry: PaletteEntry, name: string): string | null {
+    // Real entity sheets where the pack ships them. `block_shapes.ts` builds
+    // the matching geometry and UV windows; without both halves a bed is just
+    // a coloured slab.
+    const bed = /^([a-z_]+)_bed$/.exec(name);
+    if (bed) return `entity/bed/${bed[1]}`;
+    if (name === "chest" || name === "trapped_chest" || name === "ender_chest") {
+      const sheet =
+        name === "ender_chest" ? "ender" : name === "trapped_chest" ? "trapped" : "normal";
+      // A double chest is two blocks, each wearing one half of a wider sheet.
+      const type = entry.properties.type;
+      const suffix = type === "left" ? "_left" : type === "right" ? "_right" : "";
+      return `entity/chest/${sheet}${suffix}`;
+    }
+    if (name.endsWith("_sign")) {
+      const wood = name.replace(/_(?:wall_)?sign$/, "");
+      return `entity/signs/${wood}`;
+    }
+
+    // No sheet is usable for these: a banner's art is a base plus a stack of
+    // pattern layers this code cannot compose, and a shulker box's sheet is
+    // laid out for an animated lid. The dyed wool is the honest stand-in.
+    const banner = /^([a-z_]+?)_(?:wall_)?banner$/.exec(name);
+    if (banner) return `${banner[1]}_wool`;
+    const shulker = /^([a-z_]+)_shulker_box$/.exec(name);
+    if (shulker) return `${shulker[1]}_wool`;
+    return null;
+  }
+
+  private static faceCandidates(entry: PaletteEntry, baseName: string, face: string): string[] {
     const normalized = baseName.replace("minecraft:", "");
+
+    const alias = ModelBaker.entityTextureAlias(entry, normalized);
+    if (alias) {
+      return [alias];
+    }
+
+    // Two-block-tall plants and doors carry their half in a property and split
+    // their texture accordingly. Without this a peony draws its flowering top
+    // on both halves, because the generic `_top` candidate wins for every face.
+    const half = entry.properties.half;
+    if (half === "upper") {
+      return [`${normalized}_top`, `${normalized}_upper`, normalized];
+    }
+    if (half === "lower") {
+      return [`${normalized}_bottom`, `${normalized}_lower`, normalized];
+    }
+
     const rules = SPECIAL_FACE_RULES[normalized];
     if (rules) {
       if (face === "up" && rules.top) {
@@ -515,8 +924,9 @@ export class ModelBaker {
       }
     }
 
+    let candidates: string[];
     if (face === "up") {
-      return [
+      candidates = [
         `${normalized}_top`,
         `${normalized}_up`,
         `${normalized}_upper`,
@@ -524,9 +934,8 @@ export class ModelBaker {
         `${normalized}_face`,
         normalized,
       ];
-    }
-    if (face === "down") {
-      return [
+    } else if (face === "down") {
+      candidates = [
         `${normalized}_bottom`,
         `${normalized}_down`,
         `${normalized}_lower`,
@@ -534,9 +943,41 @@ export class ModelBaker {
         `${normalized}_face`,
         normalized,
       ];
+    } else {
+      // Horizontal faces.
+      candidates = [
+        `${normalized}_side`,
+        `${normalized}_side0`,
+        `${normalized}_side1`,
+        `${normalized}_front`,
+        normalized,
+      ];
     }
-    // Horizontal faces.
-    return [`${normalized}_side`, `${normalized}_side0`, `${normalized}_side1`, `${normalized}_front`, normalized];
+    return [...candidates, ...ModelBaker.materialCandidates(normalized)];
+  }
+
+  /**
+   * Shaped blocks borrow the texture of the material they are cut from: there
+   * is no `oak_stairs.png`, only `oak_planks.png`, and no `cobblestone_wall.png`,
+   * only `cobblestone.png`. Every candidate above fails for those, which sent
+   * the 85 stairs, 33 fences, 12 slabs and 8 walls of a village schematic to
+   * the hashed-colour fallback — the coloured patches on an otherwise
+   * plausible-looking render.
+   *
+   * The suffix is stripped and several spellings of the base material are
+   * offered; which one exists is decided by the resource pack rather than by a
+   * hardcoded table of wood types, so a modded or updated pack needs no change
+   * here.
+   */
+  private static materialCandidates(name: string): string[] {
+    const stripped = SHAPE_SUFFIXES.reduce(
+      (current, suffix) => (current.endsWith(suffix) ? current.slice(0, -suffix.length) : current),
+      name.startsWith("wall_") ? name.slice("wall_".length) : name,
+    );
+    if (stripped === name) {
+      return [];
+    }
+    return [stripped, `${stripped}_planks`, `${stripped}s`, `${stripped}_block`];
   }
 
   private static normalizeTextureKey(name: string): string {
@@ -561,7 +1002,12 @@ export class ModelBaker {
     if (texturePath.startsWith("textures/")) {
       texturePath = texturePath.slice("textures/".length);
     }
-    if (!texturePath.startsWith("block/") && !texturePath.startsWith("item/")) {
+    if (
+      !texturePath.startsWith("block/") &&
+      !texturePath.startsWith("item/") &&
+      // Block entities (beds, chests, signs) live outside `block/`.
+      !texturePath.startsWith("entity/")
+    ) {
       texturePath = `block/${texturePath}`;
     }
     return `${namespace}:${texturePath}`;
@@ -575,7 +1021,14 @@ export class ModelBaker {
     if (texture === null) {
       return false;
     }
-    this.textureCache[textureKey] = texture;
+    // Tinting here rather than at draw time keeps the atlas the single source
+    // of colour: the mesh carries no per-vertex tint and the glTF material has
+    // no second colour input.
+    const kind = tintKindFor(textureKey);
+    this.textureCache[textureKey] =
+      kind === null
+        ? texture
+        : applyTint(texture, kind === "water" ? this.waterTint : this.biomeTint);
     return true;
   }
 }

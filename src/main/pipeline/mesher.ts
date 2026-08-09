@@ -17,8 +17,9 @@
 // two Mapping.get() + skip-on-None(undefined) sites, both silent
 // (no log) on miss — preserved verbatim below, see comments at each site.
 
+import { occludesNeighbours } from "./block_shapes.js";
 import type { BakedFace, MeshBuffers, PaletteEntry, StructureData, UVRect } from "./types.js";
-import { bakedFaceOffset, paletteEntryIsAir, paletteEntryIsTransparent } from "./types.js";
+import { bakedFaceOffset, paletteEntryIsAir } from "./types.js";
 import type { BakedBlock, ModelBaker } from "./model_baker.js";
 
 /**
@@ -76,23 +77,33 @@ export async function culledFaces(struct: StructureData, baker: ModelBaker): Pro
           continue;
         }
         const bakedBlock: BakedBlock = await baker.bakeBlockstate(entry);
+
+        // Geometry that never participates in culling: every box of a
+        // multi-box shape (a staircase's step, a fence's rails) and the two
+        // quads of a cross. Their surfaces sit inside the block, where a
+        // neighbour cannot cover them.
+        for (const face of bakedBlock.extraFaces) {
+          faces.push(bakedFaceOffset(face, x, y, z));
+        }
+        if (!bakedBlock.isFullCube) {
+          continue;
+        }
+
         for (const [faceName, offset] of Object.entries(DIRECTIONS)) {
           const [dx, dy, dz] = offset;
           const nx = x + dx;
           const ny = y + dy;
           const nz = z + dz;
-          let neighbor: PaletteEntry;
           if (nx >= 0 && nx < sizeX && ny >= 0 && ny < sizeY && nz >= 0 && nz < sizeZ) {
-            const neighborIndex = voxels[flatIndex(nx, ny, nz)];
-            neighbor = paletteEntry(neighborIndex);
-            if (!paletteEntryIsTransparent(neighbor)) {
+            const neighbor = paletteEntry(voxels[flatIndex(nx, ny, nz)]);
+            // mesher.py asked `is_transparent`, a hardcoded name list. The
+            // real question is whether the neighbour *covers* this face, which
+            // a slab, a fence or a pane does not however opaque its texture.
+            if (occludesNeighbours(neighbor)) {
               continue;
             }
-          } else {
-            // Out-of-bounds treated as air/transparent, matching mesher.py:47-48.
-            neighbor = { namespacedName: "minecraft:air", properties: {} };
           }
-          void neighbor; // computed for parity with the source; not otherwise consumed.
+          // Out of bounds is air, matching mesher.py:47-48.
 
           // inventory.tsv `culled_faces / build_mesh` row, site 1
           // (mesher.py:49): Mapping.get() + skip-on-None(undefined),

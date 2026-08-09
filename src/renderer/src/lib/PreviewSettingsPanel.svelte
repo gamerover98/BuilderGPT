@@ -9,6 +9,8 @@
    * rather than repeated as slider literals.
    */
   import {
+    DEFAULT_BIOME_COLOR,
+    DEFAULT_WATER_COLOR,
     PREVIEW_SETTING_RANGES,
     type PreviewSettings,
   } from "../../../shared/settings.js";
@@ -64,6 +66,39 @@
       A pack ships with the app and is used by default. Choosing your own takes
       priority, with the bundled one filling in any textures it does not provide.
       Affects the preview only, never the generated file.
+    </p>
+  </div>
+
+  <div class="field">
+    <label for="biome-color">Biome colours</label>
+    <div class="pick-row">
+      <input
+        id="biome-color"
+        class="swatch"
+        type="color"
+        title="Grass, leaves, vines"
+        value={settings.biomeColor}
+        oninput={(event) => onchange({ biomeColor: (event.currentTarget as HTMLInputElement).value })}
+      />
+      <input
+        id="water-color"
+        class="swatch"
+        type="color"
+        title="Water"
+        value={settings.waterColor}
+        oninput={(event) => onchange({ waterColor: (event.currentTarget as HTMLInputElement).value })}
+      />
+      <button
+        onclick={() =>
+          onchange({ biomeColor: DEFAULT_BIOME_COLOR, waterColor: DEFAULT_WATER_COLOR })}
+        disabled={settings.biomeColor.toLowerCase() === DEFAULT_BIOME_COLOR &&
+          settings.waterColor.toLowerCase() === DEFAULT_WATER_COLOR}>Plains</button
+      >
+    </div>
+    <p class="hint">
+      Foliage (left) and water (right) ship greyscale and are tinted per biome — they are
+      separate colours in Minecraft, so they are separate here. Changing either rebuilds
+      the preview.
     </p>
   </div>
 
@@ -176,6 +211,16 @@
 
   .pick-row input {
     flex: 1;
+  }
+
+  /* `.pick-row input` above is a class+type selector and outranks a bare
+     `.swatch`, so this has to match at least as specifically or the swatch
+     stretches to fill the row. */
+  .pick-row input.swatch {
+    flex: 0 0 56px;
+    height: 34px;
+    padding: 2px;
+    cursor: pointer;
   }
 
   .toggles {

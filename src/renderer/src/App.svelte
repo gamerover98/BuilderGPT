@@ -19,10 +19,16 @@
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
   import Viewer from "./lib/Viewer.svelte";
   import { api, bridgeAvailable, forIpc, BRIDGE_MISSING_MESSAGE } from "./lib/bridge.svelte.js";
-  import type { Artifact, ProgressEvent } from "../../shared/ipc.js";
+  import {
+    openCodeModelRequiresKey,
+    type Artifact,
+    type OpenCodeModelInfo,
+    type ProgressEvent,
+  } from "../../shared/ipc.js";
   import {
     DEFAULT_SETTINGS,
     DEFAULT_UI_SETTINGS,
+    providerRequiresApiKey,
     type ExportType,
     type KeyStorageStatus,
     type PreviewSettings,
@@ -67,7 +73,25 @@
   let sunAzimuth = $state(0);
   let sunElevation = $state(0);
 
-  const canGenerate = $derived(description.trim() !== "" && !busy);
+  /**
+   * The OpenCode model in use, when there is one. Everything below is UI
+   * mirroring: `ipc/handlers.ts` applies the same two rules authoritatively,
+   * because a renderer check is a courtesy, not a gate.
+   */
+  let openCodeModel = $state<OpenCodeModelInfo | null>(null);
+
+  const hasProviderKey = $derived(
+    keyStatus?.keys.find((entry) => entry.provider === settings.provider)?.hasKey ?? false,
+  );
+  const blockedOnKey = $derived(
+    settings.provider === "OpenCode"
+      ? openCodeModelRequiresKey(openCodeModel ?? undefined) && !hasProviderKey
+      : providerRequiresApiKey(settings.provider) && !hasProviderKey,
+  );
+  /** Text-only models: the picker is disabled rather than silently ignored. */
+  const acceptsImages = $derived(openCodeModel === null || openCodeModel.imageInput !== "no");
+
+  const canGenerate = $derived(description.trim() !== "" && !busy && !blockedOnKey);
   const canRerender = $derived(lastSchemPath !== null && !busy);
 
   onMount(() => {
@@ -295,6 +319,7 @@
       onchange={patchSettings}
       onsavekey={saveKey}
       onclearkey={clearKey}
+      onmodelinfo={(model) => (openCodeModel = model)}
     />
 
     <fieldset>
@@ -343,9 +368,9 @@
             id="image"
             readonly
             value={imageName ?? ""}
-            placeholder="No image chosen"
+            placeholder={acceptsImages ? "No image chosen" : "Not supported by this model"}
           />
-          <button onclick={() => pick("image")}>Choose…</button>
+          <button onclick={() => pick("image")} disabled={!acceptsImages}>Choose…</button>
           <button
             onclick={() => {
               imagePath = null;
@@ -354,6 +379,12 @@
             disabled={!imagePath}>Clear</button
           >
         </div>
+        {#if !acceptsImages}
+          <p class="hint">
+            {openCodeModel?.name} takes text only. Pick a model marked “images” to use a reference
+            picture.
+          </p>
+        {/if}
       </div>
 
       <div class="field">

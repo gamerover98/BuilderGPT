@@ -21,6 +21,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import { loadStructure } from "../src/main/pipeline/loader.js";
+import { openCodeModelRequiresKey } from "../src/shared/ipc.js";
 import { LlmError, resolveBaseUrl } from "../src/main/services/llm.js";
 import { describeFor, sanitizeName } from "../src/main/services/naming.js";
 import {
@@ -28,7 +29,7 @@ import {
   OutputDirectoryError,
   resolveOutputPath,
 } from "../src/main/services/output.js";
-import { labelFor } from "../src/main/services/opencode.js";
+import { labelFor, mergeCatalogue } from "../src/main/services/opencode.js";
 import { buildPreview, clearPreviewCache, sunAnglesRadians } from "../src/main/services/preview.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/services/versions.js";
@@ -260,6 +261,78 @@ try {
 
   equal("free model label", labelFor("mimo-v2.5-free"), "mimo-v2.5-free (Gratuito)");
   equal("paid thinking label", labelFor("gpt-5-reasoning"), "gpt-5-reasoning (A pagamento | Thinking)");
+
+  // --- opencode.ts: the catalogue merge -------------------------------------
+  //
+  // Offline by construction: `mergeCatalogue` is pure, and these payloads are
+  // trimmed copies of what the two real sources return. Zen's `/models` gives
+  // ids and nothing else; models.dev gives cost and modalities. What is being
+  // asserted is the classification, since it now decides whether an API key is
+  // demanded and whether a reference image may be sent.
+  console.log("\n--- opencode catalogue ---");
+  const liveIds = ["gpt-5.5", "mimo-v2.5-free", "big-pickle", "brand-new-model"];
+  const metadata = {
+    "gpt-5.5": {
+      name: "GPT-5.5",
+      cost: { input: 5, output: 30 },
+      modalities: { input: ["text", "image", "pdf"] },
+      limit: { context: 400000 },
+    },
+    "mimo-v2.5-free": {
+      name: "MiMo V2.5 Free",
+      cost: { input: 0, output: 0 },
+      modalities: { input: ["text", "image", "audio", "video"] },
+    },
+    "big-pickle": {
+      name: "Big Pickle",
+      cost: { input: 0, output: 0 },
+      modalities: { input: ["text"] },
+    },
+  };
+  const catalogue = mergeCatalogue(liveIds, metadata);
+  const byId = new Map(catalogue.map((model) => [model.id, model]));
+
+  equal("every live id survives the merge", catalogue.length, liveIds.length);
+  equal("zero cost means free", byId.get("mimo-v2.5-free")?.pricing, "free");
+  equal("non-zero cost means paid", byId.get("gpt-5.5")?.pricing, "paid");
+  equal("image modality is detected", byId.get("mimo-v2.5-free")?.imageInput, "yes");
+  equal("text-only is detected", byId.get("big-pickle")?.imageInput, "no");
+  equal("context window is carried through", byId.get("gpt-5.5")?.contextTokens, 400000);
+
+  // An id models.dev has not caught up with must still be selectable, and must
+  // fail *open*: gating it behind a key would turn a metadata gap into "this
+  // model is unusable".
+  equal("an unknown id still appears", byId.get("brand-new-model")?.pricing, "unknown");
+  equal("an unknown id gets a readable name", byId.get("brand-new-model")?.name, "Brand New Model");
+  check("an unknown id is not gated behind a key", !openCodeModelRequiresKey(byId.get("brand-new-model")));
+  check("a paid model is gated behind a key", openCodeModelRequiresKey(byId.get("gpt-5.5")));
+  check("a free model is not gated behind a key", !openCodeModelRequiresKey(byId.get("mimo-v2.5-free")));
+
+  equal("free models sort ahead of paid", catalogue[0]?.pricing, "free");
+  equal("paid models sort last", catalogue[catalogue.length - 1]?.pricing, "paid");
+
+  // The whole models.dev fetch failing is not the same as the gateway failing:
+  // the model list must still come back, just without the facts.
+  const noMetadata = mergeCatalogue(liveIds, null);
+  equal("no metadata still yields every model", noMetadata.length, liveIds.length);
+  check(
+    "no metadata means everything is unknown, not everything is paid",
+    noMetadata.every((model) => model.pricing === "unknown"),
+  );
+
+  // The vendored snapshot is what makes that case rare; if it stops parsing,
+  // the offline fallback is silently gone.
+  const snapshot = JSON.parse(
+    await readFile(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "resources", "opencode_models.json"),
+      "utf-8",
+    ),
+  ) as { models?: Record<string, { cost?: { input?: number; output?: number } }> };
+  check("the bundled models.dev snapshot parses", typeof snapshot.models === "object");
+  check(
+    "the snapshot knows about free models",
+    Object.values(snapshot.models ?? {}).some((m) => m.cost?.input === 0 && m.cost?.output === 0),
+  );
 
   equal("path traversal is stripped from names", sanitizeName("../../evil"), "evil");
   equal("empty model name falls back", sanitizeName("   "), "structure");

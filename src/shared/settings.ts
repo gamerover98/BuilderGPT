@@ -22,7 +22,12 @@ export type ExportType = "schem" | "mcfunction";
 export const PROVIDER_DEFAULT_BASE_URL: Readonly<Record<Provider, string>> = {
   OpenAI: "https://api.openai.com/v1",
   "Google Gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
-  OpenCode: "https://console.opencode.ai/inference/openai/v1",
+  // component.py:73 used `https://console.opencode.ai/inference/openai/v1`,
+  // which still answers but is not the endpoint OpenCode publishes. This is
+  // the one its own model registry declares for the `opencode` provider
+  // (models.dev -> `api`), and it is where `/models` is documented to live.
+  OpenCode: "https://opencode.ai/zen/v1",
+
   "Custom (OpenAI Compatible)": "",
 };
 
@@ -117,8 +122,13 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  provider: "OpenAI",
-  model: PROVIDER_DEFAULT_MODEL.OpenAI,
+  // component.py:239 opened on OpenAI, which cannot generate anything until you
+  // paste a paid API key. OpenCode's free tier can, so a first run now works
+  // out of the box. This is only the *initial* value: `settings.json` records
+  // whatever you last chose, and that wins on every subsequent launch.
+  provider: "OpenCode",
+  model: PROVIDER_DEFAULT_MODEL.OpenCode,
+
   baseUrl: "",
   version: "JE_1_20_4",
   exportType: "schem",

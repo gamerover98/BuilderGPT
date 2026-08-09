@@ -98,6 +98,15 @@ export function legacyBlocksPath(): string {
   return path.join(resourcesDir(), "resources", "legacy_blocks.json");
 }
 
+/**
+ * Recorded models.dev metadata for OpenCode Zen. Only consulted when the live
+ * models.dev fetch fails, so the model list still says which models are free
+ * and which accept images on an offline first run.
+ */
+export function openCodeSnapshotPath(): string {
+  return path.join(resourcesDir(), "resources", "opencode_models.json");
+}
+
 /** `generated/` (component.py:137-138), relocated to a writable location. */
 export function generatedDir(): string {
   return path.join(app.getPath("userData"), "generated");

@@ -99,10 +99,38 @@ export interface SetKeyRequest {
   apiKey: string;
 }
 
-export interface OpenCodeModel {
+/**
+ * One OpenCode Zen model, as the renderer needs to reason about it.
+ *
+ * `component.py:192-199` had only `{id, label}` and derived the label from the
+ * id ("free" in the name meant free). Both facts below are now read from
+ * models.dev instead of guessed, because both drive behaviour: `pricing`
+ * decides whether an API key is required, and `imageInput` decides whether the
+ * reference image can be sent at all.
+ *
+ * `"unknown"` means models.dev has no entry for the id. It is treated
+ * permissively everywhere -- see `mergeCatalogue` for why.
+ */
+export interface OpenCodeModelInfo {
   id: string;
-  /** e.g. `"mimo-v2.5-free (Gratuito | Thinking)"` -- component.py:192-199. */
-  label: string;
+  /** Human name from models.dev, or a title-cased id when it has none. */
+  name: string;
+  description?: string;
+  pricing: "free" | "paid" | "unknown";
+  imageInput: "yes" | "no" | "unknown";
+  contextTokens?: number;
+  /** USD per million tokens, as models.dev states it. */
+  cost?: { input: number; output: number };
+  reasoning?: boolean;
+}
+
+/**
+ * The key gate for OpenCode, replacing the blanket provider-level exemption in
+ * `providerRequiresApiKey`. A model missing from the catalogue is let through:
+ * the gateway's own 401 is a better answer than refusing to try.
+ */
+export function openCodeModelRequiresKey(model: OpenCodeModelInfo | undefined): boolean {
+  return model?.pricing === "paid";
 }
 
 export interface PickFileRequest {
@@ -189,7 +217,7 @@ export interface BgptApi {
   clearKey(provider: Provider): Promise<KeyStorageStatus>;
 
   listVersions(): Promise<string[]>;
-  listOpenCodeModels(): Promise<OpenCodeModel[] | null>;
+  listOpenCodeModels(): Promise<OpenCodeModelInfo[] | null>;
 
   pickFile(req: PickFileRequest): Promise<PickFileResponse>;
   revealPath(path: string): Promise<void>;

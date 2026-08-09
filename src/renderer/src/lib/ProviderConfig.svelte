@@ -12,7 +12,7 @@
    * saved through `safeStorage` and this component only ever learns whether one
    * exists -- it can show "key stored", it cannot read the key back.
    */
-  import type { OpenCodeModel } from "../../../shared/ipc.js";
+  import { openCodeModelRequiresKey, type OpenCodeModelInfo } from "../../../shared/ipc.js";
   import { api, bridgeAvailable } from "./bridge.svelte.js";
   import {
     PROVIDERS,
@@ -29,11 +29,13 @@
     onchange: (patch: Partial<Settings>) => void;
     onsavekey: (provider: Provider, apiKey: string) => Promise<void>;
     onclearkey: (provider: Provider) => Promise<void>;
+    /** Lifted so App can gate the reference-image picker on the same fact. */
+    onmodelinfo?: (model: OpenCodeModelInfo | null) => void;
   }
 
-  const { settings, keyStatus, onchange, onsavekey, onclearkey }: Props = $props();
+  const { settings, keyStatus, onchange, onsavekey, onclearkey, onmodelinfo }: Props = $props();
 
-  let openCodeModels = $state<OpenCodeModel[] | null>(null);
+  let openCodeModels = $state<OpenCodeModelInfo[] | null>(null);
   let openCodeFetchFailed = $state(false);
   let keyDraft = $state("");
   let saving = $state(false);
@@ -41,6 +43,38 @@
   const hasKey = $derived(
     keyStatus?.keys.find((entry) => entry.provider === settings.provider)?.hasKey ?? false,
   );
+
+  const selectedModel = $derived(
+    settings.provider === "OpenCode"
+      ? (openCodeModels?.find((model) => model.id === settings.model) ?? null)
+      : null,
+  );
+
+  /** The gate the main process applies, mirrored here for the UI only. */
+  const needsKeyForModel = $derived(openCodeModelRequiresKey(selectedModel ?? undefined) && !hasKey);
+
+  const freeModels = $derived(openCodeModels?.filter((m) => m.pricing === "free") ?? []);
+  const paidModels = $derived(openCodeModels?.filter((m) => m.pricing === "paid") ?? []);
+  const unknownModels = $derived(openCodeModels?.filter((m) => m.pricing === "unknown") ?? []);
+
+  $effect(() => {
+    onmodelinfo?.(selectedModel);
+  });
+
+  /** `mimo-v2.5-free · 262k ctx · images` */
+  function describe(model: OpenCodeModelInfo): string {
+    const bits: string[] = [model.name];
+    if (model.contextTokens) {
+      bits.push(`${Math.round(model.contextTokens / 1000)}k ctx`);
+    }
+    if (model.imageInput === "yes") {
+      bits.push("images");
+    }
+    if (model.pricing === "paid" && model.cost) {
+      bits.push(`$${model.cost.input}/$${model.cost.output} per M`);
+    }
+    return bits.join(" · ");
+  }
 
   $effect(() => {
     if (!bridgeAvailable) {
@@ -109,10 +143,43 @@
           value={settings.model}
           onchange={(event) => onchange({ model: event.currentTarget.value })}
         >
-          {#each openCodeModels as model (model.id)}
-            <option value={model.id}>{model.label}</option>
-          {/each}
+          <!--
+            Grouped by what the user has to do to use them, not alphabetically:
+            the free models are the ones that work with no setup at all, so
+            they belong at the top and visibly separated.
+          -->
+          {#if freeModels.length > 0}
+            <optgroup label={`Free (${freeModels.length}) — no API key needed`}>
+              {#each freeModels as model (model.id)}
+                <option value={model.id}>{describe(model)}</option>
+              {/each}
+            </optgroup>
+          {/if}
+          {#if paidModels.length > 0}
+            <optgroup label={`Paid (${paidModels.length}) — API key required`}>
+              {#each paidModels as model (model.id)}
+                <option value={model.id}>{describe(model)}</option>
+              {/each}
+            </optgroup>
+          {/if}
+          {#if unknownModels.length > 0}
+            <optgroup label={`Pricing unknown (${unknownModels.length})`}>
+              {#each unknownModels as model (model.id)}
+                <option value={model.id}>{describe(model)}</option>
+              {/each}
+            </optgroup>
+          {/if}
         </select>
+        {#if selectedModel}
+          <p class="hint">
+            {selectedModel.id} · {openCodeModels.length} models available
+            {#if selectedModel.imageInput === "no"}
+              · text only, no reference image
+            {:else if selectedModel.imageInput === "unknown"}
+              · image support unknown
+            {/if}
+          </p>
+        {/if}
       {:else}
         <input
           id="model"
@@ -141,7 +208,7 @@
 
   <div class="field">
     <label for="api-key">
-      API key{providerRequiresApiKey(settings.provider) ? "" : " (optional for free models)"}
+      API key{providerRequiresApiKey(settings.provider) ? "" : " (only for paid models)"}
     </label>
     <div class="key-row">
       <input
@@ -154,6 +221,12 @@
       <button onclick={saveKey} disabled={saving || keyDraft.trim() === ""}>Save</button>
       <button onclick={() => onclearkey(settings.provider)} disabled={!hasKey}>Clear</button>
     </div>
+    {#if needsKeyForModel}
+      <p class="hint warn">
+        {selectedModel?.name} is billed per token, so it needs a key. The free models in the list
+        above do not.
+      </p>
+    {/if}
     {#if hasKey}
       <p class="hint ok">A key is stored for {settings.provider}. It is never sent back to this window.</p>
     {/if}

@@ -16,7 +16,8 @@ import {
   type Artifact,
   type GenerateRequest,
   type GenerateResponse,
-  type OpenCodeModel,
+  openCodeModelRequiresKey,
+  type OpenCodeModelInfo,
   type PickFileRequest,
   type PickFileResponse,
   type PreviewRequest,
@@ -40,7 +41,12 @@ import {
   sunAnglesRadians,
 } from "../services/preview.js";
 import { assertWritableDirectory } from "../services/output.js";
-import { defaultResourcePackPath, generatedDir, legacyBlocksPath } from "../services/resources.js";
+import {
+  defaultResourcePackPath,
+  generatedDir,
+  legacyBlocksPath,
+  openCodeSnapshotPath,
+} from "../services/resources.js";
 import {
   clearApiKey,
   getApiKey,
@@ -93,8 +99,8 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
 
   ipcMain.handle(IPC.versionsList, (): string[] => [...VERSION_NAMES]);
 
-  ipcMain.handle(IPC.opencodeModels, async (): Promise<OpenCodeModel[] | null> => {
-    return await fetchOpenCodeModels();
+  ipcMain.handle(IPC.opencodeModels, async (): Promise<OpenCodeModelInfo[] | null> => {
+    return await fetchOpenCodeModels({ snapshotPath: openCodeSnapshotPath() });
   });
 
   ipcMain.handle(IPC.pickFile, async (_event, req: PickFileRequest): Promise<PickFileResponse> => {
@@ -151,8 +157,27 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     }
 
     const apiKey = await getApiKey(settings.provider);
-    if (apiKey.trim() === "" && providerRequiresApiKey(settings.provider)) {
-      // component.py:383-384, same gate, same exemption for OpenCode.
+
+    // component.py:383-384 exempted OpenCode from the key gate wholesale,
+    // because "OpenCode has free models". Most of them are not: 9 of the 61
+    // models it serves are free and the rest bill per token. The gate is now
+    // per model, and the reference image is gated the same way -- a text-only
+    // model answers an image with an opaque 400.
+    let acceptsImages: boolean | undefined;
+    if (settings.provider === "OpenCode") {
+      const catalogue = await fetchOpenCodeModels({ snapshotPath: openCodeSnapshotPath() });
+      const model = catalogue?.find((entry) => entry.id === settings.model);
+      if (apiKey.trim() === "" && openCodeModelRequiresKey(model)) {
+        return {
+          ok: false,
+          kind: "no-api-key",
+          message:
+            `${model?.name ?? settings.model} is a paid OpenCode model. Add an API key, ` +
+            `or pick one of the free models in the LLM provider panel.`,
+        };
+      }
+      acceptsImages = model?.imageInput !== "no";
+    } else if (apiKey.trim() === "" && providerRequiresApiKey(settings.provider)) {
       return {
         ok: false,
         kind: "no-api-key",
@@ -170,6 +195,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         version: req.version,
         exportType: req.exportType,
         imagePath: req.imagePath,
+        acceptsImages,
         outputDir: settings.outputDir,
         onProgress: (phase, fraction, message) =>
           emitProgress(window, { requestId: req.requestId, phase, fraction, message }),

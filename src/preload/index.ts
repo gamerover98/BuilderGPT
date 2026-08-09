@@ -16,7 +16,7 @@ import {
   type BgptApi,
   type GenerateRequest,
   type GenerateResponse,
-  type OpenCodeModel,
+  type OpenCodeModelInfo,
   type PickFileRequest,
   type PickFileResponse,
   type PreviewRequest,
@@ -36,7 +36,8 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.keysClear, provider) as Promise<KeyStorageStatus>,
 
   listVersions: () => ipcRenderer.invoke(IPC.versionsList) as Promise<string[]>,
-  listOpenCodeModels: () => ipcRenderer.invoke(IPC.opencodeModels) as Promise<OpenCodeModel[] | null>,
+  listOpenCodeModels: () =>
+    ipcRenderer.invoke(IPC.opencodeModels) as Promise<OpenCodeModelInfo[] | null>,
 
   pickFile: (req: PickFileRequest) => ipcRenderer.invoke(IPC.pickFile, req) as Promise<PickFileResponse>,
   revealPath: (target: string) => ipcRenderer.invoke(IPC.revealPath, target) as Promise<void>,

@@ -50,6 +50,8 @@ export interface GenerateOptions {
   version: string;
   exportType: ExportType;
   imagePath: string | null;
+  /** `false` when the selected model is text-only; see `llm.ts`'s `LlmRequest`. */
+  acceptsImages?: boolean;
   /**
    * Where the finished file goes. Empty/omitted means the app's own
    * `generated/` folder under userData. Resolved by the caller so this module
@@ -93,6 +95,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateOutcom
     systemPrompt: sysPrompt,
     userPrompt,
     imagePath: options.imagePath,
+    acceptsImages: options.acceptsImages,
     signal: options.signal,
   });
 

@@ -22,8 +22,11 @@ BuilderGPT is a **desktop application**: one installer, no runtime to set up.
 
 - Generate structures from natural language, with an optional reference image
 - Live 3D preview, textured with a bundled resource pack (or your own)
-- Export as `.schem` or `.mcfunction`
-- Providers: OpenAI, Google Gemini, OpenCode, or any OpenAI-compatible endpoint
+- Export as `.schem` or `.mcfunction`, into a folder you choose
+- Open existing schematics: Sponge v2, Sponge v3 (WorldEdit / FAWE) and legacy
+  MCEdit `.schematic`
+- Providers: OpenAI, Google Gemini, OpenCode Zen, or any OpenAI-compatible
+  endpoint. OpenCode's free models need no API key at all
 - API keys encrypted by the OS keychain — no `.env` file, no plaintext on disk
 - Installers for Windows, Linux and macOS
 
@@ -53,7 +56,7 @@ holds its own state.
 
 | | Python / Streamlit | Electron / TypeScript |
 |---|---|---|
-| Runtime dependencies | 12 (`amulet-core`, `numpy`, `Pillow`, `quickjs`, `mcschematic`, …) | 5, all pure JS/WASM |
+| Runtime dependencies | 12 (`amulet-core`, `numpy`, `Pillow`, `quickjs`, `mcschematic`, …) | 7, all pure JS/WASM |
 | Toolchain to install | `build-essential`, `cmake`, `gcc`, `g++`, `python3-dev`, `zlib1g-dev`, `libbz2-dev`, `libsnappy-dev` | none |
 | Packaging constraints | `setuptools<71.0.0`, pinned because `pkg_resources` was removed in v71 | none |
 | Delivery | Docker image + a server on `localhost:8501`, opened in a browser | native installer per platform |
@@ -76,8 +79,9 @@ pixels. The one measured divergence was in UV coordinates, at roughly one unit
 in the last place of float32, from NumPy and V8 rounding the same formula
 differently.
 
-Four automated suites remain in `tests/`, including one that asserts the
-sandbox's containment properties directly.
+Five automated suites remain in `tests/`, including one that asserts the
+sandbox's containment properties directly and one that requires the three
+schematic container formats to decode to the same voxel grid.
 
 ## Running from source
 
@@ -97,15 +101,25 @@ Builds land in `out/`, installers in `release/`. The equivalent npm scripts
 ## Usage
 
 Pick a provider in the left panel and paste an API key — it is encrypted with
-your OS keychain and never sent back to the window. Choose a Minecraft version
-and an export format, describe what you want, and press **Generate**. Results
-are written to the app's data directory and listed under *Generated files*,
-where they can be previewed again or revealed on disk.
+your OS keychain and never sent back to the window. With OpenCode Zen the model
+list is grouped by what it costs, and the free models generate without a key;
+only the paid ones ask for one. Models that cannot read images say so, and the
+reference-image picker disables itself rather than sending a request the model
+will reject.
+
+Choose a Minecraft version and an export format, describe what you want, and
+press **Generate**. Files are named after the structure and written to the
+output folder you pick; if a file of that name already exists it is renamed with
+a timestamp rather than overwritten. Everything generated is listed under
+*Generated files*, where it can be previewed again or revealed on disk.
+
+The left panel scrolls independently of the 3D view, and can be resized by
+dragging its edge or hidden entirely with **Ctrl+B**.
 
 Preview settings — sun angle, render scale, draw distance, grid, wireframe,
 ambient occlusion — apply live without regenerating. **Re-render** rebuilds the
-preview from the last schematic, and an existing `.schem` can be loaded directly
-without generating anything.
+preview from the last schematic, and an existing schematic can be loaded
+directly without generating anything.
 
 ## How generation works
 
@@ -133,6 +147,11 @@ without generating anything.
   integration code used here was implemented independently for this project.
 - [Faithful](https://faithfulpack.net/) — the 64x resource pack bundled to
   texture the 3D preview, used under its own license.
+- [PrismarineJS/minecraft-data](https://github.com/PrismarineJS/minecraft-data)
+  (MIT) — `resources/legacy_blocks.json` is its pre-1.13 flattening table, used
+  to read legacy MCEdit `.schematic` files.
+- [models.dev](https://models.dev) — the OpenCode-maintained model catalogue
+  that supplies pricing and modality data for OpenCode Zen models.
 
 ## License
 

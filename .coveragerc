@@ -1,0 +1,12 @@
+[run]
+source = .
+omit =
+    .venv-test/*
+    migration-kit/*
+    tests/*
+    */site-packages/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:

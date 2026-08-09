@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      ARCHITECTURE.md §3 "Renderer CSP": `connect-src 'none'` is deliberate and
+      load-bearing. Every HTTP call in this app is made by the main process --
+      that is the entire reason for the Electron pivot (no CORS, no key in a
+      browser context). If a future feature appears to need this relaxed, the
+      feature belongs in main, not here.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>BuilderGPT</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

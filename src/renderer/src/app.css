@@ -1,0 +1,125 @@
+/*
+ * Palette taken from app/viewer/index.html (#0b0f14 background, #f3f6fb text,
+ * #2a3546 borders) so the 3D viewport and the surrounding chrome are one
+ * surface rather than an iframe pasted onto a white Streamlit page.
+ */
+
+:root {
+  --bg: #0b0f14;
+  --bg-panel: #121821;
+  --bg-input: #0e141c;
+  --border: #2a3546;
+  --text: #f3f6fb;
+  --text-dim: #97a3b6;
+  --accent: #4f8cff;
+  --accent-dim: #2f5fb3;
+  --danger: #ff6b6b;
+  --warn: #ffc857;
+  --ok: #5ddc9a;
+
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  width: 100%;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+input[type="checkbox"] {
+  width: auto;
+}
+
+input[type="range"] {
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 96px;
+}
+
+label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px 16px;
+  margin: 0 0 16px;
+}
+
+legend {
+  padding: 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.field {
+  margin-bottom: 12px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 4px 0 0;
+}

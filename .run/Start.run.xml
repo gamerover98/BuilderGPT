@@ -1,0 +1,16 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Start (script)" type="PowerShellRunType" factoryName="PowerShell" scriptUrl="file://$PROJECT_DIR$/scripts/start.ps1" executablePath="c:/windows/system32/windowspowershell/v1.0/powershell.exe">
+    <envs />
+    <method v="2" />
+  </configuration>
+  <configuration default="false" name="Start (npm)" type="js.build_tools.npm">
+    <package-json value="$PROJECT_DIR$/package.json" />
+    <command value="run" />
+    <scripts>
+      <script value="dev" />
+    </scripts>
+    <node-interpreter value="project" />
+    <envs />
+    <method v="2" />
+  </configuration>
+</component>

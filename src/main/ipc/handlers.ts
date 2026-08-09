@@ -39,7 +39,8 @@ import {
   PreviewTooLargeError,
   sunAnglesRadians,
 } from "../services/preview.js";
-import { defaultResourcePackPath, legacyBlocksPath } from "../services/resources.js";
+import { assertWritableDirectory } from "../services/output.js";
+import { defaultResourcePackPath, generatedDir, legacyBlocksPath } from "../services/resources.js";
 import {
   clearApiKey,
   getApiKey,
@@ -50,7 +51,10 @@ import {
 } from "../services/settings-store.js";
 import { VERSION_NAMES } from "../services/versions.js";
 
-const FILE_FILTERS: Readonly<Record<PickFileRequest["kind"], Electron.FileFilter[]>> = {
+/** File-picking kinds only; `directory` takes the folder branch instead. */
+const FILE_FILTERS: Readonly<
+  Partial<Record<PickFileRequest["kind"], Electron.FileFilter[]>>
+> = {
   // component.py:288 -- the image uploader's accepted extensions.
   image: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "bmp"] }],
   "resource-pack": [{ name: "Resource pack", extensions: ["zip"] }],
@@ -95,23 +99,45 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
 
   ipcMain.handle(IPC.pickFile, async (_event, req: PickFileRequest): Promise<PickFileResponse> => {
     const window = getWindow();
-    const filters = FILE_FILTERS[req.kind];
-    if (!filters) {
+    const wantsDirectory = req.kind === "directory";
+    const filters = wantsDirectory ? undefined : FILE_FILTERS[req.kind];
+    if (!wantsDirectory && !filters) {
       return { path: null, name: null };
     }
+
+    const options: Electron.OpenDialogOptions = wantsDirectory
+      ? { properties: ["openDirectory", "createDirectory"] }
+      : { properties: ["openFile"], filters };
     const result = window
-      ? await dialog.showOpenDialog(window, { properties: ["openFile"], filters })
-      : await dialog.showOpenDialog({ properties: ["openFile"], filters });
+      ? await dialog.showOpenDialog(window, options)
+      : await dialog.showOpenDialog(options);
     const picked = result.canceled ? undefined : result.filePaths[0];
     if (!picked) {
       return { path: null, name: null };
     }
+
+    if (wantsDirectory) {
+      // Proved writable now rather than at save time: the alternative is
+      // discovering the folder is read-only after two paid LLM calls.
+      try {
+        await assertWritableDirectory(picked);
+      } catch (err) {
+        return {
+          path: null,
+          name: null,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+
     return { path: picked, name: picked.split(/[\\/]/).pop() ?? picked };
   });
 
   ipcMain.handle(IPC.revealPath, async (_event, target: string): Promise<void> => {
     shell.showItemInFolder(target);
   });
+
+  ipcMain.handle(IPC.defaultOutputDir, async (): Promise<string> => generatedDir());
 
   ipcMain.handle(IPC.artifactsList, async (): Promise<Artifact[]> => await listArtifacts());
 
@@ -144,6 +170,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         version: req.version,
         exportType: req.exportType,
         imagePath: req.imagePath,
+        outputDir: settings.outputDir,
         onProgress: (phase, fraction, message) =>
           emitProgress(window, { requestId: req.requestId, phase, fraction, message }),
       });

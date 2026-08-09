@@ -14,7 +14,8 @@
  * differently-ordered schematic, the already-trusted reader disagrees.
  */
 
-import { mkdtemp, readdir, rm } from "fs/promises";
+import { existsSync } from "fs";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -22,6 +23,11 @@ import { fileURLToPath } from "url";
 import { loadStructure } from "../src/main/pipeline/loader.js";
 import { LlmError, resolveBaseUrl } from "../src/main/services/llm.js";
 import { describeFor, sanitizeName } from "../src/main/services/naming.js";
+import {
+  assertWritableDirectory,
+  OutputDirectoryError,
+  resolveOutputPath,
+} from "../src/main/services/output.js";
 import { labelFor } from "../src/main/services/opencode.js";
 import { buildPreview, clearPreviewCache, sunAnglesRadians } from "../src/main/services/preview.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
@@ -98,6 +104,17 @@ try {
   equal("writer holds 5 blocks", writer.blockCount, 5);
 
   const schemPath = await writer.save(workDir, "roundtrip", dataVersionFor("JE_1_20_4"));
+
+  // `generate.ts` no longer calls `save()`: it asks `output.ts` for the target
+  // path (so a collision can be backed up first) and writes `toBytes()` there.
+  // These two must stay byte-identical or that swap silently changed the file.
+  check(
+    "toBytes() matches what save() writes",
+    Buffer.compare(
+      await readFile(schemPath),
+      await writer.toBytes(dataVersionFor("JE_1_20_4")),
+    ) === 0,
+  );
   const structure = await loadStructure(schemPath);
 
   equal("bounds width  (x: 0..2)", structure.bounds.maxX - structure.bounds.minX + 1, 3);
@@ -174,6 +191,52 @@ try {
   });
   check("180 deg -> pi rad", Math.abs(sun.azimuth - Math.PI) < 1e-12);
   check("90 deg -> pi/2 rad", Math.abs(sun.elevation - Math.PI / 2) < 1e-12);
+
+  // --- output.ts: naming and the backup-on-collision rule ------------------
+  console.log("\n--- output directory ---");
+  const outDir = path.join(workDir, "out");
+
+  const first = await resolveOutputPath(outDir, "castle", "schem", new Date("2026-08-09T14:30:00Z"));
+  equal("fresh name needs no backup", first.backedUpTo, null);
+  equal("path is <dir>/<name>.<ext>", path.basename(first.filePath), "castle.schem");
+  await writeFile(first.filePath, "original", "utf-8");
+
+  const second = await resolveOutputPath(outDir, "castle", "schem", new Date("2026-08-09T14:30:00Z"));
+  equal("collision reuses the same target path", second.filePath, first.filePath);
+  equal(
+    "the previous file is renamed, not deleted",
+    second.backedUpTo === null ? null : path.basename(second.backedUpTo),
+    "castle.2026-08-09T14-30-00.bak.schem",
+  );
+  check("no colons in the backup name (illegal on Windows)", !path.basename(second.backedUpTo ?? "").includes(":"));
+  equal(
+    "the backup still holds the original bytes",
+    await readFile(second.backedUpTo ?? "", "utf-8"),
+    "original",
+  );
+  check("the target path is free again", !existsSync(second.filePath));
+
+  check(
+    "an unwritable output folder is rejected at selection time",
+    await (async () => {
+      try {
+        // A path *under an existing file* can never be a directory, on any
+        // platform. It has to be the backup: `first.filePath` was renamed away
+        // a few lines above, so mkdir -p would happily create it.
+        await assertWritableDirectory(path.join(second.backedUpTo ?? "", "nope"));
+        return false;
+      } catch (err) {
+        return err instanceof OutputDirectoryError;
+      }
+    })(),
+  );
+  check(
+    "a writable folder leaves no probe file behind",
+    await (async () => {
+      await assertWritableDirectory(outDir);
+      return (await readdir(outDir)).every((n) => !n.startsWith(".buildergpt-write-test"));
+    })(),
+  );
 
   // --- llm.ts / opencode.ts / generate.ts pure helpers ---------------------
   console.log("\n--- helpers ---");

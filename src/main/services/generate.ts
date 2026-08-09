@@ -2,13 +2,15 @@
  * Ported from `BuilderGPTComponent.generate` (component.py:106-178).
  *
  * Structure preserved: two LLM calls (structure, then name), the same prompt
- * substitutions, the same progress checkpoints, the same `{name}-{uuid4}`
- * filename, the same two export branches, artifact registration at the end.
+ * substitutions, the same progress checkpoints, the same two export branches,
+ * artifact registration at the end.
+ *
+ * Changed: the output location is now a setting, and the `{name}-{uuid4}`
+ * filename is `{name}` -- see `services/output.ts` for why the UUID went and
+ * what replaced it.
  */
 
-import { randomUUID } from "crypto";
-import { mkdir, rename, writeFile } from "fs/promises";
-import path from "path";
+import { copyFile, rename, rm, writeFile } from "fs/promises";
 
 import type { ProgressEvent } from "../../shared/ipc.js";
 import type { ExportType, Provider } from "../../shared/settings.js";
@@ -24,6 +26,7 @@ import {
 import { writeArtifact } from "./artifacts.js";
 import { callLlm } from "./llm.js";
 import { sanitizeName } from "./naming.js";
+import { resolveOutputPath } from "./output.js";
 import { generatedDir, loadBlockIdListText, loadPrompts, resourcesDir } from "./resources.js";
 import { SpongeSchematicWriter, SpongeSchematicWriterFactory } from "./schematic.js";
 import { VERSION_TABLE } from "./versions.js";
@@ -47,6 +50,12 @@ export interface GenerateOptions {
   version: string;
   exportType: ExportType;
   imagePath: string | null;
+  /**
+   * Where the finished file goes. Empty/omitted means the app's own
+   * `generated/` folder under userData. Resolved by the caller so this module
+   * keeps taking its output location as data.
+   */
+  outputDir?: string | null;
   onProgress?: (phase: ProgressEvent["phase"], fraction: number, message: string) => void;
   signal?: AbortSignal;
 }
@@ -55,6 +64,8 @@ export interface GenerateOutcome {
   path: string;
   name: string;
   exportType: ExportType;
+  /** Set when a file of the same name was moved aside to make room. */
+  backedUpTo: string | null;
 }
 
 export async function generate(options: GenerateOptions): Promise<GenerateOutcome> {
@@ -87,14 +98,19 @@ export async function generate(options: GenerateOptions): Promise<GenerateOutcom
 
   report("converting", 0.6, "Running the generated build script");
 
-  const outDir = generatedDir();
+  // Two different directories, deliberately. `core.ts` writes an intermediate
+  // `temp.mcfunction` into whatever it is given; that is app scratch and stays
+  // under userData. Only the finished file goes to the user's folder -- nobody
+  // wants build litter appearing in a directory they browse.
+  const scratchDir = generatedDir();
+  const outDir = options.outputDir?.trim() ? options.outputDir.trim() : generatedDir();
   const allowedBlocks = await loadAllowedBlocks(resourcesDir());
   const factory = new SpongeSchematicWriterFactory();
 
   const result = await textToSchem(response, options.exportType, {
     schematicWriterFactory: factory,
     allowedBlocks,
-    generatedDir: outDir,
+    generatedDir: scratchDir,
   });
 
   if (result.kind === "none") {
@@ -113,12 +129,18 @@ export async function generate(options: GenerateOptions): Promise<GenerateOutcom
     userPrompt: prompts.USR_GEN_NAME.replace("%DESCRIPTION%", options.description),
     signal: options.signal,
   });
-  const name = `${sanitizeName(rawName)}-${randomUUID()}`;
+  // component.py:143 appended a `uuid4` here. That was a collision strategy
+  // rather than a naming one, and it is `services/output.ts`'s job now: the
+  // name is the structure's, and an existing file is moved aside rather than
+  // overwritten. `sanitizeName` stays -- it is the guard against an LLM
+  // answering with `../../evil`.
+  const name = sanitizeName(rawName);
 
   report("saving", 0.9, "Writing the file");
-  await mkdir(outDir, { recursive: true }); // component.py:137-138
 
-  let filePath: string;
+  const ext = result.kind === "schematic" ? "schem" : "mcfunction";
+  const { filePath, backedUpTo } = await resolveOutputPath(outDir, name, ext);
+
   if (result.kind === "schematic") {
     // component.py:136 + 144: `input_version_to_mcs_tag` picks the version tag,
     // then `result.save(...)`. The tag is a DataVersion int here (see
@@ -128,16 +150,18 @@ export async function generate(options: GenerateOptions): Promise<GenerateOutcom
       throw new Error(`Unsupported Minecraft version: ${options.version}`);
     }
     const writer = result.schematic as SpongeSchematicWriter;
-    filePath = await writer.save(outDir, name, dataVersion);
+    await writeFile(filePath, await writer.toBytes(dataVersion));
   } else {
-    // component.py:154-167: core wrote `temp.mcfunction`; rename to the final
-    // name, and fall back to creating an empty file so the UI never breaks on
-    // a missing path.
-    filePath = path.join(outDir, `${name}.mcfunction`);
+    // component.py:154-167 moved core's `temp.mcfunction` to the final name.
+    // The copy fallback is new and load-bearing now that the destination can be
+    // a folder the user picked: `rename` fails with EXDEV across volumes, and
+    // the old fallback -- writing an empty file -- turned "your output folder
+    // is on another drive" into "your structure came out blank".
     try {
       await rename(result.path, filePath);
     } catch {
-      await writeFile(filePath, "", "utf-8");
+      await copyFile(result.path, filePath);
+      await rm(result.path, { force: true });
     }
   }
 
@@ -149,7 +173,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateOutcom
   });
 
   report("done", 1.0, "Done");
-  return { path: filePath, name, exportType: options.exportType };
+  return { path: filePath, name, exportType: options.exportType, backedUpTo };
 }
 
 /** Maps a thrown error onto `shared/ipc.ts`'s `FailureKind`. */

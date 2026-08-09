@@ -64,6 +64,7 @@ function coerceSettings(raw: unknown): Settings {
     baseUrl: typeof source.baseUrl === "string" ? source.baseUrl : DEFAULT_SETTINGS.baseUrl,
     version: typeof source.version === "string" ? source.version : DEFAULT_SETTINGS.version,
     exportType: source.exportType === "mcfunction" ? "mcfunction" : "schem",
+    outputDir: typeof source.outputDir === "string" ? source.outputDir : DEFAULT_SETTINGS.outputDir,
     preview,
     ui,
   };

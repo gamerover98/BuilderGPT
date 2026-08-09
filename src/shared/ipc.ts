@@ -26,6 +26,8 @@ export const IPC = {
 
   pickFile: "bgpt:dialog:pickFile",
   revealPath: "bgpt:shell:reveal",
+  /** The app's own `generated/` folder — what an empty `outputDir` resolves to. */
+  defaultOutputDir: "bgpt:output:defaultDir",
 
   generate: "bgpt:generate",
   preview: "bgpt:preview",
@@ -104,8 +106,13 @@ export interface OpenCodeModel {
 }
 
 export interface PickFileRequest {
-  /** Mirrors the four `st.file_uploader` call sites in component.py. */
-  kind: "image" | "resource-pack" | "schem";
+  /**
+   * The first three mirror the `st.file_uploader` call sites in component.py.
+   * `directory` is new -- it opens a folder chooser rather than a file one --
+   * and rides this channel instead of a new one because the response shape is
+   * identical and the preload signature does not have to change.
+   */
+  kind: "image" | "resource-pack" | "schem" | "directory";
 }
 
 export interface PickFileResponse {
@@ -126,10 +133,16 @@ export interface GenerateRequest {
 }
 
 export interface GenerateSuccess {
-  /** Absolute path of the saved artifact under `userData/generated/`. */
+  /** Absolute path of the saved artifact, in the configured output folder. */
   path: string;
   name: string;
   exportType: ExportType;
+  /**
+   * Absolute path a same-named file was moved to before this one was written,
+   * or `null` if there was nothing to preserve. Surfaced so "I overwrote my
+   * previous build" is never something the user finds out later.
+   */
+  backedUpTo: string | null;
 }
 
 export type GenerateResponse = Result<GenerateSuccess>;
@@ -180,6 +193,7 @@ export interface BgptApi {
 
   pickFile(req: PickFileRequest): Promise<PickFileResponse>;
   revealPath(path: string): Promise<void>;
+  getDefaultOutputDir(): Promise<string>;
 
   generate(req: GenerateRequest): Promise<GenerateResponse>;
   preview(req: PreviewRequest): Promise<PreviewResponse>;

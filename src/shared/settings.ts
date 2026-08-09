@@ -110,6 +110,8 @@ export interface Settings {
   baseUrl: string;
   version: string;
   exportType: ExportType;
+  /** Empty means "use the app's default generated/ directory under userData". */
+  outputDir: string;
   preview: PreviewSettings;
   ui: UiSettings;
 }
@@ -120,6 +122,7 @@ export const DEFAULT_SETTINGS: Settings = {
   baseUrl: "",
   version: "JE_1_20_4",
   exportType: "schem",
+  outputDir: "",
   preview: { ...DEFAULT_PREVIEW_SETTINGS },
   ui: { ...DEFAULT_UI_SETTINGS },
 };

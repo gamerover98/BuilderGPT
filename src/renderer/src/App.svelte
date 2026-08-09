@@ -44,6 +44,8 @@
   let keyStatus = $state<KeyStorageStatus | null>(null);
   let versions = $state<string[]>([]);
   let artifacts = $state<Artifact[]>([]);
+  /** What an empty `settings.outputDir` resolves to, shown as the placeholder. */
+  let defaultOutputDir = $state("");
 
   let description = $state("");
   let imagePath = $state<string | null>(null);
@@ -86,6 +88,7 @@
       keyStatus = await api().getKeyStatus();
       versions = await api().listVersions();
       artifacts = await api().listArtifacts();
+      defaultOutputDir = await api().getDefaultOutputDir();
     })();
 
     const unsubscribe = api().onProgress((event) => {
@@ -157,7 +160,7 @@
     status = { tone: "error", text: `${doing}: ${message}` };
   }
 
-  async function pick(kind: "image" | "resource-pack" | "schem"): Promise<void> {
+  async function pick(kind: "image" | "resource-pack" | "schem" | "directory"): Promise<void> {
     let picked: Awaited<ReturnType<ReturnType<typeof api>["pickFile"]>>;
     try {
       picked = await api().pickFile({ kind });
@@ -178,7 +181,9 @@
     } else if (kind === "resource-pack") {
       resourcePackPath = picked.path;
       resourcePackName = picked.name;
-        } else {
+    } else if (kind === "directory") {
+      void patchSettings({ outputDir: picked.path });
+    } else {
       pickedSchemPath = picked.path;
       pickedSchemName = picked.name;
     }
@@ -247,7 +252,15 @@
         };
         return;
       }
-      status = { tone: "ok", text: `Saved ${response.name}.${response.exportType}` };
+      status = {
+        tone: "ok",
+        text: `Saved ${response.name}.${response.exportType}`,
+        detail: response.backedUpTo
+          ? `The previous file of that name was kept as ${response.backedUpTo
+              .split(/[\\/]/)
+              .pop()}`
+          : undefined,
+      };
       artifacts = await api().listArtifacts();
       // component.py:401-404 -- only .schem gets a preview, and only then does
       // it become the "last schem" for Re-render.
@@ -341,6 +354,31 @@
             disabled={!imagePath}>Clear</button
           >
         </div>
+      </div>
+
+      <div class="field">
+        <label for="output-dir">Output folder</label>
+        <div class="pick-row">
+          <input
+            id="output-dir"
+            readonly
+            value={settings.outputDir}
+            placeholder={defaultOutputDir}
+            title={settings.outputDir || defaultOutputDir}
+          />
+          <button onclick={() => pick("directory")}>Choose…</button>
+          <button
+            onclick={() => patchSettings({ outputDir: "" })}
+            disabled={settings.outputDir === ""}>Default</button
+          >
+          <button onclick={() => api().revealPath(settings.outputDir || defaultOutputDir)}>
+            Open
+          </button>
+        </div>
+        <p class="hint">
+          A file of the same name is renamed with a timestamp before being replaced, never
+          overwritten.
+        </p>
       </div>
 
       <div class="buttons">

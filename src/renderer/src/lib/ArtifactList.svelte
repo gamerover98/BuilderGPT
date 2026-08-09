@@ -5,7 +5,7 @@
    * `main/services/artifacts.ts`.
    */
   import type { Artifact } from "../../../shared/ipc.js";
-  import { api } from "./bridge.js";
+  import { api } from "./bridge.svelte.js";
 
   interface Props {
     artifacts: Artifact[];

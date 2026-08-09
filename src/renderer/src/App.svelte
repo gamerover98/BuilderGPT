@@ -16,11 +16,13 @@
   import ArtifactList from "./lib/ArtifactList.svelte";
   import PreviewSettingsPanel from "./lib/PreviewSettingsPanel.svelte";
   import ProviderConfig from "./lib/ProviderConfig.svelte";
+  import SidebarSplitter from "./lib/SidebarSplitter.svelte";
   import Viewer from "./lib/Viewer.svelte";
-  import { api, bridgeAvailable, BRIDGE_MISSING_MESSAGE } from "./lib/bridge.js";
+  import { api, bridgeAvailable, forIpc, BRIDGE_MISSING_MESSAGE } from "./lib/bridge.svelte.js";
   import type { Artifact, ProgressEvent } from "../../shared/ipc.js";
   import {
     DEFAULT_SETTINGS,
+    DEFAULT_UI_SETTINGS,
     type ExportType,
     type KeyStorageStatus,
     type PreviewSettings,
@@ -31,6 +33,14 @@
   type Status = { tone: "info" | "ok" | "warn" | "error"; text: string; detail?: string } | null;
 
   let settings = $state<Settings>({ ...DEFAULT_SETTINGS });
+
+  /**
+   * Sidebar geometry is mirrored locally so a drag repaints at pointer speed;
+   * `settings.ui` is only written when the gesture ends. Persisting per
+   * pointermove would be a disk write per frame.
+   */
+  let sidebarWidth = $state(DEFAULT_UI_SETTINGS.sidebarWidth);
+  let sidebarCollapsed = $state(DEFAULT_UI_SETTINGS.sidebarCollapsed);
   let keyStatus = $state<KeyStorageStatus | null>(null);
   let versions = $state<string[]>([]);
   let artifacts = $state<Artifact[]>([]);
@@ -59,24 +69,62 @@
   const canRerender = $derived(lastSchemPath !== null && !busy);
 
   onMount(() => {
+    // Registered before the bridge check on purpose: collapsing the panel is
+    // pure UI, and a window whose preload failed to load is exactly the one
+    // where reaching the whole viewport still matters.
+    window.addEventListener("keydown", onWindowKey);
+
     if (!bridgeAvailable) {
       status = { tone: "error", text: BRIDGE_MISSING_MESSAGE };
-      return;
+      return () => window.removeEventListener("keydown", onWindowKey);
     }
+
     void (async () => {
       settings = await api().getSettings();
+      sidebarWidth = settings.ui.sidebarWidth;
+      sidebarCollapsed = settings.ui.sidebarCollapsed;
       keyStatus = await api().getKeyStatus();
       versions = await api().listVersions();
       artifacts = await api().listArtifacts();
     })();
-    return api().onProgress((event) => {
+
+    const unsubscribe = api().onProgress((event) => {
       progress = event.phase === "done" ? null : event;
     });
+    return () => {
+      window.removeEventListener("keydown", onWindowKey);
+      unsubscribe();
+    };
   });
+
+  function onWindowKey(event: KeyboardEvent): void {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
+      event.preventDefault();
+      toggleSidebar();
+    }
+  }
+
+  function toggleSidebar(): void {
+    sidebarCollapsed = !sidebarCollapsed;
+    void patchUi({ sidebarCollapsed });
+  }
+
+  /**
+   * Layout gestures must not depend on the settings write succeeding: the
+   * panel has already moved on screen by the time this runs, and a failed
+   * persist is worth a banner, not a stuck sidebar.
+   */
+  async function patchUi(patch: Partial<Settings["ui"]>): Promise<void> {
+    try {
+      await patchSettings({ ui: { ...settings.ui, ...patch } });
+    } catch (err) {
+      failed(err, "Saving the panel layout");
+    }
+  }
 
   /** Persist on every change; the Python UI persisted nothing at all. */
   async function patchSettings(patch: Partial<Settings>): Promise<void> {
-    settings = await api().setSettings({ ...settings, ...patch });
+    settings = await api().setSettings(forIpc({ ...settings, ...patch }));
   }
 
   async function patchPreview(patch: Partial<PreviewSettings>): Promise<void> {
@@ -93,8 +141,36 @@
 
   const requestId = () => crypto.randomUUID();
 
+  /**
+   * Every `api().*` call below is wrapped. An `ipcRenderer.invoke` that
+   * rejects -- a handler that threw before its own try/catch, a payload that
+   * failed to structured-clone -- used to surface as an unhandled rejection
+   * with `busy` cleared by `finally` and nothing at all shown, which reads as
+   * "the button does nothing".
+   */
+  function failed(err: unknown, doing: string): void {
+    // The `doing` prefix is not decoration. An `ipcRenderer.invoke` rejection
+    // carries no channel and no argument -- "An object could not be cloned."
+    // is the entire message -- so without naming the operation there is
+    // nothing to act on.
+    const message = err instanceof Error ? err.message : String(err);
+    status = { tone: "error", text: `${doing}: ${message}` };
+  }
+
   async function pick(kind: "image" | "resource-pack" | "schem"): Promise<void> {
-    const picked = await api().pickFile({ kind });
+    let picked: Awaited<ReturnType<ReturnType<typeof api>["pickFile"]>>;
+    try {
+      picked = await api().pickFile({ kind });
+    } catch (err) {
+      failed(err, `Opening the ${kind} chooser`);
+      return;
+    }
+    if (picked.error) {
+      // A rejected choice, not a cancellation — say so rather than looking
+      // like the dialog did nothing.
+      status = { tone: "error", text: picked.error };
+      return;
+    }
     if (!picked.path) return;
     if (kind === "image") {
       imagePath = picked.path;
@@ -102,19 +178,25 @@
     } else if (kind === "resource-pack") {
       resourcePackPath = picked.path;
       resourcePackName = picked.name;
-    } else {
+        } else {
       pickedSchemPath = picked.path;
       pickedSchemName = picked.name;
     }
   }
 
   async function renderPreview(schemPath: string): Promise<void> {
-    const response = await api().preview({
-      requestId: requestId(),
-      schemPath,
-      resourcePackPath,
-      settings: settings.preview,
-    });
+    let response: Awaited<ReturnType<ReturnType<typeof api>["preview"]>>;
+    try {
+      response = await api().preview({
+        requestId: requestId(),
+        schemPath,
+        resourcePackPath,
+        settings: forIpc(settings.preview),
+      });
+    } catch (err) {
+      failed(err, "Rendering the schematic");
+      return;
+    }
     if (!response.ok) {
       // component.py:456 used st.warning, not st.error: a failed preview never
       // invalidates the generated file.
@@ -141,13 +223,19 @@
     busy = true;
     status = null;
     try {
-      const response = await api().generate({
-        requestId: requestId(),
-        description,
-        version: settings.version,
-        exportType: settings.exportType,
-        imagePath,
-      });
+      let response: Awaited<ReturnType<ReturnType<typeof api>["generate"]>>;
+      try {
+        response = await api().generate({
+          requestId: requestId(),
+          description,
+          version: settings.version,
+          exportType: settings.exportType,
+          imagePath,
+        });
+      } catch (err) {
+        failed(err, "Generating the structure");
+        return;
+      }
       if (!response.ok) {
         status = {
           tone:
@@ -173,9 +261,20 @@
   }
 </script>
 
-<main>
+<main
+  class:collapsed={sidebarCollapsed}
+  style={`--sidebar-w: ${sidebarCollapsed ? 0 : sidebarWidth}px`}
+>
   <section class="controls">
-    <h1>BuilderGPT</h1>
+    <header class="sidebar-head">
+      <h1>BuilderGPT</h1>
+      <button
+        class="icon"
+        onclick={toggleSidebar}
+        title="Hide the control panel (Ctrl+B)"
+        aria-label="Hide the control panel">&#x2039;</button
+      >
+    </header>
 
     <ProviderConfig
       {settings}
@@ -227,7 +326,12 @@
       <div class="field">
         <label for="image">Optional reference image</label>
         <div class="pick-row">
-          <input id="image" readonly value={imageName ?? ""} placeholder="No image chosen" />
+          <input
+            id="image"
+            readonly
+            value={imageName ?? ""}
+            placeholder="No image chosen"
+          />
           <button onclick={() => pick("image")}>Choose…</button>
           <button
             onclick={() => {
@@ -257,12 +361,6 @@
         <p class="hint">{progress.message}</p>
       {/if}
 
-      {#if status}
-        <p class={`status ${status.tone}`}>
-          {status.text}
-          {#if status.detail}<br /><small>{status.detail}</small>{/if}
-        </p>
-      {/if}
     </fieldset>
 
     <PreviewSettingsPanel
@@ -285,7 +383,43 @@
     <ArtifactList {artifacts} onselect={(artifact) => runPreview(artifact.path)} />
   </section>
 
+  {#if !sidebarCollapsed}
+    <SidebarSplitter
+      width={sidebarWidth}
+      onresize={(next) => (sidebarWidth = next)}
+      oncommit={(next) => {
+        sidebarWidth = next;
+        void patchUi({ sidebarWidth: next });
+      }}
+    />
+  {/if}
+
   <section class="preview">
+    {#if sidebarCollapsed}
+      <button
+        class="icon show-panel"
+        onclick={toggleSidebar}
+        title="Show the control panel (Ctrl+B)"
+        aria-label="Show the control panel">&#x203a;</button
+      >
+    {/if}
+
+    <!--
+      The status banner lives here, not in the Structure fieldset it was ported
+      into. A preview error raised from the Render button at the bottom of a
+      scrolling column used to render above the fold, off-screen -- visually
+      indistinguishable from nothing happening.
+    -->
+    {#if status}
+      <div class={`status ${status.tone}`} role="status">
+        <div>
+          {status.text}
+          {#if status.detail}<br /><small>{status.detail}</small>{/if}
+        </div>
+        <button class="icon" onclick={() => (status = null)} aria-label="Dismiss">&#x00d7;</button>
+      </div>
+    {/if}
+
     <Viewer
       {glb}
       {sunAzimuth}
@@ -309,29 +443,82 @@
 </main>
 
 <style>
+  /*
+   * `grid-template-rows: 100%` is the fix, not decoration. With only
+   * `grid-template-columns` declared, the single implicit row is `auto` and
+   * grows to the tallest item -- so `main`'s `height: 100%` was never the
+   * height of anything, the left column's `overflow-y: auto` had no box to
+   * overflow, and the excess propagated to the document scrollbar, which
+   * scrolled the canvas along with the controls.
+   *
+   * `min-height: 0` on the children is the second half: a grid item's
+   * automatic minimum size is its content size, so without it a tall column
+   * refuses to shrink into the row no matter what the row says.
+   */
   main {
     display: grid;
-    grid-template-columns: minmax(380px, 460px) 1fr;
+    grid-template-columns: var(--sidebar-w) auto 1fr;
+    grid-template-rows: 100%;
     height: 100%;
+    overflow: hidden;
   }
 
+  main.collapsed {
+    grid-template-columns: 0 0 1fr;
+  }
+
+  /*
+   * Every track is assigned explicitly. Auto-placement is not safe here: the
+   * splitter leaves the DOM when the panel collapses, and without these the
+   * viewport slid into the (0px) splitter track and rendered at zero width --
+   * the precise opposite of what collapsing is for.
+   */
   .controls {
+    grid-column: 1;
     overflow-y: auto;
+    overflow-x: hidden;
+    min-width: 0;
+    min-height: 0;
     padding: 20px;
     border-right: 1px solid var(--border);
   }
 
+  main :global(.splitter) {
+    grid-column: 2;
+  }
+
+  main.collapsed .controls {
+    display: none;
+  }
+
+  .sidebar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+
   h1 {
-    margin: 0 0 20px;
+    margin: 0;
     font-size: 22px;
     letter-spacing: -0.01em;
   }
 
   .preview {
+    grid-column: 3;
     position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
+  }
+
+  .show-panel {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 3;
   }
 
   .preview :global(.viewer) {
@@ -375,10 +562,20 @@
   }
 
   .status {
-    margin: 12px 0 0;
-    padding: 8px 10px;
-    border-radius: 6px;
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 4;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    max-width: min(680px, calc(100% - 96px));
+    padding: 10px 10px 10px 12px;
+    border-radius: 8px;
     border: 1px solid var(--border);
+    background: var(--bg-panel);
+    box-shadow: 0 6px 20px rgb(0 0 0 / 45%);
     font-size: 13px;
   }
 

@@ -109,9 +109,11 @@ export interface PickFileRequest {
 }
 
 export interface PickFileResponse {
-  /** `null` when the user cancelled. */
+  /** `null` when the user cancelled, or when the choice was rejected. */
   path: string | null;
   name: string | null;
+  /** Set when a choice was rejected -- e.g. a folder that cannot be written to. */
+  error?: string;
 }
 
 export interface GenerateRequest {

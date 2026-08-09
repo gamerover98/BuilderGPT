@@ -26,11 +26,17 @@
   box-sizing: border-box;
 }
 
+/*
+ * `overflow: hidden` here is deliberate: the window is a two-pane application
+ * shell, and the only thing allowed to scroll is the control column. Without
+ * it the document itself scrolls, taking the 3D canvas with it.
+ */
 html,
 body,
 #app {
   margin: 0;
   height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
 }
@@ -57,6 +63,21 @@ button:disabled {
 button.primary {
   background: var(--accent-dim);
   border-color: var(--accent);
+}
+
+/* Square, text-free affordances: panel collapse, toast dismiss. */
+button.icon {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  line-height: 1;
+  font-size: 16px;
+  color: var(--text-dim);
+}
+
+button.icon:hover:not(:disabled) {
+  color: var(--text);
 }
 
 input,

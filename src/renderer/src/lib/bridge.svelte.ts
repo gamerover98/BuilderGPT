@@ -1,6 +1,11 @@
 /**
  * Single accessor for the preload bridge.
  *
+ * The `.svelte.ts` extension is load-bearing: `forIpc` below uses the
+ * `$state.snapshot` rune, and runes are only compiled inside `.svelte` and
+ * `.svelte.js/ts` modules. In a plain `.ts` the call survives typechecking and
+ * then throws `rune_outside_svelte` at runtime.
+ *
  * `window.bgpt` is injected by `src/preload/index.ts`. It is absent in exactly
  * two situations: the page was opened in a plain browser (e.g. hitting the Vite
  * dev server's URL directly rather than through Electron), or the preload
@@ -23,4 +28,20 @@ export function api(): BgptApi {
     throw new Error(BRIDGE_MISSING_MESSAGE);
   }
   return window.bgpt;
+}
+
+/**
+ * Strips Svelte reactivity before a value crosses IPC.
+ *
+ * `$state` on an object is a deep `Proxy`, and the structured clone algorithm
+ * cannot serialize a Proxy: `ipcRenderer.invoke` rejects with the famously
+ * uninformative **"An object could not be cloned."**, naming neither the value
+ * nor the channel. Spreading is not enough -- `{ ...settings }` is a plain
+ * object whose `preview` and `ui` fields are still proxies.
+ *
+ * So any *object* built from `$state` must go through here on its way out.
+ * Primitives read off a proxy are already plain and need nothing.
+ */
+export function forIpc<T>(value: T): T {
+  return $state.snapshot(value) as T;
 }

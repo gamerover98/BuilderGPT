@@ -80,6 +80,29 @@ export const PREVIEW_SETTING_RANGES = {
   maxDrawDistance: { min: 64, max: 2048, step: 8 },
 } as const;
 
+/**
+ * Window chrome the user can rearrange. Streamlit owned its own layout and
+ * offered none of this, so there is nothing to port -- these exist because the
+ * 3D viewport and the control column now share one window and compete for it.
+ */
+export interface UiSettings {
+  /** Sidebar width in CSS pixels; clamped to SIDEBAR_WIDTH on both sides. */
+  sidebarWidth: number;
+  sidebarCollapsed: boolean;
+}
+
+/**
+ * The upper bound is also enforced against the live window width at drag time
+ * (the viewport keeps at least SIDEBAR_WIDTH.minViewport), so this is the
+ * clamp that survives a settings file written on a wider screen.
+ */
+export const SIDEBAR_WIDTH = { min: 320, max: 720, minViewport: 360 } as const;
+
+export const DEFAULT_UI_SETTINGS: UiSettings = {
+  sidebarWidth: 420,
+  sidebarCollapsed: false,
+};
+
 export interface Settings {
   provider: Provider;
   model: string;
@@ -88,6 +111,7 @@ export interface Settings {
   version: string;
   exportType: ExportType;
   preview: PreviewSettings;
+  ui: UiSettings;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -97,6 +121,7 @@ export const DEFAULT_SETTINGS: Settings = {
   version: "JE_1_20_4",
   exportType: "schem",
   preview: { ...DEFAULT_PREVIEW_SETTINGS },
+  ui: { ...DEFAULT_UI_SETTINGS },
 };
 
 /**

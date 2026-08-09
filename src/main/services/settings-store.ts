@@ -21,10 +21,13 @@ import { app, safeStorage } from "electron";
 
 import {
   DEFAULT_SETTINGS,
+  DEFAULT_UI_SETTINGS,
   PROVIDERS,
+  SIDEBAR_WIDTH,
   type KeyStorageStatus,
   type Provider,
   type Settings,
+  type UiSettings,
 } from "../../shared/settings.js";
 
 interface PersistedFile {
@@ -54,6 +57,7 @@ function isProvider(value: unknown): value is Provider {
 function coerceSettings(raw: unknown): Settings {
   const source = (raw ?? {}) as Partial<Settings>;
   const preview = { ...DEFAULT_SETTINGS.preview, ...(source.preview ?? {}) };
+  const ui = coerceUi(source.ui);
   return {
     provider: isProvider(source.provider) ? source.provider : DEFAULT_SETTINGS.provider,
     model: typeof source.model === "string" ? source.model : DEFAULT_SETTINGS.model,
@@ -61,6 +65,23 @@ function coerceSettings(raw: unknown): Settings {
     version: typeof source.version === "string" ? source.version : DEFAULT_SETTINGS.version,
     exportType: source.exportType === "mcfunction" ? "mcfunction" : "schem",
     preview,
+    ui,
+  };
+}
+
+/**
+ * The sidebar width is the one persisted number a user can drive to a value
+ * that makes the window unusable (a settings file copied from a 4K screen onto
+ * a laptop), so it is clamped on read rather than trusted.
+ */
+function coerceUi(raw: unknown): UiSettings {
+  const source = (raw ?? {}) as Partial<UiSettings>;
+  const width = Number(source.sidebarWidth);
+  return {
+    sidebarWidth: Number.isFinite(width)
+      ? Math.min(SIDEBAR_WIDTH.max, Math.max(SIDEBAR_WIDTH.min, Math.round(width)))
+      : DEFAULT_UI_SETTINGS.sidebarWidth,
+    sidebarCollapsed: source.sidebarCollapsed === true,
   };
 }
 

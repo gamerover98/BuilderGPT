@@ -13,7 +13,7 @@
    * exists -- it can show "key stored", it cannot read the key back.
    */
   import type { OpenCodeModel } from "../../../shared/ipc.js";
-  import { api, bridgeAvailable } from "./bridge.js";
+  import { api, bridgeAvailable } from "./bridge.svelte.js";
   import {
     PROVIDERS,
     PROVIDER_DEFAULT_MODEL,

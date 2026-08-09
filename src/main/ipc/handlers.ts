@@ -30,10 +30,16 @@ import {
   type Settings,
 } from "../../shared/settings.js";
 import { listArtifacts } from "../services/artifacts.js";
+import { SchematicFormatError } from "../pipeline/loader.js";
 import { classifyGenerateError, generate } from "../services/generate.js";
 import { fetchOpenCodeModels } from "../services/opencode.js";
-import { buildPreview, PreviewTooLargeError, sunAnglesRadians } from "../services/preview.js";
-import { defaultResourcePackPath } from "../services/resources.js";
+import {
+  buildPreview,
+  EmptyPreviewError,
+  PreviewTooLargeError,
+  sunAnglesRadians,
+} from "../services/preview.js";
+import { defaultResourcePackPath, legacyBlocksPath } from "../services/resources.js";
 import {
   clearApiKey,
   getApiKey,
@@ -48,7 +54,9 @@ const FILE_FILTERS: Readonly<Record<PickFileRequest["kind"], Electron.FileFilter
   // component.py:288 -- the image uploader's accepted extensions.
   image: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "bmp"] }],
   "resource-pack": [{ name: "Resource pack", extensions: ["zip"] }],
-  schem: [{ name: "Schematic", extensions: ["schem"] }],
+  // `.schematic` is the legacy MCEdit container; the loader reads it via the
+  // vendored pre-1.13 block table (pipeline/loader_formats.ts).
+  schem: [{ name: "Schematic", extensions: ["schem", "schematic"] }],
 };
 
 function emitProgress(window: BrowserWindow | null, event: ProgressEvent): void {
@@ -161,6 +169,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         // boundary — `preview.ts` and the pipeline stay import-free of electron
         // so the test suite can drive them headlessly.
         fallbackResourcePackPath: await defaultResourcePackPath(),
+        legacyBlocksPath: legacyBlocksPath(),
       });
       const sun = sunAnglesRadians(req.settings);
       emitProgress(window, {
@@ -186,6 +195,14 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         message: "Preview failed",
       });
       if (err instanceof PreviewTooLargeError) {
+        return { ok: false, kind: "invalid-input", message: err.message };
+      }
+      if (err instanceof EmptyPreviewError) {
+        return { ok: false, kind: "empty-result", message: err.message };
+      }
+      if (err instanceof SchematicFormatError) {
+        // Its message already names the format and the reason; prefixing it
+        // with "Failed to build preview" would only bury that.
         return { ok: false, kind: "invalid-input", message: err.message };
       }
       // component.py:455-457 -- "Failed to build preview: {exc}", a warning

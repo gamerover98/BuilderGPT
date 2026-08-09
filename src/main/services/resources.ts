@@ -88,6 +88,16 @@ export async function defaultResourcePackPath(): Promise<string | null> {
   return zips.length > 0 ? path.join(dir, zips[0]) : null;
 }
 
+/**
+ * The vendored pre-1.13 block flattening table, used to read legacy MCEdit
+ * `.schematic` files (`pipeline/loader_formats.ts`). Ships alongside the
+ * resource pack rather than inside the asar so the same `resourcesDir()`
+ * lookup covers dev and packaged builds.
+ */
+export function legacyBlocksPath(): string {
+  return path.join(resourcesDir(), "resources", "legacy_blocks.json");
+}
+
 /** `generated/` (component.py:137-138), relocated to a writable location. */
 export function generatedDir(): string {
   return path.join(app.getPath("userData"), "generated");

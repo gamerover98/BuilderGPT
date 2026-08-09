@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Runs every automated check for BuilderGPT: typecheck plus the four test
+    Runs every automated check for BuilderGPT: typecheck plus the five test
     suites.
 
 .DESCRIPTION
@@ -10,6 +10,7 @@
       * smoke      — end-to-end pipeline: JS build script -> blocks, .schem -> GLB
       * sandbox    — RULEBOOK.md section 3 containment guarantees
       * services   — main-process services, incl. the schematic write/read round-trip
+      * schematics — Sponge v2/v3 and MCEdit all decode to the same voxel grid
 
     Unlike build.ps1, this does NOT stop at the first failure: a test runner that
     aborts early hides how much else is broken. Every suite runs, results are
@@ -30,7 +31,8 @@ $steps = @(
     @{ Name = 'hello';     Script = 'smoke:hello' }
     @{ Name = 'smoke';     Script = 'smoke' }
     @{ Name = 'sandbox';   Script = 'smoke:sandbox' }
-    @{ Name = 'services';  Script = 'smoke:services' }
+    @{ Name = 'services';   Script = 'smoke:services' }
+    @{ Name = 'schematics'; Script = 'smoke:schematics' }
 )
 
 $failed = @()

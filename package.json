@@ -22,7 +22,8 @@
     "smoke:hello": "tsx tests/hello-world.ts",
     "smoke": "tsx tests/smoke.ts",
     "smoke:services": "tsx tests/services.ts",
-    "smoke:sandbox": "tsx tests/sandbox.ts"
+    "smoke:sandbox": "tsx tests/sandbox.ts",
+    "smoke:schematics": "tsx tests/schematics.ts"
   },
   "dependencies": {
     "@jitl/quickjs-singlefile-cjs-release-sync": "^0.32.0",

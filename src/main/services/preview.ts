@@ -26,9 +26,11 @@ import type { PreviewSettings } from "../../shared/settings.js";
 import { buildAtlas } from "../pipeline/atlas.js";
 import { meshToGlb } from "../pipeline/gltf_builder.js";
 import { loadStructure } from "../pipeline/loader.js";
+import type { SchematicFormat } from "../pipeline/loader_formats.js";
 import { buildMesh, culledFaces } from "../pipeline/mesher.js";
 import { ModelBaker } from "../pipeline/model_baker.js";
 import { normalizePalette } from "../pipeline/translate.js";
+import type { StructureData } from "../pipeline/types.js";
 
 /** preview.py:66-67 -- "50 MB is generous for a .schem file". */
 export const MAX_SCHEM_BYTES = 50 * 1024 * 1024;
@@ -37,6 +39,28 @@ export class PreviewTooLargeError extends Error {
   constructor() {
     super("Schematic too large to preview (over 50 MB)");
     this.name = "PreviewTooLargeError";
+  }
+}
+
+/**
+ * The schematic decoded, but produced no drawable geometry.
+ *
+ * This used to be the quietest failure in the app: `mesher.ts` drops faces it
+ * cannot resolve (an unknown face name, a texture missing from the atlas), and
+ * when *every* face drops, `gltf_builder.ts` still emits a structurally valid
+ * GLB with zero primitives and a zero bounding box. The renderer parsed it
+ * without complaint and drew nothing, so a schematic full of blocks the
+ * resource pack could not texture was indistinguishable from a dead button.
+ */
+export class EmptyPreviewError extends Error {
+  constructor(readonly blockCount: number) {
+    super(
+      blockCount === 0
+        ? "The schematic contains no blocks other than air"
+        : `The schematic decoded to ${blockCount} block(s) but produced no visible geometry ` +
+          `— none of its blocks could be matched to a model in the resource pack`,
+    );
+    this.name = "EmptyPreviewError";
   }
 }
 
@@ -58,7 +82,6 @@ export interface PreviewResult {
  * alongside the cached GLB rather than baked into it.
  */
 const CACHE_LIMIT = 8;
-const cache = new Map<string, PreviewResult>();
 
 /**
  * Field separator for the cache key, so that two different field splits cannot
@@ -70,6 +93,11 @@ const cache = new Map<string, PreviewResult>();
  * filesystem path, and none of them can contain one.
  */
 const SEPARATOR = "\n";
+type CachedPreview = PreviewResult & {
+  format: SchematicFormat;
+  unmappedLegacyIds: readonly string[];
+};
+const cache = new Map<string, CachedPreview>();
 
 function cacheKey(
   schemBytes: Uint8Array,
@@ -99,10 +127,36 @@ export interface BuildPreviewOptions {
    * free of Electron imports and testable headlessly.
    */
   fallbackResourcePackPath?: string | null;
+  /**
+   * The vendored pre-1.13 block table, needed only to read legacy MCEdit
+   * `.schematic` files. Resolved by the caller for the same reason as the
+   * pack paths above: this module imports no Electron.
+   */
+  legacyBlocksPath?: string | null;
 }
 
 export interface BuildPreviewOutcome extends PreviewResult {
   cached: boolean;
+  format: SchematicFormat;
+  /** MCEdit only: `id:meta` pairs with no entry in the flattening table. */
+  unmappedLegacyIds: readonly string[];
+}
+
+/** Non-air voxels, used to tell "empty schematic" from "nothing was drawable". */
+function countSolidBlocks(structure: StructureData): number {
+  const airIndices = new Set<number>();
+  structure.palette.forEach((entry, index) => {
+    if (entry.namespacedName === "minecraft:air") {
+      airIndices.add(index);
+    }
+  });
+  let count = 0;
+  for (const index of structure.voxels) {
+    if (!airIndices.has(index)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 export async function buildPreview(options: BuildPreviewOptions): Promise<BuildPreviewOutcome> {
@@ -122,7 +176,9 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
   }
 
   // preview.py:80-87, same call order, same arguments.
-  const structure = await loadStructure(options.schemPath);
+  const structure = await loadStructure(options.schemPath, {
+    legacyBlocksPath: options.legacyBlocksPath ?? null,
+  });
   // `normalizePalette`'s translator is the still-open `pymctranslate` DI seam
   // (RULEBOOK.md DEV-014's note / translate.ts's TODO(port)). `undefined` is
   // its documented identity behavior, which is also what Python's
@@ -133,12 +189,20 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
   const faces = await culledFaces(normalized, baker);
   const atlas = buildAtlas(baker.textures);
   const mesh = buildMesh(faces, atlas.uvRects);
+  if (mesh.indices.length === 0) {
+    // Deliberately raised before `meshToGlb`, which would happily produce a
+    // valid-but-blank GLB. Not cached: the next attempt may use a different
+    // resource pack, which is exactly the fix for this failure.
+    throw new EmptyPreviewError(countSolidBlocks(structure));
+  }
   const glb = meshToGlb(mesh, atlas);
 
-  const result: PreviewResult = {
+  const result: CachedPreview = {
     glb: glb.glbBytes,
     center: [...glb.center] as [number, number, number],
     size: [...glb.size] as [number, number, number],
+    format: structure.format,
+    unmappedLegacyIds: structure.unmappedLegacyIds,
   };
 
   cache.set(key, result);

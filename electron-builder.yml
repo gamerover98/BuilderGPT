@@ -18,7 +18,8 @@ extraResources:
     to: prompts.json
   - from: block_id_list.txt
     to: block_id_list.txt
-  # The default preview resource pack. `services/resources.ts`'s
+  # The default preview resource pack, plus `legacy_blocks.json` (the pre-1.13
+  # id -> block-state table used to read MCEdit .schematic files).
   # `defaultResourcePackPath` scans this directory for the first .zip, so the
   # pack can be swapped or updated without touching code.
   - from: resources

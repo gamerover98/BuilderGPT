@@ -1,0 +1,50 @@
+{
+  "name": "buildergpt",
+  "version": "3.0.0",
+  "private": true,
+  "description": "BuilderGPT \u2014 AI Minecraft structure generator (Electron port of the Streamlit app)",
+  "author": "CyniaAI Team",
+  "homepage": "https://github.com/CyniaAI/BuilderGPT",
+  "license": "GPL-3.0",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "svelte-check --tsconfig tsconfig.web.json",
+    "package": "npm run build && electron-builder",
+    "package:win": "npm run build && electron-builder --win",
+    "package:linux": "npm run build && electron-builder --linux",
+    "package:mac": "npm run build && electron-builder --mac",
+    "smoke:hello": "tsx tests/hello-world.ts",
+    "smoke": "tsx tests/smoke.ts",
+    "smoke:services": "tsx tests/services.ts",
+    "smoke:sandbox": "tsx tests/sandbox.ts"
+  },
+  "dependencies": {
+    "@jitl/quickjs-singlefile-cjs-release-sync": "^0.32.0",
+    "adm-zip": "^0.5.16",
+    "pngjs": "^7.0.0",
+    "prismarine-nbt": "^2.7.0",
+    "quickjs-emscripten-core": "^0.32.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@types/adm-zip": "^0.5.7",
+    "@types/node": "^22.15.0",
+    "@types/pngjs": "^6.0.5",
+    "@types/three": "^0.171.0",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^5.0.0",
+    "svelte": "^5.16.0",
+    "svelte-check": "^4.1.1",
+    "three": "^0.171.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3",
+    "vite": "^6.0.7"
+  }
+}

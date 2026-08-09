@@ -1,25 +1,49 @@
-__pycache__
-generated/*
-temp/*
-temp_uploads/*
-build/*
-logs/*
-test.py
-_config.yaml
+# Dependencies
+node_modules/
 
+# Build output
+# `out/` is where electron-vite writes the main/preload/renderer bundles.
+# (IntelliJ also uses this name for its compiler output, so it is ignored for
+# both reasons.)
+out/
+dist/
+# electron-builder installers
+release/
+
+# Runtime scratch
+logs/*
+temp/*
+_config.yaml
 dev/*
 
-# Environment variables
+# Environment
+# The app has no .env: provider API keys live in an in-app settings store,
+# encrypted with Electron's safeStorage under userData.
 .env
-!.env.example
+.env.*
+
+# Migration working material — the Python -> Electron port record, the vendored
+# migration kit, and their scratch output. Transient by nature and deliberately
+# never committed; the ported result is the deliverable.
+migration/
+migration-kit/
 
 # IntelliJ IDEA
 .idea/
 *.iml
 *.iws
 *.ipr
-out/
 
 # VS Code
 .vscode/
 *.code-workspace
+
+# Claude Code (local state only)
+# settings.json holds per-developer tool permissions rather than anything the
+# project needs; committing one person's grants would impose them on everyone.
+.claude/settings.json
+.claude/settings.local.json
+CLAUDE.local.md
+.claude/*.log
+.claude/cache/
+.claude/scheduled_tasks.lock

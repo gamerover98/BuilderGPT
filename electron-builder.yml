@@ -1,0 +1,57 @@
+appId: ai.cynia.buildergpt
+productName: BuilderGPT
+copyright: Copyright © CyniaAI Team
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**
+  - package.json
+
+# prompts.json and block_id_list.txt stay outside the asar so users can edit
+# them, and so `services/resources.ts`'s `process.resourcesPath` lookup finds
+# them (see ARCHITECTURE.md §2 / resources.ts).
+extraResources:
+  - from: prompts.json
+    to: prompts.json
+  - from: block_id_list.txt
+    to: block_id_list.txt
+  # The default preview resource pack. `services/resources.ts`'s
+  # `defaultResourcePackPath` scans this directory for the first .zip, so the
+  # pack can be swapped or updated without touching code.
+  - from: resources
+    to: resources
+
+# No asarUnpack list, and no native rebuild step: the sandbox is QuickJS
+# compiled to WebAssembly, shipped by the "singlefile" variant that embeds the
+# .wasm inside its JS module (RULEBOOK.md DEV-015). Every dependency left in
+# this app is pure JS, so the same asar works on all three platforms.
+asar: true
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: ${productName}-${version}-setup-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  category: Graphics
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+mac:
+  category: public.app-category.graphics-design
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  artifactName: ${productName}-${version}-${arch}.${ext}

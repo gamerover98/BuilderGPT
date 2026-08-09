@@ -1,0 +1,11 @@
+{
+  "//": "Editor + `tsc --noEmit` default. The real configs are tsconfig.node.json (main/preload/shared) and tsconfig.web.json (renderer/shared); this mirrors the node one so plain `tsc` keeps working, and `npm run typecheck` runs both.",
+  "extends": "./tsconfig.node.json",
+  "include": [
+    "src/main/**/*.ts",
+    "src/preload/**/*.ts",
+    "src/shared/**/*.ts",
+    "tests/**/*.ts",
+    "electron.vite.config.ts"
+  ]
+}

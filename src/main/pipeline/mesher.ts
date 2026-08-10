@@ -102,6 +102,13 @@ export async function culledFaces(struct: StructureData, baker: ModelBaker): Pro
             if (occludesNeighbours(neighbor)) {
               continue;
             }
+            // A block always hides the identical block next to it, even when
+            // both are see-through. This is what keeps a body of water or a
+            // wall of glass from meshing every internal face now that neither
+            // occludes an opaque neighbour — and it is what the game does.
+            if (neighbor.namespacedName === entry.namespacedName) {
+              continue;
+            }
           }
           // Out of bounds is air, matching mesher.py:47-48.
 

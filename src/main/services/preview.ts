@@ -34,7 +34,7 @@ import type { SchematicFormat } from "../pipeline/loader_formats.js";
 import { buildMesh, culledFaces } from "../pipeline/mesher.js";
 import { ModelBaker } from "../pipeline/model_baker.js";
 import { normalizePalette } from "../pipeline/translate.js";
-import type { StructureData } from "../pipeline/types.js";
+import { paletteEntryCacheKey, paletteEntryIsAir, type StructureData } from "../pipeline/types.js";
 
 /** preview.py:66-67 -- "50 MB is generous for a .schem file". */
 export const MAX_SCHEM_BYTES = 50 * 1024 * 1024;
@@ -162,7 +162,9 @@ export interface BuildPreviewOutcome extends PreviewResult {
 function countSolidBlocks(structure: StructureData): number {
   const airIndices = new Set<number>();
   structure.palette.forEach((entry, index) => {
-    if (entry.namespacedName === "minecraft:air") {
+    // `paletteEntryIsAir` rather than a literal: it also covers `cave_air` and
+    // `void_air`, which a schematic cut out of a cave is full of.
+    if (paletteEntryIsAir(entry)) {
       airIndices.add(index);
     }
   });
@@ -173,6 +175,47 @@ function countSolidBlocks(structure: StructureData): number {
     }
   }
   return count;
+}
+
+/**
+ * Names palette entries that are present in the voxels but contributed no
+ * geometry at all.
+ *
+ * Two places drop faces without a word: `mesher.ts` skips a face whose name the
+ * baked block does not carry, and `buildMesh` skips one whose texture never
+ * made it into the atlas. Until now the only alarm was `EmptyPreviewError`, and
+ * only when *everything* fell -- so "the walls of my house are missing" left no
+ * trace anywhere. This is that trace.
+ */
+async function warnAboutBlocksWithNoGeometry(
+  structure: StructureData,
+  baker: ModelBaker,
+  atlasUvKeys: ReadonlySet<string>,
+): Promise<void> {
+  const present = new Set(structure.voxels);
+  const silent: string[] = [];
+  for (const [index, entry] of structure.palette.entries()) {
+    if (!present.has(index) || paletteEntryIsAir(entry)) {
+      continue;
+    }
+    const baked = await baker.bakeBlockstate(entry);
+    const keys = [
+      ...(baked.isFullCube ? Object.values(baked.faces) : []),
+      ...baked.extraFaces,
+    ].map((face) => face.textureKey);
+    // Not "did this block end up on screen" — a block can legitimately have
+    // every face culled by its neighbours. The question is whether it *could*
+    // have drawn anything: no faces to emit, or no texture for any of them.
+    if (keys.length === 0 || keys.every((key) => !atlasUvKeys.has(key))) {
+      silent.push(paletteEntryCacheKey(entry));
+    }
+  }
+  if (silent.length > 0) {
+    console.warn(
+      `[preview] ${silent.length} block type(s) present in the schematic can draw ` +
+        `nothing and are invisible in the preview: ${silent.join(", ")}`,
+    );
+  }
 }
 
 export async function buildPreview(options: BuildPreviewOptions): Promise<BuildPreviewOutcome> {
@@ -218,6 +261,7 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
   const faces = await culledFaces(normalized, baker);
   const atlas = buildAtlas(baker.textures);
   const mesh = buildMesh(faces, atlas.uvRects);
+  await warnAboutBlocksWithNoGeometry(normalized, baker, new Set(Object.keys(atlas.uvRects)));
   if (mesh.indices.length === 0) {
     // Deliberately raised before `meshToGlb`, which would happily produce a
     // valid-but-blank GLB. Not cached: the next attempt may use a different

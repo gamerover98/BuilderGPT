@@ -71,34 +71,25 @@ export function paletteEntryCacheKey(entry: PaletteEntry): string {
   return `${entry.namespacedName}[${props}]`;
 }
 
-/** Ported from `PaletteEntry.is_air` (`types.py:42-45`). */
+/**
+ * Ported from `PaletteEntry.is_air` (`types.py:42-45`), widened on purpose.
+ *
+ * The source matched `:air` only, which is `minecraft:air` and nothing else --
+ * `minecraft:cave_air` and `minecraft:void_air` end in `_air`, not `:air`. Both
+ * are air in every sense that matters here: the game draws neither, and a
+ * schematic cut out of a cave is full of the first one. Left out, they were
+ * meshed as solid cubes wearing a hashed fallback colour *and* they hid every
+ * neighbouring face, walling the structure in.
+ *
+ * This predicate is the single answer to "is there nothing here", used by the
+ * mesher for both questions it asks of a voxel: skip it as a source, and never
+ * let it occlude (`block_shapes.ts`'s `occludesNeighbours`).
+ */
 export function paletteEntryIsAir(entry: PaletteEntry): boolean {
-  const name = entry.namespacedName;
-  return name.endsWith(":air") || name === "air" || name === "minecraft:air";
-}
-
-/** Ported from `PaletteEntry.is_transparent` (`types.py:47-66`). */
-export function paletteEntryIsTransparent(entry: PaletteEntry): boolean {
-  if (paletteEntryIsAir(entry)) {
-    return true;
-  }
-  const name = entry.namespacedName;
-  const transparentPrefixes = [
-    "minecraft:glass",
-    "minecraft:ice",
-    "minecraft:water",
-    "minecraft:kelp",
-    "minecraft:torch",
-  ];
-  if (transparentPrefixes.some((prefix) => name.startsWith(prefix))) {
-    return true;
-  }
-  return (
-    name === "minecraft:barrier" ||
-    name === "minecraft:light" ||
-    name === "minecraft:cave_air" ||
-    name === "minecraft:void_air"
-  );
+  // Any namespace, not just `minecraft:` -- the source's `endsWith(":air")`
+  // accepted a modded one and there is no reason to narrow that.
+  const name = entry.namespacedName.replace(/^[^:]*:/, "");
+  return name === "air" || name === "cave_air" || name === "void_air";
 }
 
 /**

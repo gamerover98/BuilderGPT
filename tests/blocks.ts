@@ -263,6 +263,24 @@ check("a stair does not occlude", !occludesNeighbours(block("oak_stairs")));
 check("glass does not occlude", !occludesNeighbours(block("glass")));
 check("leaves do not occlude", !occludesNeighbours(block("oak_leaves")));
 
+// The one that was missing, and it cost the whole render: air is in no shape
+// table, so it fell through to CUBE and answered "yes, I cover that face" --
+// for every exposed face in every schematic.
+for (const name of ["air", "cave_air", "void_air"]) {
+  check(`${name} does not occlude`, !occludesNeighbours(block(name)));
+}
+check("water does not occlude the ground under it", !occludesNeighbours(block("water")));
+check("lava does not occlude either", !occludesNeighbours(block("lava")));
+
+// Same class of gap as air: a name absent from every table becomes a full
+// opaque cube. `SUFFIX_SHAPES` keys "_torch", which the bare name does not end
+// with, so the commonest light source in the game was a solid block.
+check("a standing torch is not a cube", shapeFor(block("torch")).kind !== "cube");
+check("a standing torch does not occlude", !occludesNeighbours(block("torch")));
+for (const name of ["rail", "lever", "cactus", "lectern", "stonecutter", "scaffolding"]) {
+  check(`${name} is not a full cube`, shapeFor(block(name)).kind !== "cube");
+}
+
 {
   // Two blocks side by side on the x axis: stone at x=0, a slab at x=1.
   const palette: PaletteEntry[] = [block("air"), block("stone"), block("oak_slab", { type: "bottom" })];
@@ -278,6 +296,81 @@ check("leaves do not occlude", !occludesNeighbours(block("oak_leaves")));
 
   const mesh = buildMesh(faces, buildAtlas(baker.textures).uvRects);
   check("the pair meshes to real geometry", mesh.indices.length > 0);
+}
+
+// --- how much geometry a real structure produces -----------------------------
+//
+// The checks above are all predicate-level, and that is exactly how the air bug
+// survived: `occludesNeighbours(air)` was never asked. These run whole voxel
+// grids through `culledFaces` and compare against a total anyone can count by
+// hand. With air occluding, the first two came back with 0 faces and the third
+// with 20 instead of 70 — the outer shell of the bounding box and nothing else.
+console.log("\n--- geometry from a real voxel grid ---");
+
+/** Builds a structure of the given size, filling voxels from `at`. */
+function structureOf(
+  sizeX: number,
+  sizeY: number,
+  sizeZ: number,
+  palette: PaletteEntry[],
+  at: (x: number, y: number, z: number) => number,
+): StructureData {
+  const voxels = new Int32Array(sizeX * sizeY * sizeZ);
+  for (let x = 0; x < sizeX; x += 1) {
+    for (let y = 0; y < sizeY; y += 1) {
+      for (let z = 0; z < sizeZ; z += 1) {
+        // The canonical flat index, RULEBOOK.md §2.
+        voxels[x * sizeY * sizeZ + y * sizeZ + z] = at(x, y, z);
+      }
+    }
+  }
+  return {
+    bounds: { minX: 0, minY: 0, minZ: 0, maxX: sizeX - 1, maxY: sizeY - 1, maxZ: sizeZ - 1 },
+    palette,
+    voxels,
+  };
+}
+
+{
+  // One stone block floating in the middle of a 3x3x3 of air. Every one of its
+  // six faces looks at air, so all six must survive.
+  const struct = structureOf(3, 3, 3, [block("air"), block("stone")], (x, y, z) =>
+    x === 1 && y === 1 && z === 1 ? 1 : 0,
+  );
+  equal("a lone block surrounded by air keeps all 6 faces", (await culledFaces(struct, baker)).length, 6);
+}
+
+{
+  // A solid 3x3x3 core of stone inside a 5x5x5 of air: 9 faces per side, and
+  // not one of the 27-block interior.
+  const struct = structureOf(5, 5, 5, [block("air"), block("stone")], (x, y, z) =>
+    x >= 1 && x <= 3 && y >= 1 && y <= 3 && z >= 1 && z <= 3 ? 1 : 0,
+  );
+  equal("a 3x3x3 core shows its 54 outer faces and no interior", (await culledFaces(struct, baker)).length, 54);
+}
+
+{
+  // A lawn: 5x5 of grass with a layer of air above it. This is the shape the
+  // generated house was mostly made of, and the shape that made the defect
+  // visible — its 25 top faces are the ones the player actually looks at.
+  const struct = structureOf(5, 2, 5, [block("air"), block("grass_block")], (_x, y) => (y === 0 ? 1 : 0));
+  const faces = await culledFaces(struct, baker);
+  equal("a 5x5 lawn keeps its 25 top faces", faces.filter((f) => f.normal[1] === 1).length, 25);
+  // 25 up + 25 down (the grid floor) + 4 sides of 5.
+  equal("and 70 faces in total", faces.length, 70);
+}
+
+{
+  // See-through blocks: glass must not cull the stone beside it, but must still
+  // cull the glass beside it — otherwise a window pane meshes its own interior.
+  const struct = structureOf(3, 1, 1, [block("air"), block("glass"), block("stone")], (x) =>
+    x === 0 ? 1 : x === 1 ? 1 : 2,
+  );
+  const faces = await culledFaces(struct, baker);
+  const stoneWest = faces.filter((f) => f.normal[0] === -1 && f.positions[0] === 2);
+  check("stone keeps the face it shares with glass", stoneWest.length === 1);
+  const glassBetween = faces.filter((f) => f.normal[0] === 1 && f.positions[0] === 1);
+  check("glass drops the face it shares with glass", glassBetween.length === 0);
 }
 
 // --- shaped blocks borrow their material's texture ---------------------------

@@ -16,7 +16,7 @@
 // This is a deliberate approximation, not a model loader. Blocks with no entry
 // stay full cubes, which is the same answer as before for anything not listed.
 
-import type { PaletteEntry } from "./types.js";
+import { paletteEntryIsAir, type PaletteEntry } from "./types.js";
 
 /** A box in Minecraft's 1/16 units: `[x0, y0, z0, x1, y1, z1]`, each 0..16. */
 export type Box = readonly [number, number, number, number, number, number];
@@ -480,6 +480,8 @@ const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => Bl
   ["_banner", (e) => againstWall(e, 2)],
   ["_sign", (e) => againstWall(e, 2)],
   ["_torch", torchShape],
+  ["_rail", () => boxes([0, 0, 0, 16, 1, 16])],
+  ["_candle", () => boxes([7, 0, 7, 9, 6, 9])],
   ["_sapling", () => ({ kind: "cross" })],
   ["_tulip", () => ({ kind: "cross" })],
   ["_mushroom", () => ({ kind: "cross" })],
@@ -590,8 +592,36 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
   structure_void: () => INVISIBLE,
   moving_piston: () => INVISIBLE,
 
+  // `SUFFIX_SHAPES` keys `"_torch"`, which catches `wall_torch`, `soul_torch`
+  // and `redstone_torch` but not the bare name -- so the commonest torch in the
+  // game was a full opaque cube that also walled off its neighbours.
+  torch: torchShape,
+
   iron_bars: pane,
   ladder: (e) => againstWall(e, 1),
+
+  // Flat against the face they sit on. As cubes they hid the block underneath,
+  // which for a rail means the track is invisible and the ground is too.
+  rail: () => boxes([0, 0, 0, 16, 1, 16]),
+  lever: (e) => againstWall(e, 3),
+  tripwire_hook: (e) => againstWall(e, 3),
+  glow_lichen: (e) => againstWall(e, 1),
+
+  // Vanilla insets the cactus by 1/16 on all four sides; drawn as a full cube
+  // it merges with whatever it stands next to.
+  cactus: () => boxes([1, 0, 1, 15, 16, 15]),
+  scaffolding: () => boxes([0, 14, 0, 16, 16, 16]),
+  bamboo: () => boxes([6.5, 0, 6.5, 9.5, 16, 9.5]),
+  kelp: () => ({ kind: "cross" }),
+  kelp_plant: () => ({ kind: "cross" }),
+  sea_pickle: () => boxes([6, 0, 6, 10, 6, 10]),
+  candle: () => boxes([7, 0, 7, 9, 6, 9]),
+
+  // Workstations that are not full blocks. `composter` is left a cube on
+  // purpose: its outer shell really is 16x16x16, only its inside is hollow.
+  stonecutter: () => boxes([0, 0, 0, 16, 9, 16]),
+  grindstone: (e) => transform([[4, 4, 2, 12, 16, 14]], facingSteps(e), false),
+  lectern: () => boxes([0, 0, 0, 16, 2, 16], [4, 2, 4, 12, 15, 12]),
   chest,
   trapped_chest: chest,
   ender_chest: chest,
@@ -691,21 +721,40 @@ export function shapeFor(entry: PaletteEntry): BlockShape {
  * Only a full opaque cube does. Culling against a slab or a fence is what made
  * a staircase look like a wall: the block behind it lost its face to a
  * neighbour that covers an eighth of it.
+ *
+ * **Air is the case that has to come first.** It is not in any shape table, so
+ * it used to fall through to `CUBE` and answer yes -- and since every exposed
+ * face of a structure has air behind it, that culled all of them. What survived
+ * was the shell of the bounding box and nothing else: measured on a 21x14x26
+ * house, 216 faces out of 1700. It went unnoticed for so long because a dense
+ * build that fills its own bounding box looks almost right as a shell; a house
+ * with a wide lawn and thin walls disappears entirely.
  */
 export function occludesNeighbours(entry: PaletteEntry): boolean {
-  return shapeFor(entry).kind === "cube" && !hasTextureAlpha(entry);
+  if (paletteEntryIsAir(entry)) {
+    return false;
+  }
+  return shapeFor(entry).kind === "cube" && !isSeeThrough(entry);
 }
 
 /**
- * Blocks whose texture is partly transparent, so they must not occlude even
- * though their geometry is a full cube.
+ * Blocks you can see through, so they must not occlude even though their
+ * geometry is a full cube.
+ *
+ * Fluids belong here for the same reason glass does -- the sand under a pond is
+ * visible from above, so it keeps its top face. What stops that from meshing
+ * the interior of an ocean is the identical-neighbour rule in `mesher.ts`:
+ * water still hides water, glass still hides glass.
  */
-function hasTextureAlpha(entry: PaletteEntry): boolean {
+function isSeeThrough(entry: PaletteEntry): boolean {
   const name = baseName(entry);
   return (
     name.startsWith("glass") ||
     name.endsWith("_glass") ||
     name.endsWith("_leaves") ||
+    name === "water" ||
+    name === "lava" ||
+    name === "bubble_column" ||
     name === "ice" ||
     name === "frosted_ice" ||
     name === "slime_block" ||

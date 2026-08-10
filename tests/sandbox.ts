@@ -39,9 +39,16 @@ function check(label: string, cond: boolean, detail?: string): void {
   }
 }
 
-/** Runs guest code and reports what escaped, if anything. */
+/**
+ * Runs guest code and reports what escaped, if anything.
+ *
+ * Only the placements: every containment check below is phrased in terms of
+ * what the guest managed to write. The refusals `executeJsBuild` also returns
+ * are exercised separately, in the allowlist section.
+ */
 async function run(code: string, allowed: ReadonlySet<string>) {
-  return await executeJsBuild(code, allowed);
+  const outcome = await executeJsBuild(code, allowed);
+  return outcome.placements;
 }
 
 console.log("=== BuilderGPT sandbox containment checks (quickjs-emscripten) ===\n");
@@ -158,9 +165,61 @@ console.log("\n--- block allowlist ---");
       safeSetBlock(1, 0, 0, 'stone', null);
     }
   `;
-  const placements = await run(code, allowed);
+  const { placements, rejections } = await executeJsBuild(code, allowed);
   check("an unknown block id is dropped", placements.length === 1);
   check("the allowed block is kept", placements[0]?.[3] === "minecraft:stone");
+
+  // Dropping it is correct; dropping it silently was the bug. A build that
+  // loses every wall to an unlisted block used to be indistinguishable from
+  // one the model simply never wrote.
+  check("the drop is reported, not swallowed", rejections.length === 1);
+  check(
+    "the report names the block and the reason",
+    rejections[0]?.blockId === "minecraft:definitely_not_a_real_block" &&
+      rejections[0]?.reason === "unsupported" &&
+      rejections[0]?.calls === 1,
+    JSON.stringify(rejections),
+  );
+
+  // A fill counts once however large the region, and repeats accumulate.
+  const repeated = `
+    function buildCreation(x, y, z) {
+      safeFill(0, 0, 0, 9, 9, 9, 'definitely_not_a_real_block', null);
+      safeSetBlock(0, 0, 0, 'definitely_not_a_real_block', null);
+      safeSetBlock(1, 0, 0, 'definitely_not_a_real_block', null);
+    }
+  `;
+  const second = await executeJsBuild(repeated, allowed);
+  check("nothing was placed", second.placements.length === 0);
+  check(
+    "one entry per block id, counting calls not blocks",
+    second.rejections.length === 1 && second.rejections[0]?.calls === 3,
+    JSON.stringify(second.rejections),
+  );
+}
+
+// --- 5b. The allowlist covers the blocks a real build needs -------------
+console.log("\n--- allowlist coverage ---");
+{
+  // The list used to hold 234 ids and none of these. Every one of them is
+  // ordinary in a house, so their absence meant the model could describe a
+  // door and never place one.
+  const staples = [
+    "minecraft:oak_door",
+    "minecraft:oak_stairs",
+    "minecraft:oak_slab",
+    "minecraft:oak_fence",
+    "minecraft:oak_trapdoor",
+    "minecraft:glass_pane",
+    "minecraft:chest",
+    "minecraft:torch",
+    "minecraft:crafting_table",
+    "minecraft:ladder",
+    "minecraft:water",
+  ];
+  const missing = staples.filter((id) => !allowed.has(id));
+  check("the allowlist carries ordinary building blocks", missing.length === 0, missing.join(", "));
+  check("the header comment is not parsed as a block id", ![...allowed].some((id) => id.startsWith("#")));
 }
 
 // --- 6. Guest cannot reach host objects through the bridge --------------

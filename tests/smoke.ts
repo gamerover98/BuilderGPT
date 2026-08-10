@@ -44,8 +44,9 @@ console.log("--- jscode2blocks ---");
   check("minecraft:stone is an allowed block", allowed.has("minecraft:stone"));
 
   const code = "function buildCreation(x,y,z){ safeSetBlock(0,0,0,'stone',null); }";
-  const placements = await executeJsBuild(code, allowed);
+  const { placements, rejections } = await executeJsBuild(code, allowed);
   check("executeJsBuild placed exactly one block", placements.length === 1);
+  check("a clean build reports no dropped blocks", rejections.length === 0);
   check(
     "placement is (0,0,0,minecraft:stone)",
     placements.length === 1 &&
@@ -56,10 +57,10 @@ console.log("--- jscode2blocks ---");
   );
 
   // Determinism check, same technique as the Python judge's run_self_check.py.
-  const placements2 = await executeJsBuild(code, allowed);
+  const second = await executeJsBuild(code, allowed);
   check(
     "executeJsBuild is deterministic (same input, same output)",
-    JSON.stringify(placements) === JSON.stringify(placements2),
+    JSON.stringify(placements) === JSON.stringify(second.placements),
   );
 }
 

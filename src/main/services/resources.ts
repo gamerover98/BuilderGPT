@@ -15,6 +15,8 @@ import path from "path";
 
 import { app } from "electron";
 
+import { parseBlockList } from "../core.js";
+
 export interface Prompts {
   SYS_GEN: string;
   USR_GEN: string;
@@ -55,9 +57,18 @@ export async function loadPrompts(): Promise<Prompts> {
   return cachedPrompts;
 }
 
-/** The raw text spliced into `%BLOCK_TYPES_LIST%` (component.py:117). */
+/**
+ * The text spliced into `%BLOCK_TYPES_LIST%` (component.py:117).
+ *
+ * Comments are stripped rather than passed through: the list is generated and
+ * carries a header saying so, and the model has no use for the regeneration
+ * command. `parseBlockList` is shared with `core.ts`'s `loadAllowedBlocks` so
+ * the set the model is told about cannot drift from the set it is judged
+ * against -- they are now the same file read the same way.
+ */
 export async function loadBlockIdListText(): Promise<string> {
-  return await readFile(path.join(resourcesDir(), "block_id_list.txt"), "utf-8");
+  const raw = await readFile(path.join(resourcesDir(), "block_id_list.txt"), "utf-8");
+  return [...parseBlockList(raw)].join("\n");
 }
 
 /**

@@ -12,7 +12,7 @@
 
 import { copyFile, rename, rm, writeFile } from "fs/promises";
 
-import type { ProgressEvent } from "../../shared/ipc.js";
+import type { DroppedBlock, ProgressEvent } from "../../shared/ipc.js";
 import type { ExportType, Provider } from "../../shared/settings.js";
 import {
   formatVersionForPrompt,
@@ -68,6 +68,15 @@ export interface GenerateOutcome {
   exportType: ExportType;
   /** Set when a file of the same name was moved aside to make room. */
   backedUpTo: string | null;
+  /**
+   * Blocks the model asked for that the allowlist refused, most-refused first.
+   * Empty on a clean build. Reported rather than swallowed -- see
+   * `core.ts`'s `BuildRejection`.
+   *
+   * Mutable, and the IPC type rather than a local one: this array is handed
+   * straight to the renderer, and `shared/ipc.ts` owns that shape.
+   */
+  droppedBlocks: DroppedBlock[];
 }
 
 export async function generate(options: GenerateOptions): Promise<GenerateOutcome> {
@@ -176,7 +185,17 @@ export async function generate(options: GenerateOptions): Promise<GenerateOutcom
   });
 
   report("done", 1.0, "Done");
-  return { path: filePath, name, exportType: options.exportType, backedUpTo };
+  return {
+    path: filePath,
+    name,
+    exportType: options.exportType,
+    backedUpTo,
+    droppedBlocks: result.rejections.map((rejection) => ({
+      blockId: rejection.blockId,
+      reason: rejection.reason,
+      calls: rejection.calls,
+    })),
+  };
 }
 
 /** Maps a thrown error onto `shared/ipc.ts`'s `FailureKind`. */

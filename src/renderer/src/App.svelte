@@ -283,14 +283,30 @@
         };
         return;
       }
+      // Two independent things worth saying about a successful save, either of
+      // which may be absent. Dropped blocks downgrade the tone: the file was
+      // written, but it is not the structure the model described.
+      const notes: string[] = [];
+      if (response.backedUpTo) {
+        notes.push(
+          `The previous file of that name was kept as ${response.backedUpTo.split(/[\\/]/).pop()}`,
+        );
+      }
+      if (response.droppedBlocks.length > 0) {
+        const named = response.droppedBlocks
+          .slice(0, 3)
+          .map((dropped) => `${dropped.blockId ?? "(empty)"} ×${dropped.calls}`)
+          .join(", ");
+        const rest = response.droppedBlocks.length - 3;
+        notes.push(
+          `${response.droppedBlocks.length} block type(s) were left out because they are not in ` +
+            `block_id_list.txt: ${named}${rest > 0 ? `, and ${rest} more` : ""}`,
+        );
+      }
       status = {
-        tone: "ok",
+        tone: response.droppedBlocks.length > 0 ? "warn" : "ok",
         text: `Saved ${response.name}.${response.exportType}`,
-        detail: response.backedUpTo
-          ? `The previous file of that name was kept as ${response.backedUpTo
-              .split(/[\\/]/)
-              .pop()}`
-          : undefined,
+        detail: notes.length > 0 ? notes.join(". ") : undefined,
       };
       artifacts = await api().listArtifacts();
       // component.py:401-404 -- only .schem gets a preview, and only then does

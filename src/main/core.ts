@@ -105,10 +105,27 @@ export async function loadAllowedBlocks(baseDir: string): Promise<Set<string>> {
   } catch (e) {
     throw new BlockListLoadError(`load_allowed_blocks: failed to read block list: ${String(e)}`, { cause: e });
   }
+  return parseBlockList(raw);
+}
+
+/**
+ * Splits the block list into ids, dropping blank lines and `#` comments.
+ *
+ * The comment syntax arrived with the generated list: the file records where it
+ * came from and how to rebuild it, and that provenance is worth nothing if the
+ * header is silently parsed as six block ids named `#`.
+ *
+ * Exported because `services/resources.ts` must strip the same lines before
+ * splicing the list into the prompt -- the model should not be shown the
+ * generator's usage instructions.
+ */
+export function parseBlockList(raw: string): Set<string> {
   const set = new Set<string>();
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
-    if (trimmed) set.add(trimmed);
+    if (trimmed && !trimmed.startsWith("#")) {
+      set.add(trimmed);
+    }
   }
   return set;
 }
@@ -126,7 +143,10 @@ export async function loadAllowedBlocks(baseDir: string): Promise<Set<string>> {
 // the result for future callers / logging, closing the gap the source had.
 export type NormalizeBlockResult =
   | { readonly ok: true; readonly value: string }
-  | { readonly ok: false; readonly reason: "empty" | "unsupported" };
+  | { readonly ok: false; readonly reason: "empty"; readonly blockId: null }
+  // The namespaced id as it would have been placed. Carried so a caller can
+  // name what it dropped -- see `BuildRejection` below.
+  | { readonly ok: false; readonly reason: "unsupported"; readonly blockId: string };
 
 /**
  * Ported from `_normalize_block` (core.py:24-40).
@@ -147,7 +167,7 @@ export function normalizeBlock(
   allowed: ReadonlySet<string>,
 ): NormalizeBlockResult {
   if (!blockType) {
-    return { ok: false, reason: "empty" };
+    return { ok: false, reason: "empty", blockId: null };
   }
   let base = blockType.trim();
   if (!base.startsWith("minecraft:")) {
@@ -156,7 +176,7 @@ export function normalizeBlock(
   // Strip states for membership check.
   const baseId = base.split("[", 1)[0];
   if (!allowed.has(baseId)) {
-    return { ok: false, reason: "unsupported" };
+    return { ok: false, reason: "unsupported", blockId: baseId };
   }
   if (
     blockStates !== null &&
@@ -190,6 +210,47 @@ export function extractJsCode(text: string | null | undefined): string | null {
 // ---------------------------------------------------------------------------
 
 export type BlockPlacement = readonly [x: number, y: number, z: number, blockData: string];
+
+/**
+ * A block the build script asked for and did not get.
+ *
+ * `normalizeBlock` has always refused ids outside the allowlist, and both
+ * bridge closures have always returned early on that refusal without a word --
+ * core.py:90-91 did the same. That silence is the failure mode: a script that
+ * builds a house out of a block the list happens not to carry produces an empty
+ * schematic and no explanation anywhere, and the only way to find out was to
+ * diff the script against the list by hand.
+ *
+ * The placement is still dropped -- one bad block must not abort a whole build,
+ * which is the fault tolerance the source was after. It is now merely dropped
+ * *audibly*.
+ */
+export interface BuildRejection {
+  /** Namespaced id, or `null` when the script passed an empty block type. */
+  readonly blockId: string | null;
+  readonly reason: "empty" | "unsupported";
+  /** How many bridge calls were dropped for it. A fill counts once, not once per block. */
+  readonly calls: number;
+}
+
+/** What `executeJsBuild` produced: the blocks placed, and the ones refused. */
+export interface JsBuildOutcome {
+  readonly placements: BlockPlacement[];
+  readonly rejections: readonly BuildRejection[];
+}
+
+/** Accumulates rejections during one build, keyed so each id is reported once. */
+type RejectionTally = Map<string, { blockId: string | null; reason: "empty" | "unsupported"; calls: number }>;
+
+function tallyRejection(tally: RejectionTally, result: NormalizeBlockResult & { ok: false }): void {
+  const key = result.blockId ?? "";
+  const existing = tally.get(key);
+  if (existing) {
+    existing.calls += 1;
+    return;
+  }
+  tally.set(key, { blockId: result.blockId, reason: result.reason, calls: 1 });
+}
 
 // inventory.tsv rows `core.py set_block (closure)` / `fill_region (options)`:
 // set_block and fill_region parsed an identical `options` shape
@@ -270,6 +331,7 @@ function posKey(x: number, y: number, z: number): string {
 function makeSetBlock(
   allowed: ReadonlySet<string>,
   placements: Map<string, string>,
+  rejections: RejectionTally,
   log: (msg: string) => void,
 ) {
   return function setBlock(
@@ -293,8 +355,10 @@ function makeSetBlock(
     const { blockStates, mode } = parseBridgeOptions(options);
     const result = normalizeBlock(String(blockType), blockStates, allowed);
     if (!result.ok) {
-      // Matches core.py:90-91 (`if block_data is None: return None`),
-      // reason available via `result.reason` for future callers.
+      // Still dropped, matching core.py:90-91 (`if block_data is None: return
+      // None`) -- but recorded on the way out, so the caller can say what went
+      // missing instead of handing back a mysteriously empty structure.
+      tallyRejection(rejections, result);
       return;
     }
     const key = posKey(bx, by, bz);
@@ -322,6 +386,7 @@ function makeSetBlock(
 function makeFillRegion(
   allowed: ReadonlySet<string>,
   placements: Map<string, string>,
+  rejections: RejectionTally,
 ) {
   return function fillRegion(
     x1: unknown,
@@ -354,6 +419,9 @@ function makeFillRegion(
 
     const result = normalizeBlock(String(blockType), blockStates, allowed);
     if (!result.ok) {
+      // One tally entry for the whole fill: `calls` counts refused bridge
+      // calls, not the blocks a successful fill would have written.
+      tallyRejection(rejections, result);
       return;
     }
     const blockData = result.value;
@@ -562,15 +630,16 @@ export async function executeJsBuild(
   code: string,
   allowedBlocks: ReadonlySet<string>,
   log: (msg: string) => void = () => {},
-): Promise<BlockPlacement[]> {
+): Promise<JsBuildOutcome> {
   // Transform async code to sync for backward compatibility, matching
   // core.py:75-76's safety-net regex substitution (the prompt now instructs
   // synchronous generation directly; this is a fallback for old-style code).
   let transformed = code.replace(/\basync\s+function\b/g, "function").replace(/\bawait\s+/g, "");
 
   const placements = new Map<string, string>();
-  const setBlock = makeSetBlock(allowedBlocks, placements, log);
-  const fillRegion = makeFillRegion(allowedBlocks, placements);
+  const rejections: RejectionTally = new Map();
+  const setBlock = makeSetBlock(allowedBlocks, placements, rejections, log);
+  const fillRegion = makeFillRegion(allowedBlocks, placements, rejections);
 
   const quickJs = await loadQuickJs();
 
@@ -665,7 +734,17 @@ export async function executeJsBuild(
   // Sort for determinism, matching core.py:199 (`out.sort()`, lexicographic
   // tuple order -> equivalent to sorting by x, then y, then z here).
   out.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
-  return out;
+
+  // Most refused calls first: if a script asked for one unknown block once and
+  // another five hundred times, the second is the one worth naming.
+  const refused = [...rejections.values()].sort((a, b) => b.calls - a.calls);
+  for (const rejection of refused) {
+    log(
+      `execute_js_build: dropped ${rejection.calls} call(s) for ` +
+        `${rejection.blockId ?? "(empty block type)"} (${rejection.reason})`,
+    );
+  }
+  return { placements: out, rejections: refused };
 }
 
 // ---------------------------------------------------------------------------
@@ -694,8 +773,8 @@ export interface SchematicWriterFactory {
 export type ExportType = "schem" | "mcfunction";
 
 export type TextToSchemResult =
-  | { readonly kind: "schematic"; readonly schematic: SchematicWriter }
-  | { readonly kind: "mcfunctionPath"; readonly path: string }
+  | { readonly kind: "schematic"; readonly schematic: SchematicWriter; readonly rejections: readonly BuildRejection[] }
+  | { readonly kind: "mcfunctionPath"; readonly path: string; readonly rejections: readonly BuildRejection[] }
   | { readonly kind: "none" };
 
 /**
@@ -730,19 +809,19 @@ export async function textToSchem(
   const jsCode = extractJsCode(text);
   if (jsCode) {
     try {
-      const placements = await executeJsBuild(jsCode, deps.allowedBlocks, log);
+      const { placements, rejections } = await executeJsBuild(jsCode, deps.allowedBlocks, log);
       if (exportType === "schem") {
         const schematic = deps.schematicWriterFactory.create();
         for (const [x, y, z, block] of placements) {
           schematic.setBlock([x, y, z], block);
         }
-        return { kind: "schematic", schematic };
+        return { kind: "schematic", schematic, rejections };
       } else {
         await fs.mkdir(deps.generatedDir, { recursive: true });
         const filePath = path.join(deps.generatedDir, "temp.mcfunction");
         const lines = placements.map(([x, y, z, block]) => `setblock ${x} ${y} ${z} ${block}\n`).join("");
         await fs.writeFile(filePath, lines, "utf-8");
-        return { kind: "mcfunctionPath", path: filePath };
+        return { kind: "mcfunctionPath", path: filePath, rejections };
       }
     } catch (e) {
       // Environment failure, not model output: the sandbox could not be
@@ -794,7 +873,10 @@ export async function textToSchem(
           schematic.setBlock([structure.x, structure.y, structure.z], blockId);
         }
       }
-      return { kind: "schematic", schematic };
+      // No rejections to report: this path never consults the allowlist. It
+      // writes whatever ids the JSON named, which is the source's behavior
+      // (core.py:240-268 called neither `_normalize_block` nor the bridge).
+      return { kind: "schematic", schematic, rejections: [] };
     } else {
       await fs.mkdir(deps.generatedDir, { recursive: true });
       const filePath = path.join(deps.generatedDir, "temp.mcfunction");
@@ -815,7 +897,7 @@ export async function textToSchem(
         }
       }
       await fs.writeFile(filePath, lines.join(""), "utf-8");
-      return { kind: "mcfunctionPath", path: filePath };
+      return { kind: "mcfunctionPath", path: filePath, rejections: [] };
     }
   } catch (e) {
     log(`text_to_schem(JSON): failed to parse JSON: ${String(e)}`);

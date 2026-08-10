@@ -160,6 +160,15 @@ export interface GenerateRequest {
   imagePath: string | null;
 }
 
+/** One block type the build script asked for and the allowlist refused. */
+export interface DroppedBlock {
+  /** Namespaced id, or `null` when the script passed an empty block type. */
+  blockId: string | null;
+  reason: string;
+  /** Refused bridge calls, not refused blocks: one fill counts once. */
+  calls: number;
+}
+
 export interface GenerateSuccess {
   /** Absolute path of the saved artifact, in the configured output folder. */
   path: string;
@@ -171,6 +180,15 @@ export interface GenerateSuccess {
    * previous build" is never something the user finds out later.
    */
   backedUpTo: string | null;
+  /**
+   * Blocks that never made it into the file, most-refused first. Empty on a
+   * clean build.
+   *
+   * This crosses the boundary because the alternative is what the app did
+   * before: a structure missing its walls, and no way for the user to learn
+   * that the model had asked for a block the allowlist does not carry.
+   */
+  droppedBlocks: DroppedBlock[];
 }
 
 export type GenerateResponse = Result<GenerateSuccess>;

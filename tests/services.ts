@@ -15,6 +15,7 @@
  */
 
 import { existsSync } from "fs";
+import { createServer } from "http";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
@@ -22,7 +23,7 @@ import { fileURLToPath } from "url";
 
 import { loadStructure } from "../src/main/pipeline/loader.js";
 import { openCodeModelRequiresKey } from "../src/shared/ipc.js";
-import { LlmError, resolveBaseUrl } from "../src/main/services/llm.js";
+import { callLlm, LlmError, resolveBaseUrl } from "../src/main/services/llm.js";
 import { describeFor, sanitizeName } from "../src/main/services/naming.js";
 import {
   assertWritableDirectory,
@@ -333,6 +334,67 @@ try {
     "the snapshot knows about free models",
     Object.values(snapshot.models ?? {}).some((m) => m.cost?.input === 0 && m.cost?.output === 0),
   );
+
+  // --- llm.ts: the OpenCode transport ---------------------------------------
+  //
+  // A real `callLlm` against a throwaway OpenAI-compatible server on localhost.
+  // Offline, but not a stub of our own code: the AI SDK really builds the
+  // request, so anything it rejects fails here rather than in front of a user.
+  //
+  // It exists because a whole class of defect is invisible to the pure-helper
+  // checks above and to typecheck. AI SDK 7 forbids `{role:"system"}` inside
+  // `messages` -- the system prompt belongs in `instructions` -- yet
+  // `ModelMessage` still admits that role, because an opt-in flag can re-enable
+  // it. So the wrong spelling compiled cleanly and threw `InvalidPromptError`
+  // on every single generation. What follows pins both halves: the request is
+  // accepted, and the system prompt still arrives as a system message on the
+  // wire.
+  console.log("\n--- opencode transport ---");
+  let captured: { messages?: Array<{ role: string; content: unknown }> } | null = null;
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      captured = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: "chatcmpl-test",
+          object: "chat.completion",
+          created: 0,
+          model: "mimo-v2.5-free",
+          choices: [
+            { index: 0, message: { role: "assistant", content: "builder.setBlock(0,0,0)" }, finish_reason: "stop" },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address !== null ? address.port : 0;
+
+  try {
+    const answer = await callLlm({
+      provider: "OpenCode",
+      model: "mimo-v2.5-free",
+      apiKey: "",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      systemPrompt: "You are a Minecraft builder.",
+      userPrompt: "a small stone tower",
+    });
+    equal("OpenCode returns the assistant text", answer, "builder.setBlock(0,0,0)");
+  } catch (err) {
+    check(`OpenCode request is accepted by the SDK (${err instanceof Error ? err.message : String(err)})`, false);
+  }
+
+  const sent = (captured as { messages?: Array<{ role: string; content: unknown }> } | null)?.messages ?? [];
+  check("the system prompt reaches the wire as a system message", sent[0]?.role === "system");
+  equal("the system prompt survives intact", sent[0]?.content, "You are a Minecraft builder.");
+  check("the user prompt follows it", sent.some((m) => m.role === "user"));
+
+  await new Promise<void>((resolve) => server.close(() => resolve()));
 
   equal("path traversal is stripped from names", sanitizeName("../../evil"), "evil");
   equal("empty model name falls back", sanitizeName("   "), "structure");

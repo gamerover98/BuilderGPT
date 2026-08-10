@@ -139,7 +139,16 @@ async function buildUserContent(req: LlmRequest): Promise<ContentPart[]> {
  * than a result -- the caller is about to feed it to a JS parser.
  */
 async function callOpenCode(req: LlmRequest, baseUrl: string, apiKey: string): Promise<string> {
-  const messages: ModelMessage[] = [{ role: "system", content: req.systemPrompt }];
+  // The system prompt rides `instructions`, NOT a `{role:"system"}` entry in
+  // `messages`. AI SDK 7 rejects the latter at runtime -- `validatePrompt`
+  // throws `InvalidPromptError: System messages are not allowed in the prompt
+  // or messages fields` unless `allowSystemInMessages` is set. Typecheck does
+  // not catch it: `ModelMessage` still admits the system role, because the
+  // option exists to re-enable it. `instructions` is the supported spelling
+  // (`system` is the deprecated alias for the same field), and the provider
+  // adapter turns it back into a system message on the wire, so what OpenCode
+  // Zen receives is unchanged.
+  const messages: ModelMessage[] = [];
 
   const image = await readImage(req.imagePath, req.acceptsImages);
   if (image) {
@@ -152,7 +161,10 @@ async function callOpenCode(req: LlmRequest, baseUrl: string, apiKey: string): P
         { type: "image", image: new Uint8Array(image.bytes), mediaType: image.mime },
       ],
     });
-  } else if (req.userPrompt) {
+  } else {
+    // Unconditional, unlike the fetch path: with the system prompt moved to
+    // `instructions`, an empty user prompt would leave `messages` empty, and
+    // the SDK rejects that too ("messages must not be empty").
     messages.push({ role: "user", content: req.userPrompt });
   }
 
@@ -166,6 +178,7 @@ async function callOpenCode(req: LlmRequest, baseUrl: string, apiKey: string): P
   try {
     const result = await generateText({
       model: opencode(req.model),
+      instructions: req.systemPrompt,
       messages,
       temperature: 0.2, // component.py:100
       abortSignal: req.signal,

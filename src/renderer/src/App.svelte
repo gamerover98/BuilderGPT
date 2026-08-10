@@ -31,6 +31,7 @@
     type EditResponse,
     type OpenCodeModelInfo,
     type ProgressEvent,
+    type RecoveryOffer,
     type RegionSpec,
   } from "../../shared/ipc.js";
   import type { SchematicFormat } from "../../shared/schematic.js";
@@ -106,6 +107,37 @@
   /** Tool calls for the turn in flight, so the panel narrates rather than hangs. */
   let liveSteps = $state<AgentStepEvent[]>([]);
 
+  /** Unsaved work found from a session that ended badly. */
+  let recovery = $state<RecoveryOffer | null>(null);
+
+  async function resolveRecovery(restore: boolean): Promise<void> {
+    const offer = recovery;
+    // Dismissed first: whichever way this goes, the prompt is answered, and
+    // leaving it up while the restore runs invites a second click.
+    recovery = null;
+    busy = true;
+    try {
+      const response = await api().resolveRecovery(restore);
+      if (!response.ok) {
+        status = { tone: "error", text: response.message };
+        return;
+      }
+      docState = response.state;
+      if (restore && response.state) {
+        await refreshDocument();
+        status = {
+          tone: "ok",
+          text: `Recovered your unsaved work${offer?.fileName ? ` on ${offer.fileName}` : ""}.`,
+          detail: "It has not been written to disk yet — save when you are happy with it.",
+        };
+      }
+    } catch (err) {
+      failed(err, "Recovering unsaved work");
+    } finally {
+      busy = false;
+    }
+  }
+
   /**
    * The OpenCode model in use, when there is one. Everything below is UI
    * mirroring: `ipc/handlers.ts` applies the same two rules authoritatively,
@@ -146,6 +178,13 @@
       versions = await api().listVersions();
       artifacts = await api().listArtifacts();
       defaultOutputDir = await api().getDefaultOutputDir();
+
+      // Asked once, at startup, before the user has done anything they could
+      // lose by answering it.
+      const found = await api().peekRecovery();
+      if (found.ok) {
+        recovery = found.recovery;
+      }
     })();
 
     const unsubscribe = api().onProgress((event) => {
@@ -914,6 +953,28 @@
       scrolling column used to render above the fold, off-screen -- visually
       indistinguishable from nothing happening.
     -->
+    {#if recovery}
+      <!--
+        Deliberately blocking, unlike the status banner: this is the one
+        question where dismissing it by accident loses work permanently, so it
+        does not have a close button and both answers are explicit.
+      -->
+      <div class="recovery" role="alertdialog" aria-labelledby="recovery-title">
+        <strong id="recovery-title">Unsaved work was found</strong>
+        <p>
+          {recovery.fileName ?? "An unsaved schematic"} — {recovery.blockCount.toLocaleString()}
+          blocks, from {new Date(recovery.savedAt).toLocaleString()}. The last session ended before
+          it was saved.
+        </p>
+        <div class="buttons">
+          <button class="primary" onclick={() => resolveRecovery(true)} disabled={busy}>
+            Restore it
+          </button>
+          <button onclick={() => resolveRecovery(false)} disabled={busy}>Discard</button>
+        </div>
+      </div>
+    {/if}
+
     {#if status}
       <div class={`status ${status.tone}`} role="status">
         <div>
@@ -1027,6 +1088,31 @@
     top: 12px;
     left: 12px;
     z-index: 3;
+  }
+
+  .recovery {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 6;
+    width: min(440px, calc(100% - 48px));
+    padding: 16px 18px;
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    background: var(--bg-panel);
+    box-shadow: 0 12px 40px rgb(0 0 0 / 55%);
+  }
+
+  .recovery p {
+    margin: 8px 0 14px;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .recovery .buttons {
+    display: flex;
+    gap: 8px;
   }
 
   .camera-modes {

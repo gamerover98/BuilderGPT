@@ -118,6 +118,17 @@ export function openCodeSnapshotPath(): string {
   return path.join(resourcesDir(), "resources", "opencode_models.json");
 }
 
+/**
+ * Where crash-recovery snapshots live.
+ *
+ * Under userData, deliberately far from anything the user browses: an autosave
+ * that appeared beside their own files would look like clutter they should
+ * delete, and it is not their copy to manage.
+ */
+export function autosaveDir(): string {
+  return path.join(app.getPath("userData"), "autosave");
+}
+
 /** `generated/` (component.py:137-138), relocated to a writable location. */
 export function generatedDir(): string {
   return path.join(app.getPath("userData"), "generated");

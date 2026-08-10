@@ -31,6 +31,7 @@ import {
   type PreviewRequest,
   type PreviewResponse,
   type ProgressEvent,
+  type RecoveryPeekResponse,
   type SaveRequest,
   type SaveResponse,
 } from "../../shared/ipc.js";
@@ -42,6 +43,7 @@ import {
   type Settings,
 } from "../../shared/settings.js";
 import {
+  adoptDocument,
   applyEdit,
   closeDocument,
   currentSession,
@@ -60,6 +62,7 @@ import {
 } from "../services/session.js";
 import { UnrepresentableBlocksError } from "../services/writers.js";
 import { runAgent } from "../agent/agent.js";
+import { clearAutosave, readAutosave, restoreAutosave, startAutosave } from "../services/autosave.js";
 import { loadAllowedBlocks } from "../core.js";
 import { listArtifacts } from "../services/artifacts.js";
 import { SchematicFormatError } from "../pipeline/loader.js";
@@ -73,6 +76,7 @@ import {
 } from "../services/preview.js";
 import { assertWritableDirectory } from "../services/output.js";
 import {
+  autosaveDir,
   defaultResourcePackPath,
   generatedDir,
   legacyBlocksPath,
@@ -108,6 +112,15 @@ function emitProgress(window: BrowserWindow | null, event: ProgressEvent): void 
 }
 
 export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
+  // Snapshots the open document while it differs from disk. Started here
+  // because this is where the app's wiring lives, and left running for the
+  // process's lifetime — there is nothing to tear down that outlives it.
+  startAutosave({
+    dir: autosaveDir(),
+    getSession: currentSession,
+    onError: (err) => console.warn("[autosave] snapshot failed:", err),
+  });
+
   ipcMain.handle(IPC.settingsGet, async (): Promise<Settings> => await getSettings());
 
   ipcMain.handle(IPC.settingsSet, async (_event, next: Settings): Promise<Settings> => {
@@ -382,6 +395,42 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       return failure(err);
     }
   });
+
+  ipcMain.handle(IPC.docRecoveryPeek, async (): Promise<RecoveryPeekResponse> => {
+    try {
+      // Only offered when nothing is open. A snapshot found while the user is
+      // already working belongs to *this* session and is not a recovery.
+      if (currentSession() !== null) {
+        return { ok: true, recovery: null };
+      }
+      return { ok: true, recovery: await readAutosave(autosaveDir()) };
+    } catch (err) {
+      return failure(err);
+    }
+  });
+
+  ipcMain.handle(
+    IPC.docRecoveryResolve,
+    async (_event, restore: boolean): Promise<DocumentStateResponse> => {
+      try {
+        if (!restore) {
+          await clearAutosave(autosaveDir());
+          return { ok: true, state: null };
+        }
+        const session = await restoreAutosave(autosaveDir());
+        if (session === null) {
+          // The snapshot turned out to be unreadable. Clear it rather than
+          // offering it again on every launch.
+          await clearAutosave(autosaveDir());
+          return { ok: false, kind: "io-error", message: "The recovered file could not be read." };
+        }
+        adoptDocument(session.doc, session.history);
+        return { ok: true, state: documentState(requireSession()) };
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
 
   ipcMain.handle(
     IPC.docAgent,

@@ -30,6 +30,7 @@ import {
   type PreviewRequest,
   type PreviewResponse,
   type ProgressEvent,
+  type RecoveryPeekResponse,
   type SaveRequest,
   type SaveResponse,
   type SetKeyRequest,
@@ -73,6 +74,9 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docInspect, { x, y, z }) as Promise<InspectResponse>,
   saveDocument: (request: SaveRequest) =>
     ipcRenderer.invoke(IPC.docSave, request) as Promise<SaveResponse>,
+  peekRecovery: () => ipcRenderer.invoke(IPC.docRecoveryPeek) as Promise<RecoveryPeekResponse>,
+  resolveRecovery: (restore: boolean) =>
+    ipcRenderer.invoke(IPC.docRecoveryResolve, restore) as Promise<DocumentStateResponse>,
   askAgent: (request: AgentRequestPayload) =>
     ipcRenderer.invoke(IPC.docAgent, request) as Promise<AgentResponse>,
 

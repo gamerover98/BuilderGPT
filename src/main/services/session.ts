@@ -124,9 +124,17 @@ export function newDocument(
   return current;
 }
 
-/** Adopts an already-built document, as generation produces. */
-export function adoptDocument(doc: SchematicDocument): DocumentSession {
-  current = { doc, history: createHistory(), mesh: null };
+/**
+ * Adopts an already-built document, as generation produces and as crash
+ * recovery rebuilds.
+ *
+ * `history` is optional but load-bearing when it is passed: a recovered
+ * document arrives with a history whose saved point is deliberately
+ * unreachable, marking it as differing from disk. Handing it a fresh one would
+ * open unsaved recovered work and call it clean.
+ */
+export function adoptDocument(doc: SchematicDocument, history?: History): DocumentSession {
+  current = { doc, history: history ?? createHistory(), mesh: null };
   return current;
 }
 

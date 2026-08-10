@@ -29,7 +29,8 @@
     "smoke:history": "tsx tests/history.ts",
     "smoke:formats": "tsx tests/formats.ts",
     "smoke:session": "tsx tests/session.ts",
-    "smoke:agent": "tsx tests/agent.ts"
+    "smoke:agent": "tsx tests/agent.ts",
+    "smoke:autosave": "tsx tests/autosave.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.27",

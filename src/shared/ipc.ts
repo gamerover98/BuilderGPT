@@ -48,6 +48,10 @@ export const IPC = {
   docRedo: "bgpt:doc:redo",
   docInspect: "bgpt:doc:inspect",
   docSave: "bgpt:doc:save",
+  /** Is there unsaved work from a session that ended badly? */
+  docRecoveryPeek: "bgpt:doc:recovery:peek",
+  /** Restore it, or throw it away. */
+  docRecoveryResolve: "bgpt:doc:recovery:resolve",
   /** Ask the agent to edit the open document. */
   docAgent: "bgpt:doc:agent",
   /** main → renderer: one tool call the agent just made. */
@@ -365,6 +369,24 @@ export interface AgentSuccess {
 
 export type AgentResponse = Result<AgentSuccess>;
 
+/**
+ * Unsaved work found on disk from a previous session.
+ *
+ * Offered on launch. `null` is the normal case and is not an error — most
+ * sessions end with the document saved, or with nothing open at all.
+ */
+export interface RecoveryOffer {
+  /** Where the document belonged, or `null` if it had never been saved. */
+  filePath: string | null;
+  fileName: string | null;
+  format: SchematicFormat;
+  /** ISO 8601. */
+  savedAt: string;
+  blockCount: number;
+}
+
+export type RecoveryPeekResponse = Result<{ recovery: RecoveryOffer | null }>;
+
 export type DocumentStateResponse = Result<{ state: DocumentState | null }>;
 export type DocumentMeshResponse = Result<DocumentMesh>;
 export type EditResponse = Result<EditSuccess>;
@@ -411,6 +433,10 @@ export interface BgptApi {
   redo(): Promise<EditResponse>;
   inspectBlock(x: number, y: number, z: number): Promise<InspectResponse>;
   saveDocument(request: SaveRequest): Promise<SaveResponse>;
+  /** Unsaved work from a session that ended badly, if any. */
+  peekRecovery(): Promise<RecoveryPeekResponse>;
+  /** `true` restores it and opens it; `false` discards it. */
+  resolveRecovery(restore: boolean): Promise<DocumentStateResponse>;
   askAgent(request: AgentRequestPayload): Promise<AgentResponse>;
 
   onProgress(listener: (event: ProgressEvent) => void): () => void;

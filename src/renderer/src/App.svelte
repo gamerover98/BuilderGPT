@@ -14,17 +14,22 @@
   import { onMount } from "svelte";
 
   import ArtifactList from "./lib/ArtifactList.svelte";
+  import DocumentPanel from "./lib/DocumentPanel.svelte";
   import PreviewSettingsPanel from "./lib/PreviewSettingsPanel.svelte";
   import ProviderConfig from "./lib/ProviderConfig.svelte";
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
-  import Viewer from "./lib/Viewer.svelte";
+  import Viewer, { type PickedBlock } from "./lib/Viewer.svelte";
   import { api, bridgeAvailable, forIpc, BRIDGE_MISSING_MESSAGE } from "./lib/bridge.svelte.js";
   import {
     openCodeModelRequiresKey,
     type Artifact,
+    type DocumentState,
+    type EditResponse,
     type OpenCodeModelInfo,
     type ProgressEvent,
+    type RegionSpec,
   } from "../../shared/ipc.js";
+  import type { SchematicFormat } from "../../shared/schematic.js";
   import {
     DEFAULT_SETTINGS,
     DEFAULT_UI_SETTINGS,
@@ -72,6 +77,16 @@
   let bounds = $state<{ center: number[]; size: number[] } | null>(null);
   let sunAzimuth = $state(0);
   let sunElevation = $state(0);
+
+  /**
+   * The open document, as main last described it. The renderer holds no
+   * schematic of its own -- every edit is a request, and this is the summary
+   * that comes back.
+   */
+  let docState = $state<DocumentState | null>(null);
+  let selection = $state<RegionSpec | null>(null);
+  /** The first corner of a selection being built, before Shift-click extends it. */
+  let anchor = $state<{ x: number; y: number; z: number } | null>(null);
 
   /**
    * The OpenCode model in use, when there is one. Everything below is UI
@@ -125,9 +140,31 @@
   });
 
   function onWindowKey(event: KeyboardEvent): void {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
+    if (!(event.ctrlKey || event.metaKey)) {
+      return;
+    }
+    const key = event.key.toLowerCase();
+    if (key === "b") {
       event.preventDefault();
       toggleSidebar();
+      return;
+    }
+    // The document shortcuts only exist while a document does, and never while
+    // something else is already running -- an undo racing an edit would apply
+    // to a state neither of them saw.
+    if (docState === null || busy) {
+      return;
+    }
+    if (key === "z" && !event.shiftKey) {
+      event.preventDefault();
+      void runDocument("Undoing", () => api().undo());
+    } else if (key === "y" || (key === "z" && event.shiftKey)) {
+      event.preventDefault();
+      void runDocument("Redoing", () => api().redo());
+    } else if (key === "s") {
+      event.preventDefault();
+      // Nowhere to save to yet means Save As, which is what every editor does.
+      void (docState.filePath === null ? saveDocumentAs() : saveDocument());
     }
   }
 
@@ -255,6 +292,221 @@
     }
   }
 
+  // --- the open document ----------------------------------------------------
+
+  /**
+   * Redraws from whatever main last said.
+   *
+   * The mesh is fetched separately from the state because it is the expensive
+   * half: main serves it from cache whenever `revision` has not moved, so
+   * calling this after every edit costs nothing when nothing changed.
+   */
+  async function refreshDocument(): Promise<void> {
+    if (docState === null) {
+      glb = null;
+      bounds = null;
+      return;
+    }
+    const mesh = await api().getDocumentMesh(forIpc(settings.preview));
+    if (!mesh.ok) {
+      status = { tone: "warn", text: mesh.message };
+      return;
+    }
+    glb = mesh.glb;
+    bounds = { center: mesh.center, size: mesh.size };
+    sunAzimuth = mesh.sunAzimuth;
+    sunElevation = mesh.sunElevation;
+  }
+
+  /**
+   * Every document call funnels through here so failures cannot go unreported.
+   * Returns how many blocks changed, or `null` if the call did not succeed.
+   */
+  async function runDocument(
+    doing: string,
+    call: () => Promise<EditResponse>,
+  ): Promise<number | null> {
+    busy = true;
+    try {
+      const response = await call();
+      if (!response.ok) {
+        status = { tone: "warn", text: response.message };
+        return null;
+      }
+      docState = response.state;
+      await refreshDocument();
+      return response.changed;
+    } catch (err) {
+      failed(err, doing);
+      return null;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function openDocument(): Promise<void> {
+    let picked: Awaited<ReturnType<ReturnType<typeof api>["pickFile"]>>;
+    try {
+      picked = await api().pickFile({ kind: "schem" });
+    } catch (err) {
+      failed(err, "Opening the schematic chooser");
+      return;
+    }
+    if (picked.error) {
+      status = { tone: "error", text: picked.error };
+      return;
+    }
+    if (!picked.path) return;
+
+    busy = true;
+    try {
+      const response = await api().openDocument(picked.path);
+      if (!response.ok) {
+        status = { tone: "error", text: response.message };
+        return;
+      }
+      docState = response.state;
+      selection = null;
+      anchor = null;
+      status = null;
+      await refreshDocument();
+    } catch (err) {
+      failed(err, "Opening the schematic");
+    } finally {
+      busy = false;
+    }
+  }
+
+  /**
+   * A click sets the anchor and selects that one block; Shift-click grows the
+   * box to include it. Two corners is the whole gesture -- it is what a region
+   * *is*, and it does not fight the orbit controls for the drag.
+   */
+  function onPick(block: PickedBlock): void {
+    if (block.extend && anchor !== null) {
+      selection = {
+        minX: Math.min(anchor.x, block.x),
+        minY: Math.min(anchor.y, block.y),
+        minZ: Math.min(anchor.z, block.z),
+        maxX: Math.max(anchor.x, block.x),
+        maxY: Math.max(anchor.y, block.y),
+        maxZ: Math.max(anchor.z, block.z),
+      };
+      return;
+    }
+    anchor = { x: block.x, y: block.y, z: block.z };
+    selection = {
+      minX: block.x,
+      minY: block.y,
+      minZ: block.z,
+      maxX: block.x,
+      maxY: block.y,
+      maxZ: block.z,
+    };
+  }
+
+  function selectAll(): void {
+    if (!docState) return;
+    anchor = { x: 0, y: 0, z: 0 };
+    selection = {
+      minX: 0,
+      minY: 0,
+      minZ: 0,
+      maxX: docState.size[0] - 1,
+      maxY: docState.size[1] - 1,
+      maxZ: docState.size[2] - 1,
+    };
+  }
+
+  function parseBlock(text: string): { namespacedName: string; properties?: Record<string, string> } {
+    const trimmed = text.trim();
+    const name = trimmed.includes(":") ? trimmed : `minecraft:${trimmed}`;
+    const bracket = name.indexOf("[");
+    if (bracket === -1) {
+      return { namespacedName: name };
+    }
+    // `oak_stairs[facing=north]` typed by hand: the same spelling the palette
+    // list shows, so a material can be copied straight back into the field.
+    const properties: Record<string, string> = {};
+    for (const part of name.slice(bracket + 1).replace(/\]$/, "").split(",")) {
+      const eq = part.indexOf("=");
+      if (eq > 0) properties[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
+    }
+    return { namespacedName: name.slice(0, bracket), properties };
+  }
+
+  async function fillSelection(block: string): Promise<void> {
+    if (!selection) return;
+    const region = selection;
+    const changed = await runDocument("Filling the selection", () =>
+      api().applyEdit({ kind: "fill", region: forIpc(region), block: parseBlock(block) }),
+    );
+    reportChange(changed);
+  }
+
+  async function replaceInSelection(from: string, to: string): Promise<void> {
+    if (!selection) return;
+    const region = selection;
+    const changed = await runDocument("Replacing blocks", () =>
+      api().applyEdit({
+        kind: "replace",
+        region: forIpc(region),
+        from: parseBlock(from),
+        to: parseBlock(to),
+      }),
+    );
+    reportChange(changed);
+  }
+
+  /**
+   * An edit that matched nothing is indistinguishable from a broken button, so
+   * it says so. A successful one needs no announcement: the viewport is the
+   * confirmation.
+   */
+  function reportChange(changed: number | null): void {
+    if (changed === 0) {
+      status = { tone: "info", text: "No blocks matched, so nothing changed." };
+    }
+  }
+
+  async function saveDocument(format?: SchematicFormat, filePath?: string): Promise<void> {
+    busy = true;
+    try {
+      const response = await api().saveDocument({ filePath: filePath ?? null, format });
+      if (!response.ok) {
+        status = { tone: "error", text: response.message };
+        return;
+      }
+      docState = response.state;
+      status = {
+        tone: response.degraded.length > 0 ? "warn" : "ok",
+        text: `Saved ${response.filePath.split(/[\\/]/).pop()}`,
+        detail:
+          response.degraded.length > 0
+            ? `${response.degraded.length} block type(s) cannot keep their block state in this ` +
+              `format and will come back changed: ${response.degraded.slice(0, 3).join(", ")}`
+            : undefined,
+      };
+    } catch (err) {
+      failed(err, "Saving the schematic");
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function saveDocumentAs(): Promise<void> {
+    let picked: Awaited<ReturnType<ReturnType<typeof api>["pickFile"]>>;
+    try {
+      picked = await api().pickFile({ kind: "directory" });
+    } catch (err) {
+      failed(err, "Choosing where to save");
+      return;
+    }
+    if (!picked.path || !docState) return;
+    const name = docState.fileName ?? "untitled.schem";
+    await saveDocument(docState.format, `${picked.path}/${name}`);
+  }
+
   async function onGenerate(): Promise<void> {
     busy = true;
     status = null;
@@ -335,6 +587,24 @@
         aria-label="Hide the control panel">&#x2039;</button
       >
     </header>
+
+    <DocumentPanel
+      doc={docState}
+      {selection}
+      {busy}
+      onopen={openDocument}
+      onsave={(format) => saveDocument(format)}
+      onsaveas={saveDocumentAs}
+      onundo={() => runDocument("Undoing", () => api().undo())}
+      onredo={() => runDocument("Redoing", () => api().redo())}
+      onfill={fillSelection}
+      onreplace={replaceInSelection}
+      onclearselection={() => {
+        selection = null;
+        anchor = null;
+      }}
+      onselectall={selectAll}
+    />
 
     <ProviderConfig
       {settings}
@@ -516,6 +786,8 @@
       {glb}
       {sunAzimuth}
       {sunElevation}
+      selection={docState ? selection : null}
+      onpick={docState ? onPick : undefined}
       maxDpr={settings.preview.maxDpr}
       renderScale={settings.preview.renderScale}
       maxDrawDistance={settings.preview.maxDrawDistance}

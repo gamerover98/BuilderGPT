@@ -21,6 +21,24 @@
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
   import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
+  /** A block coordinate in the schematic's own grid. */
+  export interface PickedBlock {
+    x: number;
+    y: number;
+    z: number;
+    /** True when the click carried Shift — the gesture that extends a selection. */
+    extend: boolean;
+  }
+
+  interface Region {
+    minX: number;
+    minY: number;
+    minZ: number;
+    maxX: number;
+    maxY: number;
+    maxZ: number;
+  }
+
   interface Props {
     glb: Uint8Array | null;
     sunAzimuth: number;
@@ -31,6 +49,9 @@
     showGrid: boolean;
     wireframe: boolean;
     ambientOcclusion: boolean;
+    /** Drawn as a wire box; `null` hides it. */
+    selection?: Region | null;
+    onpick?: (block: PickedBlock) => void;
   }
 
   const {
@@ -43,6 +64,8 @@
     showGrid,
     wireframe,
     ambientOcclusion,
+    selection = null,
+    onpick,
   }: Props = $props();
 
   let canvas: HTMLCanvasElement;
@@ -64,6 +87,85 @@
   let ambient: THREE.HemisphereLight | undefined;
   let grid: THREE.GridHelper | undefined;
   let loaded: THREE.Object3D | null = null;
+  let selectionBox: THREE.LineSegments | undefined;
+
+  const raycaster = new THREE.Raycaster();
+
+  /**
+   * Which block a ray hit.
+   *
+   * The mesh is one fused geometry with no per-block identity in it, so the
+   * answer has to come from the hit itself: step a hair *inwards* from the
+   * surface along the face normal, and the integer cell that lands in is the
+   * block that owns the face.
+   *
+   * The step is deliberately tiny. Half a block would be the obvious choice and
+   * is wrong: a pressure plate is one sixteenth tall, so stepping 0.5 in from
+   * its top face lands in the block below it. A hair is enough, because the only
+   * ambiguity being resolved is which side of an exact integer boundary the
+   * face belongs to — the +X face of block 2 and the -X face of block 3 are the
+   * same plane at x=3.
+   *
+   * The alternative was baking a block index into every vertex and carrying it
+   * through the GLB. This needs no pipeline change at all, and is exact for
+   * every shape the mesher emits, including the diagonal quads of a cross.
+   */
+  function pickBlockAt(clientX: number, clientY: number): PickedBlock | null {
+    if (!camera || !loaded || !container) return null;
+    const rect = container.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    raycaster.setFromCamera(ndc, camera);
+    const hit = raycaster.intersectObject(loaded, true)[0];
+    if (!hit || !hit.face) return null;
+
+    // Object space is world space here — the pipeline emits no node transform —
+    // but going through the normal matrix costs nothing and survives that
+    // changing.
+    const normal = hit.face.normal
+      .clone()
+      .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
+      .normalize();
+    const inside = hit.point.clone().addScaledVector(normal, -1e-3);
+    return {
+      x: Math.floor(inside.x),
+      y: Math.floor(inside.y),
+      z: Math.floor(inside.z),
+      extend: false,
+    };
+  }
+
+  function updateSelectionBox(): void {
+    if (!scene) return;
+    if (selectionBox) {
+      scene.remove(selectionBox);
+      selectionBox.geometry.dispose();
+      (selectionBox.material as THREE.Material).dispose();
+      selectionBox = undefined;
+    }
+    if (!selection) return;
+
+    // maxX is inclusive and a block occupies a whole unit cell, so the far
+    // corner is +1: selecting one block draws a 1x1x1 box, not a point.
+    const box = new THREE.Box3(
+      new THREE.Vector3(selection.minX, selection.minY, selection.minZ),
+      new THREE.Vector3(selection.maxX + 1, selection.maxY + 1, selection.maxZ + 1),
+    );
+    const geometry = new THREE.EdgesGeometry(
+      new THREE.BoxGeometry(
+        box.max.x - box.min.x,
+        box.max.y - box.min.y,
+        box.max.z - box.min.z,
+      ),
+    );
+    const material = new THREE.LineBasicMaterial({ color: 0x6ea8fe, depthTest: false });
+    selectionBox = new THREE.LineSegments(geometry, material);
+    box.getCenter(selectionBox.position);
+    selectionBox.renderOrder = 999;
+    scene.add(selectionBox);
+  }
 
   function setSunFromAngles(az: number, el: number): void {
     if (!sun) return;
@@ -179,10 +281,32 @@
       };
       window.addEventListener("keydown", onKey);
 
+      // Left-drag orbits and pans, so a click cannot simply be pointerup: the
+      // gesture is only a selection if the pointer barely moved. Four pixels is
+      // the usual allowance for a shaky hand on a trackpad.
+      let downAt: { x: number; y: number } | null = null;
+      const onPointerDown = (event: PointerEvent) => {
+        downAt = event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
+      };
+      const onPointerUp = (event: PointerEvent) => {
+        const start = downAt;
+        downAt = null;
+        if (!start || !onpick) return;
+        if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
+        const picked = pickBlockAt(event.clientX, event.clientY);
+        if (picked) {
+          onpick({ ...picked, extend: event.shiftKey });
+        }
+      };
+      renderer.domElement.addEventListener("pointerdown", onPointerDown);
+      renderer.domElement.addEventListener("pointerup", onPointerUp);
+
       return () => {
         cancelAnimationFrame(frame);
         observer.disconnect();
         window.removeEventListener("keydown", onKey);
+        renderer?.domElement.removeEventListener("pointerdown", onPointerDown);
+        renderer?.domElement.removeEventListener("pointerup", onPointerUp);
         if (loaded) disposeObject(loaded);
         controls?.dispose();
         renderer?.dispose();
@@ -222,6 +346,13 @@
 
   $effect(() => {
     if (grid) grid.visible = showGrid;
+  });
+
+  $effect(() => {
+    // Reads `selection` and `scene` so it reruns when either changes.
+    void selection;
+    void scene;
+    updateSelectionBox();
   });
 
   $effect(() => {

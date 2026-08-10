@@ -24,7 +24,8 @@
     "smoke:services": "tsx tests/services.ts",
     "smoke:sandbox": "tsx tests/sandbox.ts",
     "smoke:schematics": "tsx tests/schematics.ts",
-    "smoke:blocks": "tsx tests/blocks.ts"
+    "smoke:blocks": "tsx tests/blocks.ts",
+    "smoke:document": "tsx tests/document.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.27",

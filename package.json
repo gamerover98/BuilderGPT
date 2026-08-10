@@ -2,7 +2,7 @@
   "name": "buildergpt",
   "version": "3.0.0",
   "private": true,
-  "description": "BuilderGPT — AI Minecraft structure generator (Electron port of the Streamlit app)",
+  "description": "BuilderGPT \u2014 AI Minecraft structure generator (Electron port of the Streamlit app)",
   "author": "CyniaAI Team",
   "homepage": "https://github.com/CyniaAI/BuilderGPT",
   "license": "GPL-3.0",
@@ -28,7 +28,8 @@
     "smoke:document": "tsx tests/document.ts",
     "smoke:history": "tsx tests/history.ts",
     "smoke:formats": "tsx tests/formats.ts",
-    "smoke:session": "tsx tests/session.ts"
+    "smoke:session": "tsx tests/session.ts",
+    "smoke:agent": "tsx tests/agent.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.27",

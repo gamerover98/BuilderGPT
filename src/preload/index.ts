@@ -12,6 +12,9 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import {
   IPC,
+  type AgentRequestPayload,
+  type AgentResponse,
+  type AgentStepEvent,
   type Artifact,
   type BgptApi,
   type DocumentMeshResponse,
@@ -70,6 +73,8 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docInspect, { x, y, z }) as Promise<InspectResponse>,
   saveDocument: (request: SaveRequest) =>
     ipcRenderer.invoke(IPC.docSave, request) as Promise<SaveResponse>,
+  askAgent: (request: AgentRequestPayload) =>
+    ipcRenderer.invoke(IPC.docAgent, request) as Promise<AgentResponse>,
 
   onProgress(listener) {
     // The raw IpcRendererEvent must not leak into the renderer -- it carries
@@ -77,6 +82,12 @@ const api: BgptApi = {
     const wrapped = (_event: unknown, payload: ProgressEvent) => listener(payload);
     ipcRenderer.on(IPC.progress, wrapped);
     return () => ipcRenderer.removeListener(IPC.progress, wrapped);
+  },
+
+  onAgentStep(listener) {
+    const wrapped = (_event: unknown, payload: AgentStepEvent) => listener(payload);
+    ipcRenderer.on(IPC.agentStep, wrapped);
+    return () => ipcRenderer.removeListener(IPC.agentStep, wrapped);
   },
 };
 

@@ -1,0 +1,162 @@
+<script lang="ts">
+  /**
+   * Asking the agent to change the open schematic.
+   *
+   * The tool calls arrive as they happen rather than all at the end, because a
+   * request can take half a minute and a panel that shows nothing for that long
+   * is indistinguishable from one that has hung.
+   */
+  import type { AgentStepEvent, RegionSpec } from "../../../shared/ipc.js";
+
+  export interface ChatEntry {
+    role: "user" | "agent" | "error";
+    text: string;
+    /** Tool calls made while answering; agent turns only. */
+    steps?: { tool: string; summary: string }[];
+    changed?: number;
+  }
+
+  interface Props {
+    entries: ChatEntry[];
+    /** Tool calls for the turn in flight, cleared when it lands. */
+    live: AgentStepEvent[];
+    selection: RegionSpec | null;
+    enabled: boolean;
+    busy: boolean;
+    onask: (prompt: string) => void;
+  }
+
+  const { entries, live, selection, enabled, busy, onask }: Props = $props();
+
+  let draft = $state("");
+
+  function submit(): void {
+    const prompt = draft.trim();
+    if (prompt === "" || busy || !enabled) return;
+    draft = "";
+    onask(prompt);
+  }
+
+  function onKeydown(event: KeyboardEvent): void {
+    // Enter sends, Shift+Enter breaks the line — the convention everywhere else.
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      submit();
+    }
+  }
+</script>
+
+<fieldset>
+  <legend>Ask the AI</legend>
+
+  {#if !enabled}
+    <p class="hint">Open a schematic first — the AI edits the one you have open.</p>
+  {:else}
+    {#if entries.length > 0 || live.length > 0}
+      <ul class="log">
+        {#each entries as entry, index (index)}
+          <li class={entry.role}>
+            <span class="who">{entry.role === "user" ? "You" : entry.role === "error" ? "Failed" : "AI"}</span>
+            <span class="text">{entry.text}</span>
+            {#if entry.steps && entry.steps.length > 0}
+              <ul class="steps">
+                {#each entry.steps as step, stepIndex (stepIndex)}
+                  <li>{step.summary}</li>
+                {/each}
+              </ul>
+            {/if}
+            {#if entry.changed !== undefined && entry.changed > 0}
+              <span class="hint">{entry.changed.toLocaleString()} blocks changed · Ctrl+Z undoes the whole request</span>
+            {/if}
+          </li>
+        {/each}
+        {#if live.length > 0}
+          <li class="agent">
+            <span class="who">AI</span>
+            <ul class="steps">
+              {#each live as step, index (index)}
+                <li>{step.summary}</li>
+              {/each}
+            </ul>
+          </li>
+        {/if}
+      </ul>
+    {/if}
+
+    <div class="field">
+      <label for="prompt">
+        {#if selection}
+          Acts on your selection unless you say otherwise
+        {:else}
+          Acts on the whole schematic — select a region to narrow it
+        {/if}
+      </label>
+      <textarea
+        id="prompt"
+        bind:value={draft}
+        onkeydown={onKeydown}
+        placeholder="Replace the cobblestone with stone…"
+        rows="3"
+      ></textarea>
+    </div>
+
+    <div class="buttons">
+      <button class="primary" onclick={submit} disabled={busy || draft.trim() === ""}>
+        {busy ? "Working…" : "Send"}
+      </button>
+    </div>
+  {/if}
+</fieldset>
+
+<style>
+  .log {
+    list-style: none;
+    margin: 0 0 12px;
+    padding: 0;
+    max-height: 320px;
+    overflow-y: auto;
+    font-size: 13px;
+  }
+
+  .log > li {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .who {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+  }
+
+  .log > li.error .who {
+    color: var(--danger);
+  }
+
+  .text {
+    white-space: pre-wrap;
+  }
+
+  .steps {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 0 0 0 10px;
+    border-left: 2px solid var(--border);
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .buttons {
+    display: flex;
+    gap: 8px;
+  }
+
+  textarea {
+    width: 100%;
+    resize: vertical;
+  }
+</style>

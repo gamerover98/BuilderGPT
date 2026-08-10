@@ -14,6 +14,7 @@
   import { onMount } from "svelte";
 
   import ArtifactList from "./lib/ArtifactList.svelte";
+  import ChatPanel, { type ChatEntry } from "./lib/ChatPanel.svelte";
   import DocumentPanel from "./lib/DocumentPanel.svelte";
   import PreviewSettingsPanel from "./lib/PreviewSettingsPanel.svelte";
   import ProviderConfig from "./lib/ProviderConfig.svelte";
@@ -22,6 +23,7 @@
   import { api, bridgeAvailable, forIpc, BRIDGE_MISSING_MESSAGE } from "./lib/bridge.svelte.js";
   import {
     openCodeModelRequiresKey,
+    type AgentStepEvent,
     type Artifact,
     type DocumentState,
     type EditResponse,
@@ -88,6 +90,10 @@
   /** The first corner of a selection being built, before Shift-click extends it. */
   let anchor = $state<{ x: number; y: number; z: number } | null>(null);
 
+  let chat = $state<ChatEntry[]>([]);
+  /** Tool calls for the turn in flight, so the panel narrates rather than hangs. */
+  let liveSteps = $state<AgentStepEvent[]>([]);
+
   /**
    * The OpenCode model in use, when there is one. Everything below is UI
    * mirroring: `ipc/handlers.ts` applies the same two rules authoritatively,
@@ -133,9 +139,13 @@
     const unsubscribe = api().onProgress((event) => {
       progress = event.phase === "done" ? null : event;
     });
+    const unsubscribeSteps = api().onAgentStep((event) => {
+      liveSteps = [...liveSteps, event];
+    });
     return () => {
       window.removeEventListener("keydown", onWindowKey);
       unsubscribe();
+      unsubscribeSteps();
     };
   });
 
@@ -507,6 +517,44 @@
     await saveDocument(docState.format, `${picked.path}/${name}`);
   }
 
+  async function askAgent(prompt: string): Promise<void> {
+    chat = [...chat, { role: "user", text: prompt }];
+    liveSteps = [];
+    busy = true;
+    try {
+      const response = await api().askAgent({
+        requestId: requestId(),
+        prompt,
+        selection: selection ? forIpc(selection) : null,
+      });
+      if (!response.ok) {
+        chat = [...chat, { role: "error", text: response.message }];
+        return;
+      }
+      docState = response.state;
+      chat = [
+        ...chat,
+        {
+          role: "agent",
+          // A model can answer with tool calls and no closing text; saying
+          // nothing at all would read as a failure.
+          text: response.text.trim() === "" ? "Done." : response.text,
+          steps: response.steps,
+          changed: response.changed,
+        },
+      ];
+      await refreshDocument();
+    } catch (err) {
+      chat = [
+        ...chat,
+        { role: "error", text: err instanceof Error ? err.message : String(err) },
+      ];
+    } finally {
+      liveSteps = [];
+      busy = false;
+    }
+  }
+
   async function onGenerate(): Promise<void> {
     busy = true;
     status = null;
@@ -604,6 +652,15 @@
         anchor = null;
       }}
       onselectall={selectAll}
+    />
+
+    <ChatPanel
+      entries={chat}
+      live={liveSteps}
+      {selection}
+      enabled={docState !== null}
+      {busy}
+      onask={askAgent}
     />
 
     <ProviderConfig

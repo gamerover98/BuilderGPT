@@ -48,6 +48,10 @@ export const IPC = {
   docRedo: "bgpt:doc:redo",
   docInspect: "bgpt:doc:inspect",
   docSave: "bgpt:doc:save",
+  /** Ask the agent to edit the open document. */
+  docAgent: "bgpt:doc:agent",
+  /** main → renderer: one tool call the agent just made. */
+  agentStep: "bgpt:agent:step",
 
   artifactsList: "bgpt:artifacts:list",
 
@@ -337,6 +341,30 @@ export interface SaveSuccess {
   state: DocumentState;
 }
 
+/** One tool call, as it happens, so the chat can narrate rather than hang. */
+export interface AgentStepEvent {
+  requestId: string;
+  tool: string;
+  summary: string;
+}
+
+export interface AgentRequestPayload {
+  requestId: string;
+  prompt: string;
+  /** The user's selection, which the agent's tools default to. */
+  selection: RegionSpec | null;
+}
+
+export interface AgentSuccess {
+  /** The model's closing explanation. */
+  text: string;
+  changed: number;
+  steps: { tool: string; summary: string }[];
+  state: DocumentState;
+}
+
+export type AgentResponse = Result<AgentSuccess>;
+
 export type DocumentStateResponse = Result<{ state: DocumentState | null }>;
 export type DocumentMeshResponse = Result<DocumentMesh>;
 export type EditResponse = Result<EditSuccess>;
@@ -383,6 +411,8 @@ export interface BgptApi {
   redo(): Promise<EditResponse>;
   inspectBlock(x: number, y: number, z: number): Promise<InspectResponse>;
   saveDocument(request: SaveRequest): Promise<SaveResponse>;
+  askAgent(request: AgentRequestPayload): Promise<AgentResponse>;
 
   onProgress(listener: (event: ProgressEvent) => void): () => void;
+  onAgentStep(listener: (event: AgentStepEvent) => void): () => void;
 }

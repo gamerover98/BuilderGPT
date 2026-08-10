@@ -13,6 +13,8 @@ import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 
 import {
   IPC,
+  type AgentRequestPayload,
+  type AgentResponse,
   type Artifact,
   type DocumentMeshResponse,
   type DocumentStateResponse,
@@ -57,6 +59,8 @@ import {
   undoEdit,
 } from "../services/session.js";
 import { UnrepresentableBlocksError } from "../services/writers.js";
+import { runAgent } from "../agent/agent.js";
+import { loadAllowedBlocks } from "../core.js";
 import { listArtifacts } from "../services/artifacts.js";
 import { SchematicFormatError } from "../pipeline/loader.js";
 import { classifyGenerateError, generate } from "../services/generate.js";
@@ -73,6 +77,7 @@ import {
   generatedDir,
   legacyBlocksPath,
   openCodeSnapshotPath,
+  resourcesDir,
 } from "../services/resources.js";
 import {
   clearApiKey,
@@ -377,6 +382,84 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       return failure(err);
     }
   });
+
+  ipcMain.handle(
+    IPC.docAgent,
+    async (_event, req: AgentRequestPayload): Promise<AgentResponse> => {
+      const window = getWindow();
+      const settings = await getSettings();
+
+      if (req.prompt.trim() === "") {
+        return { ok: false, kind: "invalid-input", message: "Say what you want changed." };
+      }
+
+      let session;
+      try {
+        session = requireSession();
+      } catch (err) {
+        return failure(err);
+      }
+
+      // The same key gate as generation, for the same reason: a paid model with
+      // no key returns an opaque 401 that reaches the user as "LLM API Error".
+      const apiKey = await getApiKey(settings.provider);
+      if (settings.provider === "OpenCode") {
+        const catalogue = await fetchOpenCodeModels({ snapshotPath: openCodeSnapshotPath() });
+        const model = catalogue?.find((entry) => entry.id === settings.model);
+        if (apiKey.trim() === "" && openCodeModelRequiresKey(model)) {
+          return {
+            ok: false,
+            kind: "no-api-key",
+            message: `${model?.name ?? settings.model} is a paid OpenCode model. Add an API key, or pick a free one.`,
+          };
+        }
+      } else if (apiKey.trim() === "" && providerRequiresApiKey(settings.provider)) {
+        return {
+          ok: false,
+          kind: "no-api-key",
+          message: `Add an API key for ${settings.provider} in Settings.`,
+        };
+      }
+
+      try {
+        const result = await runAgent({
+          session,
+          provider: settings.provider,
+          model: settings.model,
+          apiKey,
+          baseUrl: settings.baseUrl,
+          prompt: req.prompt,
+          selection: req.selection,
+          allowedBlocks: await loadAllowedBlocks(resourcesDir()),
+          onStep: (step) => {
+            if (window && !window.isDestroyed()) {
+              window.webContents.send(IPC.agentStep, {
+                requestId: req.requestId,
+                tool: step.tool,
+                summary: step.summary,
+              });
+            }
+          },
+        });
+        return {
+          ok: true,
+          text: result.text,
+          changed: result.changed,
+          steps: [...result.steps],
+          state: documentState(session),
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // `runAgent` wraps everything as an LlmError, so the prefix is the
+        // signal — same convention `classifyGenerateError` uses.
+        return {
+          ok: false,
+          kind: message.startsWith("LLM API Error") ? "llm-error" : "io-error",
+          message,
+        };
+      }
+    },
+  );
 
   ipcMain.handle(IPC.preview, async (_event, req: PreviewRequest): Promise<PreviewResponse> => {
     const window = getWindow();

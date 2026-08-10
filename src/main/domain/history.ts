@@ -437,7 +437,51 @@ export function runTransaction<T>(
     return result;
   }
 
-  history.undoStack.push({ label, commands: recorder.commands });
+  pushTransaction(history, { label, commands: recorder.commands });
+  return result;
+}
+
+/**
+ * `runTransaction` for a body that awaits.
+ *
+ * The agent needs this and the synchronous version cannot serve it: it calls
+ * `body(recorder)` and catches what that call throws, which for an async body
+ * is nothing at all -- the function returns a promise, the rejection happens
+ * later, and the rollback never runs. A half-applied edit would be left on the
+ * document with no undo entry describing it.
+ *
+ * One agent request spans one of these, however many tool calls it makes, so
+ * the whole request is one CTRL+Z.
+ */
+export async function runTransactionAsync<T>(
+  doc: SchematicDocument,
+  history: History,
+  label: string,
+  body: (tx: TransactionScope) => Promise<T>,
+): Promise<T> {
+  const recorder = new Recorder(doc);
+  let result: T;
+  try {
+    result = await body(recorder);
+  } catch (err) {
+    recorder.flush();
+    for (let i = recorder.commands.length - 1; i >= 0; i -= 1) {
+      revertCommand(doc, recorder.commands[i]);
+    }
+    throw err;
+  }
+
+  recorder.flush();
+  if (recorder.commands.length === 0) {
+    return result;
+  }
+  pushTransaction(history, { label, commands: recorder.commands });
+  return result;
+}
+
+/** Shared by both transaction runners: push, clear redo, honour the limit. */
+function pushTransaction(history: History, transaction: Transaction): void {
+  history.undoStack.push(transaction);
   // A new edit makes the redo branch unreachable, as everywhere else.
   history.redoStack.length = 0;
 
@@ -450,7 +494,6 @@ export function runTransaction<T>(
     // a different transaction and calling a modified document saved.
     history.savedDepth = history.savedDepth >= dropped ? history.savedDepth - dropped : -1;
   }
-  return result;
 }
 
 export function undo(doc: SchematicDocument, history: History): Transaction | null {

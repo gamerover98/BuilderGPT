@@ -31,7 +31,14 @@ import {
   resolveOutputPath,
 } from "../src/main/services/output.js";
 import { labelFor, mergeCatalogue } from "../src/main/services/opencode.js";
-import { buildPreview, clearPreviewCache, sunAnglesRadians } from "../src/main/services/preview.js";
+import {
+  buildDocumentPreview,
+  buildPreview,
+  clearBakerCache,
+  clearPreviewCache,
+  sunAnglesRadians,
+} from "../src/main/services/preview.js";
+import { documentFromLoaded, setBlock } from "../src/main/domain/document.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/services/versions.js";
 
@@ -180,6 +187,71 @@ try {
     "bundled pack changes the render (textures vs flat colours)",
     Buffer.compare(Buffer.from(preview.glb), Buffer.from(untextured.glb)) !== 0,
   );
+
+  // --- previewing an open document -----------------------------------------
+  //
+  // The edit loop. What matters is that it produces the same picture as the
+  // file-based path -- otherwise editing and re-opening would disagree -- and
+  // that it stays out of the resource pack, which is what makes it fast enough
+  // to run after every change.
+  console.log("\n--- document preview ---");
+  {
+    clearPreviewCache();
+    clearBakerCache();
+
+    const doc = documentFromLoaded(await loadStructure(schemPath), schemPath);
+    const fromDocument = await buildDocumentPreview(doc, {
+      resourcePackPath: null,
+      fallbackResourcePackPath: bundledPack,
+    });
+    check(
+      "a document renders byte-identically to the file it came from",
+      Buffer.compare(Buffer.from(preview.glb), Buffer.from(fromDocument.glb)) === 0,
+    );
+    equal("...with the same bounds", fromDocument.size, preview.size);
+
+    // An edit has to change the picture, or the whole loop is decorative.
+    // (2,1,1) is empty in the fixture above; asserting the write landed keeps
+    // this from passing on a no-op, which is exactly how it failed first time.
+    check(
+      "the test edit actually writes a block",
+      setBlock(doc, 2, 1, 1, { namespacedName: "minecraft:glass", properties: {} }) !== null,
+    );
+    const afterEdit = await buildDocumentPreview(doc, {
+      resourcePackPath: null,
+      fallbackResourcePackPath: bundledPack,
+    });
+    check(
+      "editing a block changes the render",
+      Buffer.compare(Buffer.from(fromDocument.glb), Buffer.from(afterEdit.glb)) !== 0,
+    );
+
+    // The baker cache is the point of the exercise. Reading the bundled pack is
+    // ~17 MB of zip and dominates a cold build; a warm rebuild must not do it
+    // again. Timing is a blunt instrument, so the bar is deliberately loose --
+    // it is there to catch the cache being bypassed entirely, not to police
+    // milliseconds on a busy machine.
+    clearBakerCache();
+    const coldStart = Date.now();
+    await buildDocumentPreview(doc, {
+      resourcePackPath: null,
+      fallbackResourcePackPath: bundledPack,
+    });
+    const cold = Date.now() - coldStart;
+
+    setBlock(doc, 1, 1, 1, { namespacedName: "minecraft:stone", properties: {} });
+    const warmStart = Date.now();
+    await buildDocumentPreview(doc, {
+      resourcePackPath: null,
+      fallbackResourcePackPath: bundledPack,
+    });
+    const warm = Date.now() - warmStart;
+    check(
+      "a warm rebuild is substantially faster than a cold one",
+      warm * 2 < cold,
+      `cold ${cold} ms, warm ${warm} ms`,
+    );
+  }
 
   const sun = sunAnglesRadians({
     sunAzimuthDeg: 180,

@@ -35,6 +35,7 @@ import { buildMesh, culledFaces } from "../pipeline/mesher.js";
 import { ModelBaker } from "../pipeline/model_baker.js";
 import { normalizePalette } from "../pipeline/translate.js";
 import { paletteEntryCacheKey, paletteEntryIsAir, type StructureData } from "../pipeline/types.js";
+import { toStructureData, type SchematicDocument } from "../domain/document.js";
 
 /** preview.py:66-67 -- "50 MB is generous for a .schem file". */
 export const MAX_SCHEM_BYTES = 50 * 1024 * 1024;
@@ -127,6 +128,88 @@ function cacheKey(
   hash.update(SEPARATOR);
   hash.update(fallbackResourcePackPath ?? "");
   return hash.digest("hex");
+}
+
+/**
+ * Model bakers, kept alive across previews.
+ *
+ * `ModelBaker.create` opens the resource pack -- 17 MB of zip for the bundled
+ * one -- and everything it accumulates afterwards (baked blockstates, decoded
+ * textures) is a pure function of the pack and the two tints. So a baker can be
+ * reused by any preview that agrees on those four things, which during an
+ * editing session means all of them.
+ *
+ * That is what takes the pack read out of the edit loop: with the baker cached,
+ * re-previewing after a change is culling, atlas and mesh, and no I/O at all.
+ *
+ * The texture set only ever grows, so the atlas is memoised against its size --
+ * a count that changes exactly when a block the pack had not been asked for
+ * before shows up.
+ */
+interface CachedBaker {
+  baker: ModelBaker;
+  atlas: ReturnType<typeof buildAtlas> | null;
+  atlasTextureCount: number;
+}
+
+const BAKER_CACHE_LIMIT = 3;
+const bakers = new Map<string, CachedBaker>();
+
+function bakerKey(
+  resourcePackPath: string | null,
+  fallbackResourcePackPath: string | null,
+  biomeColor: string,
+  waterColor: string,
+): string {
+  return [resourcePackPath ?? "", fallbackResourcePackPath ?? "", biomeColor, waterColor].join(
+    SEPARATOR,
+  );
+}
+
+async function cachedBaker(
+  resourcePackPath: string | null,
+  fallbackResourcePackPath: string | null,
+  biomeColor: string,
+  waterColor: string,
+): Promise<CachedBaker> {
+  const key = bakerKey(resourcePackPath, fallbackResourcePackPath, biomeColor, waterColor);
+  const hit = bakers.get(key);
+  if (hit) {
+    bakers.delete(key);
+    bakers.set(key, hit);
+    return hit;
+  }
+  const entry: CachedBaker = {
+    baker: await ModelBaker.create(
+      resourcePackPath,
+      fallbackResourcePackPath,
+      biomeColor,
+      waterColor,
+    ),
+    atlas: null,
+    atlasTextureCount: -1,
+  };
+  bakers.set(key, entry);
+  while (bakers.size > BAKER_CACHE_LIMIT) {
+    const oldest = bakers.keys().next();
+    if (oldest.done) break;
+    bakers.delete(oldest.value);
+  }
+  return entry;
+}
+
+/** The atlas for whatever the baker has decoded so far, rebuilt only when that grew. */
+function cachedAtlas(entry: CachedBaker): ReturnType<typeof buildAtlas> {
+  const count = Object.keys(entry.baker.textures).length;
+  if (entry.atlas === null || entry.atlasTextureCount !== count) {
+    entry.atlas = buildAtlas(entry.baker.textures);
+    entry.atlasTextureCount = count;
+  }
+  return entry.atlas;
+}
+
+export function clearBakerCache(): void {
+  bakers.clear();
 }
 
 export interface BuildPreviewOptions {
@@ -252,14 +335,17 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
   // `normalize_palette` did whenever PyMCTranslate wasn't installed.
   const normalized = normalizePalette(structure, undefined);
 
-  const baker = await ModelBaker.create(
+  const cached = await cachedBaker(
     options.resourcePackPath,
     fallbackResourcePackPath,
     biomeColor,
     waterColor,
   );
+  const baker = cached.baker;
   const faces = await culledFaces(normalized, baker);
-  const atlas = buildAtlas(baker.textures);
+  // After culling, not before: `culledFaces` is what asks the baker for each
+  // blockstate, so the texture set is only complete once it has run.
+  const atlas = cachedAtlas(cached);
   const mesh = buildMesh(faces, atlas.uvRects);
   await warnAboutBlocksWithNoGeometry(normalized, baker, new Set(Object.keys(atlas.uvRects)));
   if (mesh.indices.length === 0) {
@@ -288,6 +374,53 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
   }
 
   return { ...result, cached: false };
+}
+
+export interface DocumentPreviewOptions {
+  resourcePackPath: string | null;
+  fallbackResourcePackPath?: string | null;
+  biomeColor?: string;
+  waterColor?: string;
+}
+
+/**
+ * The same pipeline, driven from an open document rather than a file.
+ *
+ * This is the edit loop: no read, no decode, no `loadStructure`, and -- thanks
+ * to the baker cache above -- no resource pack either. What is left is the work
+ * that genuinely depends on the blocks having changed.
+ *
+ * There is no content cache here on purpose. `buildPreview` hashes the file
+ * bytes because the same file gets previewed repeatedly; a document is
+ * previewed because it just changed, so a cache keyed on its contents would
+ * miss every time and cost a hash of the whole grid to find that out. The
+ * caller has `doc.revision`, which answers "is my last mesh still current" for
+ * free.
+ */
+export async function buildDocumentPreview(
+  doc: SchematicDocument,
+  options: DocumentPreviewOptions,
+): Promise<PreviewResult> {
+  const cached = await cachedBaker(
+    options.resourcePackPath,
+    options.fallbackResourcePackPath ?? null,
+    options.biomeColor ?? DEFAULT_BIOME_COLOR,
+    options.waterColor ?? DEFAULT_WATER_COLOR,
+  );
+  const structure = toStructureData(doc);
+  const faces = await culledFaces(structure, cached.baker);
+  const atlas = cachedAtlas(cached);
+  const mesh = buildMesh(faces, atlas.uvRects);
+  await warnAboutBlocksWithNoGeometry(structure, cached.baker, new Set(Object.keys(atlas.uvRects)));
+  if (mesh.indices.length === 0) {
+    throw new EmptyPreviewError(countSolidBlocks(structure));
+  }
+  const glb = meshToGlb(mesh, atlas);
+  return {
+    glb: glb.glbBytes,
+    center: [...glb.center] as [number, number, number],
+    size: [...glb.size] as [number, number, number],
+  };
 }
 
 /**

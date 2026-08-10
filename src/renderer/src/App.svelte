@@ -110,6 +110,72 @@
   /** Unsaved work found from a session that ended badly. */
   let recovery = $state<RecoveryOffer | null>(null);
 
+  /** A schematic is being dragged over the viewport. */
+  let dropActive = $state(false);
+  /**
+   * `dragenter`/`dragleave` fire for every child element the pointer crosses,
+   * so a plain boolean flickers off as soon as the cursor moves onto the
+   * canvas. Counting enters against leaves is the usual fix.
+   */
+  let dragDepth = 0;
+
+  const SCHEMATIC_EXTENSIONS = [".schem", ".schematic"];
+
+  function isSchematicPath(filePath: string): boolean {
+    const lower = filePath.toLowerCase();
+    return SCHEMATIC_EXTENSIONS.some((extension) => lower.endsWith(extension));
+  }
+
+  function onDragEnter(event: DragEvent): void {
+    if (!bridgeAvailable) return;
+    // The dragged file's *name* is not readable during a drag — only its type,
+    // for privacy — so the highlight cannot promise the file is supported. It
+    // says "you can drop here"; the drop itself says whether it worked.
+    if (!event.dataTransfer?.types.includes("Files")) return;
+    event.preventDefault();
+    dragDepth += 1;
+    dropActive = true;
+  }
+
+  function onDragOver(event: DragEvent): void {
+    if (!dropActive) return;
+    // Without this the browser refuses the drop and shows a "no entry" cursor.
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "copy";
+    }
+  }
+
+  function onDragLeave(): void {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) {
+      dropActive = false;
+    }
+  }
+
+  async function onDrop(event: DragEvent): Promise<void> {
+    event.preventDefault();
+    dragDepth = 0;
+    dropActive = false;
+
+    const file = event.dataTransfer?.files?.[0];
+    if (!file) return;
+
+    const filePath = api().pathForDroppedFile(file);
+    if (!filePath) {
+      status = { tone: "warn", text: `${file.name} does not come from a file on disk.` };
+      return;
+    }
+    if (!isSchematicPath(filePath)) {
+      status = {
+        tone: "warn",
+        text: `${file.name} is not a schematic — open a .schem or .schematic.`,
+      };
+      return;
+    }
+    await openDocumentAt(filePath);
+  }
+
   async function resolveRecovery(restore: boolean): Promise<void> {
     const offer = recovery;
     // Dismissed first: whichever way this goes, the prompt is answered, and
@@ -424,10 +490,14 @@
       return;
     }
     if (!picked.path) return;
+    await openDocumentAt(picked.path);
+  }
 
+  /** Opens a schematic by path — from the picker, or from a drop. */
+  async function openDocumentAt(filePath: string): Promise<void> {
     busy = true;
     try {
-      const response = await api().openDocument(picked.path);
+      const response = await api().openDocument(filePath);
       if (!response.ok) {
         status = { tone: "error", text: response.message };
         return;
@@ -918,7 +988,20 @@
     />
   {/if}
 
-  <section class="preview">
+  <!--
+    The drop target is the whole viewport rather than a dedicated zone: an
+    empty viewport is exactly where someone will try to drop a file, and a
+    small target inside it would be a worse guess than the obvious one.
+  -->
+  <section
+    class="preview"
+    class:drop-active={dropActive}
+    aria-label="3D viewport"
+    ondragenter={onDragEnter}
+    ondragover={onDragOver}
+    ondragleave={onDragLeave}
+    ondrop={onDrop}
+  >
     {#if sidebarCollapsed}
       <button
         class="icon show-panel"
@@ -953,6 +1036,13 @@
       scrolling column used to render above the fold, off-screen -- visually
       indistinguishable from nothing happening.
     -->
+    {#if dropActive}
+      <div class="drop-hint" aria-hidden="true">
+        <strong>Drop to open</strong>
+        <span>.schem or .schematic</span>
+      </div>
+    {/if}
+
     {#if recovery}
       <!--
         Deliberately blocking, unlike the status banner: this is the one
@@ -1088,6 +1178,40 @@
     top: 12px;
     left: 12px;
     z-index: 3;
+  }
+
+  .preview.drop-active::after {
+    content: "";
+    position: absolute;
+    inset: 8px;
+    z-index: 4;
+    border: 2px dashed var(--accent);
+    border-radius: 10px;
+    background: rgb(110 168 254 / 8%);
+    /* The overlay must not eat the drop event it is drawn for. */
+    pointer-events: none;
+  }
+
+  .drop-hint {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 14px 22px;
+    border-radius: 10px;
+    background: var(--bg-panel);
+    box-shadow: 0 8px 28px rgb(0 0 0 / 45%);
+    pointer-events: none;
+  }
+
+  .drop-hint span {
+    font-size: 12px;
+    color: var(--text-dim);
   }
 
   .recovery {

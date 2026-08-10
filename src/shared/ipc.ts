@@ -433,6 +433,12 @@ export interface BgptApi {
   redo(): Promise<EditResponse>;
   inspectBlock(x: number, y: number, z: number): Promise<InspectResponse>;
   saveDocument(request: SaveRequest): Promise<SaveResponse>;
+  /**
+   * The filesystem path behind a dropped `File`, or `""` when it has none.
+   * Synchronous, and the one method here that is not an IPC call: it is
+   * answered in the preload, which is the only place that can.
+   */
+  pathForDroppedFile(file: File): string;
   /** Unsaved work from a session that ended badly, if any. */
   peekRecovery(): Promise<RecoveryPeekResponse>;
   /** `true` restores it and opens it; `false` discards it. */

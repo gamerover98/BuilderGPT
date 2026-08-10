@@ -8,7 +8,7 @@
  * generic `invoke(channel, ...)`.
  */
 
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 import {
   IPC,
@@ -74,6 +74,24 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docInspect, { x, y, z }) as Promise<InspectResponse>,
   saveDocument: (request: SaveRequest) =>
     ipcRenderer.invoke(IPC.docSave, request) as Promise<SaveResponse>,
+  /**
+   * The filesystem path of a dropped file.
+   *
+   * `File.path`, the obvious answer, was removed in Electron 32; `webUtils` is
+   * the replacement, and it only exists on this side of the bridge. The `File`
+   * itself never crosses — it goes in as an argument and a string comes back,
+   * which is the whole reason this is a preload function rather than something
+   * the renderer could do itself.
+   */
+  pathForDroppedFile: (file: File) => {
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      // A drag from somewhere with no path behind it — a browser, a zip
+      // viewer. Reported as "not a file we can open" rather than as a crash.
+      return "";
+    }
+  },
   peekRecovery: () => ipcRenderer.invoke(IPC.docRecoveryPeek) as Promise<RecoveryPeekResponse>,
   resolveRecovery: (restore: boolean) =>
     ipcRenderer.invoke(IPC.docRecoveryResolve, restore) as Promise<DocumentStateResponse>,

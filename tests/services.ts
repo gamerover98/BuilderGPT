@@ -75,7 +75,7 @@ function equal(label: string, actual: unknown, expected: unknown): void {
   check(label, ok);
 }
 
-console.log("=== BuilderGPT redesign-slice service smoke test ===\n");
+console.log("=== Schematic AI Studio redesign-slice service smoke test ===\n");
 
 const workDir = await mkdtemp(path.join(tmpdir(), "bgpt-smoke-"));
 

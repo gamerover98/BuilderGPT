@@ -1,5 +1,10 @@
+# `appId` is install identity, not branding: changing it would make an upgrade
+# look like a different application and orphan the installed copy. Same reason
+# `package.json`'s `name` stays `buildergpt` — that is what `app.getName()`
+# resolves to, and therefore what the userData directory is called, so renaming
+# it would strand every existing settings file and generated schematic.
 appId: ai.cynia.buildergpt
-productName: BuilderGPT
+productName: Schematic AI Studio
 copyright: Copyright © CyniaAI Team
 
 directories:
@@ -35,7 +40,7 @@ win:
   target:
     - target: nsis
       arch: [x64]
-  artifactName: ${productName}-${version}-setup-${arch}.${ext}
+  artifactName: SchematicAIStudio-${version}-setup-${arch}.${ext}
 
 nsis:
   oneClick: false
@@ -48,11 +53,11 @@ linux:
       arch: [x64]
     - target: deb
       arch: [x64]
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: SchematicAIStudio-${version}-${arch}.${ext}
 
 mac:
   category: public.app-category.graphics-design
   target:
     - target: dmg
       arch: [x64, arm64]
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: SchematicAIStudio-${version}-${arch}.${ext}

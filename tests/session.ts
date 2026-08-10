@@ -66,7 +66,7 @@ const LEGACY_BLOCKS = path.resolve(
 const stone = { namespacedName: "minecraft:stone" };
 const planks = { namespacedName: "minecraft:oak_planks" };
 
-console.log("=== BuilderGPT document session ===\n");
+console.log("=== Schematic AI Studio document session ===\n");
 
 const workDir = await mkdtemp(path.join(tmpdir(), "bgpt-session-"));
 

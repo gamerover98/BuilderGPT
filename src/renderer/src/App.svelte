@@ -627,7 +627,7 @@
 >
   <section class="controls">
     <header class="sidebar-head">
-      <h1>BuilderGPT</h1>
+      <h1>Schematic AI Studio</h1>
       <button
         class="icon"
         onclick={toggleSidebar}

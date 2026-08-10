@@ -56,7 +56,7 @@ function allVertices(baked: BakedBlock): Array<[number, number, number]> {
   return out;
 }
 
-console.log("=== BuilderGPT block geometry ===\n");
+console.log("=== Schematic AI Studio block geometry ===\n");
 
 const pack = await findBundledResourcePack();
 const baker = await ModelBaker.create(null, pack);

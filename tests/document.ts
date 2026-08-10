@@ -72,7 +72,7 @@ const PLANKS = block("minecraft:oak_planks");
 const STAIRS_N = block("minecraft:oak_stairs", { facing: "north" });
 const STAIRS_S = block("minecraft:oak_stairs", { facing: "south" });
 
-console.log("=== BuilderGPT schematic document ===\n");
+console.log("=== Schematic AI Studio: document ===\n");
 
 // --- shape and indexing -----------------------------------------------------
 console.log("--- shape ---");

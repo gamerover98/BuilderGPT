@@ -124,7 +124,7 @@ const baseRequest = {
   allowedBlocks: ALLOWED,
 };
 
-console.log("=== BuilderGPT schematic agent ===\n");
+console.log("=== Schematic AI Studio: agent ===\n");
 
 // --- a tool call reaches the document ---------------------------------------
 console.log("--- tools act on the document ---");

@@ -51,7 +51,7 @@ async function run(code: string, allowed: ReadonlySet<string>) {
   return outcome.placements;
 }
 
-console.log("=== BuilderGPT sandbox containment checks (quickjs-emscripten) ===\n");
+console.log("=== Schematic AI Studio sandbox containment checks (quickjs-emscripten) ===\n");
 
 const allowed = await loadAllowedBlocks(REPO_ROOT);
 

@@ -2,7 +2,7 @@
   "name": "buildergpt",
   "version": "3.0.0",
   "private": true,
-  "description": "BuilderGPT \u2014 AI Minecraft structure generator (Electron port of the Streamlit app)",
+  "description": "Schematic AI Studio — an AI-assisted 3D editor for Minecraft schematics",
   "author": "CyniaAI Team",
   "homepage": "https://github.com/CyniaAI/BuilderGPT",
   "license": "GPL-3.0",

@@ -34,7 +34,7 @@ function check(label: string, cond: boolean): void {
   }
 }
 
-console.log(`=== BuilderGPT TS port smoke test (core.ts VERSION=${VERSION}) ===\n`);
+console.log(`=== Schematic AI Studio TS port smoke test (core.ts VERSION=${VERSION}) ===\n`);
 
 // --- Scenario 1: jscode2blocks ---
 console.log("--- jscode2blocks ---");

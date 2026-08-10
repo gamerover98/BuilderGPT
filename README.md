@@ -1,30 +1,39 @@
 <div align="center">
-   <h1>BuilderGPT</h1>
+   <h1>Schematic AI Studio</h1>
    <img src="https://img.shields.io/badge/Electron-desktop-47848F" alt="Electron">
    <img src="https://img.shields.io/badge/TypeScript-strict-3178C6" alt="TypeScript">
    <img src="https://img.shields.io/github/license/CyniaAI/BuilderGPT" alt="License">
    <br>
 </div>
 
-Describe a building in plain language and a language model produces a
-ready-to-use Minecraft structure, rendered in 3D before you export it. Output is
-a `.schem` file or a `.mcfunction` script, importable with tools like WorldEdit.
+An AI-assisted 3D editor for Minecraft schematics. Open a build, select part of
+it, and either edit it by hand or ask for the change in plain language — the AI
+works on the schematic itself, not on a description of it. Everything it does is
+an ordinary editor action: one request is one <kbd>Ctrl</kbd>+<kbd>Z</kbd>.
 
-BuilderGPT is a **desktop application**: one installer, no runtime to set up.
+It also still generates a structure from nothing, which is where the project
+started. Files are `.schem` or `.mcfunction`, importable with tools like
+WorldEdit.
 
-> This is a desktop rewrite of the original
-> [CyniaAI/BuilderGPT](https://github.com/CyniaAI/BuilderGPT), which ran as a
-> Python/Streamlit web app. The generation approach and prompt design come from
-> that project; see [Why this was rewritten](#why-this-was-rewritten) and
-> [Credits](#credits).
+Schematic AI Studio is a **desktop application**: one installer, no runtime to
+set up.
+
+> Formerly BuilderGPT, and originally
+> [CyniaAI/BuilderGPT](https://github.com/CyniaAI/BuilderGPT), a Python/Streamlit
+> web app. The generation approach and prompt design come from that project; see
+> [Why this was rewritten](#why-this-was-rewritten) and [Credits](#credits).
 
 ## Features
 
+- **Edit schematics**: select a region in the viewport, fill or replace inside
+  it, with full undo/redo
+- **Ask the AI to edit them**: it inspects the build through tools and changes
+  it directly, and the whole request undoes in one step
 - Generate structures from natural language, with an optional reference image
 - Live 3D preview, textured with a bundled resource pack (or your own)
-- Export as `.schem` or `.mcfunction`, into a folder you choose
-- Open existing schematics: Sponge v2, Sponge v3 (WorldEdit / FAWE) and legacy
-  MCEdit `.schematic`
+- Read and write Sponge v2, Sponge v3 (WorldEdit / FAWE) and legacy MCEdit
+  `.schematic`, keeping the format a file came in — chest contents and sign text
+  included
 - Providers: OpenAI, Google Gemini, OpenCode Zen, or any OpenAI-compatible
   endpoint. OpenCode's free models need no API key at all
 - API keys encrypted by the OS keychain — no `.env` file, no plaintext on disk

@@ -19,7 +19,7 @@ import type { BgptApi } from "../../../shared/ipc.js";
 export const bridgeAvailable = typeof window !== "undefined" && Boolean(window.bgpt);
 
 export const BRIDGE_MISSING_MESSAGE =
-  "This page is not running inside the BuilderGPT desktop app, so the backend is " +
+  "This page is not running inside the Schematic AI Studio desktop app, so the backend is " +
   "unavailable. Start it with `npm run dev` (or the packaged app) rather than " +
   "opening the dev-server URL in a browser.";
 

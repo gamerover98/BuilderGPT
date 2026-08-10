@@ -143,7 +143,7 @@ function sampleDocument(format: SchematicDocument["format"]): SchematicDocument 
   return doc;
 }
 
-console.log("=== BuilderGPT schematic writers ===\n");
+console.log("=== Schematic AI Studio: writers ===\n");
 
 const workDir = await mkdtemp(path.join(tmpdir(), "bgpt-write-"));
 

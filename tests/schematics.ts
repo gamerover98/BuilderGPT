@@ -367,7 +367,7 @@ function entities(): unknown {
   };
 }
 
-console.log("=== BuilderGPT schematic container-format parity ===\n");
+console.log("=== Schematic AI Studio: container-format parity ===\n");
 
 const workDir = await mkdtemp(path.join(tmpdir(), "bgpt-schem-"));
 

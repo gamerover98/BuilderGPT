@@ -28,7 +28,7 @@ function createWindow(): void {
     show: false,
     // `layout="wide"` + the dark viewer background from app/viewer/index.html.
     backgroundColor: "#0b0f14",
-    title: "BuilderGPT - AI Minecraft Structure Generator", // run_app.py:6
+    title: "Schematic AI Studio", // run_app.py:6 set a title too
     webPreferences: {
       preload: path.join(dirname, "../preload/index.cjs"),
       contextIsolation: true,

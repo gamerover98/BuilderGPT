@@ -74,7 +74,7 @@ function snapshot(doc: SchematicDocument): string {
   return `${doc.width}x${doc.height}x${doc.length}|${cells.join(",")}`;
 }
 
-console.log("=== BuilderGPT edit history ===\n");
+console.log("=== Schematic AI Studio edit history ===\n");
 
 // --- one transaction is one step --------------------------------------------
 console.log("--- transaction grouping ---");

@@ -1,20 +1,31 @@
-# BuilderGPT — operating manual
+# Schematic AI Studio — operating manual
 
-An Electron desktop app that generates Minecraft structures with an LLM and
-previews them in 3D. Node/TypeScript main process, Svelte 5 renderer, Three.js
-viewport.
+An Electron desktop app for editing Minecraft schematics, by hand and by AI.
+Node/TypeScript main process, Svelte 5 renderer, Three.js viewport.
 
-It began as a Python/Streamlit app and was ported in full. The Python sources
-are gone from the working tree; they remain in git history as the spec.
+The product name is **Schematic AI Studio**. Technical identifiers are
+deliberately *not* renamed: `package.json`'s `name` is still `buildergpt`
+because that is what `app.getName()` resolves to and therefore what the userData
+directory is called, `appId` is install identity, and the IPC channels are
+prefixed `bgpt:`. Rename branding; leave identifiers alone unless there is a
+concrete benefit.
+
+It began as a Python/Streamlit generator and was ported in full, then grew an
+editor around the generated output. The Python sources are gone from the working
+tree; they remain in git history as the spec.
 
 ## Layout
 
 ```
 src/
-  shared/     types crossing the process boundary — ipc.ts (channel list), settings.ts
+  shared/     types crossing the process boundary — ipc.ts (channel list),
+              settings.ts, schematic.ts (the container-format union)
   main/       everything privileged: fs, network, the JS sandbox, the schem->GLB pipeline
     ipc/      ipcMain.handle registrations — thin, no business logic
-    services/ llm, opencode, generate, preview, schematic, output, settings-store, …
+    domain/   document.ts (the mutable schematic), history.ts (transactions, undo)
+    agent/    agent.ts (the AI tool loop), tools.ts (what it may do)
+    services/ session (the open document), writers, llm, opencode, generate,
+              preview, schematic, output, settings-store, …
     pipeline/ schem -> GLB (loader, loader_formats, model_baker, mesher, atlas, …)
     core.ts   sandboxed execution of LLM-generated build scripts
   preload/    contextBridge — the only renderer↔main surface
@@ -22,8 +33,25 @@ src/
 resources/    shipped as extraResources: the default pack, legacy_blocks.json,
               opencode_models.json
 tests/        the automated suites (see Commands)
-scripts/      build / start / check, in PowerShell and sh
+scripts/      build / start / check, in PowerShell and sh; gen-block-list.mjs
 ```
+
+## The shape of the thing
+
+There is **one open document at a time**, owned by `services/session.ts`.
+Nothing else holds a reference to it. Every path in and out goes through there:
+
+```
+loader ─► SchematicDocument ─► mesher ─► GLB ─► viewer
+             ▲        │
+   UI edits ─┤        └─► writers ─► file
+   AI tools ─┘
+        (both via history.ts transactions)
+```
+
+The renderer holds no schematic. It gets `DocumentState` — a flat summary — and
+a GLB, and every edit is a request. That is why the UI disables its buttons from
+the state main last returned rather than from anything it tracks itself.
 
 ## Commands
 
@@ -35,9 +63,60 @@ scripts/check.sh          # or scripts\check.ps1   — typecheck + all four test
 ```
 
 They are thin wrappers over the npm scripts, which stay the source of truth:
-`npm run dev｜build｜typecheck｜package:{win,linux,mac}｜smoke｜smoke:{hello,sandbox,services,schematics}`.
+`npm run dev｜build｜typecheck｜package:{win,linux,mac}｜smoke｜smoke:{hello,sandbox,services,schematics,blocks,document,history,formats,session,agent}`.
+
+`check.sh` runs typecheck plus every suite and does **not** stop at the first
+failure — a runner that aborts early hides how much else is broken.
 
 ## Invariants — do not quietly change these
+
+**The document's palette is append-only while editing.** Clearing an entry that
+fell out of use renumbers the ones after it, and the undo stack is full of those
+numbers. `compactPalette` therefore invalidates every recorded delta and is only
+safe when the history is being discarded too. It is **not** a save-time step,
+whatever an earlier comment claimed: the writers build their own local palette
+from the voxels instead, which reaches the same file without touching the
+document.
+
+**`doc.revision` is a cache key, not a dirty flag.** It is monotonic and is
+bumped by every mutation *including an undo*, which is what makes it safe for
+"is my mesh still current". It cannot answer "have you undone back to what is on
+disk" — that is `history.ts`'s `isDirty`, measured by undo-stack depth.
+
+**A resize is alone in its command.** A voxel index only means anything relative
+to the dimensions in force when it was recorded, so block deltas either side of
+a resize belong to different coordinate frames. A transaction is a *list* of
+commands applied in order and reverted in reverse; a shrink also records the
+blocks it destroyed, or undoing it could not bring them back.
+
+**One agent request is one transaction.** `runTransactionAsync`, not
+`runTransaction` — the synchronous one catches what `body(recorder)` throws,
+which for an async body is nothing, so the rollback silently never runs and a
+failed request leaves the document half-edited.
+
+**MCEdit output is lossy, and says which way.** A block with no legacy
+equivalent fails the save by name; a block whose exact state the format cannot
+carry is written as the base block and reported through `degraded`. Both
+directions count: a state-less `minecraft:chest` comes back as
+`chest[facing=north,type=single]`, because the metadata nibble has to say which
+way it faces. The rule is simply "the exact state did not match".
+
+**Block picking steps a *hair* inwards from the hit face**, not half a block.
+The mesh is one fused geometry with no per-block identity, so the owning block
+is found by moving `1e-3` along `-normal` from the hit point and flooring. Half
+a block is the obvious choice and is wrong: a pressure plate is a sixteenth
+tall, so stepping half a block in from its top face lands underneath it.
+
+**`block_id_list.txt` is generated.** `node scripts/gen-block-list.mjs >
+block_id_list.txt`, idempotent, from `legacy_blocks.json` plus explicit family
+tables for 1.13+. Editing it by hand is fine right up until someone regenerates
+it. It is also the list spliced into the prompt, so the set the model is told
+about cannot drift from the set it is judged against.
+
+**A Svelte prop may not be called `state`.** A local binding of that name makes
+every `$state(...)` in the same component parse as a store subscription to it
+(`store_rune_conflict`), and the fields silently stop being reactive.
+`DocumentPanel`'s prop is `doc` for exactly this reason.
 
 **The sandbox engine is `quickjs-emscripten`. Do not reintroduce `isolated-vm`.**
 It cannot be loaded in Electron at all: it links against `v8_inspector::*` and
@@ -97,6 +176,19 @@ the OpenCode provider and is not: it is a client for a *local opencode agent
 server*, spawns the opencode CLI, and has no path to a chat completion against
 OpenCode Zen. The client OpenCode's own registry designates for Zen is
 `@ai-sdk/openai-compatible`, which is what `services/llm.ts` uses.
+
+Related, and worth stating because the product plan assumed otherwise: **in this
+app "OpenCode" is a model gateway, not an agent framework.** It is one of four
+providers, alongside OpenAI. The agent loop is built on the `ai` package, which
+is why it works on all four rather than on that one.
+
+**All four providers share one client.** `services/llm.ts` used to have a second
+transport — a hand-rolled `fetch` against `/chat/completions` for OpenAI, Gemini
+and Custom — which was perfectly reasonable until the app needed tool calling,
+which it cannot do. Do not reintroduce it. `resolveModel` is exported so the
+agent reaches the same endpoint with the same key resolved the same way; two
+places deciding what a provider means is how you get something that works in
+generation and not in chat.
 
 **OpenCode's API key is required per model, not per provider.** 9 of its 61
 models are free; the rest bill per token. `openCodeModelRequiresKey` in

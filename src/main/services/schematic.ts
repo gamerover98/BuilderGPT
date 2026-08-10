@@ -164,7 +164,7 @@ export class SpongeSchematicWriter implements SchematicWriter {
         Metadata: {
           type: "compound",
           value: {
-            Name: { type: "string", value: "BuilderGPT" },
+            Name: { type: "string", value: "Schematic AI Studio" },
           },
         },
       },

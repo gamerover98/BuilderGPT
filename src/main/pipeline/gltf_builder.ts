@@ -122,7 +122,7 @@ export function meshToGlb(mesh: MeshBuffers, atlas: AtlasResult): GLBResult {
     // Ported from gltf_builder.py:27-44 — empty-mesh short-circuit, JSON-only
     // GLB (no BIN chunk at all, not just an empty one).
     const empty = {
-      asset: { version: "2.0", generator: "BuilderGPT Preview" },
+      asset: { version: "2.0", generator: "Schematic AI Studio Preview" },
       scenes: [{ nodes: [0] }],
       scene: 0,
       nodes: [{ mesh: 0 }],
@@ -229,7 +229,7 @@ export function meshToGlb(mesh: MeshBuffers, atlas: AtlasResult): GLBResult {
   });
 
   const gltf = {
-    asset: { version: "2.0", generator: "BuilderGPT Preview" },
+    asset: { version: "2.0", generator: "Schematic AI Studio Preview" },
     scenes: [{ nodes: [0] }],
     scene: 0,
     nodes: [{ mesh: 0 }],

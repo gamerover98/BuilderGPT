@@ -421,7 +421,7 @@ try {
   // on every single generation. What follows pins both halves: the request is
   // accepted, and the system prompt still arrives as a system message on the
   // wire.
-  console.log("\n--- opencode transport ---");
+  console.log("\n--- LLM transport: four providers, one client ---");
   let captured: { messages?: Array<{ role: string; content: unknown }> } | null = null;
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -447,25 +447,71 @@ try {
   const address = server.address();
   const port = typeof address === "object" && address !== null ? address.port : 0;
 
-  try {
-    const answer = await callLlm({
-      provider: "OpenCode",
-      model: "mimo-v2.5-free",
-      apiKey: "",
-      baseUrl: `http://127.0.0.1:${port}/v1`,
-      systemPrompt: "You are a Minecraft builder.",
-      userPrompt: "a small stone tower",
-    });
-    equal("OpenCode returns the assistant text", answer, "builder.setBlock(0,0,0)");
-  } catch (err) {
-    check(`OpenCode request is accepted by the SDK (${err instanceof Error ? err.message : String(err)})`, false);
+  // Every provider goes through one transport now, so every provider gets the
+  // same referee: a real HTTP server that records what actually went out. The
+  // three that used to take the hand-rolled `fetch` path are the point -- they
+  // are the ones the change could have broken, and the ones that could not do
+  // tool calling before it.
+  for (const provider of [
+    "OpenCode",
+    "OpenAI",
+    "Google Gemini",
+    "Custom (OpenAI Compatible)",
+  ] as const) {
+    captured = null;
+    try {
+      const answer = await callLlm({
+        provider,
+        model: "test-model",
+        apiKey: provider === "OpenCode" ? "" : "sk-test",
+        // Every provider is pointed at the local server: what is being checked
+        // is the transport, not where each one lives by default.
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        systemPrompt: "You are a Minecraft builder.",
+        userPrompt: "a small stone tower",
+      });
+      equal(`${provider} returns the assistant text`, answer, "builder.setBlock(0,0,0)");
+    } catch (err) {
+      check(
+        `${provider} request is accepted (${err instanceof Error ? err.message : String(err)})`,
+        false,
+      );
+    }
+
+    const sent =
+      (captured as { messages?: Array<{ role: string; content: unknown }> } | null)?.messages ?? [];
+    check(`${provider}: the system prompt reaches the wire as a system message`, sent[0]?.role === "system");
+    equal(`${provider}: the system prompt survives intact`, sent[0]?.content, "You are a Minecraft builder.");
+    check(`${provider}: the user prompt follows it`, sent.some((m) => m.role === "user"));
   }
 
-  const sent = (captured as { messages?: Array<{ role: string; content: unknown }> } | null)?.messages ?? [];
-  check("the system prompt reaches the wire as a system message", sent[0]?.role === "system");
-  equal("the system prompt survives intact", sent[0]?.content, "You are a Minecraft builder.");
-  check("the user prompt follows it", sent.some((m) => m.role === "user"));
+  // The one provider that must still refuse: "Custom" with no base URL has
+  // nowhere to go, and defaulting it to OpenAI (as the Python original did)
+  // is a silent wrong answer.
+  check(
+    "Custom without a base URL is refused rather than defaulted",
+    await (async () => {
+      try {
+        await callLlm({
+          provider: "Custom (OpenAI Compatible)",
+          model: "test-model",
+          apiKey: "sk-test",
+          baseUrl: "",
+          systemPrompt: "s",
+          userPrompt: "u",
+        });
+        return false;
+      } catch (err) {
+        return err instanceof LlmError && err.message.includes("Base URL");
+      }
+    })(),
+  );
 
+  // `close()` alone waits for the keep-alive sockets these four calls leave
+  // behind, which would hold the suite open; dropping them first keeps the
+  // teardown prompt. (This is not what fixes the exit code — see the note at
+  // the bottom of the file. The handles that mattered were the client's.)
+  server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 
   equal("path traversal is stripped from names", sanitizeName("../../evil"), "evil");
@@ -482,4 +528,13 @@ try {
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
-process.exit(failures === 0 ? 0 : 1);
+
+// `exitCode` rather than `exit()`, unlike the other suites, and not by taste.
+// The four provider calls above leave keep-alive sockets in fetch's connection
+// pool; `process.exit()` tears libuv down while they are still open, and Node
+// on Windows aborts with
+//   Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), src\win\async.c
+// *after* printing that every check passed -- so the suite reported success and
+// exited 127. Setting the code and letting the event loop drain lets those
+// sockets close themselves. It costs a second or two at the end of this suite.
+process.exitCode = failures === 0 ? 0 : 1;

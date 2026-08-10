@@ -1,29 +1,26 @@
 /**
  * Ported from `BuilderGPTComponent.call_llm` (component.py:63-104).
  *
- * Two transports, on purpose.
+ * **One transport, for all four providers**: `@ai-sdk/openai-compatible`.
  *
- * **OpenAI, Gemini and Custom** go through Node's builtin `fetch` against the
- * OpenAI-compatible `/chat/completions`. The Python original's provider
- * branches differ only in base URL and the whole request is three fields, so
- * an SDK would add nothing. This is also what removed the CORS problem that
- * motivated the Electron pivot: the request is made from the main process,
- * which is Node, not a browser.
+ * It was two until the agent work. OpenAI, Gemini and Custom went through
+ * Node's builtin `fetch` against `/chat/completions`, on the reasonable
+ * grounds that the request is three fields and an SDK would add nothing --
+ * true, right up until the app needed tool calling. A hand-rolled chat
+ * completion cannot do a tool loop: no tool schemas on the way out, no
+ * `tool_calls` parsed on the way back, no multi-step. Keeping it would have
+ * meant the agent worked on OpenCode and nowhere else.
  *
- * **OpenCode** goes through the AI SDK (`@ai-sdk/openai-compatible`). This
- * closes RULEBOOK.md DEV-013, which had been open on "use the official
- * OpenCode SDK" -- with a finding rather than a simple yes. `@opencode-ai/sdk`
- * is a client for a *local opencode agent server*: it depends on `cross-spawn`,
- * expects the opencode CLI installed and listening on localhost, and drives
- * agent sessions. It has no path to a chat completion against OpenCode Zen, and
- * adopting it would have meant this app could not generate anything without a
- * separate CLI install -- the opposite of "one installer, no runtime to set up".
+ * `createOpenAICompatible` speaks the same dialect all four of these endpoints
+ * already serve -- Gemini publishes an OpenAI-compatible surface, and
+ * "Custom (OpenAI Compatible)" says so in its name -- so unifying costs
+ * nothing at the protocol level and buys the whole `ai` toolchain.
  *
- * What OpenCode *does* designate for Zen is `@ai-sdk/openai-compatible`: its
- * own model registry (models.dev, provider `opencode`) publishes exactly that
- * as the client, alongside the `https://opencode.ai/zen/v1` endpoint. So the
- * spirit of the request is honoured -- the provider-blessed client, typed and
- * maintained -- without the local-server dependency. Pure JS, so the
+ * This also keeps RULEBOOK.md DEV-013 closed the way it was closed: not with
+ * `@opencode-ai/sdk`, which is a client for a *local opencode agent server*
+ * (it depends on `cross-spawn`, expects the CLI installed and listening on
+ * localhost, and has no path to a chat completion against Zen), but with the
+ * client OpenCode's own registry designates for Zen. Pure JS, so the
  * zero-native-dependencies invariant in CLAUDE.md still holds.
  */
 
@@ -62,10 +59,6 @@ export interface LlmRequest {
   acceptsImages?: boolean;
   signal?: AbortSignal;
 }
-
-type ContentPart =
-  | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string } };
 
 const IMAGE_MIME: Readonly<Record<string, string>> = {
   ".png": "image/png",
@@ -114,31 +107,38 @@ async function readImage(
   }
 }
 
-async function buildUserContent(req: LlmRequest): Promise<ContentPart[]> {
-  const parts: ContentPart[] = [];
-  if (req.userPrompt) {
-    parts.push({ type: "text", text: req.userPrompt });
-  }
-  const image = await readImage(req.imagePath, req.acceptsImages);
-  if (image) {
-    parts.push({
-      type: "image_url",
-      image_url: { url: `data:${image.mime};base64,${image.bytes.toString("base64")}` },
-    });
-  }
-  return parts;
+/**
+ * The provider handle for a request.
+ *
+ * Exported because the agent builds its own `generateText` calls -- tools,
+ * multi-step -- and must reach the same endpoint, with the same key, resolved
+ * the same way. Two places deciding what "OpenCode" means is exactly the kind
+ * of drift that produces "it works in generation and not in chat".
+ */
+export function resolveModel(req: {
+  provider: Provider;
+  model: string;
+  apiKey: string;
+  baseUrl: string;
+}) {
+  const baseUrl = resolveBaseUrl(req.provider, req.baseUrl).replace(/\/+$/, "");
+  // component.py:68 -- an empty key becomes the literal "none", which is what
+  // OpenCode's free tier expects and what the other providers reject anyway.
+  const apiKey = req.apiKey.trim() !== "" ? req.apiKey.trim() : "none";
+  const provider = createOpenAICompatible({ name: req.provider, baseURL: baseUrl, apiKey });
+  return provider(req.model);
 }
 
 /**
- * OpenCode Zen, through the client its own registry designates.
+ * One completion.
  *
  * `generateText` handles the request/response shape, so the only things worth
  * spelling out here are the two contracts this app relies on: every failure
- * leaves as an `LlmError` (`services/generate.ts:184` classifies by that
- * message prefix, not by `instanceof`), and an empty string is a failure rather
- * than a result -- the caller is about to feed it to a JS parser.
+ * leaves as an `LlmError` (`services/generate.ts` classifies by that message
+ * prefix, not by `instanceof`), and an empty string is a failure rather than a
+ * result -- the caller is about to feed it to a JS parser.
  */
-async function callOpenCode(req: LlmRequest, baseUrl: string, apiKey: string): Promise<string> {
+export async function callLlm(req: LlmRequest): Promise<string> {
   // The system prompt rides `instructions`, NOT a `{role:"system"}` entry in
   // `messages`. AI SDK 7 rejects the latter at runtime -- `validatePrompt`
   // throws `InvalidPromptError: System messages are not allowed in the prompt
@@ -168,16 +168,10 @@ async function callOpenCode(req: LlmRequest, baseUrl: string, apiKey: string): P
     messages.push({ role: "user", content: req.userPrompt });
   }
 
-  const opencode = createOpenAICompatible({
-    name: "opencode",
-    baseURL: baseUrl,
-    apiKey,
-  });
-
   let text: string;
   try {
     const result = await generateText({
-      model: opencode(req.model),
+      model: resolveModel(req),
       instructions: req.systemPrompt,
       messages,
       temperature: 0.2, // component.py:100
@@ -194,70 +188,3 @@ async function callOpenCode(req: LlmRequest, baseUrl: string, apiKey: string): P
   return text;
 }
 
-export async function callLlm(req: LlmRequest): Promise<string> {
-  const baseUrl = resolveBaseUrl(req.provider, req.baseUrl).replace(/\/+$/, "");
-
-  // component.py:68 -- an empty key becomes the literal "none", which is what
-  // OpenCode's free tier expects and what the other providers reject anyway.
-  const apiKey = req.apiKey.trim() !== "" ? req.apiKey.trim() : "none";
-
-  if (req.provider === "OpenCode") {
-    return await callOpenCode(req, baseUrl, apiKey);
-  }
-
-  const messages: Array<{ role: string; content: string | ContentPart[] }> = [
-    { role: "system", content: req.systemPrompt },
-  ];
-
-  const userContent = await buildUserContent(req);
-  if (userContent.length > 0) {
-    messages.push({ role: "user", content: userContent });
-  }
-
-  let response: Response;
-  try {
-    response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: req.model,
-        messages,
-        temperature: 0.2, // component.py:100
-      }),
-      signal: req.signal,
-    });
-  } catch (err) {
-    throw new LlmError(err instanceof Error ? err.message : String(err));
-  }
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new LlmError(`${response.status} ${response.statusText}${body ? ` - ${body.slice(0, 500)}` : ""}`);
-  }
-
-  let payload: {
-    choices?: Array<{ message?: { content?: string | null } }>;
-    error?: { message?: string };
-  };
-  try {
-    payload = (await response.json()) as typeof payload;
-  } catch (err) {
-    throw new LlmError(`malformed JSON response: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  if (payload.error?.message) {
-    throw new LlmError(payload.error.message);
-  }
-
-  const content = payload.choices?.[0]?.message?.content;
-  if (typeof content !== "string") {
-    // component.py:102 indexed `choices[0]` unconditionally and would have
-    // raised an IndexError wrapped as "LLM API Error"; same class of failure,
-    // with a message that says what actually went wrong.
-    throw new LlmError("response contained no message content");
-  }
-  return content;
-}

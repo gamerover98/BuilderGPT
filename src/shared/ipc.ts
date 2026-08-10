@@ -6,6 +6,7 @@
  * primitives, arrays, and `Uint8Array`. No classes, no functions, no `Buffer`.
  */
 
+import type { SchematicFormat } from "./schematic.js";
 import type {
   ExportType,
   KeyStorageStatus,
@@ -31,6 +32,22 @@ export const IPC = {
 
   generate: "bgpt:generate",
   preview: "bgpt:preview",
+
+  /**
+   * The open document. One channel per verb (rule R-2) rather than a
+   * `doc:command` dispatcher, so the payload of each is a named type the
+   * compiler checks on both sides.
+   */
+  docOpen: "bgpt:doc:open",
+  docNew: "bgpt:doc:new",
+  docClose: "bgpt:doc:close",
+  docState: "bgpt:doc:state",
+  docMesh: "bgpt:doc:mesh",
+  docApply: "bgpt:doc:apply",
+  docUndo: "bgpt:doc:undo",
+  docRedo: "bgpt:doc:redo",
+  docInspect: "bgpt:doc:inspect",
+  docSave: "bgpt:doc:save",
 
   artifactsList: "bgpt:artifacts:list",
 
@@ -217,6 +234,115 @@ export interface PreviewSuccess {
 
 export type PreviewResponse = Result<PreviewSuccess>;
 
+// ---------------------------------------------------------------------------
+// The open document
+// ---------------------------------------------------------------------------
+
+/** A block, as it crosses the boundary: a name plus its block states. */
+export interface BlockSpec {
+  namespacedName: string;
+  properties?: Record<string, string>;
+}
+
+/** Inclusive on both corners; the main process sorts and clips it. */
+export interface RegionSpec {
+  minX: number;
+  minY: number;
+  minZ: number;
+  maxX: number;
+  maxY: number;
+  maxZ: number;
+}
+
+export interface PaletteCount {
+  /** `minecraft:oak_stairs[facing=north]`. */
+  block: string;
+  count: number;
+}
+
+/**
+ * Everything the renderer knows about the open schematic.
+ *
+ * Deliberately small and flat. The document itself is millions of voxels and a
+ * map of NBT trees; it stays in main, and this is the summary the UI actually
+ * draws — title bar, block count, palette list, and the state of the undo menu.
+ */
+export interface DocumentState {
+  filePath: string | null;
+  fileName: string | null;
+  format: SchematicFormat;
+  size: [number, number, number];
+  offset: [number, number, number];
+  blockCount: number;
+  /** Most common first, capped — enough to show, not the whole palette. */
+  palette: PaletteCount[];
+  dirty: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+  /** What the undo/redo menu items should say, or `null` when unavailable. */
+  undoLabel: string | null;
+  redoLabel: string | null;
+  /** Monotonic; the renderer uses it to tell whether its mesh is stale. */
+  revision: number;
+}
+
+/**
+ * One editing operation.
+ *
+ * The undo label is derived in main from the request, not carried on it: the
+ * renderer should not be able to write history's description of what happened.
+ */
+export type EditRequest =
+  | { kind: "setBlock"; x: number; y: number; z: number; block: BlockSpec }
+  | { kind: "fill"; region: RegionSpec; block: BlockSpec }
+  | { kind: "replace"; region: RegionSpec; from: BlockSpec; to: BlockSpec };
+
+export interface DocumentMesh {
+  glb: Uint8Array;
+  center: [number, number, number];
+  size: [number, number, number];
+  /** True when the document had not changed since the last mesh was built. */
+  cached: boolean;
+  sunAzimuth: number;
+  sunElevation: number;
+}
+
+export interface BlockInspection {
+  block: string;
+  properties: Record<string, string>;
+  /** `nbt` is JSON, since the renderer only displays it. */
+  blockEntity: { id: string; nbt: string } | null;
+}
+
+export interface EditSuccess {
+  /** Voxels actually changed; 0 means the edit matched nothing. */
+  changed: number;
+  state: DocumentState;
+}
+
+export interface SaveRequest {
+  /** Omitted means "over the file it came from"; required for Save As. */
+  filePath?: string | null;
+  format?: SchematicFormat;
+}
+
+export interface SaveSuccess {
+  filePath: string;
+  format: SchematicFormat;
+  /**
+   * Blocks that will not come back exactly as they went in, because the chosen
+   * container cannot carry their state. Always empty for Sponge.
+   */
+  degraded: string[];
+  state: DocumentState;
+}
+
+export type DocumentStateResponse = Result<{ state: DocumentState | null }>;
+export type DocumentMeshResponse = Result<DocumentMesh>;
+export type EditResponse = Result<EditSuccess>;
+export type InspectResponse = Result<BlockInspection>;
+export type SaveResponse = Result<SaveSuccess>;
+
 export interface Artifact {
   path: string;
   name: string;
@@ -245,6 +371,18 @@ export interface BgptApi {
   preview(req: PreviewRequest): Promise<PreviewResponse>;
 
   listArtifacts(): Promise<Artifact[]>;
+
+  /** The open document. `getDocumentState` resolves `{state: null}` when none is. */
+  openDocument(filePath: string): Promise<DocumentStateResponse>;
+  newDocument(size: { width: number; height: number; length: number }): Promise<DocumentStateResponse>;
+  closeDocument(): Promise<void>;
+  getDocumentState(): Promise<DocumentStateResponse>;
+  getDocumentMesh(settings: PreviewSettings): Promise<DocumentMeshResponse>;
+  applyEdit(request: EditRequest): Promise<EditResponse>;
+  undo(): Promise<EditResponse>;
+  redo(): Promise<EditResponse>;
+  inspectBlock(x: number, y: number, z: number): Promise<InspectResponse>;
+  saveDocument(request: SaveRequest): Promise<SaveResponse>;
 
   onProgress(listener: (event: ProgressEvent) => void): () => void;
 }

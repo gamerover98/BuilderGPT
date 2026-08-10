@@ -11,6 +11,7 @@
 #   document    the mutable schematic document: palette, resize, revision
 #   history     transactions, undo/redo, and the N-edits-N-undos property
 #   formats     writing a document back out, round-tripped through the reader
+#   session     the open document as the IPC handlers drive it
 #
 # Unlike build.sh, this does NOT stop at the first failure: a test runner that
 # aborts early hides how much else is broken. Every suite runs, results are
@@ -28,8 +29,8 @@ set +e
 
 install_dependencies_if_missing
 
-STEP_NAMES=(typecheck hello smoke sandbox services schematics blocks document history formats)
-STEP_SCRIPTS=(typecheck smoke:hello smoke smoke:sandbox smoke:services smoke:schematics smoke:blocks smoke:document smoke:history smoke:formats)
+STEP_NAMES=(typecheck hello smoke sandbox services schematics blocks document history formats session)
+STEP_SCRIPTS=(typecheck smoke:hello smoke smoke:sandbox smoke:services smoke:schematics smoke:blocks smoke:document smoke:history smoke:formats smoke:session)
 STEP_RESULTS=()
 
 # ASCII only, to stay readable in terminals that are not UTF-8.

@@ -14,14 +14,21 @@ import {
   IPC,
   type Artifact,
   type BgptApi,
+  type DocumentMeshResponse,
+  type DocumentStateResponse,
+  type EditRequest,
+  type EditResponse,
   type GenerateRequest,
   type GenerateResponse,
+  type InspectResponse,
   type OpenCodeModelInfo,
   type PickFileRequest,
   type PickFileResponse,
   type PreviewRequest,
   type PreviewResponse,
   type ProgressEvent,
+  type SaveRequest,
+  type SaveResponse,
   type SetKeyRequest,
 } from "../shared/ipc.js";
 import type { KeyStorageStatus, Provider, Settings } from "../shared/settings.js";
@@ -47,6 +54,22 @@ const api: BgptApi = {
   preview: (req: PreviewRequest) => ipcRenderer.invoke(IPC.preview, req) as Promise<PreviewResponse>,
 
   listArtifacts: () => ipcRenderer.invoke(IPC.artifactsList) as Promise<Artifact[]>,
+
+  openDocument: (filePath: string) =>
+    ipcRenderer.invoke(IPC.docOpen, filePath) as Promise<DocumentStateResponse>,
+  newDocument: (size) => ipcRenderer.invoke(IPC.docNew, size) as Promise<DocumentStateResponse>,
+  closeDocument: () => ipcRenderer.invoke(IPC.docClose) as Promise<void>,
+  getDocumentState: () => ipcRenderer.invoke(IPC.docState) as Promise<DocumentStateResponse>,
+  getDocumentMesh: (settings) =>
+    ipcRenderer.invoke(IPC.docMesh, settings) as Promise<DocumentMeshResponse>,
+  applyEdit: (request: EditRequest) =>
+    ipcRenderer.invoke(IPC.docApply, request) as Promise<EditResponse>,
+  undo: () => ipcRenderer.invoke(IPC.docUndo) as Promise<EditResponse>,
+  redo: () => ipcRenderer.invoke(IPC.docRedo) as Promise<EditResponse>,
+  inspectBlock: (x: number, y: number, z: number) =>
+    ipcRenderer.invoke(IPC.docInspect, { x, y, z }) as Promise<InspectResponse>,
+  saveDocument: (request: SaveRequest) =>
+    ipcRenderer.invoke(IPC.docSave, request) as Promise<SaveResponse>,
 
   onProgress(listener) {
     // The raw IpcRendererEvent must not leak into the renderer -- it carries

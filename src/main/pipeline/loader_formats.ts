@@ -18,6 +18,7 @@
 
 import { readFile } from "fs/promises";
 
+import type { SchematicFormat } from "../../shared/schematic.js";
 import type {
   BlockEntityRecord,
   EntityRecord,
@@ -318,7 +319,9 @@ export function readEntities(tag: NbtTag | undefined): EntityRecord[] {
 
 // --- format detection ------------------------------------------------------
 
-export type SchematicFormat = "sponge2" | "sponge3" | "mcedit";
+// Declared in `shared/` because the renderer names it too; re-exported here so
+// this module stays the one place the pipeline asks about container formats.
+export type { SchematicFormat };
 
 export interface DecodedSchematic {
   readonly format: SchematicFormat;

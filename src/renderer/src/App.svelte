@@ -20,7 +20,7 @@
   import PreviewSettingsPanel from "./lib/PreviewSettingsPanel.svelte";
   import ProviderConfig from "./lib/ProviderConfig.svelte";
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
-  import Viewer, { type PickedBlock } from "./lib/Viewer.svelte";
+  import Viewer, { type CameraMode, type PickedBlock } from "./lib/Viewer.svelte";
   import { api, bridgeAvailable, forIpc, BRIDGE_MISSING_MESSAGE } from "./lib/bridge.svelte.js";
   import {
     openCodeModelRequiresKey,
@@ -95,6 +95,12 @@
   /** The last block clicked, and where — the inspector's subject. */
   let inspection = $state<BlockInspection | null>(null);
   let inspectedAt = $state<{ x: number; y: number; z: number } | null>(null);
+
+  /**
+   * Not persisted, deliberately: launching into flight with the pointer not yet
+   * captured is a confusing place to start, and the mode is one click away.
+   */
+  let cameraMode = $state<CameraMode>("orbit");
 
   let chat = $state<ChatEntry[]>([]);
   /** Tool calls for the turn in flight, so the panel narrates rather than hangs. */
@@ -883,6 +889,25 @@
       >
     {/if}
 
+    {#if glb}
+      <div class="camera-modes" role="group" aria-label="Camera mode">
+        <button
+          class:active={cameraMode === "orbit"}
+          onclick={() => (cameraMode = "orbit")}
+          title="Orbit around the structure, and click to select"
+        >
+          Orbit
+        </button>
+        <button
+          class:active={cameraMode === "fly"}
+          onclick={() => (cameraMode = "fly")}
+          title="Fly through it — WASD, Space and Shift"
+        >
+          Creative
+        </button>
+      </div>
+    {/if}
+
     <!--
       The status banner lives here, not in the Structure fieldset it was ported
       into. A preview error raised from the Render button at the bottom of a
@@ -905,6 +930,8 @@
       {sunElevation}
       selection={docState ? selection : null}
       onpick={docState ? onPick : undefined}
+      {cameraMode}
+      flySpeed={settings.preview.flySpeed}
       maxDpr={settings.preview.maxDpr}
       renderScale={settings.preview.renderScale}
       maxDrawDistance={settings.preview.maxDrawDistance}
@@ -1000,6 +1027,32 @@
     top: 12px;
     left: 12px;
     z-index: 3;
+  }
+
+  .camera-modes {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 3;
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 8px;
+    background: rgb(10 14 20 / 65%);
+    backdrop-filter: blur(6px);
+  }
+
+  .camera-modes button {
+    padding: 4px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    font-size: 12px;
+  }
+
+  .camera-modes button.active {
+    background: var(--accent);
+    color: #fff;
   }
 
   .preview :global(.viewer) {

@@ -19,7 +19,18 @@
   import { onMount } from "svelte";
   import * as THREE from "three";
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+  import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
   import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+
+  /**
+   * How the camera is driven.
+   *
+   * Kept as a named union with one controller object per mode rather than a
+   * branch inside the render loop, because the plan calls for more of them
+   * later (a top-down mode, a walk mode) and the loop is the one place that
+   * must not accumulate special cases.
+   */
+  export type CameraMode = "orbit" | "fly";
 
   /** A block coordinate in the schematic's own grid. */
   export interface PickedBlock {
@@ -52,6 +63,9 @@
     /** Drawn as a wire box; `null` hides it. */
     selection?: Region | null;
     onpick?: (block: PickedBlock) => void;
+    cameraMode?: CameraMode;
+    /** Blocks per second in fly mode. */
+    flySpeed?: number;
   }
 
   const {
@@ -66,6 +80,8 @@
     ambientOcclusion,
     selection = null,
     onpick,
+    cameraMode = "orbit",
+    flySpeed = 12,
   }: Props = $props();
 
   let canvas: HTMLCanvasElement;
@@ -88,8 +104,53 @@
   let grid: THREE.GridHelper | undefined;
   let loaded: THREE.Object3D | null = null;
   let selectionBox: THREE.LineSegments | undefined;
+  let fly: PointerLockControls | undefined;
+  /** True while the pointer is captured; drives the "click to fly" overlay. */
+  let flying = $state(false);
 
   const raycaster = new THREE.Raycaster();
+
+  /**
+   * Keys held down, by `event.code` — physical position, not the character
+   * produced. `code` because a French AZERTY keyboard puts Z where W is: `key`
+   * would give the letter and strand half the world's keyboards.
+   */
+  const held = new Set<string>();
+
+  /**
+   * Moves the camera for one frame of flight.
+   *
+   * Speed is per *second* and scaled by the frame time, so a slow machine
+   * travels the same distance as a fast one rather than crawling. Ctrl doubles
+   * it, matching the sprint every game binds there.
+   */
+  function updateFlight(delta: number): void {
+    if (!fly || !camera || !fly.isLocked) return;
+    const speed = flySpeed * (held.has("ControlLeft") || held.has("ControlRight") ? 2 : 1) * delta;
+
+    let forward = 0;
+    let strafe = 0;
+    let lift = 0;
+    if (held.has("KeyW")) forward += 1;
+    if (held.has("KeyS")) forward -= 1;
+    if (held.has("KeyD")) strafe += 1;
+    if (held.has("KeyA")) strafe -= 1;
+    if (held.has("Space")) lift += 1;
+    if (held.has("ShiftLeft") || held.has("ShiftRight")) lift -= 1;
+
+    // Diagonals are normalised, or moving forward-and-right would be 1.41x as
+    // fast as either alone.
+    const planar = Math.hypot(forward, strafe);
+    if (planar > 0) {
+      fly.moveForward((forward / planar) * speed);
+      fly.moveRight((strafe / planar) * speed);
+    }
+    if (lift !== 0) {
+      // Straight up in world space, not along the camera's up: looking at the
+      // floor and pressing Space should still rise, as it does in the game.
+      camera.position.y += lift * speed;
+    }
+  }
 
   /**
    * Which block a ray hit.
@@ -261,15 +322,39 @@
 
       resize();
 
+      fly = new PointerLockControls(camera, renderer.domElement);
+      fly.addEventListener("lock", () => (flying = true));
+      fly.addEventListener("unlock", () => {
+        flying = false;
+        // Keys held when the pointer released would otherwise stay held
+        // forever: the keyup lands on whatever has focus next, not here.
+        held.clear();
+      });
+
       let frame = 0;
+      const clock = new THREE.Clock();
       const animate = () => {
         frame = requestAnimationFrame(animate);
-        controls?.update();
+        const delta = clock.getDelta();
+        if (cameraMode === "fly") {
+          updateFlight(delta);
+        } else {
+          controls?.update();
+        }
         if (renderer && scene && camera) {
           renderer.render(scene, camera);
         }
       };
       animate();
+
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (fly?.isLocked) {
+          held.add(event.code);
+        }
+      };
+      const onKeyUp = (event: KeyboardEvent) => held.delete(event.code);
+      window.addEventListener("keydown", onKeyDown);
+      window.addEventListener("keyup", onKeyUp);
 
       const observer = new ResizeObserver(resize);
       observer.observe(container);
@@ -291,6 +376,15 @@
       const onPointerUp = (event: PointerEvent) => {
         const start = downAt;
         downAt = null;
+        // In fly mode a click means "capture the pointer and let me look
+        // around", which is the only thing it can mean while the cursor is
+        // still visible. Selection is an orbit-mode gesture.
+        if (cameraMode === "fly") {
+          if (!fly?.isLocked) {
+            fly?.lock();
+          }
+          return;
+        }
         if (!start || !onpick) return;
         if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
         const picked = pickBlockAt(event.clientX, event.clientY);
@@ -305,9 +399,12 @@
         cancelAnimationFrame(frame);
         observer.disconnect();
         window.removeEventListener("keydown", onKey);
+        window.removeEventListener("keydown", onKeyDown);
+        window.removeEventListener("keyup", onKeyUp);
         renderer?.domElement.removeEventListener("pointerdown", onPointerDown);
         renderer?.domElement.removeEventListener("pointerup", onPointerUp);
         if (loaded) disposeObject(loaded);
+        fly?.dispose();
         controls?.dispose();
         renderer?.dispose();
       };
@@ -353,6 +450,36 @@
     void selection;
     void scene;
     updateSelectionBox();
+  });
+
+  /**
+   * Exactly one controller drives the camera at a time.
+   *
+   * OrbitControls is disabled rather than disposed in fly mode: it keeps its
+   * target, so switching back resumes orbiting around the same point instead of
+   * snapping to the origin.
+   */
+  $effect(() => {
+    if (!controls) return;
+    if (cameraMode === "fly") {
+      controls.enabled = false;
+    } else {
+      controls.enabled = true;
+      if (fly?.isLocked) {
+        fly.unlock();
+      }
+      // Orbiting rotates about the target, so it has to be somewhere sensible
+      // after a flight — otherwise the camera swings around wherever it was
+      // pointing before takeoff.
+      if (camera) {
+        const ahead = new THREE.Vector3(0, 0, -1)
+          .applyQuaternion(camera.quaternion)
+          .multiplyScalar(24)
+          .add(camera.position);
+        controls.target.copy(ahead);
+        controls.update();
+      }
+    }
   });
 
   $effect(() => {
@@ -435,7 +562,21 @@
       No placeholder for the empty state: an empty viewport is self-evidently
       empty, and a card in the middle of it was noise rather than information.
     -->
-    <div class="overlay">Left: pan · Right: rotate · Wheel: zoom · R: reset</div>
+    <div class="overlay">
+      {#if cameraMode === "fly"}
+        {#if flying}
+          WASD: move · Space/Shift: up, down · Ctrl: faster · Esc: release
+        {:else}
+          Click the viewport to fly
+        {/if}
+      {:else}
+        Left: pan · Right: rotate · Wheel: zoom · Click: select · R: reset
+      {/if}
+    </div>
+    {#if cameraMode === "fly" && flying}
+      <!-- A crosshair, because in flight there is no cursor to aim with. -->
+      <div class="crosshair" aria-hidden="true"></div>
+    {/if}
   {/if}
 </div>
 
@@ -466,6 +607,23 @@
     font-size: 13px;
     line-height: 1.4;
     pointer-events: none;
+  }
+
+  .crosshair {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 14px;
+    height: 14px;
+    margin: -7px 0 0 -7px;
+    pointer-events: none;
+    /* Two hairlines rather than a glyph: a text crosshair sits on the baseline
+       and is never quite centred on the point being aimed at. */
+    background:
+      linear-gradient(var(--text, #e6edf3), var(--text, #e6edf3)) center / 100% 1px no-repeat,
+      linear-gradient(var(--text, #e6edf3), var(--text, #e6edf3)) center / 1px 100% no-repeat;
+    opacity: 0.7;
+    mix-blend-mode: difference;
   }
 
   .error {

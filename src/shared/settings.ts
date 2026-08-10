@@ -82,6 +82,8 @@ export interface PreviewSettings {
   biomeColor: string;
   /** `#rrggbb` for water; see `DEFAULT_WATER_COLOR`. Also rebuilds the mesh. */
   waterColor: string;
+  /** Blocks per second in the Creative flight camera. */
+  flySpeed: number;
 }
 
 /** component.py:319-328 slider/checkbox defaults, verbatim. */
@@ -96,6 +98,7 @@ export const DEFAULT_PREVIEW_SETTINGS: PreviewSettings = {
   ambientOcclusion: true,
   biomeColor: DEFAULT_BIOME_COLOR,
   waterColor: DEFAULT_WATER_COLOR,
+  flySpeed: 12,
 };
 
 /** Slider bounds from component.py:319-328, reused by the renderer's inputs. */
@@ -105,6 +108,7 @@ export const PREVIEW_SETTING_RANGES = {
   maxDpr: { min: 0.5, max: 3, step: 0.1 },
   renderScale: { min: 0.5, max: 2, step: 0.1 },
   maxDrawDistance: { min: 64, max: 2048, step: 8 },
+  flySpeed: { min: 2, max: 60, step: 1 },
 } as const;
 
 /**

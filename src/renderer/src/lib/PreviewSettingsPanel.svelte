@@ -166,6 +166,18 @@
         oninput={(event) => onchange({ maxDrawDistance: num(event) })}
       />
     </div>
+    <div>
+      <label for="fly-speed">Flight speed — {settings.flySpeed.toFixed(0)} blocks/s</label>
+      <input
+        id="fly-speed"
+        type="range"
+        min={PREVIEW_SETTING_RANGES.flySpeed.min}
+        max={PREVIEW_SETTING_RANGES.flySpeed.max}
+        step={PREVIEW_SETTING_RANGES.flySpeed.step}
+        value={settings.flySpeed}
+        oninput={(event) => onchange({ flySpeed: num(event) })}
+      />
+    </div>
     <div class="toggles">
       <label class="toggle">
         <input

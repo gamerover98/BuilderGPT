@@ -93,6 +93,53 @@ export function paletteEntryIsAir(entry: PaletteEntry): boolean {
 }
 
 /**
+ * Loose shape of a decoded NBT tag as `prismarine-nbt`'s `parse()` returns it.
+ *
+ * Lives here rather than in `loader_formats.ts` (which is where it started)
+ * because block entities carry raw NBT and both the decoder and the document
+ * model need to name that type. `loader_formats.ts` re-exports both for its
+ * existing importers.
+ */
+export interface NbtTag {
+  readonly type: string;
+  readonly value: unknown;
+}
+
+export type NbtCompound = Record<string, NbtTag>;
+
+/**
+ * A block entity: the NBT a chest, sign, banner or spawner carries in addition
+ * to its block state.
+ *
+ * Nothing in the app read these before -- the decoder produced blocks and
+ * nothing else, and the writer emitted none -- so every import silently threw
+ * away chest contents and sign text. They are kept **verbatim**: `nbt` is
+ * whatever the file held, unmodelled, because modelling per block type would
+ * discard exactly the fields nobody thought to anticipate.
+ */
+export interface BlockEntityRecord {
+  /** `minecraft:chest`. Namespaced even when the file spelled it bare. */
+  readonly id: string;
+  /** Grid coordinates, relative to the schematic origin like the voxels are. */
+  readonly pos: readonly [number, number, number];
+  /** Everything else the entry carried, minus the id and position. */
+  readonly nbt: NbtCompound;
+}
+
+/**
+ * An entity — a mob, item frame, armour stand — stored with the schematic.
+ *
+ * Position is floating point and relative to the schematic origin, which is
+ * why this is not just a `BlockEntityRecord`: an item frame at x=3.5 is on a
+ * block face, and rounding it to the voxel grid would move it.
+ */
+export interface EntityRecord {
+  readonly id: string;
+  readonly pos: readonly [number, number, number];
+  readonly nbt: NbtCompound;
+}
+
+/**
  * `StructureData` — ported from `types.py:70-73` (plain, non-frozen
  * `@dataclass`).
  *

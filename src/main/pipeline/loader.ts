@@ -27,7 +27,12 @@ import {
   type NbtCompound,
   type SchematicFormat,
 } from "./loader_formats.js";
-import type { StructureBounds, StructureData } from "./types.js";
+import type {
+  BlockEntityRecord,
+  EntityRecord,
+  StructureBounds,
+  StructureData,
+} from "./types.js";
 
 export { SchematicFormatError } from "./loader_formats.js";
 
@@ -45,6 +50,14 @@ export interface LoadedStructure extends StructureData {
   readonly format: SchematicFormat;
   /** MCEdit only: `id:meta` pairs the flattening table had no entry for. */
   readonly unmappedLegacyIds: readonly string[];
+  /** Chest contents, sign text and the like, verbatim. */
+  readonly blockEntities: readonly BlockEntityRecord[];
+  /** Mobs and item frames stored with the schematic, verbatim. */
+  readonly entities: readonly EntityRecord[];
+  /** The schematic's origin in the world it was cut from. */
+  readonly offset: readonly [number, number, number];
+  /** The file's declared `DataVersion`; `null` for MCEdit, which has none. */
+  readonly dataVersion: number | null;
 }
 
 /**
@@ -114,5 +127,9 @@ export async function loadStructure(
     voxels,
     format: decoded.format,
     unmappedLegacyIds: decoded.unmappedLegacyIds,
+    blockEntities: decoded.blockEntities,
+    entities: decoded.entities,
+    offset: decoded.offset,
+    dataVersion: decoded.dataVersion,
   };
 }

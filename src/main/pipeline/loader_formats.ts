@@ -18,19 +18,17 @@
 
 import { readFile } from "fs/promises";
 
-import type { PaletteEntry } from "./types.js";
+import type {
+  BlockEntityRecord,
+  EntityRecord,
+  NbtCompound,
+  NbtTag,
+  PaletteEntry,
+} from "./types.js";
 
-/**
- * Loose shape of a decoded NBT tag as returned by `prismarine-nbt`'s
- * `parse()`. Conservative structural type covering the tags these decoders
- * read (short/int/compound/list/byteArray/intArray/longArray).
- */
-export interface NbtTag {
-  readonly type: string;
-  readonly value: unknown;
-}
-
-export type NbtCompound = Record<string, NbtTag>;
+// Re-exported: these two started here, and moved to `types.ts` once block
+// entities gave the document model a reason to name them too.
+export type { NbtCompound, NbtTag } from "./types.js";
 
 /**
  * Raised when the file parses as NBT but is not a schematic this app can read.
@@ -195,6 +193,129 @@ function decodeVarintBlockData(data: readonly number[], totalBlocks: number): In
   return values;
 }
 
+// --- block entities and entities -------------------------------------------
+//
+// Read permissively, on purpose. The three container formats spell the same
+// data three ways -- Sponge v2 puts the block entity's NBT inline beside `Id`
+// and `Pos`, v3 nests it under `Data`, MCEdit uses lowercase `id` with separate
+// `x`/`y`/`z` ints -- and a reader that insisted on one spelling would drop the
+// contents of every chest written by the other two. Whatever is not recognised
+// as identity or position is kept as-is under `nbt`, so a field this code has
+// never heard of survives a load/save round trip.
+
+/** Elements of a `list` tag of compounds; `[]` for anything else. */
+function compoundList(tag: NbtTag | undefined): NbtCompound[] {
+  if (!tag || tag.value === null || typeof tag.value !== "object") {
+    return [];
+  }
+  // prismarine-nbt nests a list as `{type:"list", value:{type, value:[...]}}`,
+  // but a bare array is accepted too rather than silently yielding nothing.
+  const inner = (tag.value as { value?: unknown }).value;
+  const items = Array.isArray(inner) ? inner : Array.isArray(tag.value) ? tag.value : [];
+  return items.filter(
+    (item): item is NbtCompound => typeof item === "object" && item !== null,
+  );
+}
+
+function numberOf(tag: NbtTag | undefined): number | null {
+  return tag && typeof tag.value === "number" ? tag.value : null;
+}
+
+function stringOf(tag: NbtTag | undefined): string | null {
+  return tag && typeof tag.value === "string" ? tag.value : null;
+}
+
+/** `Pos` as a 3-vector, whether it arrived as an int array or a list of numbers. */
+function vectorOf(tag: NbtTag | undefined): [number, number, number] | null {
+  if (!tag || tag.value === null || typeof tag.value !== "object") {
+    return null;
+  }
+  const inner = (tag.value as { value?: unknown }).value;
+  const raw = Array.isArray(inner) ? inner : Array.isArray(tag.value) ? tag.value : null;
+  if (!raw || raw.length < 3) {
+    return null;
+  }
+  const nums = raw.slice(0, 3).map((item) => {
+    if (typeof item === "number") return item;
+    // A list of tagged doubles, as Sponge writes entity positions.
+    if (item && typeof item === "object" && typeof (item as NbtTag).value === "number") {
+      return (item as NbtTag).value as number;
+    }
+    return Number.NaN;
+  });
+  return nums.every((n) => Number.isFinite(n)) ? [nums[0], nums[1], nums[2]] : null;
+}
+
+/** Everything except the keys that carried identity and position. */
+function remainingNbt(entry: NbtCompound, consumed: readonly string[]): NbtCompound {
+  // A `Data` compound (Sponge v3) *is* the payload, so it is unwrapped rather
+  // than kept as a nested tag -- otherwise the same chest would come back with
+  // its items one level deeper than it went in.
+  const data = entry.Data;
+  if (data && data.type === "compound" && data.value && typeof data.value === "object") {
+    return { ...(data.value as NbtCompound) };
+  }
+  const out: NbtCompound = {};
+  for (const [key, value] of Object.entries(entry)) {
+    if (!consumed.includes(key)) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function namespaced(id: string): string {
+  return id.includes(":") ? id : `minecraft:${id}`;
+}
+
+const BLOCK_ENTITY_KEYS = ["Id", "id", "Pos", "pos", "x", "y", "z", "X", "Y", "Z", "Data"];
+
+/**
+ * Sponge `BlockEntities`/`TileEntities` and MCEdit `TileEntities`.
+ *
+ * An entry with no usable identity or position is skipped: it cannot be placed
+ * back anywhere, and carrying it would corrupt a later save.
+ */
+export function readBlockEntities(tag: NbtTag | undefined): BlockEntityRecord[] {
+  const out: BlockEntityRecord[] = [];
+  for (const entry of compoundList(tag)) {
+    const id = stringOf(entry.Id) ?? stringOf(entry.id);
+    if (id === null) {
+      continue;
+    }
+    // Sponge: a single `Pos` array. MCEdit: three separate int tags.
+    const pos =
+      vectorOf(entry.Pos) ??
+      (() => {
+        const x = numberOf(entry.x) ?? numberOf(entry.X);
+        const y = numberOf(entry.y) ?? numberOf(entry.Y);
+        const z = numberOf(entry.z) ?? numberOf(entry.Z);
+        return x !== null && y !== null && z !== null
+          ? ([x, y, z] as [number, number, number])
+          : null;
+      })();
+    if (pos === null) {
+      continue;
+    }
+    out.push({ id: namespaced(id), pos, nbt: remainingNbt(entry, BLOCK_ENTITY_KEYS) });
+  }
+  return out;
+}
+
+/** Sponge and MCEdit `Entities`. Positions stay floating point. */
+export function readEntities(tag: NbtTag | undefined): EntityRecord[] {
+  const out: EntityRecord[] = [];
+  for (const entry of compoundList(tag)) {
+    const id = stringOf(entry.Id) ?? stringOf(entry.id);
+    const pos = vectorOf(entry.Pos) ?? vectorOf(entry.pos);
+    if (id === null || pos === null) {
+      continue;
+    }
+    out.push({ id: namespaced(id), pos, nbt: remainingNbt(entry, ["Id", "id", "Pos", "pos", "Data"]) });
+  }
+  return out;
+}
+
 // --- format detection ------------------------------------------------------
 
 export type SchematicFormat = "sponge2" | "sponge3" | "mcedit";
@@ -215,6 +336,17 @@ export interface DecodedSchematic {
   readonly indices: Int32Array;
   /** Block ids the legacy table had no entry for; MCEdit only. */
   readonly unmappedLegacyIds: readonly string[];
+  /** Chest contents, sign text, spawner data. Empty when the file carried none. */
+  readonly blockEntities: readonly BlockEntityRecord[];
+  /** Mobs, item frames, armour stands. Empty when the file carried none. */
+  readonly entities: readonly EntityRecord[];
+  /**
+   * Where the schematic sat in the world it was cut from. Preserved so a save
+   * can put it back rather than silently re-anchoring it at the origin.
+   */
+  readonly offset: readonly [number, number, number];
+  /** The Minecraft `DataVersion` the file declares, or `null` for MCEdit. */
+  readonly dataVersion: number | null;
 }
 
 /**
@@ -317,7 +449,26 @@ function decodeSponge(
     indices = decodePackedBlockStates(rawBytes, palette.length, totalBlocks);
   }
 
-  return { format, width, height, length, palette, indices, unmappedLegacyIds: [] };
+  return {
+    format,
+    width,
+    height,
+    length,
+    palette,
+    indices,
+    unmappedLegacyIds: [],
+    // v3 moved block entities down into `Blocks` alongside the block data; v2
+    // keeps them at the top level, and v1-era WorldEdit files spell it
+    // `TileEntities`. First one present wins -- and it must be *one*, not the
+    // concatenation of all three: for v2 `blocks` and `payload` are the same
+    // compound, so reading both yielded every chest twice.
+    blockEntities: readBlockEntities(
+      blocks.BlockEntities ?? payload.BlockEntities ?? payload.TileEntities,
+    ),
+    entities: readEntities(payload.Entities),
+    offset: vectorOf(payload.Offset) ?? [0, 0, 0],
+    dataVersion: numberOf(payload.DataVersion),
+  };
 }
 
 // --- MCEdit ----------------------------------------------------------------
@@ -423,6 +574,21 @@ function decodeMcEdit(payload: NbtCompound, table: LegacyBlockTable): DecodedSch
     palette,
     indices,
     unmappedLegacyIds: [...unmapped].sort(),
+    // MCEdit's tile entities are pre-flattening: a chest's `id` is `Chest`, not
+    // `minecraft:chest`, and its items are named by numeric id. The NBT is kept
+    // exactly as found -- translating it would need a second flattening table
+    // this app does not vendor, and a wrong translation is worse than an
+    // untranslated one that still round-trips.
+    blockEntities: readBlockEntities(payload.TileEntities),
+    entities: readEntities(payload.Entities),
+    // MCEdit spells the offset as three separate shorts.
+    offset: [
+      numberOf(payload.WEOffsetX) ?? 0,
+      numberOf(payload.WEOffsetY) ?? 0,
+      numberOf(payload.WEOffsetZ) ?? 0,
+    ],
+    // Legacy files predate DataVersion entirely.
+    dataVersion: null,
   };
 }
 

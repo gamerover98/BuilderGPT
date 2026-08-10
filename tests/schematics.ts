@@ -124,7 +124,11 @@ async function writeNbtGz(filePath: string, root: unknown): Promise<string> {
  * `Schematic` compound, and the block arrays inside a `Blocks` sub-compound
  * where `BlockData` has been renamed `Data`.
  */
-async function writeSpongeV3(filePath: string): Promise<string> {
+/** Palette and varint block data, shared by both Sponge fixture writers. */
+function spongeBlockArrays(): {
+  paletteCompound: Record<string, { type: "int"; value: number }>;
+  data: number[];
+} {
   const palette = new Map<string, number>([["minecraft:air", 0]]);
   const indexFor = (block: string): number => {
     const existing = palette.get(block);
@@ -148,29 +152,59 @@ async function writeSpongeV3(filePath: string): Promise<string> {
   for (const [block, index] of palette) {
     paletteCompound[block] = { type: "int", value: index };
   }
+  return { paletteCompound, data: varints.map(toSignedByte) };
+}
+
+async function writeSpongeV3(filePath: string, withEntities = false): Promise<string> {
+  const { paletteCompound, data } = spongeBlockArrays();
+  const blocks: Record<string, unknown> = {
+    Palette: { type: "compound", value: paletteCompound },
+    Data: { type: "byteArray", value: data },
+  };
+  const schematic: Record<string, unknown> = {
+    Version: { type: "int", value: 3 },
+    DataVersion: { type: "int", value: dataVersionFor("JE_1_20_4") },
+    Width: { type: "short", value: WIDTH },
+    Height: { type: "short", value: HEIGHT },
+    Length: { type: "short", value: LENGTH },
+    Offset: { type: "intArray", value: [0, 0, 0] },
+  };
+  if (withEntities) {
+    // v3 moved block entities inside `Blocks`; entities stayed at the top.
+    blocks.BlockEntities = spongeV3BlockEntities();
+    schematic.Entities = entities();
+    schematic.Offset = { type: "intArray", value: [-4, 64, 12] };
+  }
+  schematic.Blocks = { type: "compound", value: blocks };
 
   return await writeNbtGz(filePath, {
     type: "compound",
     name: "",
+    value: { Schematic: { type: "compound", value: schematic } },
+  });
+}
+
+/**
+ * Sponge v2 written by hand rather than by `SpongeSchematicWriter`, which emits
+ * no block entities of its own -- that is what this suite is here to find out
+ * about, so the fixture must not depend on it.
+ */
+async function writeSpongeV2(filePath: string): Promise<string> {
+  const { paletteCompound, data } = spongeBlockArrays();
+  return await writeNbtGz(filePath, {
+    type: "compound",
+    name: "Schematic",
     value: {
-      Schematic: {
-        type: "compound",
-        value: {
-          Version: { type: "int", value: 3 },
-          DataVersion: { type: "int", value: dataVersionFor("JE_1_20_4") },
-          Width: { type: "short", value: WIDTH },
-          Height: { type: "short", value: HEIGHT },
-          Length: { type: "short", value: LENGTH },
-          Offset: { type: "intArray", value: [0, 0, 0] },
-          Blocks: {
-            type: "compound",
-            value: {
-              Palette: { type: "compound", value: paletteCompound },
-              Data: { type: "byteArray", value: varints.map(toSignedByte) },
-            },
-          },
-        },
-      },
+      Version: { type: "int", value: 2 },
+      DataVersion: { type: "int", value: dataVersionFor("JE_1_20_4") },
+      Width: { type: "short", value: WIDTH },
+      Height: { type: "short", value: HEIGHT },
+      Length: { type: "short", value: LENGTH },
+      Offset: { type: "intArray", value: [-4, 64, 12] },
+      Palette: { type: "compound", value: paletteCompound },
+      BlockData: { type: "byteArray", value: data },
+      BlockEntities: spongeV2BlockEntities(),
+      Entities: entities(),
     },
   });
 }
@@ -180,7 +214,11 @@ async function writeSpongeV3(filePath: string): Promise<string> {
  * arrays, no palette at all -- the ids only become block names by way of the
  * vendored flattening table.
  */
-async function writeMcEdit(filePath: string, withAddBlocks = false): Promise<string> {
+async function writeMcEdit(
+  filePath: string,
+  withAddBlocks = false,
+  withEntities = false,
+): Promise<string> {
   const total = WIDTH * HEIGHT * LENGTH;
   const blocks = new Array<number>(total).fill(0);
   const data = new Array<number>(total).fill(0);
@@ -206,7 +244,127 @@ async function writeMcEdit(filePath: string, withAddBlocks = false): Promise<str
     value.AddBlocks = { type: "byteArray", value: new Array(Math.ceil(total / 2)).fill(0) };
   }
 
+  if (withEntities) {
+    value.TileEntities = mcEditTileEntities();
+    value.Entities = entities();
+    // MCEdit spells the origin as three separate shorts, not an int array.
+    value.WEOffsetX = { type: "short", value: -4 };
+    value.WEOffsetY = { type: "short", value: 64 };
+    value.WEOffsetZ = { type: "short", value: 12 };
+  }
+
   return await writeNbtGz(filePath, { type: "compound", name: "Schematic", value });
+}
+
+// --- block entities and entities, spelled three ways ------------------------
+//
+// The same chest, sign and armour stand, encoded the way each container format
+// specifies. What is being checked is that the decoder recovers identical
+// records from all three spellings, and that the NBT nobody modelled -- the
+// chest's items, the sign's text -- survives verbatim.
+//
+// Caveat worth stating: these fixtures encode the Sponge spec as this repo
+// understands it, so they cannot prove the spec itself is right. No
+// third-party schematic carrying block entities was available to check
+// against. What they do catch is the decoder losing, reshaping or misplacing
+// data it was handed, which is what a permissive reader is at risk of.
+
+const CHEST_ITEMS = {
+  type: "list",
+  value: {
+    type: "compound",
+    value: [
+      { id: { type: "string", value: "minecraft:diamond" }, Count: { type: "byte", value: 3 } },
+    ],
+  },
+};
+const SIGN_TEXT = { type: "string", value: '{"text":"hello"}' };
+
+/** Sponge v2: `Id`, `Pos` as an int array, and the payload inline beside them. */
+function spongeV2BlockEntities(): unknown {
+  return {
+    type: "list",
+    value: {
+      type: "compound",
+      value: [
+        {
+          Id: { type: "string", value: "minecraft:chest" },
+          Pos: { type: "intArray", value: [0, 0, 0] },
+          Items: CHEST_ITEMS,
+        },
+        {
+          Id: { type: "string", value: "minecraft:oak_sign" },
+          Pos: { type: "intArray", value: [1, 0, 0] },
+          Text1: SIGN_TEXT,
+        },
+      ],
+    },
+  };
+}
+
+/** Sponge v3: same, but the payload nested under `Data`. */
+function spongeV3BlockEntities(): unknown {
+  return {
+    type: "list",
+    value: {
+      type: "compound",
+      value: [
+        {
+          Id: { type: "string", value: "minecraft:chest" },
+          Pos: { type: "intArray", value: [0, 0, 0] },
+          Data: { type: "compound", value: { Items: CHEST_ITEMS } },
+        },
+        {
+          Id: { type: "string", value: "minecraft:oak_sign" },
+          Pos: { type: "intArray", value: [1, 0, 0] },
+          Data: { type: "compound", value: { Text1: SIGN_TEXT } },
+        },
+      ],
+    },
+  };
+}
+
+/** MCEdit: lowercase `id`, and three separate int coordinates. */
+function mcEditTileEntities(): unknown {
+  return {
+    type: "list",
+    value: {
+      type: "compound",
+      value: [
+        {
+          id: { type: "string", value: "chest" },
+          x: { type: "int", value: 0 },
+          y: { type: "int", value: 0 },
+          z: { type: "int", value: 0 },
+          Items: CHEST_ITEMS,
+        },
+        {
+          id: { type: "string", value: "oak_sign" },
+          x: { type: "int", value: 1 },
+          y: { type: "int", value: 0 },
+          z: { type: "int", value: 0 },
+          Text1: SIGN_TEXT,
+        },
+      ],
+    },
+  };
+}
+
+/** An armour stand at a non-integer position, which must not be rounded. */
+function entities(): unknown {
+  return {
+    type: "list",
+    value: {
+      type: "compound",
+      value: [
+        {
+          Id: { type: "string", value: "minecraft:armor_stand" },
+          Pos: { type: "list", value: { type: "double", value: [1.5, 0, 1.5] } },
+          Data: { type: "compound", value: { Invisible: { type: "byte", value: 1 } } },
+        },
+      ],
+    },
+  };
 }
 
 console.log("=== BuilderGPT schematic container-format parity ===\n");
@@ -262,6 +420,91 @@ try {
       }
     })(),
   );
+
+  // --- block entities, entities and offset ---------------------------------
+  //
+  // Before this, none of the three decoders read any of it: `DecodedSchematic`
+  // carried blocks and nothing else, so opening a schematic and saving it back
+  // emptied every chest in it without a word.
+  console.log("\n--- block entities and entities ---");
+  {
+    const v2ePath = await writeSpongeV2(path.join(workDir, "entities-v2.schem"));
+    const v3ePath = await writeSpongeV3(path.join(workDir, "entities-v3.schem"), true);
+    const mcePath = await writeMcEdit(path.join(workDir, "entities-mcedit.schematic"), false, true);
+
+    const v2e = await loadStructure(v2ePath);
+    const v3e = await loadStructure(v3ePath);
+    const mce = await loadStructure(mcePath, { legacyBlocksPath: LEGACY_BLOCKS });
+
+    equal("v2 finds both block entities", v2e.blockEntities.length, 2);
+    equal("v3 finds both block entities", v3e.blockEntities.length, 2);
+    equal("MCEdit finds both block entities", mce.blockEntities.length, 2);
+
+    // Identity and placement must agree across all three spellings, including
+    // MCEdit's bare lowercase `chest`, which is namespaced on the way in.
+    for (const [label, loaded] of [
+      ["v2", v2e],
+      ["v3", v3e],
+      ["MCEdit", mce],
+    ] as const) {
+      equal(
+        `${label}: ids and positions`,
+        loaded.blockEntities.map((entry) => [entry.id, entry.pos]),
+        [
+          ["minecraft:chest", [0, 0, 0]],
+          ["minecraft:oak_sign", [1, 0, 0]],
+        ],
+      );
+    }
+
+    // The payload is the point: an empty `nbt` would mean the chest arrived
+    // without its diamonds, which is the failure this whole section is about.
+    check(
+      "v3 unwraps the Data compound rather than nesting it",
+      v3e.blockEntities[0]?.nbt.Items !== undefined,
+      );
+    check("v2 keeps the inline payload", v2e.blockEntities[0]?.nbt.Items !== undefined);
+    check("MCEdit keeps the inline payload", mce.blockEntities[0]?.nbt.Items !== undefined);
+    equal(
+      "the chest's contents survive verbatim, all three ways",
+      [v2e, v3e, mce].map((loaded) => JSON.stringify(loaded.blockEntities[0]?.nbt.Items)),
+      new Array(3).fill(JSON.stringify(CHEST_ITEMS)),
+    );
+    check(
+      "the sign's text survives",
+      v2e.blockEntities[1]?.nbt.Text1 !== undefined &&
+        v3e.blockEntities[1]?.nbt.Text1 !== undefined,
+    );
+    check(
+      "identity keys are not left behind in the payload",
+      v2e.blockEntities[0]?.nbt.Id === undefined && mce.blockEntities[0]?.nbt.id === undefined,
+    );
+
+    // A block entity is on the voxel grid; an entity is not. Rounding an
+    // armour stand at x=1.5 onto it would move it half a block.
+    for (const [label, loaded] of [
+      ["v2", v2e],
+      ["v3", v3e],
+      ["MCEdit", mce],
+    ] as const) {
+      equal(
+        `${label}: the entity keeps its fractional position`,
+        loaded.entities.map((entry) => [entry.id, entry.pos]),
+        [["minecraft:armor_stand", [1.5, 0, 1.5]]],
+      );
+    }
+
+    equal("v2 offset", v2e.offset, [-4, 64, 12]);
+    equal("v3 offset", v3e.offset, [-4, 64, 12]);
+    equal("MCEdit offset, from its three separate shorts", mce.offset, [-4, 64, 12]);
+    equal("v2 DataVersion", v2e.dataVersion, dataVersionFor("JE_1_20_4"));
+    equal("MCEdit has no DataVersion", mce.dataVersion, null);
+
+    // A file with none of this must not acquire any.
+    equal("a schematic without block entities reports none", v2.blockEntities, []);
+    equal("...and no entities", v2.entities, []);
+    equal("...and a zero offset", v2.offset, [0, 0, 0]);
+  }
 
   // --- unrecognised container ----------------------------------------------
   console.log("\n--- rejection ---");

@@ -10,6 +10,7 @@
 #   blocks      block geometry: shapes, culling, texture orientation
 #   document    the mutable schematic document: palette, resize, revision
 #   history     transactions, undo/redo, and the N-edits-N-undos property
+#   formats     writing a document back out, round-tripped through the reader
 #
 # Unlike build.sh, this does NOT stop at the first failure: a test runner that
 # aborts early hides how much else is broken. Every suite runs, results are
@@ -27,8 +28,8 @@ set +e
 
 install_dependencies_if_missing
 
-STEP_NAMES=(typecheck hello smoke sandbox services schematics blocks document history)
-STEP_SCRIPTS=(typecheck smoke:hello smoke smoke:sandbox smoke:services smoke:schematics smoke:blocks smoke:document smoke:history)
+STEP_NAMES=(typecheck hello smoke sandbox services schematics blocks document history formats)
+STEP_SCRIPTS=(typecheck smoke:hello smoke smoke:sandbox smoke:services smoke:schematics smoke:blocks smoke:document smoke:history smoke:formats)
 STEP_RESULTS=()
 
 # ASCII only, to stay readable in terminals that are not UTF-8.

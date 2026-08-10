@@ -37,6 +37,7 @@ $steps = @(
     @{ Name = 'blocks';     Script = 'smoke:blocks' }
     @{ Name = 'document';   Script = 'smoke:document' }
     @{ Name = 'history';    Script = 'smoke:history' }
+    @{ Name = 'formats';    Script = 'smoke:formats' }
 )
 
 $failed = @()

@@ -239,9 +239,12 @@ export function paletteHistogram(doc: SchematicDocument): Map<string, number> {
 /**
  * Drops palette entries no voxel refers to and renumbers the rest.
  *
- * Only safe when nothing holds an index across the call -- which means at save
- * time, not during editing, because the undo stack is full of them. See the
- * append-only invariant at the top.
+ * **This invalidates every index recorded in the undo stack**, so it is only
+ * safe when that stack is being discarded too -- closing a document, or an
+ * explicit "compact" the user asked for. In particular it is *not* a save-time
+ * step, though an earlier draft of this comment said so: saving must not cost
+ * you your undo history. The writers build their own local palette from the
+ * voxels instead, which reaches the same file without touching the document.
  */
 export function compactPalette(doc: SchematicDocument): void {
   const used = new Uint8Array(doc.palette.length);

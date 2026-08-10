@@ -26,7 +26,8 @@
     "smoke:schematics": "tsx tests/schematics.ts",
     "smoke:blocks": "tsx tests/blocks.ts",
     "smoke:document": "tsx tests/document.ts",
-    "smoke:history": "tsx tests/history.ts"
+    "smoke:history": "tsx tests/history.ts",
+    "smoke:formats": "tsx tests/formats.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.27",

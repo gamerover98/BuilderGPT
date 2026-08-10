@@ -103,6 +103,30 @@
    */
   let cameraMode = $state<CameraMode>("orbit");
 
+  /**
+   * The block Fill writes and the one Creative mode places. Held here rather
+   * than in the panel because the viewport places it too, and one of them
+   * having a different idea of "the current block" would be a bug nobody could
+   * see.
+   */
+  let activeBlock = $state("minecraft:stone");
+
+  /**
+   * Building from the crosshair. One block, one transaction — the same edit the
+   * panel makes, so Ctrl+Z treats them alike.
+   */
+  async function onBuild(
+    action: "place" | "break",
+    at: { x: number; y: number; z: number },
+  ): Promise<void> {
+    if (busy) return;
+    const block =
+      action === "break" ? { namespacedName: "minecraft:air" } : parseBlock(activeBlock);
+    await runDocument(action === "break" ? "Breaking a block" : "Placing a block", () =>
+      api().applyEdit({ kind: "setBlock", x: at.x, y: at.y, z: at.z, block }),
+    );
+  }
+
   let chat = $state<ChatEntry[]>([]);
   /** Tool calls for the turn in flight, so the panel narrates rather than hangs. */
   let liveSteps = $state<AgentStepEvent[]>([]);
@@ -808,6 +832,8 @@
       doc={docState}
       {selection}
       {busy}
+      block={activeBlock}
+      onblockchange={(next) => (activeBlock = next)}
       onopen={openDocument}
       onsave={(format) => saveDocument(format)}
       onsaveas={saveDocumentAs}
@@ -1083,6 +1109,7 @@
       onpick={docState ? onPick : undefined}
       {cameraMode}
       flySpeed={settings.preview.flySpeed}
+      onbuild={docState ? onBuild : undefined}
       maxDpr={settings.preview.maxDpr}
       renderScale={settings.preview.renderScale}
       maxDrawDistance={settings.preview.maxDrawDistance}

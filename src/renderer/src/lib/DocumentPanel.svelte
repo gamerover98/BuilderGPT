@@ -11,8 +11,8 @@
    *
    * The prop is `doc`, not `state`, and that is load-bearing. A local binding
    * called `state` makes every `$state(...)` in the same component parse as a
-   * store subscription to it (`store_rune_conflict`), so the two fields below
-   * silently stop being reactive.
+   * store subscription to it (`store_rune_conflict`), so `fromBlock` below
+   * would silently stop being reactive.
    */
   import type { DocumentState, RegionSpec } from "../../../shared/ipc.js";
   import { SCHEMATIC_FORMAT_LABEL, type SchematicFormat } from "../../../shared/schematic.js";
@@ -21,6 +21,13 @@
     doc: DocumentState | null;
     selection: RegionSpec | null;
     busy: boolean;
+    /**
+     * The block Fill writes and the one Creative mode places. Owned by the app
+     * rather than by this panel, because the viewport places it too and the two
+     * must not disagree about what "the current block" is.
+     */
+    block: string;
+    onblockchange: (block: string) => void;
     onopen: () => void;
     onsave: (format?: SchematicFormat) => void;
     onsaveas: () => void;
@@ -36,6 +43,8 @@
     doc,
     selection,
     busy,
+    block,
+    onblockchange,
     onopen,
     onsave,
     onsaveas,
@@ -48,7 +57,6 @@
   }: Props = $props();
 
   let fromBlock = $state("");
-  let toBlock = $state("minecraft:stone");
 
   const selectedVolume = $derived(
     selection === null
@@ -132,12 +140,18 @@
     <!-- Editing -->
     <div class="field">
       <label for="to-block">Block</label>
-      <input id="to-block" bind:value={toBlock} placeholder="minecraft:stone" spellcheck="false" />
+      <input
+        id="to-block"
+        value={block}
+        placeholder="minecraft:stone"
+        spellcheck="false"
+        oninput={(event) => onblockchange(event.currentTarget.value)}
+      />
       <div class="buttons">
         <button
           class="primary"
-          onclick={() => onfill(toBlock)}
-          disabled={busy || selection === null || toBlock.trim() === ""}
+          onclick={() => onfill(block)}
+          disabled={busy || selection === null || block.trim() === ""}
           title={selection === null ? "Select a region first" : "Fill the selection"}
         >
           Fill
@@ -155,8 +169,8 @@
       />
       <div class="buttons">
         <button
-          onclick={() => onreplace(fromBlock, toBlock)}
-          disabled={busy || selection === null || fromBlock.trim() === "" || toBlock.trim() === ""}
+          onclick={() => onreplace(fromBlock, block)}
+          disabled={busy || selection === null || fromBlock.trim() === "" || block.trim() === ""}
           title={selection === null ? "Select a region first" : "Replace within the selection"}
         >
           Replace with the block above

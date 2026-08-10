@@ -39,7 +39,16 @@
     z: number;
     /** True when the click carried Shift — the gesture that extends a selection. */
     extend: boolean;
+    /**
+     * The empty cell on the outside of the face that was hit — where a new
+     * block goes. `null` when that cell falls outside the schematic, which is
+     * the only honest answer: the grid does not grow by being built against.
+     */
+    place: { x: number; y: number; z: number } | null;
   }
+
+  /** Placing or removing one block, from the crosshair in flight. */
+  export type BuildAction = "place" | "break";
 
   interface Region {
     minX: number;
@@ -66,6 +75,8 @@
     cameraMode?: CameraMode;
     /** Blocks per second in fly mode. */
     flySpeed?: number;
+    /** Building from the crosshair, in flight. */
+    onbuild?: (action: BuildAction, at: { x: number; y: number; z: number }) => void;
   }
 
   const {
@@ -82,6 +93,7 @@
     onpick,
     cameraMode = "orbit",
     flySpeed = 12,
+    onbuild,
   }: Props = $props();
 
   let canvas: HTMLCanvasElement;
@@ -190,12 +202,45 @@
       .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
       .normalize();
     const inside = hit.point.clone().addScaledVector(normal, -1e-3);
-    return {
-      x: Math.floor(inside.x),
-      y: Math.floor(inside.y),
-      z: Math.floor(inside.z),
-      extend: false,
-    };
+    const x = Math.floor(inside.x);
+    const y = Math.floor(inside.y);
+    const z = Math.floor(inside.z);
+
+    /*
+     * Where a new block goes: one *cell* along the face normal, not one hair
+     * past the surface that was hit.
+     *
+     * Stepping past the surface is what the pick does, and it is wrong here.
+     * A bottom slab's top face is at y+0.5, so a hair above it is still inside
+     * the same cell, and placing on top of a slab would try to write into the
+     * block that is already there. Placement is cell-based: the target is the
+     * cell adjacent across the *cell* boundary, whatever the geometry inside
+     * it looks like.
+     *
+     * The dominant axis rather than rounding each component, so a cross quad's
+     * diagonal normal yields a real neighbour instead of a diagonal one that
+     * shares no face.
+     */
+    const ax = Math.abs(normal.x);
+    const ay = Math.abs(normal.y);
+    const az = Math.abs(normal.z);
+    let place: { x: number; y: number; z: number } | null = null;
+    if (ax >= ay && ax >= az && ax > 0) {
+      place = { x: x + Math.sign(normal.x), y, z };
+    } else if (ay >= az && ay > 0) {
+      place = { x, y: y + Math.sign(normal.y), z };
+    } else if (az > 0) {
+      place = { x, y, z: z + Math.sign(normal.z) };
+    }
+
+    return { x, y, z, extend: false, place };
+  }
+
+  /** The block under the crosshair, which in flight is the screen's centre. */
+  function pickAtCrosshair(): PickedBlock | null {
+    if (!container) return null;
+    const rect = container.getBoundingClientRect();
+    return pickBlockAt(rect.left + rect.width / 2, rect.top + rect.height / 2);
   }
 
   function updateSelectionBox(): void {
@@ -376,12 +421,22 @@
       const onPointerUp = (event: PointerEvent) => {
         const start = downAt;
         downAt = null;
-        // In fly mode a click means "capture the pointer and let me look
-        // around", which is the only thing it can mean while the cursor is
-        // still visible. Selection is an orbit-mode gesture.
+        // In fly mode the first click captures the pointer — it is the only
+        // thing a click can mean while the cursor is still visible. After
+        // that, clicks build: left breaks, right places, from the crosshair.
+        // Selection stays an orbit-mode gesture.
         if (cameraMode === "fly") {
           if (!fly?.isLocked) {
             fly?.lock();
+            return;
+          }
+          if (!onbuild) return;
+          const target = pickAtCrosshair();
+          if (!target) return;
+          if (event.button === 0) {
+            onbuild("break", { x: target.x, y: target.y, z: target.z });
+          } else if (event.button === 2 && target.place) {
+            onbuild("place", target.place);
           }
           return;
         }
@@ -392,8 +447,18 @@
           onpick({ ...picked, extend: event.shiftKey });
         }
       };
+      // Right-click places a block in flight, so the context menu must not
+      // also appear. Only suppressed while flying: in orbit mode right-drag
+      // rotates and the menu never had a chance to open anyway, but leaving
+      // the default alone there keeps the browser's own behaviour available.
+      const onContextMenu = (event: MouseEvent) => {
+        if (cameraMode === "fly") {
+          event.preventDefault();
+        }
+      };
       renderer.domElement.addEventListener("pointerdown", onPointerDown);
       renderer.domElement.addEventListener("pointerup", onPointerUp);
+      renderer.domElement.addEventListener("contextmenu", onContextMenu);
 
       return () => {
         cancelAnimationFrame(frame);
@@ -403,6 +468,7 @@
         window.removeEventListener("keyup", onKeyUp);
         renderer?.domElement.removeEventListener("pointerdown", onPointerDown);
         renderer?.domElement.removeEventListener("pointerup", onPointerUp);
+        renderer?.domElement.removeEventListener("contextmenu", onContextMenu);
         if (loaded) disposeObject(loaded);
         fly?.dispose();
         controls?.dispose();
@@ -565,7 +631,8 @@
     <div class="overlay">
       {#if cameraMode === "fly"}
         {#if flying}
-          WASD: move · Space/Shift: up, down · Ctrl: faster · Esc: release
+          WASD: move · Space/Shift: up, down · Ctrl: faster · Left: break · Right: place · Esc:
+          release
         {:else}
           Click the viewport to fly
         {/if}

@@ -16,6 +16,7 @@
   import ArtifactList from "./lib/ArtifactList.svelte";
   import ChatPanel, { type ChatEntry } from "./lib/ChatPanel.svelte";
   import DocumentPanel from "./lib/DocumentPanel.svelte";
+  import InspectorPanel from "./lib/InspectorPanel.svelte";
   import PreviewSettingsPanel from "./lib/PreviewSettingsPanel.svelte";
   import ProviderConfig from "./lib/ProviderConfig.svelte";
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
@@ -25,6 +26,7 @@
     openCodeModelRequiresKey,
     type AgentStepEvent,
     type Artifact,
+    type BlockInspection,
     type DocumentState,
     type EditResponse,
     type OpenCodeModelInfo,
@@ -89,6 +91,10 @@
   let selection = $state<RegionSpec | null>(null);
   /** The first corner of a selection being built, before Shift-click extends it. */
   let anchor = $state<{ x: number; y: number; z: number } | null>(null);
+
+  /** The last block clicked, and where — the inspector's subject. */
+  let inspection = $state<BlockInspection | null>(null);
+  let inspectedAt = $state<{ x: number; y: number; z: number } | null>(null);
 
   let chat = $state<ChatEntry[]>([]);
   /** Tool calls for the turn in flight, so the panel narrates rather than hangs. */
@@ -345,6 +351,12 @@
       }
       docState = response.state;
       await refreshDocument();
+      // The inspected block may well have been one of the ones that changed --
+      // a fill over it, or an undo of the edit that made it. Showing what it
+      // used to be is worse than showing nothing.
+      if (inspectedAt) {
+        await inspectBlock(inspectedAt.x, inspectedAt.y, inspectedAt.z);
+      }
       return response.changed;
     } catch (err) {
       failed(err, doing);
@@ -378,6 +390,8 @@
       docState = response.state;
       selection = null;
       anchor = null;
+      inspection = null;
+      inspectedAt = null;
       status = null;
       await refreshDocument();
     } catch (err) {
@@ -392,7 +406,22 @@
    * box to include it. Two corners is the whole gesture -- it is what a region
    * *is*, and it does not fight the orbit controls for the drag.
    */
+  /** Fetches what the clicked block is, for the inspector. */
+  async function inspectBlock(x: number, y: number, z: number): Promise<void> {
+    inspectedAt = { x, y, z };
+    try {
+      const response = await api().inspectBlock(x, y, z);
+      inspection = response.ok ? response : null;
+    } catch {
+      // A failed inspection is not worth a banner — the panel simply stays
+      // empty, and the click still moved the selection, which is the part the
+      // user was asking for.
+      inspection = null;
+    }
+  }
+
   function onPick(block: PickedBlock): void {
+    void inspectBlock(block.x, block.y, block.z);
     if (block.extend && anchor !== null) {
       selection = {
         minX: Math.min(anchor.x, block.x),
@@ -443,6 +472,30 @@
       if (eq > 0) properties[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
     }
     return { namespacedName: name.slice(0, bracket), properties };
+  }
+
+  /**
+   * Rewrites one of the inspected block's states.
+   *
+   * There is no "change a property" operation in the domain, and there should
+   * not be: a block plus its states *is* the block, so this places the same
+   * block again with one state different. That makes it an ordinary edit, on
+   * the ordinary undo stack.
+   */
+  async function changeBlockProperty(name: string, value: string): Promise<void> {
+    if (!inspection || !inspectedAt) return;
+    const at = inspectedAt;
+    const properties = { ...inspection.properties, [name]: value.trim() };
+    await runDocument("Changing a block state", () =>
+      api().applyEdit({
+        kind: "setBlock",
+        x: at.x,
+        y: at.y,
+        z: at.z,
+        block: { namespacedName: inspection!.block, properties },
+      }),
+    );
+    // No re-inspect here: `runDocument` already refreshes the inspected block.
   }
 
   async function fillSelection(block: string): Promise<void> {
@@ -652,6 +705,13 @@
         anchor = null;
       }}
       onselectall={selectAll}
+    />
+
+    <InspectorPanel
+      {inspection}
+      at={inspectedAt}
+      {busy}
+      onchangeproperty={changeBlockProperty}
     />
 
     <ChatPanel

@@ -26,7 +26,7 @@ import {
   getBlock,
   getBlockEntity,
   internPalette,
-  isDirty,
+
   markSaved,
   normalizeRegion,
   paletteHistogram,
@@ -169,20 +169,22 @@ console.log("\n--- block entities ---");
   check("...and detaches it", getBlockEntity(doc, 0, 0, 0) === null);
 }
 
-// --- dirty tracking ---------------------------------------------------------
-console.log("\n--- dirty state ---");
+// --- the revision counter ---------------------------------------------------
+//
+// Monotonic, because it is a cache key: "is the mesh I built still the mesh for
+// this document". Dirtiness is a different question and lives in history.ts.
+console.log("\n--- revision ---");
 {
   const doc = createDocument({ width: 2, height: 1, length: 1 });
-  check("a new document is clean", !isDirty(doc));
+  const start = doc.revision;
   setBlock(doc, 0, 0, 0, STONE);
-  check("a write makes it dirty", isDirty(doc));
+  check("a write advances the revision", doc.revision > start);
+  const after = doc.revision;
+  setBlock(doc, 0, 0, 0, STONE);
+  equal("a write that changed nothing does not", doc.revision, after);
+
   markSaved(doc, "C:/tmp/x.schem");
-  check("saving makes it clean again", !isDirty(doc));
-  equal("...and records where", doc.filePath, "C:/tmp/x.schem");
-  check("a write that changed nothing does not dirty it", (() => {
-    setBlock(doc, 0, 0, 0, STONE);
-    return !isDirty(doc);
-  })());
+  equal("saving records the path", doc.filePath, "C:/tmp/x.schem");
 }
 
 // --- regions ----------------------------------------------------------------
@@ -289,7 +291,7 @@ console.log("\n--- adopting a loaded schematic ---");
       getBlock(doc, 2, 1, 1).properties.facing,
       "north",
     );
-    check("a freshly loaded document is clean", !isDirty(doc));
+    equal("a freshly loaded document starts at revision 0", doc.revision, 0);
     equal("...and knows where it came from", doc.filePath, filePath);
     equal("the format is remembered", doc.format, "sponge2");
     equal("the DataVersion is remembered", doc.dataVersion, dataVersionFor("JE_1_20_4"));

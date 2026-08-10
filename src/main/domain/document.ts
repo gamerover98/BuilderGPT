@@ -22,9 +22,11 @@
  *   out of use would renumber the ones after it, and every delta already
  *   recorded in the undo stack refers to the old numbers. Reclaiming is a
  *   save-time concern -- see `compactPalette`.
- * - **`revision` increases on every mutation.** `savedRevision` records the one
- *   that was last written to disk, so dirtiness is a comparison rather than a
- *   flag somebody has to remember to set.
+ * - **`revision` increases on every mutation, and never decreases.** It is a
+ *   cache key -- "is the mesh I built still the mesh for this document" -- so
+ *   an undo advances it like any other change. It is deliberately *not* the
+ *   dirty flag: undoing back to the saved state would still leave the number
+ *   different. `history.ts`'s `isDirty` answers that, by stack depth.
  *
  * Interface plus free functions, not a class: RULEBOOK.md §1's "Data-object
  * shape" row, and the same reason it gives -- plain objects survive the
@@ -67,8 +69,8 @@ export interface SchematicDocument {
   offset: [number, number, number];
   /** `null` until it has been saved somewhere. */
   filePath: string | null;
+  /** Monotonic; a cache key, not a dirty flag. See the invariants above. */
   revision: number;
-  savedRevision: number;
 }
 
 /** The key both `core.ts` and `services/schematic.ts` already use. */
@@ -103,14 +105,13 @@ export function voxelIndex(doc: SchematicDocument, x: number, y: number, z: numb
   return x * doc.height * doc.length + y * doc.length + z;
 }
 
-export function isDirty(doc: SchematicDocument): boolean {
-  return doc.revision !== doc.savedRevision;
-}
-
-/** Marks the current state as the one on disk. */
+/**
+ * Binds the document to a path. Whether it is *dirty* relative to that file is
+ * `history.ts`'s `isDirty`, which counts undo depth -- see the invariants above
+ * for why a revision counter cannot answer it.
+ */
 export function markSaved(doc: SchematicDocument, filePath: string): void {
   doc.filePath = filePath;
-  doc.savedRevision = doc.revision;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +146,6 @@ export function createDocument(options: CreateDocumentOptions): SchematicDocumen
     offset: [0, 0, 0],
     filePath: null,
     revision: 0,
-    savedRevision: 0,
   };
 }
 
@@ -188,7 +188,6 @@ export function documentFromLoaded(
   doc.filePath = filePath;
   // Freshly loaded is not modified, whatever the remapping above did.
   doc.revision = 0;
-  doc.savedRevision = 0;
   return doc;
 }
 

@@ -21,12 +21,15 @@
     /** Tool calls for the turn in flight, cleared when it lands. */
     live: AgentStepEvent[];
     selection: RegionSpec | null;
+    /** Exchanges the agent is carrying into the next question. */
+    remembered: number;
     enabled: boolean;
     busy: boolean;
     onask: (prompt: string) => void;
+    onforget: () => void;
   }
 
-  const { entries, live, selection, enabled, busy, onask }: Props = $props();
+  const { entries, live, selection, remembered, enabled, busy, onask, onforget }: Props = $props();
 
   let draft = $state("");
 
@@ -104,7 +107,21 @@
       <button class="primary" onclick={submit} disabled={busy || draft.trim() === ""}>
         {busy ? "Working…" : "Send"}
       </button>
+      <button
+        onclick={onforget}
+        disabled={busy || (entries.length === 0 && remembered === 0)}
+        title="Forget what has been said so far and start over"
+      >
+        New chat
+      </button>
     </div>
+
+    {#if remembered > 0}
+      <p class="hint">
+        Follow-ups can refer back — the AI remembers
+        {remembered === 1 ? "this exchange" : `the last ${remembered} exchanges`}.
+      </p>
+    {/if}
   {/if}
 </fieldset>
 

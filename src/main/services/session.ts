@@ -45,6 +45,8 @@ import {
   undo,
   type History,
 } from "../domain/history.js";
+import type { ModelMessage } from "ai";
+
 import { loadStructure } from "../pipeline/loader.js";
 import type { PaletteEntry } from "../pipeline/types.js";
 import { buildDocumentPreview, type DocumentPreviewOptions } from "./preview.js";
@@ -62,6 +64,20 @@ export interface DocumentSession {
    * baker and atlas behind it are shared and live in `preview.ts`.
    */
   meshCache?: ChunkMeshCache;
+  /**
+   * What has been said to the agent about this document, in the shape the model
+   * consumes — user turns, its tool calls, and their results.
+   *
+   * Per session because a conversation is *about* a schematic: "make it taller"
+   * means nothing once a different file is open, so closing the document has to
+   * take the conversation with it. That happens for free by living here rather
+   * than in a module-level map.
+   *
+   * It deliberately holds no summary of the schematic; `agent.ts` regenerates
+   * that into the instructions each turn. The renderer keeps its own display
+   * copy of the exchange and never sees this one.
+   */
+  conversation?: ModelMessage[];
 }
 
 let current: DocumentSession | null = null;
@@ -240,6 +256,17 @@ export function undoEdit(session: DocumentSession): string | null {
 
 export function redoEdit(session: DocumentSession): string | null {
   return redo(session.doc, session.history)?.label ?? null;
+}
+
+/**
+ * Forgets what has been said to the agent, keeping the document.
+ *
+ * Worth having as a verb rather than leaving the user to close and reopen: a
+ * conversation that has gone somewhere unhelpful is a reason to start over on
+ * the talking, not on the work.
+ */
+export function clearConversation(session: DocumentSession): void {
+  session.conversation = [];
 }
 
 /** What block sits at a coordinate, for the inspector. */

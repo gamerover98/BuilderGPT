@@ -98,6 +98,7 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docRecoveryResolve, restore) as Promise<DocumentStateResponse>,
   askAgent: (request: AgentRequestPayload) =>
     ipcRenderer.invoke(IPC.docAgent, request) as Promise<AgentResponse>,
+  resetAgentConversation: () => ipcRenderer.invoke(IPC.docAgentReset) as Promise<void>,
 
   onProgress(listener) {
     // The raw IpcRendererEvent must not leak into the renderer -- it carries

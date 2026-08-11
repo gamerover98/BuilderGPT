@@ -145,6 +145,28 @@
   let chat = $state<ChatEntry[]>([]);
   /** Tool calls for the turn in flight, so the panel narrates rather than hangs. */
   let liveSteps = $state<AgentStepEvent[]>([]);
+  /**
+   * How many exchanges the agent is carrying, as main last reported. The
+   * transcript itself lives there — this is only enough to tell the user
+   * whether "make it taller" will be understood.
+   */
+  let remembered = $state(0);
+
+  /**
+   * Throws away the visible log *and* the transcript behind it.
+   *
+   * Both, always: main forgets the conversation whenever the open document
+   * changes, and a log left on screen after that would show the user exchanges
+   * the agent can no longer refer to.
+   */
+  async function forgetConversation(): Promise<void> {
+    chat = [];
+    liveSteps = [];
+    remembered = 0;
+    if (bridgeAvailable) {
+      await api().resetAgentConversation();
+    }
+  }
 
   /** Unsaved work found from a session that ended badly. */
   let recovery = $state<RecoveryOffer | null>(null);
@@ -231,6 +253,10 @@
       if (restore && response.state) {
         // Recovered work is a structure the camera has not seen either.
         framingEpoch += 1;
+        // ...and a session whose conversation did not survive the crash.
+        chat = [];
+        liveSteps = [];
+        remembered = 0;
         await refreshDocument();
         status = {
           tone: "ok",
@@ -556,6 +582,12 @@
       inspection = null;
       inspectedAt = null;
       status = null;
+      // A conversation is about a schematic. Opening another one makes every
+      // "it" in the log refer to something that is no longer on screen, and
+      // main has already dropped its side with the old session.
+      chat = [];
+      liveSteps = [];
+      remembered = 0;
       // A newly opened document is the one case where framing the camera is
       // what the user wants: they have not aimed it at anything yet.
       framingEpoch += 1;
@@ -771,6 +803,7 @@
           changed: response.changed,
         },
       ];
+      remembered = response.remembered;
       await refreshDocument();
     } catch (err) {
       chat = [
@@ -896,9 +929,11 @@
       entries={chat}
       live={liveSteps}
       {selection}
+      {remembered}
       enabled={docState !== null}
       {busy}
       onask={askAgent}
+      onforget={forgetConversation}
     />
 
     <ProviderConfig

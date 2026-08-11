@@ -20,6 +20,17 @@
  * commonest blocks, and the selection; everything else it has to ask for. A
  * 100x100x100 build is a million cells, and no useful amount of it fits in a
  * prompt — but almost every request only needs a corner of it.
+ *
+ * ## The conversation is remembered, the schematic is not
+ *
+ * Prior turns — the user's words, the tool calls, their results — are kept on
+ * the session and replayed, so "now make it taller" knows what "it" is. What is
+ * *not* replayed is the description of the schematic: it is regenerated into
+ * the instructions on every turn instead of being prepended to each user
+ * message. A transcript of stale descriptions is worse than none, because the
+ * model has no way to tell which of five conflicting block counts is current.
+ * This way there is exactly one, it is always the live one, and the history
+ * holds only what was said.
  */
 
 import { generateText, stepCountIs, type ModelMessage } from "ai";
@@ -33,6 +44,16 @@ import { buildTools } from "./tools.js";
 
 /** How many tool round trips one request may take before it is cut off. */
 const MAX_STEPS = 24;
+
+/**
+ * How many past exchanges ride along with a request.
+ *
+ * A cap rather than a token budget: counting tokens needs the provider's own
+ * tokenizer, and there are four of them. Twelve is well inside every context
+ * window the app can reach while being more conversation than anyone holds in
+ * their head.
+ */
+const MAX_REMEMBERED_TURNS = 12;
 
 export interface AgentStep {
   tool: string;
@@ -66,6 +87,8 @@ export interface AgentResult {
   /** Voxels changed across the whole request. */
   changed: number;
   steps: AgentStep[];
+  /** Exchanges the next request will carry, this one included. */
+  remembered: number;
 }
 
 const SYSTEM_PROMPT = [
@@ -83,6 +106,9 @@ const SYSTEM_PROMPT = [
   "- Finish by telling the user what you changed, in one or two sentences. Be specific about",
   "  counts and materials. If a tool reported that nothing matched, say so rather than claiming",
   "  success.",
+  "- Earlier turns are what was said, not what is true now. The summary below describes the",
+  "  schematic as it stands this instant, and the user may have edited or undone things in",
+  "  between; where the two disagree, the summary wins.",
 ].join("\n");
 
 /** The context that rides along with the request, resolved rather than dumped. */
@@ -117,9 +143,39 @@ function undoLabel(prompt: string): string {
   return oneLine.length <= 48 ? `AI: ${oneLine}` : `AI: ${oneLine.slice(0, 45)}…`;
 }
 
+/**
+ * Drops the oldest exchanges, cutting only where a user message starts.
+ *
+ * The cut point is the whole point. An assistant message carrying a tool call
+ * and the tool message carrying its result are one indivisible pair — slice
+ * between them and the next request sends a `tool_call_id` that answers
+ * nothing, which providers reject outright rather than ignore. Every turn
+ * begins at a user message, so cutting there can never split one.
+ */
+function trimToRecentTurns(messages: readonly ModelMessage[], maxTurns: number): ModelMessage[] {
+  const turnStarts: number[] = [];
+  for (let i = 0; i < messages.length; i += 1) {
+    if (messages[i].role === "user") {
+      turnStarts.push(i);
+    }
+  }
+  if (turnStarts.length <= maxTurns) {
+    return [...messages];
+  }
+  return messages.slice(turnStarts[turnStarts.length - maxTurns]);
+}
+
+/** How many exchanges a transcript holds. */
+function countTurns(messages: readonly ModelMessage[]): number {
+  return messages.reduce((total, message) => total + (message.role === "user" ? 1 : 0), 0);
+}
+
 export async function runAgent(request: AgentRequest): Promise<AgentResult> {
   const steps: AgentStep[] = [];
   const { session } = request;
+
+  const asked: ModelMessage = { role: "user", content: request.prompt };
+  const history = trimToRecentTurns(session.conversation ?? [], MAX_REMEMBERED_TURNS - 1);
 
   const result = await runTransactionAsync(
     session.doc,
@@ -137,18 +193,13 @@ export async function runAgent(request: AgentRequest): Promise<AgentResult> {
         },
       });
 
-      const messages: ModelMessage[] = [
-        {
-          role: "user",
-          content: `${describeDocument(session, request.selection)}\n\n${request.prompt}`,
-        },
-      ];
-
       try {
         return await generateText({
           model: request.modelOverride ?? resolveModel(request),
-          instructions: SYSTEM_PROMPT,
-          messages,
+          // Rebuilt every turn, so the state the model reasons from is the
+          // state the document is actually in — see the note at the top.
+          instructions: `${SYSTEM_PROMPT}\n\n${describeDocument(session, request.selection)}`,
+          messages: [...history, asked],
           tools,
           // Without a stop condition the SDK returns after the first tool call
           // and never feeds the result back, so the model would place one block
@@ -165,11 +216,22 @@ export async function runAgent(request: AgentRequest): Promise<AgentResult> {
     },
   );
 
+  // Only now, past everything that throws. A run that failed rolled the
+  // document back, and a transcript describing edits that were rolled back
+  // would have the next turn building on something that never happened.
+  //
+  // `responseMessages`, not `response.messages`: the latter is deprecated and
+  // carries only the *final* step, so a turn that called four tools would be
+  // remembered as its closing sentence and nothing else — the model would have
+  // no record of what it had already looked up. Replaying the tool traffic is
+  // affordable because `tools.ts` caps a result at MAX_REPORTED_BLOCKS.
+  session.conversation = [...history, asked, ...result.responseMessages];
+
   // `changed` is counted from the tool results rather than from the transaction,
   // which does not expose its size once committed.
   const changed = steps.length === 0 ? 0 : countChanged(result);
 
-  return { text: result.text, changed, steps };
+  return { text: result.text, changed, steps, remembered: countTurns(session.conversation) };
 }
 
 /** Adds up the `changed` each mutating tool reported. */

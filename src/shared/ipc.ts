@@ -57,6 +57,8 @@ export const IPC = {
   docRecoveryResolve: "bgpt:doc:recovery:resolve",
   /** Ask the agent to edit the open document. */
   docAgent: "bgpt:doc:agent",
+  /** Forget the conversation so far, keeping the document open. */
+  docAgentReset: "bgpt:doc:agent:reset",
   /** main → renderer: one tool call the agent just made. */
   agentStep: "bgpt:agent:step",
 
@@ -368,6 +370,12 @@ export interface AgentSuccess {
   changed: number;
   steps: { tool: string; summary: string }[];
   state: DocumentState;
+  /**
+   * Exchanges the agent is carrying, this one included. The transcript itself
+   * stays in main — this is the one thing the UI needs from it, to say whether
+   * the next question will be understood in context.
+   */
+  remembered: number;
 }
 
 export type AgentResponse = Result<AgentSuccess>;
@@ -448,6 +456,8 @@ export interface BgptApi {
   /** `true` restores it and opens it; `false` discards it. */
   resolveRecovery(restore: boolean): Promise<DocumentStateResponse>;
   askAgent(request: AgentRequestPayload): Promise<AgentResponse>;
+  /** Forget the conversation so far. Resolves even when nothing is open. */
+  resetAgentConversation(): Promise<void>;
 
   onProgress(listener: (event: ProgressEvent) => void): () => void;
   onAgentStep(listener: (event: AgentStepEvent) => void): () => void;

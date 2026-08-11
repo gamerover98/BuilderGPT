@@ -45,6 +45,7 @@ import {
 import {
   adoptDocument,
   applyEdit,
+  clearConversation,
   closeDocument,
   currentSession,
   documentMesh,
@@ -500,6 +501,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           changed: result.changed,
           steps: [...result.steps],
           state: documentState(session),
+          remembered: result.remembered,
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -513,6 +515,15 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       }
     },
   );
+
+  ipcMain.handle(IPC.docAgentReset, async (): Promise<void> => {
+    // Nothing open is not a failure: the renderer clears its own log either
+    // way, and there is no conversation to disagree with it.
+    const session = currentSession();
+    if (session) {
+      clearConversation(session);
+    }
+  });
 
   ipcMain.handle(IPC.preview, async (_event, req: PreviewRequest): Promise<PreviewResponse> => {
     const window = getWindow();

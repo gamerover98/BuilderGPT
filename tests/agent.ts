@@ -14,7 +14,7 @@ import { MockLanguageModelV3 } from "ai/test";
 import { runAgent } from "../src/main/agent/agent.js";
 import { getBlock, setBlock, type SchematicDocument } from "../src/main/domain/document.js";
 import { canUndo, undo } from "../src/main/domain/history.js";
-import { newDocument, type DocumentSession } from "../src/main/services/session.js";
+import { clearConversation, newDocument, type DocumentSession } from "../src/main/services/session.js";
 
 let failures = 0;
 
@@ -82,10 +82,32 @@ type Turn =
   | { kind: "text"; text: string }
   | { kind: "throw"; message: string };
 
-function scriptedModel(turns: Turn[]) {
+/**
+ * What a scripted model was handed, so a test can assert on it.
+ *
+ * The prompts are the only way to check that the agent remembers anything:
+ * the conversation lives in the session and is never returned, so the
+ * observable fact is what turned up in the next request.
+ */
+interface Seen {
+  prompts: unknown[][];
+  systems: string[];
+}
+
+function scriptedModel(turns: Turn[], seen?: Seen) {
   let index = 0;
   return new MockLanguageModelV3({
-    doGenerate: async () => {
+    doGenerate: async (options: { prompt: unknown }) => {
+      if (seen) {
+        const messages = options.prompt as { role: string; content: unknown }[];
+        seen.prompts.push(messages.filter((m) => m.role !== "system"));
+        seen.systems.push(
+          messages
+            .filter((m) => m.role === "system")
+            .map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)))
+            .join("\n"),
+        );
+      }
       const turn = turns[Math.min(index, turns.length - 1)];
       index += 1;
       if (turn.kind === "throw") {
@@ -292,6 +314,299 @@ console.log("\n--- the model fails mid-request ---");
   );
   equal("the half-applied edit was rolled back", grid(session.doc), before);
   equal("...and left no undo step", session.history.undoStack.length, 0);
+}
+
+// --- the conversation ---------------------------------------------------------
+//
+// "Now make it taller" is only answerable if the previous turn is still there.
+// None of this is observable from the return value — the transcript lives on
+// the session and is never handed out — so these assert on what the model was
+// actually sent.
+
+/** Every scrap of text in one request's messages, flattened. */
+function textOf(messages: unknown[]): string {
+  const parts: string[] = [];
+  const walk = (value: unknown): void => {
+    if (typeof value === "string") {
+      parts.push(value);
+    } else if (Array.isArray(value)) {
+      value.forEach(walk);
+    } else if (value && typeof value === "object") {
+      Object.values(value as Record<string, unknown>).forEach(walk);
+    }
+  };
+  walk(messages);
+  return parts.join(" ");
+}
+
+console.log("\n--- the agent remembers the conversation ---");
+{
+  const session = seeded();
+  const seen: Seen = { prompts: [], systems: [] };
+
+  await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "build a stone pillar at 2,2",
+    modelOverride: scriptedModel(
+      [
+        { kind: "tool", toolName: "set_block", input: { x: 2, y: 1, z: 2, block: "minecraft:stone" } },
+        { kind: "text", text: "Put a stone block at 2,1,2." },
+      ],
+      seen,
+    ),
+  });
+
+  const second = await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "now make it taller",
+    modelOverride: scriptedModel(
+      [
+        { kind: "tool", toolName: "set_block", input: { x: 2, y: 2, z: 2, block: "minecraft:stone" } },
+        { kind: "text", text: "Raised it by one." },
+      ],
+      seen,
+    ),
+  });
+
+  // seen.prompts: [turn1 call1, turn1 call2, turn2 call1, turn2 call2]
+  const secondTurn = textOf(seen.prompts[2]);
+  check(
+    "the second request carries what the user asked the first time",
+    secondTurn.includes("build a stone pillar at 2,2"),
+  );
+  check(
+    "...and what the agent answered",
+    secondTurn.includes("Put a stone block at 2,1,2."),
+  );
+  check("...as well as the new question", secondTurn.includes("now make it taller"));
+  equal("both exchanges are remembered", second.remembered, 2);
+  equal("the follow-up landed", getBlock(session.doc, 2, 2, 2).namespacedName, "minecraft:stone");
+
+  // What the model *did*, not just what it said about it. `response.messages`
+  // — the obvious field, and deprecated — holds only the final step, which
+  // would drop every tool call and leave the agent re-reading what it already
+  // knew. This is the assertion that catches that.
+  const roles = (seen.prompts[2] as { role: string }[]).map((m) => m.role);
+  check(
+    "the tool call from the first turn is remembered too",
+    roles.includes("tool"),
+    roles.join(","),
+  );
+}
+
+// --- the schematic summary is regenerated, never replayed ---------------------
+//
+// If the description rode along inside each user message, the transcript would
+// accumulate contradictory block counts and the model would have no way to tell
+// which was current.
+console.log("\n--- the schematic summary is fresh, and there is only one ---");
+{
+  const session = seeded();
+  const seen: Seen = { prompts: [], systems: [] };
+
+  await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "fill the floor with stone",
+    modelOverride: scriptedModel(
+      [
+        { kind: "tool", toolName: "replace_blocks", input: { from: "minecraft:cobblestone", to: "minecraft:stone" } },
+        { kind: "text", text: "Done." },
+      ],
+      seen,
+    ),
+  });
+  await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "and now the walls",
+    modelOverride: scriptedModel([{ kind: "text", text: "Which walls?" }], seen),
+  });
+
+  const lastTurn = textOf(seen.prompts[seen.prompts.length - 1]);
+  const lastSystem = seen.systems[seen.systems.length - 1];
+
+  check("the dimensions reach the model", lastSystem.includes("6x6x6"));
+  check(
+    "...in the instructions, not glued onto the user's words",
+    !lastTurn.includes("6x6x6"),
+    lastTurn.slice(0, 200),
+  );
+  check(
+    "the summary describes the schematic as it is now, after the first turn's edit",
+    lastSystem.includes("minecraft:stone"),
+  );
+  check(
+    "...and no longer claims the cobblestone that was replaced",
+    !lastSystem.includes("minecraft:cobblestone"),
+    lastSystem,
+  );
+}
+
+// --- a failed run leaves the transcript alone --------------------------------
+//
+// The document is rolled back, so a transcript describing those edits would
+// have the next turn building on something that never happened.
+console.log("\n--- a failed turn is not remembered ---");
+{
+  const session = seeded();
+  const seen: Seen = { prompts: [], systems: [] };
+
+  await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "place one block",
+    modelOverride: scriptedModel([{ kind: "text", text: "Placed it." }], seen),
+  });
+
+  try {
+    await runAgent({
+      ...baseRequest,
+      session,
+      selection: null,
+      prompt: "this request will fail",
+      modelOverride: scriptedModel([{ kind: "throw", message: "upstream reset" }], seen),
+    });
+  } catch {
+    // Expected; asserted in its own section above.
+  }
+
+  const third = await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "carry on",
+    modelOverride: scriptedModel([{ kind: "text", text: "Carrying on." }], seen),
+  });
+
+  const carriedOn = textOf(seen.prompts[seen.prompts.length - 1]);
+  check("the successful turn survives", carriedOn.includes("place one block"));
+  check(
+    "the failed one left nothing behind",
+    !carriedOn.includes("this request will fail"),
+    carriedOn,
+  );
+  equal("...and is not counted", third.remembered, 2);
+}
+
+// --- trimming ----------------------------------------------------------------
+//
+// The cap has to cut where a turn starts. Slicing between an assistant's tool
+// call and the tool message answering it sends a tool_call_id that resolves to
+// nothing, which providers reject outright.
+console.log("\n--- old exchanges fall off the end, at turn boundaries ---");
+{
+  const session = seeded();
+  const seen: Seen = { prompts: [], systems: [] };
+
+  let last = 0;
+  for (let turn = 0; turn < 16; turn += 1) {
+    const result = await runAgent({
+      ...baseRequest,
+      session,
+      selection: null,
+      prompt: `turn number ${turn}`,
+      modelOverride: scriptedModel(
+        [
+          { kind: "tool", toolName: "set_block", input: { x: 1, y: 1, z: 1, block: "minecraft:stone" } },
+          { kind: "text", text: `Did turn ${turn}.` },
+        ],
+        seen,
+      ),
+    });
+    last = result.remembered;
+  }
+
+  check("the transcript stops growing", last === 12, `remembered ${last}`);
+
+  const finalRequest = seen.prompts[seen.prompts.length - 1] as { role: string; content: unknown }[];
+  equal("what is left starts at a user turn", finalRequest[0]?.role, "user");
+  check(
+    "the oldest turns are gone",
+    !textOf(finalRequest).includes("turn number 0"),
+  );
+  check("the newest is not", textOf(finalRequest).includes("turn number 15"));
+
+  // Every tool result must still be able to name the call it answers.
+  const offered = new Set<string>();
+  let orphans = 0;
+  for (const message of finalRequest) {
+    for (const part of Array.isArray(message.content) ? message.content : []) {
+      const typed = part as { type?: string; toolCallId?: string };
+      if (typed.type === "tool-call" && typed.toolCallId) {
+        offered.add(typed.toolCallId);
+      } else if (typed.type === "tool-result" && typed.toolCallId && !offered.has(typed.toolCallId)) {
+        orphans += 1;
+      }
+    }
+  }
+  equal("no tool result was cut away from its call", orphans, 0);
+}
+
+// --- starting over -----------------------------------------------------------
+console.log("\n--- clearing the conversation ---");
+{
+  const session = seeded();
+  const seen: Seen = { prompts: [], systems: [] };
+
+  await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "something memorable",
+    modelOverride: scriptedModel([{ kind: "text", text: "Noted." }], seen),
+  });
+  clearConversation(session);
+
+  const after = await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "a fresh start",
+    modelOverride: scriptedModel([{ kind: "text", text: "Hello." }], seen),
+  });
+
+  const fresh = textOf(seen.prompts[seen.prompts.length - 1]);
+  check("the old exchange is gone", !fresh.includes("something memorable"), fresh);
+  check("...and the new one is there", fresh.includes("a fresh start"));
+  equal("counting starts again", after.remembered, 1);
+}
+
+// --- a conversation belongs to its document ----------------------------------
+console.log("\n--- opening another document starts over ---");
+{
+  const session = seeded();
+  const seen: Seen = { prompts: [], systems: [] };
+  await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "about the first schematic",
+    modelOverride: scriptedModel([{ kind: "text", text: "Noted." }], seen),
+  });
+
+  // What `newDocument`/`openDocument`/`adoptDocument` all do: a new session.
+  const other = seeded();
+  const next = await runAgent({
+    ...baseRequest,
+    session: other,
+    selection: null,
+    prompt: "about the second",
+    modelOverride: scriptedModel([{ kind: "text", text: "Noted." }], seen),
+  });
+
+  check(
+    "the other document's conversation does not follow it",
+    !textOf(seen.prompts[seen.prompts.length - 1]).includes("about the first schematic"),
+  );
+  equal("...it starts at one", next.remembered, 1);
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

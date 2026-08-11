@@ -129,6 +129,22 @@
   let lastHighlightAt = 0;
   const HIGHLIGHT_INTERVAL_MS = 50;
 
+  /**
+   * Is this event coming out of somewhere the user is entering text?
+   *
+   * Single-key shortcuts here listen on `window`, which sees every keypress in
+   * the app including the ones meant for a text field. Without this the
+   * viewport's shortcuts fire while the user types in the sidebar.
+   */
+  function isTyping(target: EventTarget | null): boolean {
+    const element = target as HTMLElement | null;
+    if (!element || typeof element.tagName !== "string") {
+      return false;
+    }
+    const tag = element.tagName.toLowerCase();
+    return tag === "input" || tag === "textarea" || tag === "select" || element.isContentEditable;
+  }
+
   let canvas: HTMLCanvasElement;
   let container: HTMLDivElement;
   let error = $state<string | null>(null);
@@ -500,6 +516,13 @@
       observer.observe(container);
 
       const onKey = (event: KeyboardEvent) => {
+        // Not while the user is typing. This listens on `window`, so a keypress
+        // in any field bubbles up to it: before this guard, typing "birch" into
+        // the block picker — or any word with an r in it — threw the camera
+        // back to the framing position mid-word.
+        if (isTyping(event.target)) {
+          return;
+        }
         if ((event.key === "r" || event.key === "R") && loaded) {
           fitCameraToObject(loaded);
         }

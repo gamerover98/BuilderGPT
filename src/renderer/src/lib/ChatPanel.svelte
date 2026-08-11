@@ -9,7 +9,8 @@
   import type { AgentStepEvent, RegionSpec } from "../../../shared/ipc.js";
 
   export interface ChatEntry {
-    role: "user" | "agent" | "error";
+    /** `note` is something that happened but did not go wrong — a stopped run. */
+    role: "user" | "agent" | "error" | "note";
     text: string;
     /** Tool calls made while answering; agent turns only. */
     steps?: { tool: string; summary: string }[];
@@ -27,9 +28,11 @@
     busy: boolean;
     onask: (prompt: string) => void;
     onforget: () => void;
+    onstop: () => void;
   }
 
-  const { entries, live, selection, remembered, enabled, busy, onask, onforget }: Props = $props();
+  const { entries, live, selection, remembered, enabled, busy, onask, onforget, onstop }: Props =
+    $props();
 
   let draft = $state("");
 
@@ -59,7 +62,9 @@
       <ul class="log">
         {#each entries as entry, index (index)}
           <li class={entry.role}>
-            <span class="who">{entry.role === "user" ? "You" : entry.role === "error" ? "Failed" : "AI"}</span>
+            <span class="who">
+              {#if entry.role === "user"}You{:else if entry.role === "error"}Failed{:else if entry.role === "note"}Stopped{:else}AI{/if}
+            </span>
             <span class="text">{entry.text}</span>
             {#if entry.steps && entry.steps.length > 0}
               <ul class="steps">
@@ -107,13 +112,22 @@
       <button class="primary" onclick={submit} disabled={busy || draft.trim() === ""}>
         {busy ? "Working…" : "Send"}
       </button>
-      <button
-        onclick={onforget}
-        disabled={busy || (entries.length === 0 && remembered === 0)}
-        title="Forget what has been said so far and start over"
-      >
-        New chat
-      </button>
+      {#if busy}
+        <!--
+          Only while a run is in flight, and never disabled. A Stop that is
+          greyed out while the thing it stops is running is the one state this
+          button must not have.
+        -->
+        <button onclick={onstop} title="Stop this request; nothing will be changed">Stop</button>
+      {:else}
+        <button
+          onclick={onforget}
+          disabled={entries.length === 0 && remembered === 0}
+          title="Forget what has been said so far and start over"
+        >
+          New chat
+        </button>
+      {/if}
     </div>
 
     {#if remembered > 0}
@@ -152,6 +166,10 @@
 
   .log > li.error .who {
     color: var(--danger);
+  }
+
+  .log > li.note .who {
+    color: var(--warn);
   }
 
   .text {

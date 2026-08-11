@@ -62,7 +62,7 @@ import {
   undoEdit,
 } from "../services/session.js";
 import { UnrepresentableBlocksError } from "../services/writers.js";
-import { runAgent } from "../agent/agent.js";
+import { AgentCancelledError, runAgent } from "../agent/agent.js";
 import { clearAutosave, readAutosave, restoreAutosave, startAutosave } from "../services/autosave.js";
 import { loadAllowedBlocks } from "../core.js";
 import { listArtifacts } from "../services/artifacts.js";
@@ -105,6 +105,17 @@ const FILE_FILTERS: Readonly<
   // vendored pre-1.13 block table (pipeline/loader_formats.ts).
   schem: [{ name: "Schematic", extensions: ["schem", "schematic"] }],
 };
+
+/**
+ * Agent runs the user can still stop, by request id.
+ *
+ * Keyed rather than a single slot because the renderer being busy is a UI
+ * convention, not something main can rely on — nothing stops a retry or a
+ * second window from overlapping, and aborting the wrong run is worse than not
+ * offering the button. Entries are removed in the `finally` of the run itself,
+ * so a finished run cannot be cancelled and the map cannot grow.
+ */
+const inFlightAgentRuns = new Map<string, AbortController>();
 
 function emitProgress(window: BrowserWindow | null, event: ProgressEvent): void {
   if (window && !window.isDestroyed()) {
@@ -475,6 +486,10 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         };
       }
 
+      // Registered before the run so a Stop arriving while the model is still
+      // being resolved still finds something to abort.
+      const controller = new AbortController();
+      inFlightAgentRuns.set(req.requestId, controller);
       try {
         const result = await runAgent({
           session,
@@ -484,6 +499,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           baseUrl: settings.baseUrl,
           prompt: req.prompt,
           selection: req.selection,
+          signal: controller.signal,
           allowedBlocks: await loadAllowedBlocks(resourcesDir()),
           onStep: (step) => {
             if (window && !window.isDestroyed()) {
@@ -504,6 +520,11 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           remembered: result.remembered,
         };
       } catch (err) {
+        if (err instanceof AgentCancelledError) {
+          // The document rolled back with the transaction, so there is nothing
+          // to clean up here — only something to say.
+          return { ok: false, kind: "cancelled", message: "Stopped. Nothing was changed." };
+        }
         const message = err instanceof Error ? err.message : String(err);
         // `runAgent` wraps everything as an LlmError, so the prefix is the
         // signal — same convention `classifyGenerateError` uses.
@@ -512,9 +533,23 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           kind: message.startsWith("LLM API Error") ? "llm-error" : "io-error",
           message,
         };
+      } finally {
+        inFlightAgentRuns.delete(req.requestId);
       }
     },
   );
+
+  ipcMain.handle(IPC.docAgentCancel, async (_event, requestId: string): Promise<boolean> => {
+    const controller = inFlightAgentRuns.get(requestId);
+    if (!controller) {
+      // Already finished, or never started. Not an error: the button and the
+      // run settling race by nature, and pressing Stop a moment too late
+      // should not produce a message.
+      return false;
+    }
+    controller.abort();
+    return true;
+  });
 
   ipcMain.handle(IPC.docAgentReset, async (): Promise<void> => {
     // Nothing open is not a failure: the renderer clears its own log either

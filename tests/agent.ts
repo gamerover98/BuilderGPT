@@ -11,7 +11,8 @@
 
 import { MockLanguageModelV3 } from "ai/test";
 
-import { runAgent } from "../src/main/agent/agent.js";
+import { AgentCancelledError, runAgent } from "../src/main/agent/agent.js";
+import { LlmError } from "../src/main/services/llm.js";
 import { getBlock, setBlock, type SchematicDocument } from "../src/main/domain/document.js";
 import { canUndo, undo } from "../src/main/domain/history.js";
 import { clearConversation, newDocument, type DocumentSession } from "../src/main/services/session.js";
@@ -80,7 +81,16 @@ function grid(doc: SchematicDocument): string {
 type Turn =
   | { kind: "tool"; toolName: string; input: unknown }
   | { kind: "text"; text: string }
-  | { kind: "throw"; message: string };
+  | { kind: "throw"; message: string }
+  /**
+   * The user pressing Stop while the model is working: the signal trips and
+   * the in-flight call rejects, which is what a real aborted fetch does.
+   *
+   * `name` is settable because that is the whole point of one of the tests —
+   * an abort does not always arrive looking like an `AbortError`. Cut the
+   * connection mid-stream and it surfaces as an ordinary socket failure.
+   */
+  | { kind: "abort"; controller: AbortController; message?: string; name?: string };
 
 /**
  * What a scripted model was handed, so a test can assert on it.
@@ -110,6 +120,12 @@ function scriptedModel(turns: Turn[], seen?: Seen) {
       }
       const turn = turns[Math.min(index, turns.length - 1)];
       index += 1;
+      if (turn.kind === "abort") {
+        turn.controller.abort();
+        const error = new Error(turn.message ?? "The operation was aborted");
+        error.name = turn.name ?? "AbortError";
+        throw error;
+      }
       if (turn.kind === "throw") {
         throw new Error(turn.message);
       }
@@ -607,6 +623,145 @@ console.log("\n--- opening another document starts over ---");
     !textOf(seen.prompts[seen.prompts.length - 1]).includes("about the first schematic"),
   );
   equal("...it starts at one", next.remembered, 1);
+}
+
+// --- stopping a run -----------------------------------------------------------
+//
+// A request can be two dozen model round trips long, and the UI is disabled for
+// all of it. Stop is only worth offering if it is safe, and "safe" here means
+// something exact: the document ends up as it started, however far in the run
+// had got.
+console.log("\n--- the user stops a run ---");
+{
+  const session = seeded();
+  const before = grid(session.doc);
+  const controller = new AbortController();
+
+  let thrown: unknown = null;
+  try {
+    await runAgent({
+      ...baseRequest,
+      session,
+      selection: null,
+      signal: controller.signal,
+      prompt: "flatten everything",
+      modelOverride: scriptedModel([
+        // Real damage first, so the rollback has something to undo.
+        { kind: "tool", toolName: "fill_region", input: { minX: 0, minY: 0, minZ: 0, maxX: 5, maxY: 5, maxZ: 5, block: "minecraft:stone" } },
+        { kind: "abort", controller },
+      ]),
+    });
+  } catch (err) {
+    thrown = err;
+  }
+
+  check("it reports being stopped", thrown instanceof AgentCancelledError);
+  check(
+    "...and not as a failure, which is what keeps it out of the error UI",
+    !(thrown instanceof LlmError),
+  );
+  equal("the document is exactly as it was", grid(session.doc), before);
+  equal("...with no undo step to clean up", session.history.undoStack.length, 0);
+}
+
+// The choice this pins: cancellation is decided by the signal, not by what the
+// error looked like. An aborted call reports itself differently depending on
+// where in the loop it was caught, so reading the message would classify some
+// stops as crashes.
+console.log("\n--- a stop is recognised however the call failed ---");
+{
+  const session = seeded();
+  const controller = new AbortController();
+
+  let thrown: unknown = null;
+  try {
+    await runAgent({
+      ...baseRequest,
+      session,
+      selection: null,
+      signal: controller.signal,
+      prompt: "stop me",
+      modelOverride: scriptedModel([
+        // Aborted, but surfacing as something that looks nothing like an
+        // abort — neither the message nor the name says so. Only the signal
+        // does, which is why the signal is what gets read.
+        { kind: "abort", controller, message: "socket hang up", name: "Error" },
+      ]),
+    });
+  } catch (err) {
+    thrown = err;
+  }
+
+  check("still reported as stopped, not as a connection error", thrown instanceof AgentCancelledError);
+}
+
+console.log("\n--- a stopped run is not remembered ---");
+{
+  const session = seeded();
+  const seen: Seen = { prompts: [], systems: [] };
+
+  await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "the first thing",
+    modelOverride: scriptedModel([{ kind: "text", text: "Done." }], seen),
+  });
+
+  const controller = new AbortController();
+  try {
+    await runAgent({
+      ...baseRequest,
+      session,
+      selection: null,
+      signal: controller.signal,
+      prompt: "the stopped thing",
+      modelOverride: scriptedModel([{ kind: "abort", controller }], seen),
+    });
+  } catch {
+    // Asserted above.
+  }
+
+  const after = await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "the third thing",
+    modelOverride: scriptedModel([{ kind: "text", text: "Done." }], seen),
+  });
+
+  const carried = textOf(seen.prompts[seen.prompts.length - 1]);
+  check("the turn before it survives", carried.includes("the first thing"));
+  check("the stopped one left nothing behind", !carried.includes("the stopped thing"), carried);
+  equal("...and is not counted", after.remembered, 2);
+}
+
+// A signal that never trips must change nothing — otherwise every ordinary run
+// would be at the mercy of the cancellation path.
+console.log("\n--- a run nobody stops is unaffected ---");
+{
+  const session = seeded();
+  const controller = new AbortController();
+  const result = await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    signal: controller.signal,
+    prompt: "replace the cobblestone with stone",
+    modelOverride: scriptedModel([
+      { kind: "tool", toolName: "replace_blocks", input: { from: "minecraft:cobblestone", to: "minecraft:stone" } },
+      { kind: "text", text: "Replaced them." },
+    ]),
+  });
+
+  equal("the edit landed", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:stone");
+  equal("...and is undoable as one step", session.history.undoStack.length, 1);
+  equal("the run is remembered", result.remembered, 1);
+
+  // Stopping something already finished must not reach back into it.
+  controller.abort();
+  equal("a late stop does not undo it", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:stone");
+  equal("...nor discard the undo step", session.history.undoStack.length, 1);
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

@@ -152,6 +152,23 @@
    */
   let remembered = $state(0);
 
+  /** The agent request in flight, if any — what Stop cancels. */
+  let agentRequestId = $state<string | null>(null);
+
+  /**
+   * Asks main to stop the run.
+   *
+   * Deliberately does not touch `chat` or `busy`: the request is still in
+   * flight and will settle through `askAgent` as a `cancelled` failure, which
+   * is the one place that should report what happened. Ending the turn from
+   * here as well would write the outcome twice.
+   */
+  async function stopAgent(): Promise<void> {
+    const id = agentRequestId;
+    if (id === null) return;
+    await api().cancelAgent(id);
+  }
+
   /**
    * Throws away the visible log *and* the transcript behind it.
    *
@@ -781,14 +798,23 @@
     chat = [...chat, { role: "user", text: prompt }];
     liveSteps = [];
     busy = true;
+    const id = requestId();
+    // Held so Stop can name the run. Cleared in `finally`, which is what makes
+    // the button disappear the instant the request settles, however it settled.
+    agentRequestId = id;
     try {
       const response = await api().askAgent({
-        requestId: requestId(),
+        requestId: id,
         prompt,
         selection: selection ? forIpc(selection) : null,
       });
       if (!response.ok) {
-        chat = [...chat, { role: "error", text: response.message }];
+        // Stopping is something the user did, not something that went wrong,
+        // so it reads as an ordinary note rather than a failure.
+        chat = [
+          ...chat,
+          { role: response.kind === "cancelled" ? "note" : "error", text: response.message },
+        ];
         return;
       }
       docState = response.state;
@@ -811,6 +837,7 @@
         { role: "error", text: err instanceof Error ? err.message : String(err) },
       ];
     } finally {
+      agentRequestId = null;
       liveSteps = [];
       busy = false;
     }
@@ -934,6 +961,7 @@
       {busy}
       onask={askAgent}
       onforget={forgetConversation}
+      onstop={stopAgent}
     />
 
     <ProviderConfig

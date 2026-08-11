@@ -59,6 +59,8 @@ export const IPC = {
   docAgent: "bgpt:doc:agent",
   /** Forget the conversation so far, keeping the document open. */
   docAgentReset: "bgpt:doc:agent:reset",
+  /** Stop the request in flight. */
+  docAgentCancel: "bgpt:doc:agent:cancel",
   /** main → renderer: one tool call the agent just made. */
   agentStep: "bgpt:agent:step",
 
@@ -108,7 +110,13 @@ export type FailureKind =
   | "sandbox-unavailable"
   | "empty-result"
   | "io-error"
-  | "invalid-input";
+  | "invalid-input"
+  /**
+   * The user stopped it. Not a fault, and deliberately not folded into
+   * `llm-error`: nothing went wrong, so the UI must not dress it up in red and
+   * invite a bug report.
+   */
+  | "cancelled";
 
 export interface Failure {
   ok: false;
@@ -458,6 +466,13 @@ export interface BgptApi {
   askAgent(request: AgentRequestPayload): Promise<AgentResponse>;
   /** Forget the conversation so far. Resolves even when nothing is open. */
   resetAgentConversation(): Promise<void>;
+  /**
+   * Stop the request with this id. Resolves `true` if one was in flight.
+   *
+   * The request itself still settles through `askAgent`, as a `cancelled`
+   * failure — this only asks it to stop.
+   */
+  cancelAgent(requestId: string): Promise<boolean>;
 
   onProgress(listener: (event: ProgressEvent) => void): () => void;
   onAgentStep(listener: (event: AgentStepEvent) => void): () => void;

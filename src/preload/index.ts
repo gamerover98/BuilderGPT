@@ -99,6 +99,8 @@ const api: BgptApi = {
   askAgent: (request: AgentRequestPayload) =>
     ipcRenderer.invoke(IPC.docAgent, request) as Promise<AgentResponse>,
   resetAgentConversation: () => ipcRenderer.invoke(IPC.docAgentReset) as Promise<void>,
+  cancelAgent: (requestId: string) =>
+    ipcRenderer.invoke(IPC.docAgentCancel, requestId) as Promise<boolean>,
 
   onProgress(listener) {
     // The raw IpcRendererEvent must not leak into the renderer -- it carries

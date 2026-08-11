@@ -46,6 +46,21 @@ import { buildTools } from "./tools.js";
 const MAX_STEPS = 24;
 
 /**
+ * The user stopped the run.
+ *
+ * Its own type rather than an `LlmError` because nothing failed. Everything
+ * downstream keys off that distinction: the document still rolls back, but the
+ * UI says "stopped" instead of showing an error, and `classifyGenerateError`
+ * never sees it.
+ */
+export class AgentCancelledError extends Error {
+  constructor() {
+    super("The request was stopped");
+    this.name = "AgentCancelledError";
+  }
+}
+
+/**
  * How many past exchanges ride along with a request.
  *
  * A cap rather than a token budget: counting tokens needs the provider's own
@@ -209,6 +224,14 @@ export async function runAgent(request: AgentRequest): Promise<AgentResult> {
           abortSignal: request.signal,
         });
       } catch (err) {
+        // Asked first, and from the signal rather than from the error: an
+        // aborted `generateText` reports itself in more than one shape
+        // depending on where in the loop it was, but the signal is unambiguous.
+        // Getting this backwards would show the user an LLM failure for
+        // something they did on purpose.
+        if (request.signal?.aborted) {
+          throw new AgentCancelledError();
+        }
         // Same contract as `callLlm`: everything leaves as an LlmError, because
         // that prefix is what the UI and `classifyGenerateError` recognise.
         throw new LlmError(err instanceof Error ? err.message : String(err));

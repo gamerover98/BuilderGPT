@@ -124,6 +124,11 @@
   /** Increments per parse, so an overtaken one can tell it has been. */
   let parseToken = 0;
 
+  /** The block outline under the crosshair; see `updateCrosshairHighlight`. */
+  let highlight: THREE.LineSegments | undefined;
+  let lastHighlightAt = 0;
+  const HIGHLIGHT_INTERVAL_MS = 50;
+
   let canvas: HTMLCanvasElement;
   let container: HTMLDivElement;
   let error = $state<string | null>(null);
@@ -262,6 +267,67 @@
     }
 
     return { x, y, z, extend: false, place };
+  }
+
+  /**
+   * The outline around the block the crosshair is on, as the game draws it.
+   *
+   * One unit cube, moved rather than rebuilt — this runs on a timer while
+   * flying, and allocating an EdgesGeometry per update would litter the heap
+   * for no reason.
+   *
+   * It is a *cell* outline, not the block's own silhouette: the mesh is fused
+   * and carries no per-block shape, so the renderer cannot know that a slab is
+   * half-height. Vanilla traces the collision box; this traces the cell the
+   * block occupies, which is the same thing for the great majority of blocks
+   * and an honest approximation for the rest.
+   */
+  function ensureHighlight(): THREE.LineSegments | undefined {
+    if (!scene) return undefined;
+    if (!highlight) {
+      // 1.002 for the same reason the game expands its own outline: a box
+      // exactly coincident with the block's faces z-fights with them.
+      const geometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.002, 1.002, 1.002));
+      const material = new THREE.LineBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.55,
+      });
+      highlight = new THREE.LineSegments(geometry, material);
+      highlight.visible = false;
+      scene.add(highlight);
+    }
+    return highlight;
+  }
+
+  /**
+   * Points the outline at whatever the crosshair is on.
+   *
+   * Throttled: raycasting a fused mesh of a large schematic is a linear scan
+   * over its triangles, and the camera moves every frame in flight, so doing
+   * this per frame would spend the frame budget on it. Twenty times a second
+   * is under the threshold where the outline feels like it lags the view.
+   */
+  function updateCrosshairHighlight(now: number): void {
+    const box = ensureHighlight();
+    if (!box) return;
+    if (cameraMode !== "fly" || !flying || !loaded) {
+      box.visible = false;
+      return;
+    }
+    if (now - lastHighlightAt < HIGHLIGHT_INTERVAL_MS) {
+      return;
+    }
+    lastHighlightAt = now;
+
+    const target = pickAtCrosshair();
+    if (target === null) {
+      box.visible = false;
+      return;
+    }
+    // A cell spans [x, x+1], so its centre is half a block along each axis.
+    box.position.set(target.x + 0.5, target.y + 0.5, target.z + 0.5);
+    box.visible = true;
   }
 
   /** The block under the crosshair, which in flight is the screen's centre. */
@@ -414,6 +480,7 @@
         } else {
           controls?.update();
         }
+        updateCrosshairHighlight(performance.now());
         if (renderer && scene && camera) {
           renderer.render(scene, camera);
         }
@@ -499,6 +566,10 @@
         renderer?.domElement.removeEventListener("pointerup", onPointerUp);
         renderer?.domElement.removeEventListener("contextmenu", onContextMenu);
         if (loaded) disposeObject(loaded);
+        if (highlight) {
+          highlight.geometry.dispose();
+          (highlight.material as THREE.Material).dispose();
+        }
         fly?.dispose();
         controls?.dispose();
         renderer?.dispose();

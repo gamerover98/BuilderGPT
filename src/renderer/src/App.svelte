@@ -112,6 +112,18 @@
   let activeBlock = $state("minecraft:stone");
 
   /**
+   * Bumped when the viewport starts showing a *different* structure, and only
+   * then. The viewer frames the camera on a change and leaves it alone
+   * otherwise, so an edit — or an undo — no longer throws the view back to
+   * where it started.
+   *
+   * A counter rather than the file path: a path is `null` for a document that
+   * has never been saved, and Save As changes it without changing what is on
+   * screen.
+   */
+  let framingEpoch = $state(0);
+
+  /**
    * Building from the crosshair. One block, one transaction — the same edit the
    * panel makes, so Ctrl+Z treats them alike.
    */
@@ -214,6 +226,8 @@
       }
       docState = response.state;
       if (restore && response.state) {
+        // Recovered work is a structure the camera has not seen either.
+        framingEpoch += 1;
         await refreshDocument();
         status = {
           tone: "ok",
@@ -427,6 +441,12 @@
       status = { tone: "warn", text: response.message };
       return;
     }
+    // A different file is a different structure and gets framed; re-rendering
+    // the same one — which is what changing a biome tint does — must not move
+    // a camera the user has placed.
+    if (schemPath !== lastSchemPath) {
+      framingEpoch += 1;
+    }
     glb = response.glb;
     bounds = { center: response.center, size: response.size };
     sunAzimuth = response.sunAzimuth;
@@ -532,6 +552,9 @@
       inspection = null;
       inspectedAt = null;
       status = null;
+      // A newly opened document is the one case where framing the camera is
+      // what the user wants: they have not aimed it at anything yet.
+      framingEpoch += 1;
       await refreshDocument();
     } catch (err) {
       failed(err, "Opening the schematic");
@@ -559,7 +582,16 @@
     }
   }
 
-  function onPick(block: PickedBlock): void {
+  function onPick(block: PickedBlock | null): void {
+    if (block === null) {
+      // Clicked past the structure. That is the gesture for "never mind" —
+      // it drops the selection and empties the inspector.
+      selection = null;
+      anchor = null;
+      inspection = null;
+      inspectedAt = null;
+      return;
+    }
     void inspectBlock(block.x, block.y, block.z);
     if (block.extend && anchor !== null) {
       selection = {
@@ -1109,6 +1141,7 @@
       onpick={docState ? onPick : undefined}
       {cameraMode}
       flySpeed={settings.preview.flySpeed}
+      framingKey={framingEpoch}
       onbuild={docState ? onBuild : undefined}
       maxDpr={settings.preview.maxDpr}
       renderScale={settings.preview.renderScale}

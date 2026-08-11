@@ -16,7 +16,7 @@
    * lighting with the AO-dependent intensities, same 256/32 grid at y=-0.01
    * with depthWrite off, same 1.6·maxDim framing, same R-to-reset.
    */
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import * as THREE from "three";
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
   import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
@@ -71,10 +71,25 @@
     ambientOcclusion: boolean;
     /** Drawn as a wire box; `null` hides it. */
     selection?: Region | null;
-    onpick?: (block: PickedBlock) => void;
+    /**
+     * A click in orbit mode. `null` means the ray hit nothing — clicking empty
+     * space, which clears the selection rather than doing nothing.
+     */
+    onpick?: (block: PickedBlock | null) => void;
     cameraMode?: CameraMode;
     /** Blocks per second in fly mode. */
     flySpeed?: number;
+    /**
+     * Identifies *which* structure is being shown, as opposed to which version
+     * of it.
+     *
+     * Every edit produces a new GLB, and framing the camera on each one threw
+     * the user back to the establishing shot after every block they placed.
+     * The camera is now re-framed only when this changes — a different file, a
+     * different generation — so editing leaves the view exactly where they put
+     * it.
+     */
+    framingKey?: string | number;
     /** Building from the crosshair, in flight. */
     onbuild?: (action: BuildAction, at: { x: number; y: number; z: number }) => void;
   }
@@ -94,7 +109,20 @@
     cameraMode = "orbit",
     flySpeed = 12,
     onbuild,
+    framingKey = 0,
   }: Props = $props();
+
+  /**
+   * The `framingKey` the camera was last framed for.
+   *
+   * `null` until the first structure arrives, so the very first one is framed.
+   * Not `$state`: nothing renders from it, and making it reactive would put it
+   * in the dependency graph of the effect that writes it.
+   */
+  let framedFor: string | number | null = null;
+
+  /** Increments per parse, so an overtaken one can tell it has been. */
+  let parseToken = 0;
 
   let canvas: HTMLCanvasElement;
   let container: HTMLDivElement;
@@ -443,9 +471,10 @@
         if (!start || !onpick) return;
         if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
         const picked = pickBlockAt(event.clientX, event.clientY);
-        if (picked) {
-          onpick({ ...picked, extend: event.shiftKey });
-        }
+        // A click that hit nothing is reported as such rather than swallowed:
+        // clicking empty space is how you *stop* having a selection, and doing
+        // nothing left no way to clear one but the button in the panel.
+        onpick(picked === null ? null : { ...picked, extend: event.shiftKey });
       };
       // Right-click places a block in flight, so the context menu must not
       // also appear. Only suppressed while flying: in orbit mode right-drag
@@ -587,12 +616,28 @@
     const bytes = glb;
     if (!scene || !bytes || bytes.length === 0) return;
     const target = scene;
+    /*
+     * Read without subscribing. If this effect depended on `framingKey` it
+     * would run again the moment a new document is opened — before that
+     * document's mesh has arrived — re-parsing the *previous* GLB and framing
+     * the camera on the structure being replaced.
+     */
+    const key = untrack(() => framingKey);
 
-    if (loaded) {
-      target.remove(loaded);
-      disposeObject(loaded);
-      loaded = null;
-    }
+    /*
+     * The outgoing model stays in the scene until the incoming one is ready.
+     *
+     * Removing it first — which is what this did — left the viewport empty for
+     * the length of the parse, so every edit flashed the structure out and back
+     * in. During an edit the two meshes are nearly identical, and swapping them
+     * in one frame is invisible.
+     */
+    const previous = loaded;
+    // Guards against two parses overlapping, which is easy to provoke by
+    // holding a key down to place blocks: a slow earlier parse must not finish
+    // after a fast later one and put a stale mesh on screen.
+    parseToken += 1;
+    const token = parseToken;
 
     // `slice()` guarantees a standalone ArrayBuffer: the payload arrives from
     // structured clone as a Uint8Array that may be a view into a larger buffer,
@@ -603,13 +648,30 @@
       buffer,
       "",
       (gltf) => {
+        if (token !== parseToken) {
+          // Superseded while parsing. Drop what was just built rather than
+          // showing it, and leave the newer parse to do the swap.
+          disposeObject(gltf.scene);
+          return;
+        }
+        if (previous) {
+          target.remove(previous);
+          disposeObject(previous);
+        }
         loaded = gltf.scene;
         target.add(loaded);
         applyWireframe(loaded, wireframe);
-        fitCameraToObject(loaded);
+        // Only for a structure the camera has not been framed on before.
+        // Re-framing on every mesh meant every placed block, and every undo,
+        // snapped the view back to the establishing shot.
+        if (key !== framedFor) {
+          fitCameraToObject(loaded);
+          framedFor = key;
+        }
         error = untexturedReason(loaded);
       },
       (err) => {
+        if (token !== parseToken) return;
         error = err instanceof Error ? err.message : String(err);
       },
     );

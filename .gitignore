@@ -9,6 +9,10 @@ out/
 dist/
 # electron-builder installers
 release/
+# electron-vite transpiles electron.vite.config.ts to a timestamped .mjs beside
+# it and deletes it on exit -- so it is only ever on disk when a dev server was
+# killed uncleanly, which is exactly when someone is about to `git add -A`.
+electron.vite.config.*.mjs
 
 # Runtime scratch
 logs/*

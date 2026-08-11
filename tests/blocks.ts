@@ -7,10 +7,13 @@
  * one of those defects so it cannot come back quietly.
  */
 
+import { readFileSync } from "fs";
 import { readdir } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import { parseBlockList } from "../src/main/core.js";
+import { searchBlocks } from "../src/renderer/src/lib/block_search.js";
 import { occludesNeighbours, shapeFor } from "../src/main/pipeline/block_shapes.js";
 import { ModelBaker, type BakedBlock } from "../src/main/pipeline/model_baker.js";
 import { buildMesh, culledFaces } from "../src/main/pipeline/mesher.js";
@@ -595,6 +598,63 @@ if (pack === null) {
       Buffer.from(still.data),
       Buffer.from(otherWater.textures["minecraft:block/water_still"].data),
     ) !== 0,
+  );
+}
+
+// --- searching the registry from the UI --------------------------------------
+//
+// The picker is where the user meets all ~920 blocks. It shipped capped at 40
+// results, which is not a shortfall anyone can see: a search with 41 answers
+// showed 40 and said nothing. These run against the real list rather than a
+// fixture, because "does it show everything" is only meaningful at full size.
+console.log("\n--- the block picker's search ---");
+{
+  const registry = [...parseBlockList(readFileSync("block_id_list.txt", "utf-8"))].sort();
+  check("the registry is the big one, not a stub", registry.length > 900, `${registry.length}`);
+
+  equal("an empty query offers every block", searchBlocks(registry, "").length, registry.length);
+
+  // The exact case the cap used to clip, and the reason a cap is the wrong
+  // shape of answer: the number is just over a round one nobody would question.
+  const oak = searchBlocks(registry, "oak");
+  equal(
+    "every oak block is offered, not the first forty",
+    oak.length,
+    registry.filter((b) => b.includes("oak")).length,
+  );
+  check("...which is more than forty", oak.length > 40, `${oak.length}`);
+
+  check(
+    "nothing is dropped for any query",
+    ["a", "e", "stone", "wood", "minecraft", "_"].every(
+      (q) => searchBlocks(registry, q).length === registry.filter((b) => b.includes(q)).length,
+    ),
+  );
+
+  // Ranking. Alphabetically `minecraft:stone` lands after `blackstone` and the
+  // rest of the Bs, so an unranked list puts the obvious answer out of sight.
+  equal("an exact id comes first", searchBlocks(registry, "minecraft:stone")[0], "minecraft:stone");
+  equal("...and so does a bare name that is exact", searchBlocks(registry, "stone")[0], "minecraft:stone");
+  check(
+    "a name starting with the query beats one merely containing it",
+    searchBlocks(registry, "oak").indexOf("minecraft:oak_planks") <
+      searchBlocks(registry, "oak").indexOf("minecraft:dark_oak_planks"),
+  );
+  check(
+    "...even when the containing one sorts earlier alphabetically",
+    "minecraft:dark_oak_planks" < "minecraft:oak_planks",
+  );
+
+  equal("a query matching nothing offers nothing", searchBlocks(registry, "zzzznope").length, 0);
+  equal(
+    "case does not matter",
+    searchBlocks(registry, "OAK").length,
+    searchBlocks(registry, "oak").length,
+  );
+  equal(
+    "surrounding space does not either",
+    searchBlocks(registry, "  stone  ")[0],
+    "minecraft:stone",
   );
 }
 

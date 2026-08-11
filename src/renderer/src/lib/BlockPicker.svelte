@@ -5,7 +5,15 @@
    * (CLAUDE.md: "the set the model is told about cannot drift from the set it
    * is judged against"). Typing anything the list does not contain is still
    * allowed; this only makes the common case a click instead of a memory test.
+   *
+   * Every match is listed. The registry is ~920 blocks, so an earlier cap of 40
+   * meant the list silently stopped a third of the way through the As — and
+   * worse, a search that genuinely had 41 answers quietly showed 40 with nothing
+   * to say it had. A dropdown that hides matches is harder to trust than a plain
+   * text field, which was the thing this replaced.
    */
+  import { searchBlocks } from "./block_search.js";
+
   interface Props {
     id?: string;
     value: string;
@@ -19,11 +27,25 @@
   let open = $state(false);
   let highlighted = $state(0);
   let root: HTMLDivElement | undefined;
+  /**
+   * `$state`, unlike `root` below it, because the scroll effect reads it: a
+   * plain `let` is written by `bind:this` without waking anything, so the
+   * effect would not re-run when the dropdown opens and the element appears.
+   */
+  let list = $state<HTMLUListElement | undefined>(undefined);
 
-  const matches = $derived.by(() => {
-    const query = value.trim().toLowerCase();
-    const pool = query === "" ? blocks : blocks.filter((b) => b.toLowerCase().includes(query));
-    return pool.slice(0, 40);
+  const matches = $derived(searchBlocks(blocks, value));
+
+  /**
+   * Keeps the highlighted row on screen.
+   *
+   * Not a nicety at this length: arrowing down a 920-row list without it moves
+   * a selection the user cannot see, which reads as the keys doing nothing.
+   */
+  $effect(() => {
+    if (!open || list === undefined) return;
+    const row = list.children[highlighted] as HTMLElement | undefined;
+    row?.scrollIntoView({ block: "nearest" });
   });
 
   function choose(block: string): void {
@@ -77,7 +99,20 @@
     onkeydown={onKeydown}
   />
   {#if open && matches.length > 0}
-    <ul class="dropdown" role="listbox">
+    <div class="dropdown">
+      <!--
+        Outside the scrolling list on purpose: `list.children` is indexed by the
+        highlighted row, so anything else living in that element would put the
+        keyboard selection one off from what is drawn.
+      -->
+      <p class="count">
+        {#if matches.length === blocks.length}
+          all {blocks.length} blocks
+        {:else}
+          {matches.length} of {blocks.length}
+        {/if}
+      </p>
+      <ul role="listbox" bind:this={list}>
       {#each matches as block, i (block)}
         <li>
           <button
@@ -95,7 +130,8 @@
           </button>
         </li>
       {/each}
-    </ul>
+      </ul>
+    </div>
   {/if}
 </div>
 
@@ -115,15 +151,27 @@
     top: calc(100% + 2px);
     left: 0;
     right: 0;
-    max-height: 220px;
-    overflow-y: auto;
-    margin: 0;
     padding: 4px;
-    list-style: none;
     background: var(--bg-panel);
     border: 1px solid var(--border);
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  }
+
+  .count {
+    margin: 0 0 4px;
+    padding: 0 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .dropdown ul {
+    /* The list scrolls, not the panel, so the count stays put while it does. */
+    max-height: 220px;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 
   .dropdown button {

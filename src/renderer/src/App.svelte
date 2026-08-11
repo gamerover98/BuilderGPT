@@ -111,6 +111,9 @@
    */
   let activeBlock = $state("minecraft:stone");
 
+  /** The registry, for the block pickers to search — fetched once at startup. */
+  let blockRegistry = $state<string[]>([]);
+
   /**
    * Bumped when the viewport starts showing a *different* structure, and only
    * then. The viewer frames the camera on a change and leaves it alone
@@ -282,6 +285,7 @@
       versions = await api().listVersions();
       artifacts = await api().listArtifacts();
       defaultOutputDir = await api().getDefaultOutputDir();
+      blockRegistry = await api().listBlocks();
 
       // Asked once, at startup, before the user has done anything they could
       // lose by answering it.
@@ -864,6 +868,7 @@
       doc={docState}
       {selection}
       {busy}
+      blocks={blockRegistry}
       block={activeBlock}
       onblockchange={(next) => (activeBlock = next)}
       onopen={openDocument}

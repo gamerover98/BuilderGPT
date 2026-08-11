@@ -30,6 +30,9 @@ export const IPC = {
   /** The app's own `generated/` folder — what an empty `outputDir` resolves to. */
   defaultOutputDir: "bgpt:output:defaultDir",
 
+  /** Every block the app can place — the same set the agent is judged against. */
+  blocksList: "bgpt:blocks:list",
+
   generate: "bgpt:generate",
   preview: "bgpt:preview",
 
@@ -416,6 +419,7 @@ export interface BgptApi {
   pickFile(req: PickFileRequest): Promise<PickFileResponse>;
   revealPath(path: string): Promise<void>;
   getDefaultOutputDir(): Promise<string>;
+  listBlocks(): Promise<string[]>;
 
   generate(req: GenerateRequest): Promise<GenerateResponse>;
   preview(req: PreviewRequest): Promise<PreviewResponse>;

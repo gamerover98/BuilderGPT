@@ -189,6 +189,10 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   });
 
   ipcMain.handle(IPC.defaultOutputDir, async (): Promise<string> => generatedDir());
+  ipcMain.handle(
+    IPC.blocksList,
+    async (): Promise<string[]> => [...(await loadAllowedBlocks(resourcesDir()))].sort(),
+  );
 
   ipcMain.handle(IPC.artifactsList, async (): Promise<Artifact[]> => await listArtifacts());
 

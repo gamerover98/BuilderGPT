@@ -16,11 +16,14 @@
    */
   import type { DocumentState, RegionSpec } from "../../../shared/ipc.js";
   import { SCHEMATIC_FORMAT_LABEL, type SchematicFormat } from "../../../shared/schematic.js";
+  import BlockPicker from "./BlockPicker.svelte";
 
   interface Props {
     doc: DocumentState | null;
     selection: RegionSpec | null;
     busy: boolean;
+    /** The registry to search — the same set the agent is judged against. */
+    blocks: readonly string[];
     /**
      * The block Fill writes and the one Creative mode places. Owned by the app
      * rather than by this panel, because the viewport places it too and the two
@@ -43,6 +46,7 @@
     doc,
     selection,
     busy,
+    blocks,
     block,
     onblockchange,
     onopen,
@@ -140,13 +144,7 @@
     <!-- Editing -->
     <div class="field">
       <label for="to-block">Block</label>
-      <input
-        id="to-block"
-        value={block}
-        placeholder="minecraft:stone"
-        spellcheck="false"
-        oninput={(event) => onblockchange(event.currentTarget.value)}
-      />
+      <BlockPicker id="to-block" value={block} placeholder="minecraft:stone" {blocks} onchange={onblockchange} />
       <div class="buttons">
         <button
           class="primary"
@@ -161,11 +159,12 @@
 
     <div class="field">
       <label for="from-block">Replace</label>
-      <input
+      <BlockPicker
         id="from-block"
-        bind:value={fromBlock}
+        value={fromBlock}
         placeholder="minecraft:cobblestone"
-        spellcheck="false"
+        {blocks}
+        onchange={(next) => (fromBlock = next)}
       />
       <div class="buttons">
         <button

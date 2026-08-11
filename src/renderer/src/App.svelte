@@ -15,6 +15,7 @@
 
   import ArtifactList from "./lib/ArtifactList.svelte";
   import ChatPanel, { type ChatEntry } from "./lib/ChatPanel.svelte";
+  import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
   import DocumentPanel from "./lib/DocumentPanel.svelte";
   import InspectorPanel from "./lib/InspectorPanel.svelte";
   import PreviewSettingsPanel from "./lib/PreviewSettingsPanel.svelte";
@@ -360,6 +361,18 @@
       return;
     }
     const key = event.key.toLowerCase();
+    // Ctrl+K and Ctrl+Shift+P, the two everyone reaches for. Handled before the
+    // "is a document open" gate below, because the palette is also how you open
+    // one — and toggling, so the same keystroke closes it again.
+    if (key === "k" || (key === "p" && event.shiftKey)) {
+      event.preventDefault();
+      togglePalette();
+      return;
+    }
+    // Anything else typed into the palette belongs to the palette.
+    if (paletteOpen) {
+      return;
+    }
     if (key === "b") {
       event.preventDefault();
       toggleSidebar();
@@ -383,6 +396,150 @@
       void (docState.filePath === null ? saveDocumentAs() : saveDocument());
     }
   }
+
+  let paletteOpen = $state(false);
+
+  function togglePalette(): void {
+    const next = !paletteOpen;
+    // Creative mode holds the pointer, and a locked pointer means the keys the
+    // user is about to type are also steering the camera. Releasing it is what
+    // makes the palette usable from flight rather than a way to fly into a wall.
+    if (next && document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+    paletteOpen = next;
+  }
+
+  /**
+   * Everything the app can do, by name.
+   *
+   * Built here rather than inside the palette so each entry calls the same
+   * function its button does — the palette cannot offer an action the UI has
+   * stopped having, and `enabled` is derived from the same state that greys the
+   * buttons out.
+   */
+  const commands = $derived<Command[]>([
+    {
+      id: "open",
+      title: "Open schematic…",
+      group: "File",
+      keywords: "load import schem",
+      enabled: !busy,
+      run: () => void openDocument(),
+    },
+    ...recentDocuments.slice(0, 5).map((filePath) => ({
+      id: `recent:${filePath}`,
+      title: `Open ${filePath.split(/[\\/]/).pop() ?? filePath}`,
+      group: "Recent",
+      keywords: filePath,
+      enabled: !busy,
+      run: () => void openDocumentAt(filePath),
+    })),
+    {
+      id: "save",
+      title: "Save",
+      group: "File",
+      shortcut: "Ctrl+S",
+      enabled: !busy && docState !== null,
+      run: () => void (docState?.filePath === null ? saveDocumentAs() : saveDocument()),
+    },
+    {
+      id: "save-as",
+      title: "Save as…",
+      group: "File",
+      keywords: "export format sponge mcedit",
+      enabled: !busy && docState !== null,
+      run: () => void saveDocumentAs(),
+    },
+    {
+      id: "undo",
+      title: "Undo",
+      group: "Edit",
+      shortcut: "Ctrl+Z",
+      enabled: !busy && docState?.canUndo === true,
+      run: () => void runDocument("Undoing", () => api().undo()),
+    },
+    {
+      id: "redo",
+      title: "Redo",
+      group: "Edit",
+      shortcut: "Ctrl+Y",
+      enabled: !busy && docState?.canRedo === true,
+      run: () => void runDocument("Redoing", () => api().redo()),
+    },
+    {
+      id: "select-all",
+      title: "Select the whole schematic",
+      group: "Edit",
+      keywords: "selection everything",
+      enabled: !busy && docState !== null,
+      run: selectAll,
+    },
+    {
+      id: "clear-selection",
+      title: "Clear the selection",
+      group: "Edit",
+      enabled: !busy && selection !== null,
+      run: () => {
+        selection = null;
+        anchor = null;
+      },
+    },
+    {
+      id: "camera-orbit",
+      title: "Camera: orbit",
+      group: "View",
+      keywords: "turntable rotate",
+      enabled: cameraMode !== "orbit",
+      run: () => (cameraMode = "orbit"),
+    },
+    {
+      id: "camera-fly",
+      title: "Camera: Creative flight",
+      group: "View",
+      keywords: "wasd walk fly first person",
+      enabled: cameraMode !== "fly",
+      run: () => (cameraMode = "fly"),
+    },
+    {
+      id: "toggle-grid",
+      title: settings.preview.showGrid ? "Hide the grid" : "Show the grid",
+      group: "View",
+      enabled: true,
+      run: () => void patchPreview({ showGrid: !settings.preview.showGrid }),
+    },
+    {
+      id: "toggle-wireframe",
+      title: settings.preview.wireframe ? "Turn off wireframe" : "Turn on wireframe",
+      group: "View",
+      enabled: true,
+      run: () => void patchPreview({ wireframe: !settings.preview.wireframe }),
+    },
+    {
+      id: "toggle-sidebar",
+      title: sidebarCollapsed ? "Show the control panel" : "Hide the control panel",
+      group: "View",
+      shortcut: "Ctrl+B",
+      enabled: true,
+      run: toggleSidebar,
+    },
+    {
+      id: "new-chat",
+      title: "Start a new chat",
+      group: "AI",
+      keywords: "forget conversation reset clear",
+      enabled: !busy && (chat.length > 0 || remembered > 0),
+      run: () => void forgetConversation(),
+    },
+    {
+      id: "stop-agent",
+      title: "Stop the AI",
+      group: "AI",
+      keywords: "cancel abort",
+      enabled: agentRequestId !== null,
+      run: () => void stopAgent(),
+    },
+  ]);
 
   function toggleSidebar(): void {
     sidebarCollapsed = !sidebarCollapsed;
@@ -918,6 +1075,8 @@
     }
   }
 </script>
+
+<CommandPalette open={paletteOpen} {commands} onclose={() => (paletteOpen = false)} />
 
 <main
   class:collapsed={sidebarCollapsed}

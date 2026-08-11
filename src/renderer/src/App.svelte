@@ -114,6 +114,9 @@
   /** The registry, for the block pickers to search — fetched once at startup. */
   let blockRegistry = $state<string[]>([]);
 
+  /** Recently opened schematics. Owned by main; re-read after every open. */
+  let recentDocuments = $state<string[]>([]);
+
   /**
    * Bumped when the viewport starts showing a *different* structure, and only
    * then. The viewer frames the camera on a change and leaves it alone
@@ -329,6 +332,7 @@
       artifacts = await api().listArtifacts();
       defaultOutputDir = await api().getDefaultOutputDir();
       blockRegistry = await api().listBlocks();
+      recentDocuments = await api().listRecentDocuments();
 
       // Asked once, at startup, before the user has done anything they could
       // lose by answering it.
@@ -589,6 +593,10 @@
     busy = true;
     try {
       const response = await api().openDocument(filePath);
+      // Re-read either way: main adds the file on success and drops it on
+      // failure, so a stale entry for a schematic that has moved disappears the
+      // moment it is clicked rather than sitting there failing forever.
+      recentDocuments = await api().listRecentDocuments();
       if (!response.ok) {
         status = { tone: "error", text: response.message };
         return;
@@ -931,6 +939,8 @@
       {selection}
       {busy}
       blocks={blockRegistry}
+      recent={recentDocuments}
+      onopenrecent={openDocumentAt}
       block={activeBlock}
       onblockchange={(next) => (activeBlock = next)}
       onopen={openDocument}

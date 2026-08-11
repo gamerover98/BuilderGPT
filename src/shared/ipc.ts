@@ -42,6 +42,8 @@ export const IPC = {
    * compiler checks on both sides.
    */
   docOpen: "bgpt:doc:open",
+  /** Recently opened schematics, most recent first. */
+  docRecentList: "bgpt:doc:recent:list",
   docNew: "bgpt:doc:new",
   docClose: "bgpt:doc:close",
   docState: "bgpt:doc:state",
@@ -464,6 +466,11 @@ export interface BgptApi {
 
   /** The open document. `getDocumentState` resolves `{state: null}` when none is. */
   openDocument(filePath: string): Promise<DocumentStateResponse>;
+  /**
+   * Recently opened schematics, most recent first. Main-owned: it is not part
+   * of `Settings`, so saving settings cannot overwrite it with a stale copy.
+   */
+  listRecentDocuments(): Promise<string[]>;
   newDocument(size: { width: number; height: number; length: number }): Promise<DocumentStateResponse>;
   closeDocument(): Promise<void>;
   getDocumentState(): Promise<DocumentStateResponse>;

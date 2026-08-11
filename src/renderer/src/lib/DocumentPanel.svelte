@@ -24,6 +24,9 @@
     busy: boolean;
     /** The registry to search — the same set the agent is judged against. */
     blocks: readonly string[];
+    /** Recently opened schematics, most recent first. */
+    recent: readonly string[];
+    onopenrecent: (filePath: string) => void;
     /**
      * The block Fill writes and the one Creative mode places. Owned by the app
      * rather than by this panel, because the viewport places it too and the two
@@ -47,6 +50,8 @@
     selection,
     busy,
     blocks,
+    recent,
+    onopenrecent,
     block,
     onblockchange,
     onopen,
@@ -74,6 +79,19 @@
   function baseName(block: string): string {
     return block.split("[")[0];
   }
+
+  /** The file's own name; the full path stays in the tooltip. */
+  function fileName(filePath: string): string {
+    return filePath.split(/[\\/]/).pop() ?? filePath;
+  }
+
+  /**
+   * The open document is the first recent entry, and offering to reopen what is
+   * already open is a button that does nothing visible.
+   */
+  const reopenable = $derived(
+    recent.filter((entry) => doc === null || entry !== doc.filePath).slice(0, 6),
+  );
 </script>
 
 <fieldset>
@@ -84,6 +102,20 @@
     <div class="buttons">
       <button class="primary" onclick={onopen} disabled={busy}>Open…</button>
     </div>
+    {#if reopenable.length > 0}
+      <div class="field">
+        <label for="recent-empty">Recent</label>
+        <ul id="recent-empty" class="recent">
+          {#each reopenable as filePath (filePath)}
+            <li>
+              <button class="link" onclick={() => onopenrecent(filePath)} disabled={busy} title={filePath}>
+                {fileName(filePath)}
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
   {:else}
     <div class="file">
       <strong title={doc.filePath ?? "Not saved yet"}>
@@ -120,6 +152,21 @@
     </div>
     {#if doc.undoLabel}
       <p class="hint">Next undo: {doc.undoLabel}</p>
+    {/if}
+
+    {#if reopenable.length > 0}
+      <div class="field">
+        <label for="recent">Recent</label>
+        <ul id="recent" class="recent">
+          {#each reopenable as filePath (filePath)}
+            <li>
+              <button class="link" onclick={() => onopenrecent(filePath)} disabled={busy} title={filePath}>
+                {fileName(filePath)}
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </div>
     {/if}
 
     <!-- Selection -->
@@ -232,6 +279,23 @@
     max-height: 190px;
     overflow-y: auto;
     font-size: 12px;
+  }
+
+  .recent {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-size: 12px;
+  }
+
+  .recent li {
+    padding: 2px 0;
+  }
+
+  button.link:disabled {
+    color: var(--text-dim);
+    cursor: default;
+    text-decoration: none;
   }
 
   .palette li {

@@ -29,12 +29,27 @@ import {
   type Settings,
   type UiSettings,
 } from "../../shared/settings.js";
+import { coerceRecents, forgetRecent, rememberRecent } from "./recent_documents.js";
 
 interface PersistedFile {
   settings: Settings;
   /** provider -> base64 ciphertext. Never plaintext. */
   encryptedKeys: Record<string, string>;
+  /**
+   * Recently opened schematics, most recent first.
+   *
+   * Beside `settings` rather than inside it, and for the same reason
+   * `encryptedKeys` is: the renderer round-trips the whole `Settings` object on
+   * every save. It holds a snapshot taken at startup, so a list that grew in
+   * main since then would be overwritten by the stale one the moment the user
+   * changed a preview slider — the file opened five minutes ago would silently
+   * vanish from the list. Only main writes this.
+   */
+  recentDocuments: string[];
 }
+
+/** Windows reaches the same file through paths differing only in case. */
+const RECENTS_ARE_CASE_SENSITIVE = process.platform !== "win32";
 
 function settingsPath(): string {
   return path.join(app.getPath("userData"), "settings.json");
@@ -97,6 +112,7 @@ async function load(): Promise<PersistedFile> {
       settings: coerceSettings(parsed.settings),
       encryptedKeys:
         parsed.encryptedKeys && typeof parsed.encryptedKeys === "object" ? parsed.encryptedKeys : {},
+      recentDocuments: coerceRecents(parsed.recentDocuments),
     };
   } catch (err: unknown) {
     // RULEBOOK.md §1 "Standard library I/O": catch-ENOENT, rethrow-else. A
@@ -106,7 +122,7 @@ async function load(): Promise<PersistedFile> {
     if (code !== "ENOENT" && !(err instanceof SyntaxError)) {
       throw err;
     }
-    cache = { settings: { ...DEFAULT_SETTINGS }, encryptedKeys: {} };
+    cache = { settings: { ...DEFAULT_SETTINGS }, encryptedKeys: {}, recentDocuments: [] };
   }
   return cache;
 }
@@ -126,6 +142,33 @@ export async function setSettings(next: Settings): Promise<Settings> {
   data.settings = coerceSettings(next);
   await persist();
   return data.settings;
+}
+
+export async function getRecentDocuments(): Promise<string[]> {
+  return [...(await load()).recentDocuments];
+}
+
+/** Moves a path to the front of the list, or adds it there. */
+export async function rememberRecentDocument(filePath: string): Promise<string[]> {
+  const data = await load();
+  data.recentDocuments = rememberRecent(
+    data.recentDocuments,
+    filePath,
+    RECENTS_ARE_CASE_SENSITIVE,
+  );
+  await persist();
+  return [...data.recentDocuments];
+}
+
+/** Drops one — used when opening it fails, because it has moved or gone. */
+export async function forgetRecentDocument(filePath: string): Promise<string[]> {
+  const data = await load();
+  const before = data.recentDocuments.length;
+  data.recentDocuments = forgetRecent(data.recentDocuments, filePath, RECENTS_ARE_CASE_SENSITIVE);
+  if (data.recentDocuments.length !== before) {
+    await persist();
+  }
+  return [...data.recentDocuments];
 }
 
 export async function getApiKey(provider: Provider): Promise<string> {

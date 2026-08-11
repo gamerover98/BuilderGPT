@@ -86,9 +86,12 @@ import {
 } from "../services/resources.js";
 import {
   clearApiKey,
+  forgetRecentDocument,
   getApiKey,
   getKeyStatus,
+  getRecentDocuments,
   getSettings,
+  rememberRecentDocument,
   setApiKey,
   setSettings,
 } from "../services/settings-store.js";
@@ -299,11 +302,19 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   ipcMain.handle(IPC.docOpen, async (_event, filePath: string): Promise<DocumentStateResponse> => {
     try {
       const session = await openDocument(filePath, { legacyBlocksPath: legacyBlocksPath() });
+      // Only once it really opened. Recording the attempt would fill the list
+      // with paths that fail every time they are clicked.
+      await rememberRecentDocument(filePath);
       return { ok: true, state: documentState(session) };
     } catch (err) {
+      // Moved, deleted, or no longer readable: take it off the list rather than
+      // leave an entry whose only behaviour is to produce this same error.
+      await forgetRecentDocument(filePath);
       return failure(err);
     }
   });
+
+  ipcMain.handle(IPC.docRecentList, async (): Promise<string[]> => await getRecentDocuments());
 
   ipcMain.handle(
     IPC.docNew,

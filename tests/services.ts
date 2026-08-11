@@ -26,6 +26,11 @@ import { openCodeModelRequiresKey } from "../src/shared/ipc.js";
 import { callLlm, LlmError, resolveBaseUrl } from "../src/main/services/llm.js";
 import { describeFor, sanitizeName } from "../src/main/services/naming.js";
 import {
+  coerceRecents,
+  forgetRecent,
+  rememberRecent,
+} from "../src/main/services/recent_documents.js";
+import {
   assertWritableDirectory,
   OutputDirectoryError,
   resolveOutputPath,
@@ -532,6 +537,54 @@ try {
   equal("short description keeps no ellipsis", describeFor("small house"), "small house");
 } finally {
   await rm(workDir, { recursive: true, force: true });
+}
+
+// --- the recently-opened list -------------------------------------------------
+console.log("\n--- recent documents ---");
+{
+  const A = "C:/builds/house.schem";
+  const B = "C:/builds/castle.schem";
+  const C = "C:/builds/tower.schem";
+
+  equal("a new list starts with what was opened", rememberRecent([], A, true), [A]);
+  equal("the newest goes first", rememberRecent([A], B, true), [B, A]);
+
+  // The point of the list: reopening something you already have moves it up
+  // rather than giving it a second slot that opens the same file.
+  equal("reopening promotes rather than duplicates", rememberRecent([A, B, C], C, true), [C, A, B]);
+  equal(
+    "...and the list does not grow doing it",
+    rememberRecent([A, B, C], C, true).length,
+    3,
+  );
+
+  // On Windows the same schematic reached through the picker and through a drop
+  // can differ only in the drive letter's case.
+  equal(
+    "a path differing only in case is the same file when case is ignored",
+    rememberRecent([A], A.toUpperCase(), false),
+    [A.toUpperCase()],
+  );
+  equal(
+    "...and a different one where case matters",
+    rememberRecent([A], A.toUpperCase(), true).length,
+    2,
+  );
+
+  // The cap has to drop the *oldest*, which is the end of the list.
+  const many = Array.from({ length: 10 }, (_, i) => `C:/builds/${i}.schem`);
+  const capped = rememberRecent(many, "C:/builds/new.schem", true, 10);
+  equal("the list stops at the cap", capped.length, 10);
+  equal("...keeping the newest", capped[0], "C:/builds/new.schem");
+  check("...and dropping the oldest", !capped.includes("C:/builds/9.schem"));
+
+  equal("forgetting removes it", forgetRecent([A, B], A, true), [B]);
+  equal("forgetting something absent changes nothing", forgetRecent([A, B], C, true), [A, B]);
+
+  // A settings file written by another build, or edited by hand.
+  equal("a non-array reads as empty", coerceRecents({ nope: true }), []);
+  equal("nulls and numbers are dropped", coerceRecents([A, null, 7, "", B]), [A, B]);
+  equal("...and the cap still applies", coerceRecents(many, 3).length, 3);
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

@@ -36,6 +36,11 @@ import { ModelBaker } from "../pipeline/model_baker.js";
 import { normalizePalette } from "../pipeline/translate.js";
 import { paletteEntryCacheKey, paletteEntryIsAir, type StructureData } from "../pipeline/types.js";
 import { toStructureData, type SchematicDocument } from "../domain/document.js";
+import {
+  buildChunkedMesh,
+  createChunkMeshCache,
+  type ChunkMeshCache,
+} from "../pipeline/chunked_mesh.js";
 
 /** preview.py:66-67 -- "50 MB is generous for a .schem file". */
 export const MAX_SCHEM_BYTES = 50 * 1024 * 1024;
@@ -198,14 +203,21 @@ async function cachedBaker(
   return entry;
 }
 
-/** The atlas for whatever the baker has decoded so far, rebuilt only when that grew. */
-function cachedAtlas(entry: CachedBaker): ReturnType<typeof buildAtlas> {
+/**
+ * The atlas for whatever the baker has decoded so far, rebuilt only when that
+ * grew.
+ *
+ * The texture count doubles as the atlas's version: it changes exactly when
+ * the layout does, which is what `chunked_mesh.ts` needs to know to throw away
+ * UVs that address the old one.
+ */
+function cachedAtlas(entry: CachedBaker): { atlas: ReturnType<typeof buildAtlas>; version: number } {
   const count = Object.keys(entry.baker.textures).length;
   if (entry.atlas === null || entry.atlasTextureCount !== count) {
     entry.atlas = buildAtlas(entry.baker.textures);
     entry.atlasTextureCount = count;
   }
-  return entry.atlas;
+  return { atlas: entry.atlas, version: entry.atlasTextureCount };
 }
 
 export function clearBakerCache(): void {
@@ -345,7 +357,7 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
   const faces = await culledFaces(normalized, baker);
   // After culling, not before: `culledFaces` is what asks the baker for each
   // blockstate, so the texture set is only complete once it has run.
-  const atlas = cachedAtlas(cached);
+  const { atlas } = cachedAtlas(cached);
   const mesh = buildMesh(faces, atlas.uvRects);
   await warnAboutBlocksWithNoGeometry(normalized, baker, new Set(Object.keys(atlas.uvRects)));
   if (mesh.indices.length === 0) {
@@ -383,6 +395,13 @@ export interface DocumentPreviewOptions {
   waterColor?: string;
 }
 
+export interface DocumentPreviewResult extends PreviewResult {
+  /** Hand this back on the next call to re-mesh only what changed. */
+  meshCache: ChunkMeshCache;
+  rebuiltChunks: number;
+  totalChunks: number;
+}
+
 /**
  * The same pipeline, driven from an open document rather than a file.
  *
@@ -400,7 +419,8 @@ export interface DocumentPreviewOptions {
 export async function buildDocumentPreview(
   doc: SchematicDocument,
   options: DocumentPreviewOptions,
-): Promise<PreviewResult> {
+  meshCache?: ChunkMeshCache,
+): Promise<DocumentPreviewResult> {
   const cached = await cachedBaker(
     options.resourcePackPath,
     options.fallbackResourcePackPath ?? null,
@@ -408,19 +428,56 @@ export async function buildDocumentPreview(
     options.waterColor ?? DEFAULT_WATER_COLOR,
   );
   const structure = toStructureData(doc);
-  const faces = await culledFaces(structure, cached.baker);
-  const atlas = cachedAtlas(cached);
-  const mesh = buildMesh(faces, atlas.uvRects);
+
+  /*
+   * The atlas has to exist before the chunks are meshed, because their UVs
+   * address it -- but it only knows about a block once the baker has been
+   * asked for it, and that is what culling does. So the first pass over a
+   * document primes the baker, and the atlas built after it is complete.
+   *
+   * Only the first pass: `cachedAtlas` rebuilds nothing when the texture set
+   * has not grown, and `buildChunkedMesh` re-meshes nothing when no voxel has
+   * moved, so the steady-state cost of an edit is the chunks it touched.
+   */
+  await primeBaker(structure, cached.baker);
+  const { atlas, version } = cachedAtlas(cached);
+
+  const chunked = await buildChunkedMesh(
+    structure,
+    cached.baker,
+    atlas.uvRects,
+    version,
+    meshCache ?? createChunkMeshCache(),
+  );
   await warnAboutBlocksWithNoGeometry(structure, cached.baker, new Set(Object.keys(atlas.uvRects)));
-  if (mesh.indices.length === 0) {
+  if (chunked.buffers.indices.length === 0) {
     throw new EmptyPreviewError(countSolidBlocks(structure));
   }
-  const glb = meshToGlb(mesh, atlas);
+  const glb = meshToGlb(chunked.buffers, atlas);
   return {
     glb: glb.glbBytes,
     center: [...glb.center] as [number, number, number],
     size: [...glb.size] as [number, number, number],
+    meshCache: chunked.cache,
+    rebuiltChunks: chunked.rebuilt,
+    totalChunks: chunked.total,
   };
+}
+
+/**
+ * Makes sure the baker has decoded every block the structure uses.
+ *
+ * Cheaper than it looks: `bakeBlockstate` is memoised per blockstate, so this
+ * is one bake per *distinct* block and a map lookup for the rest, however many
+ * voxels there are.
+ */
+async function primeBaker(structure: StructureData, baker: ModelBaker): Promise<void> {
+  const present = new Set(structure.voxels);
+  for (const [index, entry] of structure.palette.entries()) {
+    if (present.has(index) && !paletteEntryIsAir(entry)) {
+      await baker.bakeBlockstate(entry);
+    }
+  }
 }
 
 /**

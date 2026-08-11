@@ -44,13 +44,32 @@ const DIRECTIONS: Record<string, readonly [number, number, number]> = {
  * RULEBOOK.md §1's async-model row — awaited below, unlike the source's
  * synchronous `baker.bake_blockstate(entry)` call.
  */
-export async function culledFaces(struct: StructureData, baker: ModelBaker): Promise<BakedFace[]> {
+export async function culledFaces(
+  struct: StructureData,
+  baker: ModelBaker,
+  /**
+   * Restricts which voxels are *visited*, not which are *read*.
+   *
+   * Neighbour lookups still range over the whole grid, so the faces produced
+   * for a sub-region are exactly the ones a full pass would produce for those
+   * voxels — which is what lets `chunked_mesh.ts` re-cull one chunk after an
+   * edit and keep the rest. Omitted means the whole structure.
+   */
+  region?: { minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number },
+): Promise<BakedFace[]> {
   const voxels = struct.voxels;
   const [sizeX, sizeY, sizeZ] = [
     struct.bounds.maxX - struct.bounds.minX + 1,
     struct.bounds.maxY - struct.bounds.minY + 1,
     struct.bounds.maxZ - struct.bounds.minZ + 1,
   ];
+
+  const fromX = region ? Math.max(0, region.minX) : 0;
+  const fromY = region ? Math.max(0, region.minY) : 0;
+  const fromZ = region ? Math.max(0, region.minZ) : 0;
+  const toX = region ? Math.min(sizeX - 1, region.maxX) : sizeX - 1;
+  const toY = region ? Math.min(sizeY - 1, region.maxY) : sizeY - 1;
+  const toZ = region ? Math.min(sizeZ - 1, region.maxZ) : sizeZ - 1;
 
   // voxels.shape in the source is (width, height, length); StructureData
   // does not carry shape separately from bounds, so size is derived the
@@ -68,9 +87,9 @@ export async function culledFaces(struct: StructureData, baker: ModelBaker): Pro
     return struct.palette[index];
   }
 
-  for (let x = 0; x < sizeX; x++) {
-    for (let y = 0; y < sizeY; y++) {
-      for (let z = 0; z < sizeZ; z++) {
+  for (let x = fromX; x <= toX; x++) {
+    for (let y = fromY; y <= toY; y++) {
+      for (let z = fromZ; z <= toZ; z++) {
         const paletteIndex = voxels[flatIndex(x, y, z)];
         const entry = paletteEntry(paletteIndex);
         if (paletteEntryIsAir(entry)) {

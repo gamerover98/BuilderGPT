@@ -204,11 +204,18 @@ try {
       resourcePackPath: null,
       fallbackResourcePackPath: bundledPack,
     });
+    // Byte equality, and it holds only because this fixture is 3x3x3 and fits
+    // inside a single 16-block chunk, so the chunked path emits its geometry in
+    // the same order the whole-structure path does. Enlarge the fixture past
+    // one chunk and the orders diverge while both stay correct — which is why
+    // the bounds check below is the one that generalises, and why
+    // `tests/chunks.ts` compares the chunked path against itself.
     check(
-      "a document renders byte-identically to the file it came from",
+      "a single-chunk document renders byte-identically to the file it came from",
       Buffer.compare(Buffer.from(preview.glb), Buffer.from(fromDocument.glb)) === 0,
     );
     equal("...with the same bounds", fromDocument.size, preview.size);
+    equal("...and the whole structure fits in one chunk, as assumed above", fromDocument.totalChunks, 1);
 
     // An edit has to change the picture, or the whole loop is decorative.
     // (2,1,1) is empty in the fixture above; asserting the write landed keeps

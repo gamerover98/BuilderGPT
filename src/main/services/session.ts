@@ -48,6 +48,7 @@ import {
 import { loadStructure } from "../pipeline/loader.js";
 import type { PaletteEntry } from "../pipeline/types.js";
 import { buildDocumentPreview, type DocumentPreviewOptions } from "./preview.js";
+import type { ChunkMeshCache } from "../pipeline/chunked_mesh.js";
 import { saveDocument, type WriteResult } from "./writers.js";
 
 export interface DocumentSession {
@@ -55,6 +56,12 @@ export interface DocumentSession {
   readonly history: History;
   /** The GLB last handed out, and the revision it was built from. */
   mesh: { revision: number; glb: Uint8Array; center: [number, number, number]; size: [number, number, number] } | null;
+  /**
+   * Per-chunk geometry carried between rebuilds, so an edit re-meshes only the
+   * chunks it touched. Belongs to the session because it is per document; the
+   * baker and atlas behind it are shared and live in `preview.ts`.
+   */
+  meshCache?: ChunkMeshCache;
 }
 
 let current: DocumentSession | null = null;
@@ -266,14 +273,15 @@ export async function documentMesh(
     const { glb, center, size } = session.mesh;
     return { glb, center, size, cached: true };
   }
-  const built = await buildDocumentPreview(session.doc, options);
+  const built = await buildDocumentPreview(session.doc, options, session.meshCache);
+  session.meshCache = built.meshCache;
   session.mesh = {
     revision: session.doc.revision,
     glb: built.glb,
     center: built.center,
     size: built.size,
   };
-  return { ...built, cached: false };
+  return { glb: built.glb, center: built.center, size: built.size, cached: false };
 }
 
 /** Drops the cached mesh — the tints changed, so the atlas will differ. */

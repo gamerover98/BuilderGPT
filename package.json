@@ -25,6 +25,7 @@
     "smoke:sandbox": "tsx tests/sandbox.ts",
     "smoke:schematics": "tsx tests/schematics.ts",
     "smoke:blocks": "tsx tests/blocks.ts",
+    "smoke:chunks": "tsx tests/chunks.ts",
     "smoke:document": "tsx tests/document.ts",
     "smoke:history": "tsx tests/history.ts",
     "smoke:formats": "tsx tests/formats.ts",

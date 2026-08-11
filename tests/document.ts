@@ -38,7 +38,9 @@ import {
   toStructureData,
   voxelIndex,
 } from "../src/main/domain/document.js";
+import { flattenNbt, NbtEditError, setNbtValue } from "../src/main/domain/nbt_edit.js";
 import { loadStructure } from "../src/main/pipeline/loader.js";
+import { saveDocument } from "../src/main/services/writers.js";
 import { paletteEntryCacheKey, type PaletteEntry } from "../src/main/pipeline/types.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor } from "../src/main/services/versions.js";
@@ -295,6 +297,167 @@ console.log("\n--- adopting a loaded schematic ---");
     equal("...and knows where it came from", doc.filePath, filePath);
     equal("the format is remembered", doc.format, "sponge2");
     equal("the DataVersion is remembered", doc.dataVersion, dataVersionFor("JE_1_20_4"));
+  } finally {
+    await rm(workDir, { recursive: true, force: true });
+  }
+}
+
+// --- editing NBT ---------------------------------------------------------------
+//
+// NBT is typed and the types are load-bearing: a chest's Count is a byte, a
+// sign's text is a string, and a file that says otherwise does not load. The
+// inspector renders NBT with the type wrappers stripped because they are
+// unreadable — so the one thing these have to prove is that writing a value
+// back does *not* go through that stripped form.
+console.log("\n--- flattening NBT for the inspector ---");
+{
+  const nbt = {
+    Text1: { type: "string", value: '{"text":"hello"}' },
+    Lock: { type: "string", value: "" },
+    Items: {
+      type: "list",
+      value: {
+        type: "compound",
+        value: [
+          { id: { type: "string", value: "minecraft:diamond" }, Count: { type: "byte", value: 5 } },
+          { id: { type: "string", value: "minecraft:emerald" }, Count: { type: "byte", value: 1 } },
+        ],
+      },
+    },
+    Bulk: { type: "intArray", value: [1, 2, 3, 4] },
+    Big: { type: "long", value: [1, 2] },
+  };
+
+  const fields = flattenNbt(nbt);
+  const byLabel = new Map(fields.map((f) => [f.label, f]));
+
+  equal("a top-level string is offered", byLabel.get("Text1")?.value, '{"text":"hello"}');
+  // The doubly-nested list shape is the one that trips naive walkers: a list's
+  // value is `{type, value: [...]}` and its compound elements are unwrapped.
+  equal("a value inside a list is reached", byLabel.get("Items[0].Count")?.value, "5");
+  equal("...and the second element too", byLabel.get("Items[1].id")?.value, "minecraft:emerald");
+  equal("...carrying its tag type", byLabel.get("Items[0].Count")?.type, "byte");
+  equal(
+    "...with a path that addresses it",
+    byLabel.get("Items[0].Count")?.path,
+    ["Items", 0, "Count"],
+  );
+
+  // A long is two 32-bit halves, not a number: (1 << 32) | 2.
+  equal("a long reads as one number, not a pair", byLabel.get("Big")?.value, "4294967298");
+
+  check("bulk arrays are listed but not editable", byLabel.get("Bulk")?.editable === false);
+  check("...while scalars are", byLabel.get("Text1")?.editable === true);
+  check(
+    "no container is offered as a field",
+    !fields.some((f) => f.type === "compound" || f.type === "list"),
+  );
+}
+
+console.log("\n--- writing a value keeps its type ---");
+{
+  const nbt = {
+    Text1: { type: "string", value: "old" },
+    Items: {
+      type: "list",
+      value: {
+        type: "compound",
+        value: [{ id: { type: "string", value: "minecraft:diamond" }, Count: { type: "byte", value: 5 } }],
+      },
+    },
+  };
+
+  const edited = setNbtValue(nbt, ["Items", 0, "Count"], "42");
+  const count = (edited.Items.value as { value: Record<string, { type: string; value: unknown }>[] })
+    .value[0].Count;
+  equal("the value changed", count.value, 42);
+  equal("...and is still a byte, not a string", count.type, "byte");
+  check("...and is a number, not the text that was typed", typeof count.value === "number");
+
+  // The original is the `before` half of an undo delta. Writing through it
+  // would make undoing this edit restore the value it was changing to.
+  equal(
+    "the original is untouched",
+    ((nbt.Items.value as { value: Record<string, { value: unknown }>[] }).value[0].Count.value),
+    5,
+  );
+
+  const renamed = setNbtValue(nbt, ["Text1"], "new");
+  equal("a top-level string writes too", renamed.Text1.value, "new");
+  equal("...leaving its siblings alone", JSON.stringify(renamed.Items), JSON.stringify(nbt.Items));
+}
+
+console.log("\n--- what it refuses ---");
+{
+  const nbt = {
+    Count: { type: "byte", value: 5 },
+    Name: { type: "string", value: "x" },
+    Items: { type: "list", value: { type: "compound", value: [{}] } },
+    Bulk: { type: "intArray", value: [1, 2] },
+  };
+  const refuses = (path: (string | number)[], value: string): string | null => {
+    try {
+      setNbtValue(nbt, path, value);
+      return null;
+    } catch (err) {
+      return err instanceof NbtEditError ? err.message : `wrong error: ${String(err)}`;
+    }
+  };
+
+  // Truncating would leave a chest quietly holding 44 diamonds instead of 300,
+  // which is worse than a refusal because nothing says it happened.
+  check("a byte out of range is refused", refuses(["Count"], "300") !== null, "accepted 300");
+  check("...and a negative one past the floor", refuses(["Count"], "-200") !== null);
+  check("a byte within range is accepted", refuses(["Count"], "127") === null);
+  check("text where a number belongs is refused", refuses(["Count"], "many") !== null);
+  check("an empty number is refused", refuses(["Count"], "  ") !== null);
+  check("an empty string is fine, though", refuses(["Name"], "") === null);
+
+  check("a container cannot be written", refuses(["Items"], "nope") !== null);
+  check("nor a bulk array", refuses(["Bulk"], "1,2,3") !== null);
+  check("nor a field that does not exist", refuses(["Nope"], "x") !== null);
+  check("nor an index past the end of a list", refuses(["Items", 9, "x"], "1") !== null);
+  check("nor an empty path", refuses([], "x") !== null);
+}
+
+// The property everything else is for: an edited value survives being written
+// to a file and read back, still typed.
+console.log("\n--- an edited value survives a round trip ---");
+{
+  const workDir = await mkdtemp(path.join(tmpdir(), "bgpt-nbt-"));
+  try {
+    const doc = createDocument({ width: 2, height: 2, length: 2, format: "sponge3" });
+    setBlock(doc, 0, 0, 0, { namespacedName: "minecraft:chest", properties: {} });
+    setBlockEntity(doc, 0, 0, 0, {
+      id: "minecraft:chest",
+      pos: [0, 0, 0],
+      nbt: {
+        Items: {
+          type: "list",
+          value: {
+            type: "compound",
+            value: [
+              { id: { type: "string", value: "minecraft:diamond" }, Count: { type: "byte", value: 1 } },
+            ],
+          },
+        },
+      },
+    });
+
+    const before = getBlockEntity(doc, 0, 0, 0)!;
+    setBlockEntity(doc, 0, 0, 0, {
+      ...before,
+      nbt: setNbtValue(before.nbt, ["Items", 0, "Count"], "64"),
+    });
+
+    const filePath = path.join(workDir, "chest.schem");
+    await saveDocument(doc, filePath, { legacyBlocksPath: null });
+    const reloaded = documentFromLoaded(await loadStructure(filePath), filePath);
+
+    const roundTripped = flattenNbt(getBlockEntity(reloaded, 0, 0, 0)!.nbt);
+    const count = roundTripped.find((f) => f.label === "Items[0].Count");
+    equal("the edited count came back", count?.value, "64");
+    equal("...still a byte", count?.type, "byte");
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }

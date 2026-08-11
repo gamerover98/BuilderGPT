@@ -52,6 +52,8 @@ export const IPC = {
   docUndo: "bgpt:doc:undo",
   docRedo: "bgpt:doc:redo",
   docInspect: "bgpt:doc:inspect",
+  /** Write one NBT leaf of a block entity. */
+  docSetNbt: "bgpt:doc:nbt:set",
   docSave: "bgpt:doc:save",
   /** Is there unsaved work from a session that ended badly? */
   docRecoveryPeek: "bgpt:doc:recovery:peek",
@@ -330,11 +332,36 @@ export interface DocumentMesh {
   sunElevation: number;
 }
 
+/**
+ * One editable scalar inside a block entity's NBT.
+ *
+ * The tag type travels with it because that is what makes writing safe: the
+ * readable rendering strips the types, and "5" alone cannot say whether it is a
+ * byte, an int or a string.
+ */
+export interface NbtFieldView {
+  /** Keys and list indices from the root, e.g. `["Items", 0, "Count"]`. */
+  path: (string | number)[];
+  label: string;
+  type: string;
+  value: string;
+  /** Containers and bulk arrays are shown but not writable. */
+  editable: boolean;
+}
+
 export interface BlockInspection {
   block: string;
   properties: Record<string, string>;
-  /** `nbt` is JSON, since the renderer only displays it. */
-  blockEntity: { id: string; nbt: string } | null;
+  /** `nbt` is JSON for display; `fields` is the same tree flattened for editing. */
+  blockEntity: { id: string; nbt: string; fields: NbtFieldView[] } | null;
+}
+
+export interface SetNbtRequest {
+  x: number;
+  y: number;
+  z: number;
+  path: (string | number)[];
+  value: string;
 }
 
 export interface EditSuccess {
@@ -479,6 +506,8 @@ export interface BgptApi {
   undo(): Promise<EditResponse>;
   redo(): Promise<EditResponse>;
   inspectBlock(x: number, y: number, z: number): Promise<InspectResponse>;
+  /** Write one NBT leaf. Undoable like any other edit. */
+  setNbtValue(request: SetNbtRequest): Promise<EditResponse>;
   saveDocument(request: SaveRequest): Promise<SaveResponse>;
   /**
    * The filesystem path behind a dropped `File`, or `""` when it has none.

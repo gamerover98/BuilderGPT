@@ -21,9 +21,13 @@
     at: { x: number; y: number; z: number } | null;
     busy: boolean;
     onchangeproperty: (name: string, value: string) => void;
+    onchangenbt: (path: (string | number)[], value: string) => void;
   }
 
-  const { inspection, at, busy, onchangeproperty }: Props = $props();
+  const { inspection, at, busy, onchangeproperty, onchangenbt }: Props = $props();
+
+  /** Raw NBT is worth showing, but not by default — it is long and wrapped. */
+  let showRaw = $state(false);
 
   /**
    * The values these properties almost always take. Offered as suggestions;
@@ -120,8 +124,38 @@
 
     {#if inspection.blockEntity}
       <div class="field">
-        <label for="nbt">{inspection.blockEntity.id} data</label>
-        <pre id="nbt">{nbtText || "(empty)"}</pre>
+        <label for="nbt-fields">{inspection.blockEntity.id} data</label>
+        {#if inspection.blockEntity.fields.length === 0}
+          <p class="hint" id="nbt-fields">This block entity carries no data.</p>
+        {:else}
+          <ul id="nbt-fields" class="props nbt">
+            {#each inspection.blockEntity.fields as field (field.label)}
+              <li>
+                <span class="key" title={`${field.label} · ${field.type}`}>
+                  {field.label}
+                  <em>{field.type}</em>
+                </span>
+                <input
+                  value={field.value}
+                  disabled={busy || !field.editable}
+                  spellcheck="false"
+                  title={field.editable ? undefined : `A ${field.type} cannot be edited here`}
+                  onchange={(event) => onchangenbt(field.path, event.currentTarget.value)}
+                />
+              </li>
+            {/each}
+          </ul>
+          <p class="hint">
+            Each value keeps its NBT type, and each change is its own undo step.
+          </p>
+        {/if}
+
+        <button class="link" onclick={() => (showRaw = !showRaw)}>
+          {showRaw ? "Hide" : "Show"} the raw tree
+        </button>
+        {#if showRaw}
+          <pre>{nbtText || "(empty)"}</pre>
+        {/if}
       </div>
     {/if}
   </fieldset>
@@ -153,6 +187,38 @@
     color: var(--text-dim);
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .nbt {
+    max-height: 240px;
+    overflow-y: auto;
+  }
+
+  /* Long paths like Items[0].tag.display.Name need the room more than the
+     value box does. */
+  .nbt li {
+    grid-template-columns: minmax(90px, 55%) 1fr;
+  }
+
+  .key em {
+    font-style: normal;
+    opacity: 0.65;
+    margin-left: 4px;
+    font-size: 10px;
+  }
+
+  button.link {
+    background: none;
+    border: none;
+    padding: 4px 0 0;
+    color: var(--accent);
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+  }
+
+  button.link:hover {
+    text-decoration: underline;
   }
 
   pre {

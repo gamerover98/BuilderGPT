@@ -887,6 +887,22 @@
     // No re-inspect here: `runDocument` already refreshes the inspected block.
   }
 
+  /**
+   * Writes one NBT leaf.
+   *
+   * `runDocument` re-inspects afterwards, which matters more here than for a
+   * block state: main coerces the text to the tag's type, so 007 comes back as
+   * 7 and the field has to show what was actually stored rather than what was
+   * typed.
+   */
+  async function changeNbtValue(path: (string | number)[], value: string): Promise<void> {
+    if (!inspectedAt) return;
+    const at = inspectedAt;
+    await runDocument("Editing block entity data", () =>
+      api().setNbtValue({ x: at.x, y: at.y, z: at.z, path: forIpc(path), value }),
+    );
+  }
+
   async function fillSelection(block: string): Promise<void> {
     if (!selection) return;
     const region = selection;
@@ -1121,6 +1137,7 @@
       at={inspectedAt}
       {busy}
       onchangeproperty={changeBlockProperty}
+      onchangenbt={changeNbtValue}
     />
 
     <ChatPanel

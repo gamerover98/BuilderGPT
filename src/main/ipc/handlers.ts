@@ -34,6 +34,7 @@ import {
   type RecoveryPeekResponse,
   type SaveRequest,
   type SaveResponse,
+  type SetNbtRequest,
 } from "../../shared/ipc.js";
 import {
   providerRequiresApiKey,
@@ -50,9 +51,11 @@ import {
   currentSession,
   documentMesh,
   documentState,
+  editBlockEntityValue,
   EditTooLargeError,
   inspect,
   newDocument,
+  NoBlockEntityError,
   NoDocumentError,
   NoSaveTargetError,
   openDocument,
@@ -61,6 +64,7 @@ import {
   saveSession,
   undoEdit,
 } from "../services/session.js";
+import { NbtEditError } from "../domain/nbt_edit.js";
 import { UnrepresentableBlocksError } from "../services/writers.js";
 import { AgentCancelledError, runAgent } from "../agent/agent.js";
 import { clearAutosave, readAutosave, restoreAutosave, startAutosave } from "../services/autosave.js";
@@ -292,6 +296,11 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     if (err instanceof SchematicFormatError || err instanceof EmptyPreviewError) {
       return { ok: false, kind: "invalid-input", message: err.message };
     }
+    if (err instanceof NbtEditError || err instanceof NoBlockEntityError) {
+      // "300 is out of range for a byte" is the whole message the user needs,
+      // and it is theirs to fix — not an io-error.
+      return { ok: false, kind: "invalid-input", message: err.message };
+    }
     return {
       ok: false,
       kind: "io-error",
@@ -366,6 +375,23 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     try {
       const session = requireSession();
       const changed = applyEdit(session, request);
+      return { ok: true, changed, state: documentState(session) };
+    } catch (err) {
+      return failure(err);
+    }
+  });
+
+  ipcMain.handle(IPC.docSetNbt, async (_event, request: SetNbtRequest): Promise<EditResponse> => {
+    try {
+      const session = requireSession();
+      const changed = editBlockEntityValue(
+        session,
+        request.x,
+        request.y,
+        request.z,
+        request.path,
+        request.value,
+      );
       return { ok: true, changed, state: documentState(session) };
     } catch (err) {
       return failure(err);

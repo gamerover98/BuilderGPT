@@ -13,17 +13,19 @@ import { tmpdir } from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { getBlock, setBlock } from "../src/main/domain/document.js";
+import { getBlock, setBlock, setBlockEntity } from "../src/main/domain/document.js";
 import {
   applyEdit,
   closeDocument,
   currentSession,
   documentMesh,
   documentState,
+  editBlockEntityValue,
   EditTooLargeError,
   inspect,
   MAX_EDIT_VOLUME,
   newDocument,
+  NoBlockEntityError,
   NoDocumentError,
   NoSaveTargetError,
   openDocument,
@@ -344,6 +346,74 @@ try {
 } finally {
   closeDocument();
   await rm(workDir, { recursive: true, force: true });
+}
+
+// --- editing a block entity through the session --------------------------------
+//
+// The inspector claims each NBT change is its own undo step. That claim is the
+// reason the edit goes through a transaction at all, so it is worth checking
+// against the real session rather than against the pure helper.
+console.log("\n--- editing block entity data ---");
+{
+  const session = newDocument({ width: 2, height: 2, length: 2 });
+  setBlock(session.doc, 0, 0, 0, { namespacedName: "minecraft:oak_sign", properties: {} });
+  setBlockEntity(session.doc, 0, 0, 0, {
+    id: "minecraft:oak_sign",
+    pos: [0, 0, 0],
+    nbt: { Text1: { type: "string", value: "before" }, Glow: { type: "byte", value: 0 } },
+  });
+  session.history.undoStack.length = 0;
+  session.history.redoStack.length = 0;
+  session.history.savedDepth = 0;
+
+  const field = (label: string) =>
+    inspect(session, 0, 0, 0).blockEntity?.fields.find((f) => f.label === label);
+
+  equal("the inspector offers the sign's text", field("Text1")?.value, "before");
+
+  editBlockEntityValue(session, 0, 0, 0, ["Text1"], "after");
+  equal("editing it changes what the inspector reports", field("Text1")?.value, "after");
+  equal("...as exactly one undo step", session.history.undoStack.length, 1);
+  check(
+    "...labelled for the menu",
+    session.history.undoStack[0]?.label.includes("Text1"),
+    session.history.undoStack[0]?.label,
+  );
+
+  undoEdit(session);
+  equal("undo puts the old text back", field("Text1")?.value, "before");
+  equal("...and the tag is still a string", field("Text1")?.type, "string");
+
+  redoEdit(session);
+  equal("redo reapplies it", field("Text1")?.value, "after");
+
+  // A second field must not disturb the first.
+  editBlockEntityValue(session, 0, 0, 0, ["Glow"], "1");
+  equal("a second field writes independently", field("Glow")?.value, "1");
+  equal("...leaving the first alone", field("Text1")?.value, "after");
+
+  // A refusal must not leave a half-step on the stack, or CTRL+Z would undo
+  // something the user never saw happen.
+  const depth = session.history.undoStack.length;
+  let refused = false;
+  try {
+    editBlockEntityValue(session, 0, 0, 0, ["Glow"], "not a number");
+  } catch {
+    refused = true;
+  }
+  check("a value that cannot be coerced is refused", refused);
+  equal("...leaving the data as it was", field("Glow")?.value, "1");
+  equal("...and adding no undo step", session.history.undoStack.length, depth);
+
+  // Nowhere to write is its own answer, not a crash.
+  let missing = false;
+  try {
+    editBlockEntityValue(session, 1, 1, 1, ["Text1"], "x");
+  } catch (err) {
+    missing = err instanceof NoBlockEntityError;
+  }
+  check("a block with no block entity is refused by name", missing);
+  closeDocument();
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

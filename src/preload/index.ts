@@ -34,6 +34,7 @@ import {
   type SaveRequest,
   type SaveResponse,
   type SetKeyRequest,
+  type SetNbtRequest,
 } from "../shared/ipc.js";
 import type { KeyStorageStatus, Provider, Settings } from "../shared/settings.js";
 
@@ -74,6 +75,8 @@ const api: BgptApi = {
   redo: () => ipcRenderer.invoke(IPC.docRedo) as Promise<EditResponse>,
   inspectBlock: (x: number, y: number, z: number) =>
     ipcRenderer.invoke(IPC.docInspect, { x, y, z }) as Promise<InspectResponse>,
+  setNbtValue: (request: SetNbtRequest) =>
+    ipcRenderer.invoke(IPC.docSetNbt, request) as Promise<EditResponse>,
   saveDocument: (request: SaveRequest) =>
     ipcRenderer.invoke(IPC.docSave, request) as Promise<SaveResponse>,
   /**

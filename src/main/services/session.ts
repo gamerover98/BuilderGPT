@@ -47,6 +47,7 @@ import {
 } from "../domain/history.js";
 import type { ModelMessage } from "ai";
 
+import { flattenNbt, setNbtValue } from "../domain/nbt_edit.js";
 import { loadStructure } from "../pipeline/loader.js";
 import type { PaletteEntry } from "../pipeline/types.js";
 import { buildDocumentPreview, type DocumentPreviewOptions } from "./preview.js";
@@ -276,10 +277,56 @@ export function inspect(session: DocumentSession, x: number, y: number, z: numbe
   return {
     block: entry.namespacedName,
     properties: { ...entry.properties },
-    // Serialised rather than handed over raw: NBT is a tree of tagged values
-    // and the renderer only ever displays it.
-    blockEntity: blockEntity === null ? null : { id: blockEntity.id, nbt: JSON.stringify(blockEntity.nbt) },
+    blockEntity:
+      blockEntity === null
+        ? null
+        : {
+            id: blockEntity.id,
+            // Serialised rather than handed over raw: NBT is a tree of tagged
+            // values and the renderer displays it whole.
+            nbt: JSON.stringify(blockEntity.nbt),
+            // ...and flattened, because editing needs the tag types, which the
+            // readable rendering deliberately throws away.
+            fields: flattenNbt(blockEntity.nbt),
+          },
   };
+}
+
+export class NoBlockEntityError extends Error {
+  constructor() {
+    super("There is no block entity there to edit");
+    this.name = "NoBlockEntityError";
+  }
+}
+
+/**
+ * Writes one NBT leaf, as one undoable step.
+ *
+ * Through the transaction like every other edit, so a mistyped sign is a
+ * CTRL+Z rather than a reload — `setBlockEntity` records the whole record
+ * either side, which is what makes that exact.
+ */
+export function editBlockEntityValue(
+  session: DocumentSession,
+  x: number,
+  y: number,
+  z: number,
+  path: readonly (string | number)[],
+  value: string,
+): number {
+  const existing = session.doc.blockEntities.get(`${x},${y},${z}`) ?? null;
+  if (existing === null) {
+    throw new NoBlockEntityError();
+  }
+  // Coerced before the transaction opens: `setNbtValue` throws on anything it
+  // cannot represent, and a transaction that opens only to roll back would
+  // still have bumped the revision and thrown away the redo stack.
+  const nbt = setNbtValue(existing.nbt, path, value);
+  const label = `Edit ${existing.id} ${path.join(".")}`;
+  return runTransaction(session.doc, session.history, label, (tx) => {
+    tx.setBlockEntity(x, y, z, { ...existing, nbt });
+    return 1;
+  });
 }
 
 // ---------------------------------------------------------------------------

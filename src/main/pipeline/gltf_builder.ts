@@ -22,23 +22,70 @@ const JSON_CHUNK_TYPE = 0x4e4f534a; // "JSON"
 const BIN_CHUNK_TYPE = 0x004e4942; // "BIN\0"
 
 /**
- * Ported from `_append_with_padding` (gltf_builder.py:16-23). Appends `data`
- * to `target`, then pads with zero bytes to the next 4-byte boundary — glTF
- * binary chunks (and the overall GLB container) must be 4-byte aligned.
- * Padding math `(4 - (length % 4)) % 4` reproduced exactly, per the task
- * brief's explicit instruction to match it verbatim.
+ * Ported from `_append_with_padding` (gltf_builder.py:16-23). Records `data`
+ * as the next piece of the binary chunk, plus zero padding to the next 4-byte
+ * boundary — glTF binary chunks (and the overall GLB container) must be 4-byte
+ * aligned. Padding math `(4 - (length % 4)) % 4` reproduced exactly.
+ *
+ * The pieces are kept as typed arrays and joined once, at the end. This began
+ * as a `number[]` appended to one byte at a time, which is how the Python read,
+ * and it had two problems that only appear at scale:
+ *
+ * - **It could not build a large schematic at all.** V8 caps a plain array's
+ *   backing store at 134,217,727 elements, so a binary chunk past ~128 MB threw
+ *   `RangeError: Invalid array length` — measured, a 96x96x96 structure is
+ *   enough to hit it, and the preview died rather than degrading.
+ * - It was the single most expensive step in the pipeline. At 64x64x64 the
+ *   byte-by-byte append cost 1173 ms of a 1952 ms build, more than the culling
+ *   and meshing put together, because every byte was a boxed array slot.
+ *
+ * `Uint8Array.set` is a memcpy and has no such ceiling.
  */
-function appendWithPadding(target: number[], data: Uint8Array): [offset: number, length: number] {
-  const offset = target.length;
-  const length = data.length;
-  for (let i = 0; i < length; i++) {
-    target.push(data[i]);
+function appendWithPadding(target: Uint8Array[], data: Uint8Array): [offset: number, length: number] {
+  // Summed rather than tracked: there are five pieces, so this is cheaper than
+  // another variable to keep in step with the array.
+  const offset = byteLength(target);
+  target.push(data);
+  const padding = (4 - (data.length % 4)) % 4;
+  if (padding > 0) {
+    target.push(new Uint8Array(padding));
   }
-  const padding = (4 - (length % 4)) % 4;
-  for (let i = 0; i < padding; i++) {
-    target.push(0x00);
+  return [offset, data.length];
+}
+
+function byteLength(pieces: readonly Uint8Array[]): number {
+  let total = 0;
+  for (const piece of pieces) {
+    total += piece.length;
   }
-  return [offset, length];
+  return total;
+}
+
+function concatBytes(pieces: readonly Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(byteLength(pieces));
+  let cursor = 0;
+  for (const piece of pieces) {
+    out.set(piece, cursor);
+    cursor += piece.length;
+  }
+  return out;
+}
+
+/**
+ * Pads to the next 4-byte boundary with `fill`.
+ *
+ * The two chunk kinds pad with different bytes: glTF requires the JSON chunk to
+ * be padded with spaces and the binary chunk with zeros.
+ */
+function padTo4(data: Uint8Array, fill: number): Uint8Array {
+  const padding = (4 - (data.length % 4)) % 4;
+  if (padding === 0) {
+    return data;
+  }
+  const out = new Uint8Array(data.length + padding);
+  out.set(data, 0);
+  out.fill(fill, data.length);
+  return out;
 }
 
 /**
@@ -132,22 +179,16 @@ export function meshToGlb(mesh: MeshBuffers, atlas: AtlasResult): GLBResult {
       accessors: [],
       materials: [],
     };
-    const jsonStr = JSON.stringify(empty);
-    let jsonBytes = Array.from(Buffer.from(jsonStr, "utf-8"));
-    const jsonPadding = (4 - (jsonBytes.length % 4)) % 4;
-    // Source pads JSON chunks with ASCII space (0x20), per glTF spec (JSON
-    // chunk padding must use space, unlike BIN chunk which uses 0x00).
-    for (let i = 0; i < jsonPadding; i++) {
-      jsonBytes.push(0x20);
-    }
-    const jsonBytesArr = Uint8Array.from(jsonBytes);
+    // Padded with ASCII space (0x20), per the glTF spec: the JSON chunk pads
+    // with spaces, unlike the BIN chunk's zeros.
+    const jsonBytesArr = padTo4(Buffer.from(JSON.stringify(empty), "utf-8"), 0x20);
     const header = packUint32x3LE(GLTF_HEADER_MAGIC, GLTF_VERSION, 12 + 8 + jsonBytesArr.length);
     const jsonChunkHeader = packUint32x2LE(jsonBytesArr.length, JSON_CHUNK_TYPE);
-    const glbBytes = new Uint8Array(header.length + jsonChunkHeader.length + jsonBytesArr.length);
-    glbBytes.set(header, 0);
-    glbBytes.set(jsonChunkHeader, header.length);
-    glbBytes.set(jsonBytesArr, header.length + jsonChunkHeader.length);
-    return { glbBytes, center: [0, 0, 0], size: [0, 0, 0] };
+    return {
+      glbBytes: concatBytes([header, jsonChunkHeader, jsonBytesArr]),
+      center: [0, 0, 0],
+      size: [0, 0, 0],
+    };
   }
 
   const positions = mesh.positions; // already Float32Array per MeshBuffers
@@ -157,7 +198,7 @@ export function meshToGlb(mesh: MeshBuffers, atlas: AtlasResult): GLBResult {
 
   const atlasBytes = encodeRgbaImageToPng(atlas.image);
 
-  const binChunk: number[] = [];
+  const binChunk: Uint8Array[] = [];
   const bufferViews: Array<Record<string, unknown>> = [];
   const accessors: Array<Record<string, unknown>> = [];
 
@@ -288,39 +329,21 @@ export function meshToGlb(mesh: MeshBuffers, atlas: AtlasResult): GLBResult {
     textures: [{ sampler: 0, source: 0 }],
   };
 
-  const jsonStr = JSON.stringify(gltf);
-  const jsonBytesArrInit = Array.from(Buffer.from(jsonStr, "utf-8"));
-  const jsonPadding = (4 - (jsonBytesArrInit.length % 4)) % 4;
-  if (jsonPadding) {
-    for (let i = 0; i < jsonPadding; i++) {
-      jsonBytesArrInit.push(0x20);
-    }
-  }
-  const jsonBytes = Uint8Array.from(jsonBytesArrInit);
+  const jsonBytes = padTo4(Buffer.from(JSON.stringify(gltf), "utf-8"), 0x20);
+  const binChunkBytes = concatBytes(binChunk);
 
-  const totalLength = 12 + 8 + jsonBytes.length + 8 + binChunk.length;
+  const totalLength = 12 + 8 + jsonBytes.length + 8 + binChunkBytes.length;
   const header = packUint32x3LE(GLTF_HEADER_MAGIC, GLTF_VERSION, totalLength);
   const jsonChunkHeader = packUint32x2LE(jsonBytes.length, JSON_CHUNK_TYPE);
-  const binChunkBytes = Uint8Array.from(binChunk);
   const binChunkHeader = packUint32x2LE(binChunkBytes.length, BIN_CHUNK_TYPE);
 
-  const glbBytes = new Uint8Array(
-    header.length +
-      jsonChunkHeader.length +
-      jsonBytes.length +
-      binChunkHeader.length +
-      binChunkBytes.length,
-  );
-  let cursor = 0;
-  glbBytes.set(header, cursor);
-  cursor += header.length;
-  glbBytes.set(jsonChunkHeader, cursor);
-  cursor += jsonChunkHeader.length;
-  glbBytes.set(jsonBytes, cursor);
-  cursor += jsonBytes.length;
-  glbBytes.set(binChunkHeader, cursor);
-  cursor += binChunkHeader.length;
-  glbBytes.set(binChunkBytes, cursor);
+  const glbBytes = concatBytes([
+    header,
+    jsonChunkHeader,
+    jsonBytes,
+    binChunkHeader,
+    binChunkBytes,
+  ]);
 
   const posMinMaxFinal = componentMinMax(positions, 3);
   const center: [number, number, number] = [

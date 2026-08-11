@@ -89,5 +89,54 @@ console.log("\n--- schem2glb ---");
   console.log(`  (GLB: ${glb.glbBytes.length} bytes, center=${JSON.stringify(glb.center)}, size=${JSON.stringify(glb.size)})`);
 }
 
+// --- Scenario 3: a GLB too big for a plain array ---
+//
+// `meshToGlb` used to assemble its binary chunk by pushing one byte at a time
+// into a `number[]`. V8 caps a plain array's backing store at 134,217,727
+// elements, so past ~128 MB of geometry it threw `RangeError: Invalid array
+// length` and the preview died outright — measured, a 96x96x96 structure was
+// enough. The buffers are built directly rather than by running the pipeline,
+// because the point is the assembly step and culling a real structure that
+// large would take seconds.
+console.log("\n--- a GLB larger than a plain array can hold ---");
+{
+  const vertices = 4_000_000; // ~145 MB of binary chunk, comfortably over the cap
+  const quads = vertices / 4;
+  const positions = new Float32Array(vertices * 3);
+  const normals = new Float32Array(vertices * 3);
+  const uvs = new Float32Array(vertices * 2);
+  const indices = new Uint32Array(quads * 6);
+  // Real-ish values: a zero-size bounding box would take the empty-mesh path
+  // and never reach the assembly this is here to exercise.
+  for (let i = 0; i < vertices; i += 1) {
+    positions[i * 3] = i % 512;
+    positions[i * 3 + 1] = (i >> 9) % 512;
+    positions[i * 3 + 2] = (i >> 18) % 512;
+    normals[i * 3 + 1] = 1;
+  }
+  for (let q = 0; q < quads; q += 1) {
+    const v = q * 4;
+    indices.set([v, v + 2, v + 1, v, v + 3, v + 2], q * 6);
+  }
+
+  const atlas = buildAtlas((await ModelBaker.create(null)).textures);
+  const big = meshToGlb({ positions, normals, uvs, indices }, atlas);
+  const magic = Buffer.from(big.glbBytes.buffer, big.glbBytes.byteOffset, 4).toString("ascii");
+  check("a 145 MB GLB is produced rather than throwing", magic === "glTF");
+  check(
+    "...and is larger than the plain-array ceiling that used to stop it",
+    big.glbBytes.length > 134_217_727,
+    `${(big.glbBytes.length / 1048576).toFixed(0)} MB`,
+  );
+  // The GLB container declares its own total length in the header; if the
+  // assembly miscounted, every reader would reject the file.
+  const declared = new DataView(
+    big.glbBytes.buffer,
+    big.glbBytes.byteOffset,
+    big.glbBytes.length,
+  ).getUint32(8, true);
+  check("the header's declared length matches the bytes emitted", declared === big.glbBytes.length);
+}
+
 console.log(`\n=== ${failures === 0 ? "PASS" : "FAIL"}: smoke test ${failures === 0 ? "succeeded" : `(${failures} check(s) failed)`} ===`);
 process.exit(failures === 0 ? 0 : 1);

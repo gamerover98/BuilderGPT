@@ -34,6 +34,7 @@
     type ProgressEvent,
     type RecoveryOffer,
     type RegionSpec,
+    type TransformRequest,
   } from "../../shared/ipc.js";
   import type { SchematicFormat } from "../../shared/schematic.js";
   import {
@@ -476,6 +477,38 @@
       run: selectAll,
     },
     {
+      id: "rotate-90",
+      title: "Rotate the selection 90°",
+      group: "Edit",
+      keywords: "turn quarter clockwise",
+      enabled: !busy && selection !== null,
+      run: () => void transformSelection({ kind: "rotate", steps: 1 }),
+    },
+    {
+      id: "rotate-180",
+      title: "Rotate the selection 180°",
+      group: "Edit",
+      keywords: "turn half",
+      enabled: !busy && selection !== null,
+      run: () => void transformSelection({ kind: "rotate", steps: 2 }),
+    },
+    {
+      id: "mirror-x",
+      title: "Mirror the selection east to west",
+      group: "Edit",
+      keywords: "flip reflect x",
+      enabled: !busy && selection !== null,
+      run: () => void transformSelection({ kind: "mirror", axis: "x" }),
+    },
+    {
+      id: "mirror-z",
+      title: "Mirror the selection north to south",
+      group: "Edit",
+      keywords: "flip reflect z",
+      enabled: !busy && selection !== null,
+      run: () => void transformSelection({ kind: "mirror", axis: "z" }),
+    },
+    {
       id: "clear-selection",
       title: "Clear the selection",
       group: "Edit",
@@ -903,6 +936,22 @@
     );
   }
 
+  /**
+   * Turns or reflects the selection.
+   *
+   * The selection itself is left alone: a quarter turn needs a square
+   * footprint, so the box the user drew still describes exactly the region that
+   * moved, and clearing it would take away the obvious way to turn it back.
+   */
+  async function transformSelection(transform: TransformRequest["transform"]): Promise<void> {
+    if (!selection) return;
+    const region = selection;
+    const changed = await runDocument("Transforming the selection", () =>
+      api().transformRegion({ region: forIpc(region), transform }),
+    );
+    reportChange(changed);
+  }
+
   async function fillSelection(block: string): Promise<void> {
     if (!selection) return;
     const region = selection;
@@ -1125,6 +1174,7 @@
       onredo={() => runDocument("Redoing", () => api().redo())}
       onfill={fillSelection}
       onreplace={replaceInSelection}
+      ontransform={transformSelection}
       onclearselection={() => {
         selection = null;
         anchor = null;

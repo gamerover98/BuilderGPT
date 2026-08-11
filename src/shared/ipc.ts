@@ -54,6 +54,8 @@ export const IPC = {
   docInspect: "bgpt:doc:inspect",
   /** Write one NBT leaf of a block entity. */
   docSetNbt: "bgpt:doc:nbt:set",
+  /** Turn or reflect the selection, block states with it. */
+  docTransform: "bgpt:doc:transform",
   docSave: "bgpt:doc:save",
   /** Is there unsaved work from a session that ended badly? */
   docRecoveryPeek: "bgpt:doc:recovery:peek",
@@ -356,6 +358,15 @@ export interface BlockInspection {
   blockEntity: { id: string; nbt: string; fields: NbtFieldView[] } | null;
 }
 
+/**
+ * Turning or reflecting a region. A quarter turn needs a square footprint and
+ * is refused otherwise rather than cropped.
+ */
+export interface TransformRequest {
+  region: RegionSpec;
+  transform: { kind: "rotate"; steps: 0 | 1 | 2 | 3 } | { kind: "mirror"; axis: "x" | "z" };
+}
+
 export interface SetNbtRequest {
   x: number;
   y: number;
@@ -508,6 +519,8 @@ export interface BgptApi {
   inspectBlock(x: number, y: number, z: number): Promise<InspectResponse>;
   /** Write one NBT leaf. Undoable like any other edit. */
   setNbtValue(request: SetNbtRequest): Promise<EditResponse>;
+  /** Turn or reflect the selection. Undoable as one step. */
+  transformRegion(request: TransformRequest): Promise<EditResponse>;
   saveDocument(request: SaveRequest): Promise<SaveResponse>;
   /**
    * The filesystem path behind a dropped `File`, or `""` when it has none.

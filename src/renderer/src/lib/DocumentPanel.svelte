@@ -14,7 +14,7 @@
    * store subscription to it (`store_rune_conflict`), so `fromBlock` below
    * would silently stop being reactive.
    */
-  import type { DocumentState, RegionSpec } from "../../../shared/ipc.js";
+  import type { DocumentState, RegionSpec, TransformRequest } from "../../../shared/ipc.js";
   import { SCHEMATIC_FORMAT_LABEL, type SchematicFormat } from "../../../shared/schematic.js";
   import BlockPicker from "./BlockPicker.svelte";
 
@@ -41,6 +41,7 @@
     onredo: () => void;
     onfill: (block: string) => void;
     onreplace: (from: string, to: string) => void;
+    ontransform: (transform: TransformRequest["transform"]) => void;
     onclearselection: () => void;
     onselectall: () => void;
   }
@@ -61,6 +62,7 @@
     onredo,
     onfill,
     onreplace,
+    ontransform,
     onclearselection,
     onselectall,
   }: Props = $props();
@@ -185,6 +187,36 @@
       <div class="buttons">
         <button onclick={onselectall} disabled={busy}>Select all</button>
         <button onclick={onclearselection} disabled={busy || selection === null}>Clear</button>
+      </div>
+      <div class="buttons">
+        <button
+          onclick={() => ontransform({ kind: "rotate", steps: 1 })}
+          disabled={busy || selection === null}
+          title="Turn the selection a quarter clockwise — needs a square footprint"
+        >
+          ⟳ 90°
+        </button>
+        <button
+          onclick={() => ontransform({ kind: "rotate", steps: 2 })}
+          disabled={busy || selection === null}
+          title="Turn the selection halfway round"
+        >
+          180°
+        </button>
+        <button
+          onclick={() => ontransform({ kind: "mirror", axis: "x" })}
+          disabled={busy || selection === null}
+          title="Reflect the selection east to west"
+        >
+          Flip X
+        </button>
+        <button
+          onclick={() => ontransform({ kind: "mirror", axis: "z" })}
+          disabled={busy || selection === null}
+          title="Reflect the selection north to south"
+        >
+          Flip Z
+        </button>
       </div>
     </div>
 

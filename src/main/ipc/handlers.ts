@@ -35,6 +35,7 @@ import {
   type SaveRequest,
   type SaveResponse,
   type SetNbtRequest,
+  type TransformRequest,
 } from "../../shared/ipc.js";
 import {
   providerRequiresApiKey,
@@ -62,6 +63,8 @@ import {
   redoEdit,
   requireSession,
   saveSession,
+  NotSquareError,
+  transformRegion,
   undoEdit,
 } from "../services/session.js";
 import { NbtEditError } from "../domain/nbt_edit.js";
@@ -296,6 +299,9 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     if (err instanceof SchematicFormatError || err instanceof EmptyPreviewError) {
       return { ok: false, kind: "invalid-input", message: err.message };
     }
+    if (err instanceof NotSquareError) {
+      return { ok: false, kind: "invalid-input", message: err.message };
+    }
     if (err instanceof NbtEditError || err instanceof NoBlockEntityError) {
       // "300 is out of range for a byte" is the whole message the user needs,
       // and it is theirs to fix — not an io-error.
@@ -392,6 +398,16 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         request.path,
         request.value,
       );
+      return { ok: true, changed, state: documentState(session) };
+    } catch (err) {
+      return failure(err);
+    }
+  });
+
+  ipcMain.handle(IPC.docTransform, async (_event, request: TransformRequest): Promise<EditResponse> => {
+    try {
+      const session = requireSession();
+      const changed = transformRegion(session, request.region, request.transform);
       return { ok: true, changed, state: documentState(session) };
     } catch (err) {
       return failure(err);

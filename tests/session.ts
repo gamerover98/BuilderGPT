@@ -28,10 +28,12 @@ import {
   NoBlockEntityError,
   NoDocumentError,
   NoSaveTargetError,
+  NotSquareError,
   openDocument,
   redoEdit,
   requireSession,
   saveSession,
+  transformRegion,
   undoEdit,
 } from "../src/main/services/session.js";
 import { clearBakerCache } from "../src/main/services/preview.js";
@@ -413,6 +415,128 @@ console.log("\n--- editing block entity data ---");
     missing = err instanceof NoBlockEntityError;
   }
   check("a block with no block entity is refused by name", missing);
+  closeDocument();
+}
+
+// --- rotating and mirroring ----------------------------------------------------
+//
+// Moving the voxels is the half that looks finished. The half that decides
+// whether the build survives is the block states: a staircase turned a quarter
+// without its `facing` following runs into a wall.
+console.log("\n--- turning a region ---");
+{
+  const session = newDocument({ width: 4, height: 1, length: 4 });
+  const stairs = (facing: string) => ({
+    namespacedName: "minecraft:oak_stairs",
+    properties: { facing, half: "bottom", shape: "straight" },
+  });
+  setBlock(session.doc, 0, 0, 0, stairs("north"));
+  setBlock(session.doc, 3, 0, 0, { namespacedName: "minecraft:oak_log", properties: { axis: "x" } });
+  session.history.undoStack.length = 0;
+  session.history.savedDepth = 0;
+
+  const whole = { minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 0, maxZ: 3 };
+  const at = (x: number, z: number) => getBlock(session.doc, x, 0, z);
+  const snapshot = () => {
+    const out: string[] = [];
+    for (let x = 0; x < 4; x += 1)
+      for (let z = 0; z < 4; z += 1) {
+        const b = at(x, z);
+        out.push(`${x},${z}:${b.namespacedName}${JSON.stringify(b.properties)}`);
+      }
+    return out.join("|");
+  };
+  const before = snapshot();
+
+  transformRegion(session, whole, { kind: "rotate", steps: 1 });
+
+  // The mesher's convention: one step sends (x, z) -> (size - 1 - z, x), and
+  // east to south. A north-facing stair therefore becomes east-facing.
+  equal("the block moved where the mesher says it should", at(3, 0).namespacedName, "minecraft:oak_stairs");
+  equal("...and its facing turned with it", at(3, 0).properties.facing, "east");
+  equal("...while a log's axis swapped", at(3, 3).properties.axis, "z");
+  equal("...leaving where it came from empty", at(0, 0).namespacedName, "minecraft:air");
+  equal("the whole turn is one undo step", session.history.undoStack.length, 1);
+
+  // The property that catches almost any mistake at once.
+  transformRegion(session, whole, { kind: "rotate", steps: 1 });
+  transformRegion(session, whole, { kind: "rotate", steps: 1 });
+  transformRegion(session, whole, { kind: "rotate", steps: 1 });
+  equal("four quarter turns return everything exactly as it was", snapshot(), before);
+
+  undoEdit(session);
+  undoEdit(session);
+  undoEdit(session);
+  undoEdit(session);
+  equal("...and so does undoing all four", snapshot(), before);
+}
+
+console.log("\n--- mirroring a region ---");
+{
+  const session = newDocument({ width: 4, height: 1, length: 4 });
+  setBlock(session.doc, 0, 0, 1, {
+    namespacedName: "minecraft:oak_stairs",
+    properties: { facing: "east", shape: "inner_left" },
+  });
+  setBlock(session.doc, 1, 0, 0, {
+    namespacedName: "minecraft:oak_door",
+    properties: { facing: "north", hinge: "left" },
+  });
+  session.history.undoStack.length = 0;
+
+  const whole = { minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 0, maxZ: 3 };
+  const at = (x: number, z: number) => getBlock(session.doc, x, 0, z);
+
+  transformRegion(session, whole, { kind: "mirror", axis: "x" });
+  equal("the block reflected across x", at(3, 1).namespacedName, "minecraft:oak_stairs");
+  equal("...and east became west", at(3, 1).properties.facing, "west");
+  // A reflection is what turns a left-hand staircase into a right-hand one.
+  equal("...and the corner changed hand", at(3, 1).properties.shape, "inner_right");
+  equal("a door's hinge changed hand too", at(2, 0).properties.hinge, "right");
+  equal("...while a north-facing door still faces north", at(2, 0).properties.facing, "north");
+
+  // A mirror is its own inverse, which is the cheapest check there is.
+  const mirrored = at(3, 1).properties.facing;
+  transformRegion(session, whole, { kind: "mirror", axis: "x" });
+  equal("mirroring twice restores the facing", at(0, 1).properties.facing, "east");
+  equal("...and the shape", at(0, 1).properties.shape, "inner_left");
+  check("...having actually changed it in between", mirrored === "west");
+}
+
+console.log("\n--- what a turn refuses, and what it carries ---");
+{
+  const session = newDocument({ width: 6, height: 1, length: 3 });
+  const oblong = { minX: 0, minY: 0, minZ: 0, maxX: 5, maxY: 0, maxZ: 2 };
+
+  let refused = false;
+  try {
+    transformRegion(session, oblong, { kind: "rotate", steps: 1 });
+  } catch (err) {
+    refused = err instanceof NotSquareError;
+  }
+  check("a quarter turn of an oblong is refused by name", refused);
+  equal("...leaving no undo step behind", session.history.undoStack.length, 0);
+
+  // A half turn maps the box onto itself whatever its shape, so it is allowed.
+  setBlock(session.doc, 0, 0, 0, { namespacedName: "minecraft:stone", properties: {} });
+  transformRegion(session, oblong, { kind: "rotate", steps: 2 });
+  equal("a half turn of the same oblong is fine", getBlock(session.doc, 5, 0, 2).namespacedName, "minecraft:stone");
+
+  // A chest that moves must take its contents with it, and say where it is now.
+  const chest = newDocument({ width: 2, height: 1, length: 2 });
+  setBlock(chest.doc, 0, 0, 0, { namespacedName: "minecraft:chest", properties: { facing: "north" } });
+  setBlockEntity(chest.doc, 0, 0, 0, {
+    id: "minecraft:chest",
+    pos: [0, 0, 0],
+    nbt: { Loot: { type: "string", value: "diamonds" } },
+  });
+  transformRegion(chest, { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 1 }, { kind: "rotate", steps: 1 });
+
+  const moved = chest.doc.blockEntities.get("1,0,0") ?? null;
+  check("the chest's block entity moved with it", moved !== null);
+  equal("...keeping its contents", JSON.stringify(moved?.nbt), JSON.stringify({ Loot: { type: "string", value: "diamonds" } }));
+  equal("...and knowing where it now is", moved?.pos, [1, 0, 0]);
+  check("...leaving none behind", (chest.doc.blockEntities.get("0,0,0") ?? null) === null);
   closeDocument();
 }
 

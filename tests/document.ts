@@ -39,6 +39,7 @@ import {
   voxelIndex,
 } from "../src/main/domain/document.js";
 import { flattenNbt, NbtEditError, setNbtValue } from "../src/main/domain/nbt_edit.js";
+import { mirrorProperties, rotateProperties } from "../src/main/domain/transform.js";
 import { loadStructure } from "../src/main/pipeline/loader.js";
 import { saveDocument } from "../src/main/services/writers.js";
 import { paletteEntryCacheKey, type PaletteEntry } from "../src/main/pipeline/types.js";
@@ -461,6 +462,93 @@ console.log("\n--- an edited value survives a round trip ---");
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }
+}
+
+// --- orientation under a transform ---------------------------------------------
+//
+// A quarter turn here is the mesher's: east becomes south.
+console.log("\n--- block states follow a rotation ---");
+{
+  const r = (props: Record<string, string>, steps: 0 | 1 | 2 | 3) => rotateProperties(props, steps);
+
+  equal("east becomes south", r({ facing: "east" }, 1).facing, "south");
+  equal("...and the cycle closes", r({ facing: "north" }, 1).facing, "east");
+  equal("a half turn is the opposite side", r({ facing: "north" }, 2).facing, "south");
+  equal("up is not a compass direction", r({ facing: "up" }, 1).facing, "up");
+
+  equal("a log's axis swaps on a quarter turn", r({ axis: "x" }, 1).axis, "z");
+  equal("...but not on a half turn, which maps each axis onto itself", r({ axis: "x" }, 2).axis, "x");
+  equal("...and the turning axis is never touched", r({ axis: "y" }, 1).axis, "y");
+
+  // Signs and banners use a 16-step dial where 0 is south and it counts up
+  // through west; a quarter turn is four steps of it.
+  equal("the sign dial turns with everything else", r({ rotation: "0" }, 1).rotation, "4");
+  equal("...and wraps", r({ rotation: "14" }, 1).rotation, "2");
+
+  // A fence's connections are one flag per side, so they move rather than
+  // change value.
+  const fence = r({ north: "true", east: "false", south: "false", west: "false" }, 1);
+  equal("a fence's north connection moves to east", fence.east, "true");
+  equal("...leaving north as it found it", fence.north, "false");
+
+  // Left and right are relative to `facing`, which is turning with them.
+  equal("a stair's corner is unchanged by a turn", r({ shape: "inner_left" }, 1).shape, "inner_left");
+  equal("...and so is a door's hinge", r({ hinge: "left" }, 1).hinge, "left");
+
+  equal("a rail's straight run swaps", r({ shape: "north_south" }, 1).shape, "east_west");
+  equal("...its climb turns", r({ shape: "ascending_east" }, 1).shape, "ascending_south");
+  equal("...and its corner turns too", r({ shape: "south_east" }, 1).shape, "south_west");
+
+  equal("properties that name no direction are carried across", r({ half: "top", waterlogged: "true" }, 1), {
+    half: "top",
+    waterlogged: "true",
+  });
+
+  // Four quarter turns are the identity, which catches a table that is right
+  // in one direction and wrong in the other.
+  const varied = {
+    facing: "north",
+    axis: "x",
+    rotation: "7",
+    shape: "ascending_west",
+    north: "true",
+    east: "false",
+  };
+  let turned = { ...varied };
+  for (let i = 0; i < 4; i += 1) turned = rotateProperties(turned, 1);
+  equal("four quarter turns return every property to itself", turned, varied);
+}
+
+console.log("\n--- block states follow a mirror ---");
+{
+  const m = mirrorProperties;
+
+  equal("mirroring x swaps east and west", m({ facing: "east" }, "x").facing, "west");
+  equal("...and leaves north alone", m({ facing: "north" }, "x").facing, "north");
+  equal("mirroring z swaps north and south", m({ facing: "north" }, "z").facing, "south");
+
+  // A reflection has no effect on which way an axis lies.
+  equal("an axis is unmoved by a mirror", m({ axis: "x" }, "x").axis, "x");
+
+  // The dial: mirroring x fixes south (0) and north (8), swapping east and west.
+  equal("the dial's south is a fixed point of an x mirror", m({ rotation: "0" }, "x").rotation, "0");
+  equal("...and east becomes west", m({ rotation: "12" }, "x").rotation, "4");
+  equal("mirroring z fixes west instead", m({ rotation: "4" }, "z").rotation, "4");
+
+  // A reflection is what turns a left-hand staircase into a right-hand one.
+  equal("a stair's corner changes hand", m({ shape: "inner_left" }, "x").shape, "inner_right");
+  equal("...as does a door's hinge", m({ hinge: "left" }, "x").hinge, "right");
+
+  const fence = m({ north: "true", east: "true", south: "false", west: "false" }, "x");
+  equal("a fence's east connection becomes west", fence.west, "true");
+  equal("...while north stays north", fence.north, "true");
+
+  equal("a rail corner reflects", m({ shape: "south_east" }, "x").shape, "south_west");
+
+  // A mirror is its own inverse.
+  const varied = { facing: "east", rotation: "3", shape: "outer_left", hinge: "right", north: "true" };
+  equal("mirroring twice is the identity", m(m(varied, "x"), "x"), varied);
+  equal("...on the other axis too", m(m(varied, "z"), "z"), varied);
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

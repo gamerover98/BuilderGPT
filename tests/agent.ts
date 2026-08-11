@@ -14,7 +14,7 @@ import { MockLanguageModelV3 } from "ai/test";
 import { AgentCancelledError, runAgent } from "../src/main/agent/agent.js";
 import { LlmError } from "../src/main/services/llm.js";
 import { getBlock, setBlock, type SchematicDocument } from "../src/main/domain/document.js";
-import { canUndo, undo } from "../src/main/domain/history.js";
+import { canUndo, runTransaction, undo } from "../src/main/domain/history.js";
 import { clearConversation, newDocument, type DocumentSession } from "../src/main/services/session.js";
 
 let failures = 0;
@@ -762,6 +762,150 @@ console.log("\n--- a run nobody stops is unaffected ---");
   controller.abort();
   equal("a late stop does not undo it", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:stone");
   equal("...nor discard the undo step", session.history.undoStack.length, 1);
+}
+
+// --- what it actually did -----------------------------------------------------
+//
+// "1,247 blocks changed" does not say whether the user's build survived. The
+// summary is the receipt, and the property that makes it worth trusting is that
+// it is read from the same deltas undo replays — so it cannot claim something
+// undo would not put back.
+console.log("\n--- the run reports what it took and what it laid down ---");
+{
+  const session = seeded();
+  const result = await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "pave over the floor",
+    modelOverride: scriptedModel([
+      { kind: "tool", toolName: "replace_blocks", input: { from: "minecraft:cobblestone", to: "minecraft:stone" } },
+      { kind: "text", text: "Paved it." },
+    ]),
+  });
+
+  equal("it says what was taken out", result.summary.removed, [
+    { block: "minecraft:cobblestone", count: 35 },
+  ]);
+  equal("...and what went in", result.summary.added, [{ block: "minecraft:stone", count: 35 }]);
+  equal("...over that many voxels", result.summary.changed, 35);
+  check("...and offers the undo entry it made", result.undoLabel !== null);
+  equal("...which is the one on the stack", result.undoLabel, session.history.undoStack[0]?.label);
+}
+
+console.log("\n--- the receipt is ordered by how much it cost ---");
+{
+  const session = seeded();
+  // One plank, thirty-five cobble: the bigger loss has to lead.
+  const result = await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "clear the floor",
+    modelOverride: scriptedModel([
+      { kind: "tool", toolName: "fill_region", input: { minX: 0, minY: 0, minZ: 0, maxX: 5, maxY: 0, maxZ: 5, block: "minecraft:glass" } },
+      { kind: "text", text: "Cleared." },
+    ]),
+  });
+
+  equal("both materials are named", result.summary.removed.length, 2);
+  equal("the commonest first", result.summary.removed[0].block, "minecraft:cobblestone");
+  equal("...with its count", result.summary.removed[0].count, 35);
+  equal("...then the rest", result.summary.removed[1], { block: "minecraft:oak_planks", count: 1 });
+}
+
+// Air is absence, not a material. Counting it would report a demolition as
+// though something had been gained.
+console.log("\n--- demolition reads as loss, not as gaining air ---");
+{
+  const session = seeded();
+  const result = await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "demolish it",
+    modelOverride: scriptedModel([
+      { kind: "tool", toolName: "fill_region", input: { minX: 0, minY: 0, minZ: 0, maxX: 5, maxY: 0, maxZ: 5, block: "minecraft:air" } },
+      { kind: "text", text: "Gone." },
+    ]),
+  });
+
+  equal("36 blocks were lost", result.summary.changed, 36);
+  equal("nothing was added", result.summary.added, []);
+  check(
+    "and air is not listed as a loss either",
+    result.summary.removed.every((t) => !t.block.startsWith("minecraft:air")),
+    JSON.stringify(result.summary.removed),
+  );
+}
+
+// The property that makes the receipt trustworthy: undo puts back exactly what
+// it said was taken.
+console.log("\n--- the receipt agrees with what undo restores ---");
+{
+  const session = seeded();
+  const before = grid(session.doc);
+  const result = await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "rebuild the floor in glass",
+    modelOverride: scriptedModel([
+      { kind: "tool", toolName: "replace_blocks", input: { from: "minecraft:cobblestone", to: "minecraft:glass" } },
+      { kind: "tool", toolName: "set_block", input: { x: 3, y: 0, z: 3, block: "minecraft:stone" } },
+      { kind: "text", text: "Done." },
+    ]),
+  });
+
+  // Count what really moved, independently of the summary.
+  const after = grid(session.doc);
+  const actuallyChanged = before
+    .split(",")
+    .filter((block, i) => block !== after.split(",")[i]).length;
+  equal("the count matches the voxels that really differ", result.summary.changed, actuallyChanged);
+
+  const removedTotal = result.summary.removed.reduce((n, t) => n + t.count, 0);
+  undo(session.doc, session.history);
+  equal("undo restores the document exactly", grid(session.doc), before);
+  equal(
+    "...and the receipt named every block it gave back",
+    removedTotal,
+    // Every changed voxel held something (the fixture has no air in the floor).
+    actuallyChanged,
+  );
+}
+
+console.log("\n--- a run that changes nothing claims nothing ---");
+{
+  const session = seeded();
+  // Seed an unrelated edit, so there is a transaction on the stack that this
+  // run must not mistake for its own.
+  setBlock(session.doc, 5, 5, 5, block("minecraft:stone"));
+  runTransaction(session.doc, session.history, "Someone else's edit", (tx) =>
+    tx.setBlock(4, 4, 4, block("minecraft:stone")) ? 1 : 0,
+  );
+
+  const result = await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "have a look around",
+    modelOverride: scriptedModel([
+      { kind: "tool", toolName: "get_schematic_info", input: {} },
+      { kind: "text", text: "It is a 6x6x6." },
+    ]),
+  });
+
+  equal("nothing is reported as removed", result.summary.removed, []);
+  equal("nothing as added", result.summary.added, []);
+  equal("nothing as changed", result.summary.changed, 0);
+  equal("and there is no undo entry to offer", result.undoLabel, null);
+  equal("the other edit is still on the stack", session.history.undoStack.length, 1);
+  equal(
+    "...untouched",
+    session.history.undoStack[0]?.label,
+    "Someone else's edit",
+  );
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

@@ -35,7 +35,7 @@
 
 import { generateText, stepCountIs, type ModelMessage } from "ai";
 
-import { runTransactionAsync } from "../domain/history.js";
+import { runTransactionAsync, summarizeTransaction, type BlockTally } from "../domain/history.js";
 import type { Region } from "../domain/document.js";
 import { countBlocks, normalizeRegion, paletteHistogram } from "../domain/document.js";
 import { LlmError, resolveModel } from "../services/llm.js";
@@ -104,6 +104,13 @@ export interface AgentResult {
   steps: AgentStep[];
   /** Exchanges the next request will carry, this one included. */
   remembered: number;
+  /** What it took out and what it put in, by block type. */
+  summary: { removed: BlockTally[]; added: BlockTally[]; changed: number };
+  /**
+   * The undo entry this run created, or `null` if it changed nothing. The UI
+   * offers "Undo this" only while this still matches the top of the stack.
+   */
+  undoLabel: string | null;
 }
 
 const SYSTEM_PROMPT = [
@@ -191,11 +198,18 @@ export async function runAgent(request: AgentRequest): Promise<AgentResult> {
 
   const asked: ModelMessage = { role: "user", content: request.prompt };
   const history = trimToRecentTurns(session.conversation ?? [], MAX_REMEMBERED_TURNS - 1);
+  const label = undoLabel(request.prompt);
+
+  // Held so the transaction this run commits can be told apart afterwards. By
+  // identity, not by depth: the stack has a size limit, so pushing onto a full
+  // one leaves the length unchanged and a depth comparison would conclude that
+  // nothing was recorded.
+  const topBefore = session.history.undoStack[session.history.undoStack.length - 1];
 
   const result = await runTransactionAsync(
     session.doc,
     session.history,
-    undoLabel(request.prompt),
+    label,
     async (tx) => {
       const tools = buildTools({
         doc: session.doc,
@@ -254,7 +268,23 @@ export async function runAgent(request: AgentRequest): Promise<AgentResult> {
   // which does not expose its size once committed.
   const changed = steps.length === 0 ? 0 : countChanged(result);
 
-  return { text: result.text, changed, steps, remembered: countTurns(session.conversation) };
+  // A run that changed nothing records no transaction, in which case the top of
+  // the stack is somebody else's edit and summarising it would report their
+  // work as this run's.
+  const committed = session.history.undoStack[session.history.undoStack.length - 1];
+  const summary =
+    committed !== undefined && committed !== topBefore
+      ? summarizeTransaction(session.doc, committed)
+      : { removed: [], added: [], changed: 0 };
+
+  return {
+    text: result.text,
+    changed,
+    steps,
+    remembered: countTurns(session.conversation),
+    summary,
+    undoLabel: summary.changed > 0 ? label : null,
+  };
 }
 
 /** Adds up the `changed` each mutating tool reported. */

@@ -372,12 +372,32 @@ export interface AgentRequestPayload {
   selection: RegionSpec | null;
 }
 
+/**
+ * What an edit took out and what it put in, counted by block type.
+ *
+ * "1,247 blocks changed" does not tell anyone whether their oak farmhouse
+ * survived. This is the receipt for it, read from the deltas the undo stack
+ * recorded, so it cannot disagree with what undo would put back.
+ */
+export interface EditSummary {
+  removed: { block: string; count: number }[];
+  added: { block: string; count: number }[];
+  changed: number;
+}
+
 export interface AgentSuccess {
   /** The model's closing explanation. */
   text: string;
   changed: number;
   steps: { tool: string; summary: string }[];
   state: DocumentState;
+  summary: EditSummary;
+  /**
+   * The undo entry this run created, or `null` if it changed nothing. The chat
+   * offers "Undo this" only while it still matches `state.undoLabel` — once
+   * anything else has been done, undoing would revert that instead.
+   */
+  undoLabel: string | null;
   /**
    * Exchanges the agent is carrying, this one included. The transcript itself
    * stays in main — this is the one thing the UI needs from it, to say whether

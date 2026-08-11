@@ -6,7 +6,7 @@
    * request can take half a minute and a panel that shows nothing for that long
    * is indistinguishable from one that has hung.
    */
-  import type { AgentStepEvent, RegionSpec } from "../../../shared/ipc.js";
+  import type { AgentStepEvent, EditSummary, RegionSpec } from "../../../shared/ipc.js";
 
   export interface ChatEntry {
     /** `note` is something that happened but did not go wrong — a stopped run. */
@@ -15,6 +15,10 @@
     /** Tool calls made while answering; agent turns only. */
     steps?: { tool: string; summary: string }[];
     changed?: number;
+    /** What was taken out and put in, by block type. */
+    summary?: EditSummary;
+    /** The undo entry this turn created, for matching against the live one. */
+    undoLabel?: string | null;
   }
 
   interface Props {
@@ -26,13 +30,34 @@
     remembered: number;
     enabled: boolean;
     busy: boolean;
+    /**
+     * The undo entry currently on top of the stack. A turn offers "Undo this"
+     * only while it matches its own — once anything else has been done, that
+     * button would revert the wrong thing.
+     */
+    undoLabel: string | null;
     onask: (prompt: string) => void;
     onforget: () => void;
     onstop: () => void;
+    onundo: () => void;
   }
 
-  const { entries, live, selection, remembered, enabled, busy, onask, onforget, onstop }: Props =
-    $props();
+  const {
+    entries,
+    live,
+    selection,
+    remembered,
+    enabled,
+    busy,
+    undoLabel,
+    onask,
+    onforget,
+    onstop,
+    onundo,
+  }: Props = $props();
+
+  /** The few that matter, and how many were left out. */
+  const SHOWN = 4;
 
   let draft = $state("");
 
@@ -73,8 +98,38 @@
                 {/each}
               </ul>
             {/if}
-            {#if entry.changed !== undefined && entry.changed > 0}
-              <span class="hint">{entry.changed.toLocaleString()} blocks changed · Ctrl+Z undoes the whole request</span>
+            {#if entry.summary && entry.summary.changed > 0}
+              <div class="receipt">
+                {#if entry.summary.removed.length > 0}
+                  <p class="removed">
+                    {#each entry.summary.removed.slice(0, SHOWN) as tally, i (tally.block)}
+                      {i > 0 ? ", " : ""}−{tally.count.toLocaleString()}
+                      {tally.block}
+                    {/each}
+                    {#if entry.summary.removed.length > SHOWN}
+                      and {entry.summary.removed.length - SHOWN} more
+                    {/if}
+                  </p>
+                {/if}
+                {#if entry.summary.added.length > 0}
+                  <p class="added">
+                    {#each entry.summary.added.slice(0, SHOWN) as tally, i (tally.block)}
+                      {i > 0 ? ", " : ""}+{tally.count.toLocaleString()}
+                      {tally.block}
+                    {/each}
+                    {#if entry.summary.added.length > SHOWN}
+                      and {entry.summary.added.length - SHOWN} more
+                    {/if}
+                  </p>
+                {/if}
+              </div>
+              {#if entry.undoLabel && entry.undoLabel === undoLabel}
+                <div class="buttons">
+                  <button onclick={onundo} disabled={busy}>Undo this</button>
+                </div>
+              {/if}
+            {:else if entry.changed !== undefined && entry.changed > 0}
+              <span class="hint">{entry.changed.toLocaleString()} blocks changed</span>
             {/if}
           </li>
         {/each}
@@ -174,6 +229,26 @@
 
   .text {
     white-space: pre-wrap;
+  }
+
+  .receipt {
+    margin: 4px 0 0;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .receipt p {
+    margin: 0;
+    /* Long block ids wrap rather than stretching the sidebar. */
+    overflow-wrap: anywhere;
+  }
+
+  .receipt .removed {
+    color: var(--danger);
+  }
+
+  .receipt .added {
+    color: var(--ok);
   }
 
   .steps {

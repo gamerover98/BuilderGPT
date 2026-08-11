@@ -28,6 +28,7 @@ import {
   nextUndoLabel,
   redo,
   runTransaction,
+  summarizeTransaction,
   undo,
 } from "../src/main/domain/history.js";
 import type { PaletteEntry } from "../src/main/pipeline/types.js";
@@ -60,6 +61,7 @@ const STONE = block("minecraft:stone");
 const PLANKS = block("minecraft:oak_planks");
 const COBBLE = block("minecraft:cobblestone");
 const GLASS = block("minecraft:glass");
+const AIR = block("minecraft:air");
 
 /** The whole grid as a comparable string, for the round-trip property. */
 function snapshot(doc: SchematicDocument): string {
@@ -199,6 +201,82 @@ console.log("\n--- resize ---");
   equal("the write after it applied too", getBlock(doc, 0, 7, 0).namespacedName, "minecraft:glass");
   undo(doc, history);
   equal("undoing across a resize restores everything", snapshot(doc), mixed);
+}
+
+// --- summarising a transaction -----------------------------------------------
+//
+// The chat shows what an edit took out, so the user can tell whether their
+// build survived. It reads the recorded deltas rather than re-deriving the
+// difference, which is what stops it claiming something undo would not restore.
+console.log("\n--- what a transaction did, by block ---");
+{
+  const doc = createDocument({ width: 4, height: 4, length: 4 });
+  const history = createHistory();
+  runTransaction(doc, history, "seed", (tx) => {
+    tx.fill({ minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 0, maxZ: 3 }, STONE);
+    tx.setBlock(0, 0, 0, PLANKS);
+  });
+
+  runTransaction(doc, history, "swap", (tx) =>
+    tx.replace({ minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 0, maxZ: 3 }, STONE, GLASS),
+  );
+  const swap = summarizeTransaction(doc, history.undoStack[history.undoStack.length - 1]);
+  equal("it names what was taken", swap.removed, [{ block: "minecraft:stone", count: 15 }]);
+  equal("...and what replaced it", swap.added, [{ block: "minecraft:glass", count: 15 }]);
+  equal("...and how many voxels moved", swap.changed, 15);
+
+  // Air is absence. Reporting it would turn a demolition into a gain.
+  runTransaction(doc, history, "demolish", (tx) =>
+    tx.fill({ minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 0, maxZ: 3 }, AIR),
+  );
+  const demolished = summarizeTransaction(doc, history.undoStack[history.undoStack.length - 1]);
+  equal("a demolition adds nothing", demolished.added, []);
+  equal("...and is all loss", demolished.changed, 16);
+  check(
+    "...with air named nowhere",
+    demolished.removed.every((tally) => !tally.block.startsWith("minecraft:air")),
+    JSON.stringify(demolished.removed),
+  );
+
+  // Deltas are coalesced per voxel, keeping the first `before` and the latest
+  // `after`. So a run that writes a cell and then puts it back leaves a delta
+  // that records no change at all — and reporting that as damage would have the
+  // chat claim a loss the user can see is not there.
+  const settled = createDocument({ width: 2, height: 2, length: 2 });
+  const settledHistory = createHistory();
+  runTransaction(settled, settledHistory, "seed", (tx) => tx.setBlock(0, 0, 0, STONE));
+  runTransaction(settled, settledHistory, "there and back", (tx) => {
+    tx.setBlock(0, 0, 0, GLASS);
+    tx.setBlock(0, 0, 0, STONE);
+    // A second cell that really does change, so the transaction is not empty
+    // and the zero-delta one has to be excluded on its own merits.
+    tx.setBlock(1, 1, 1, PLANKS);
+    return 0;
+  });
+  const net = summarizeTransaction(settled, settledHistory.undoStack[settledHistory.undoStack.length - 1]);
+  equal("a cell put back the way it was is not counted", net.changed, 1);
+  equal("...and is not reported as a loss", net.removed, []);
+  equal("...only the cell that really changed is reported", net.added, [
+    { block: "minecraft:oak_planks", count: 1 },
+  ]);
+
+  // A shrink is the most destructive edit there is, and the blocks it throws
+  // away are recorded nowhere except the command's own `dropped` list. Summing
+  // only the `blocks` commands would report the worst case as harmless.
+  const tall = createDocument({ width: 4, height: 4, length: 4 });
+  const tallHistory = createHistory();
+  runTransaction(tall, tallHistory, "seed", (tx) =>
+    tx.fill({ minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 3, maxZ: 3 }, STONE),
+  );
+  runTransaction(tall, tallHistory, "shrink", (tx) =>
+    tx.resize({ width: 2, height: 2, length: 2 }),
+  );
+  const shrunk = summarizeTransaction(tall, tallHistory.undoStack[tallHistory.undoStack.length - 1]);
+  equal("a shrink reports the blocks it destroyed", shrunk.removed, [
+    { block: "minecraft:stone", count: 56 },
+  ]);
+  equal("...all 64 less the 8 that survived", shrunk.changed, 56);
+  equal("...having added nothing", shrunk.added, []);
 }
 
 // --- atomicity ---------------------------------------------------------------

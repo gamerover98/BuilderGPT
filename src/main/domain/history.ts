@@ -34,7 +34,11 @@
  * is what every editor does and what a revision counter cannot express.
  */
 
-import type { BlockEntityRecord, PaletteEntry } from "../pipeline/types.js";
+import {
+  paletteEntryCacheKey,
+  type BlockEntityRecord,
+  type PaletteEntry,
+} from "../pipeline/types.js";
 import {
   internPalette,
   posKey,
@@ -494,6 +498,78 @@ function pushTransaction(history: History, transaction: Transaction): void {
     // a different transaction and calling a modified document saved.
     history.savedDepth = history.savedDepth >= dropped ? history.savedDepth - dropped : -1;
   }
+}
+
+/** One block type, and how many voxels of it a transaction took or laid down. */
+export interface BlockTally {
+  block: string;
+  count: number;
+}
+
+/**
+ * What a transaction did, counted by block type.
+ *
+ * "1,247 blocks changed" does not tell anyone whether their oak farmhouse is
+ * still there. This does: it is the difference between a number and a receipt.
+ *
+ * It reads the deltas the undo stack already recorded, so it is exact rather
+ * than a re-derivation that could disagree with what undo would put back —
+ * there is only one record of the change and this is it.
+ *
+ * Palette indices are resolved against the document's *current* palette, which
+ * is sound only because that palette is append-only: an index recorded earlier
+ * still names the same block. `compactPalette` would break this, along with the
+ * undo stack itself, which is why it is confined to the cases that discard both.
+ */
+export function summarizeTransaction(
+  doc: SchematicDocument,
+  transaction: Transaction,
+): { removed: BlockTally[]; added: BlockTally[]; changed: number } {
+  const removed = new Map<string, number>();
+  const added = new Map<string, number>();
+  let changed = 0;
+
+  const name = (index: number): string | null => {
+    // Air is index 0 by construction and is not a material: reporting it would
+    // bury "-412 oak_planks" under "+412 air", which says the same thing twice
+    // and reads as though something was gained.
+    if (index <= 0) return null;
+    const entry = doc.palette[index];
+    return entry ? paletteEntryCacheKey(entry) : null;
+  };
+
+  const tally = (into: Map<string, number>, index: number): void => {
+    const key = name(index);
+    if (key !== null) {
+      into.set(key, (into.get(key) ?? 0) + 1);
+    }
+  };
+
+  const walk = (deltas: readonly BlockDelta[]): void => {
+    for (const delta of deltas) {
+      if (delta.before === delta.after) continue;
+      changed += 1;
+      tally(removed, delta.before);
+      tally(added, delta.after);
+    }
+  };
+
+  for (const command of transaction.commands) {
+    if (command.kind === "blocks") {
+      walk(command.blocks);
+    } else {
+      // A shrink destroys everything outside the new box. Those voxels are the
+      // most destructive thing an edit can do and appear nowhere else.
+      walk(command.dropped);
+    }
+  }
+
+  const ranked = (counts: Map<string, number>): BlockTally[] =>
+    [...counts.entries()]
+      .map(([block, count]) => ({ block, count }))
+      .sort((a, b) => b.count - a.count || (a.block < b.block ? -1 : 1));
+
+  return { removed: ranked(removed), added: ranked(added), changed };
 }
 
 export function undo(doc: SchematicDocument, history: History): Transaction | null {

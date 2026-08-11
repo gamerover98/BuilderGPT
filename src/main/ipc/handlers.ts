@@ -518,6 +518,12 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           steps: [...result.steps],
           state: documentState(session),
           remembered: result.remembered,
+          summary: {
+            removed: [...result.summary.removed],
+            added: [...result.summary.added],
+            changed: result.summary.changed,
+          },
+          undoLabel: result.undoLabel,
         };
       } catch (err) {
         if (err instanceof AgentCancelledError) {

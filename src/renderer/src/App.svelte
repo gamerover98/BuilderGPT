@@ -827,6 +827,8 @@
           text: response.text.trim() === "" ? "Done." : response.text,
           steps: response.steps,
           changed: response.changed,
+          summary: response.summary,
+          undoLabel: response.undoLabel,
         },
       ];
       remembered = response.remembered;
@@ -959,9 +961,11 @@
       {remembered}
       enabled={docState !== null}
       {busy}
+      undoLabel={docState?.undoLabel ?? null}
       onask={askAgent}
       onforget={forgetConversation}
       onstop={stopAgent}
+      onundo={() => runDocument("Undoing", () => api().undo())}
     />
 
     <ProviderConfig

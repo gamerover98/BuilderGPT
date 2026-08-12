@@ -240,6 +240,31 @@ try {
       Buffer.compare(Buffer.from(first.glb), Buffer.from(third.glb)) !== 0,
     );
 
+    // The tints are multiplied into the texture atlas rather than applied by
+    // the viewer, so changing one has to rebuild the mesh — and it moves no
+    // revision, because it changes no block. Before the cache key included
+    // them, changing the biome colour with a document open did nothing at all.
+    //
+    // What is asserted is that it *rebuilds*, not that the bytes differ: this
+    // fixture has no resource pack, so blocks render as hashed colours and a
+    // tint has nothing to multiply into. That the tint reaches the pixels is
+    // `tests/blocks.ts`'s job, where there is a real pack to tint.
+    const tinted = await documentMesh(session, { ...previewOptions, biomeColor: "#ff0000" });
+    check("a different biome tint rebuilds rather than serving the cache", !tinted.cached);
+    const water = await documentMesh(session, {
+      ...previewOptions,
+      biomeColor: "#ff0000",
+      waterColor: "#00ff00",
+    });
+    check("so does a different water tint", !water.cached);
+    check(
+      "...and asking for the same tints again is cached",
+      (await documentMesh(session, { ...previewOptions, biomeColor: "#ff0000", waterColor: "#00ff00" }))
+        .cached,
+    );
+    // Back to the original tints for the checks below.
+    await documentMesh(session, previewOptions);
+
     // The subtle one: undo also moves the revision forward, so a mesh built
     // before an edit must not be served after it is undone.
     undoEdit(session);

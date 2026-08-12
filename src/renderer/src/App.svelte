@@ -322,7 +322,12 @@
   const acceptsImages = $derived(openCodeModel === null || openCodeModel.imageInput !== "no");
 
   const canGenerate = $derived(description.trim() !== "" && !busy && !blockedOnKey);
-  const canRerender = $derived(lastSchemPath !== null && !busy);
+  /**
+   * Re-render rebuilds a *file* preview. With a document open the document owns
+   * the viewport — painting a file into it would show something the next edit
+   * would silently replace.
+   */
+  const canRerender = $derived(lastSchemPath !== null && docState === null && !busy);
 
   onMount(() => {
     // Registered before the bridge check on purpose: collapsing the panel is
@@ -637,7 +642,14 @@
     // already has. The two tints are baked into the texture atlas, so they are
     // the ones that need the mesh rebuilt.
     const rebuilds = patch.biomeColor !== undefined || patch.waterColor !== undefined;
-    if (rebuilds && lastSchemPath && !busy) {
+    if (!rebuilds || busy) return;
+    // Whichever of the two is showing. Before this the tints only ever reached
+    // the file-preview path, so changing one with a document open did nothing
+    // at all — and it is the one setting pair that cannot be applied by the
+    // viewer, because it is multiplied into the atlas.
+    if (docState !== null) {
+      await refreshDocument();
+    } else if (lastSchemPath) {
       await runPreview(lastSchemPath);
     }
   }
@@ -1206,7 +1218,11 @@
       // component.py:401-404 -- only .schem gets a preview, and only then does
       // it become the "last schem" for Re-render.
       if (response.exportType === "schem") {
-        await renderPreview(response.path);
+        // Opened rather than merely previewed. Generating used to hand back a
+        // picture of a file: the chat still said "open a schematic first" and
+        // none of the editing tools could touch what had just been made. It is
+        // a document now, like anything else that arrives on screen.
+        await openDocumentAt(response.path);
       }
     } finally {
       busy = false;

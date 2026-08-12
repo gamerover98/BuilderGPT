@@ -72,8 +72,11 @@ import { saveDocument, type WriteResult } from "./writers.js";
 export interface DocumentSession {
   readonly doc: SchematicDocument;
   readonly history: History;
-  /** The GLB last handed out, and the revision it was built from. */
-  mesh: { revision: number; glb: Uint8Array; center: [number, number, number]; size: [number, number, number] } | null;
+  /**
+   * The GLB last handed out, and everything it was built from — the document's
+   * revision *and* the preview options that reach the atlas. See `documentMesh`.
+   */
+  mesh: { key: string; glb: Uint8Array; center: [number, number, number]; size: [number, number, number] } | null;
   /**
    * Per-chunk geometry carried between rebuilds, so an edit re-meshes only the
    * chunks it touched. Belongs to the session because it is per document; the
@@ -432,14 +435,27 @@ export async function documentMesh(
   session: DocumentSession,
   options: DocumentPreviewOptions,
 ): Promise<{ glb: Uint8Array; center: [number, number, number]; size: [number, number, number]; cached: boolean }> {
-  if (session.mesh && session.mesh.revision === session.doc.revision) {
+  // The revision is not the whole key. The two biome tints are multiplied into
+  // the texture atlas rather than applied by the viewer, so changing one has to
+  // rebuild the mesh — and it changes no revision, because it changes no block.
+  // Keying on what the mesh was actually built from means nobody has to
+  // remember to invalidate it: the same "observed, not announced" reasoning
+  // `chunked_mesh.ts` uses for dirty chunks.
+  const key = [
+    session.doc.revision,
+    options.resourcePackPath ?? options.fallbackResourcePackPath ?? "",
+    options.biomeColor ?? "",
+    options.waterColor ?? "",
+  ].join("|");
+
+  if (session.mesh && session.mesh.key === key) {
     const { glb, center, size } = session.mesh;
     return { glb, center, size, cached: true };
   }
   const built = await buildDocumentPreview(session.doc, options, session.meshCache);
   session.meshCache = built.meshCache;
   session.mesh = {
-    revision: session.doc.revision,
+    key,
     glb: built.glb,
     center: built.center,
     size: built.size,
@@ -447,10 +463,6 @@ export async function documentMesh(
   return { glb: built.glb, center: built.center, size: built.size, cached: false };
 }
 
-/** Drops the cached mesh — the tints changed, so the atlas will differ. */
-export function invalidateMesh(session: DocumentSession): void {
-  session.mesh = null;
-}
 
 // ---------------------------------------------------------------------------
 // Saving

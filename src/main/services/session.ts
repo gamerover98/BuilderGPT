@@ -48,6 +48,12 @@ import {
 } from "../domain/history.js";
 import type { ModelMessage } from "ai";
 
+import {
+  copyRegion,
+  pasteClipboard,
+  type Clipboard,
+  type PasteOptions,
+} from "../domain/clipboard.js";
 import { flattenNbt, setNbtValue } from "../domain/nbt_edit.js";
 import {
   applyRegionTransform,
@@ -299,6 +305,63 @@ export function inspect(session: DocumentSession, x: number, y: number, z: numbe
             fields: flattenNbt(blockEntity.nbt),
           },
   };
+}
+
+/**
+ * What was last copied.
+ *
+ * Module-level, not on the session, and that is the point: a clipboard whose
+ * life ended with the document could never carry anything between two of them,
+ * which is most of what a clipboard is for. Copy a tower out of one schematic,
+ * open another, paste it in.
+ *
+ * It holds palette entries by value, so nothing here refers into a document
+ * that may since have been closed.
+ */
+let clipboard: Clipboard | null = null;
+
+export function currentClipboard(): Clipboard | null {
+  return clipboard;
+}
+
+/** Copies a region out. Reads only, so no transaction. */
+export function copySelection(session: DocumentSession, request: RegionSpec): Clipboard {
+  clipboard = copyRegion(session.doc, normalizeRegion(session.doc, request));
+  return clipboard;
+}
+
+/** Copies, then clears — one undoable step for the clearing half. */
+export function cutSelection(session: DocumentSession, request: RegionSpec): Clipboard {
+  const { doc, history } = session;
+  const region = normalizeRegion(doc, request);
+  clipboard = copyRegion(doc, region);
+  runTransaction(doc, history, "Cut the selection", (tx) =>
+    tx.fill(region, { namespacedName: "minecraft:air", properties: {} }),
+  );
+  return clipboard;
+}
+
+export class EmptyClipboardError extends Error {
+  constructor() {
+    super("Nothing has been copied yet");
+    this.name = "EmptyClipboardError";
+  }
+}
+
+/** Pastes the clipboard with its corner at `at`, as one undoable step. */
+export function pasteSelection(
+  session: DocumentSession,
+  at: { x: number; y: number; z: number },
+  options: PasteOptions = {},
+): number {
+  if (clipboard === null) {
+    throw new EmptyClipboardError();
+  }
+  const held = clipboard;
+  const { doc, history } = session;
+  return runTransaction(doc, history, "Paste", (tx) =>
+    pasteClipboard(doc, tx, held, at, options),
+  );
 }
 
 /**

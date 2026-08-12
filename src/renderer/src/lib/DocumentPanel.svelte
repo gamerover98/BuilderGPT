@@ -14,7 +14,12 @@
    * store subscription to it (`store_rune_conflict`), so `fromBlock` below
    * would silently stop being reactive.
    */
-  import type { DocumentState, RegionSpec, TransformRequest } from "../../../shared/ipc.js";
+  import type {
+    ClipboardInfo,
+    DocumentState,
+    RegionSpec,
+    TransformRequest,
+  } from "../../../shared/ipc.js";
   import { SCHEMATIC_FORMAT_LABEL, type SchematicFormat } from "../../../shared/schematic.js";
   import BlockPicker from "./BlockPicker.svelte";
 
@@ -42,6 +47,11 @@
     onfill: (block: string) => void;
     onreplace: (from: string, to: string) => void;
     ontransform: (transform: TransformRequest["transform"]) => void;
+    /** What the clipboard holds, or null when nothing has been copied. */
+    clipboard: ClipboardInfo | null;
+    oncopy: () => void;
+    oncut: () => void;
+    onpaste: () => void;
     onclearselection: () => void;
     onselectall: () => void;
   }
@@ -63,6 +73,10 @@
     onfill,
     onreplace,
     ontransform,
+    clipboard,
+    oncopy,
+    oncut,
+    onpaste,
     onclearselection,
     onselectall,
   }: Props = $props();
@@ -188,6 +202,27 @@
         <button onclick={onselectall} disabled={busy}>Select all</button>
         <button onclick={onclearselection} disabled={busy || selection === null}>Clear</button>
       </div>
+      <div class="buttons">
+        <button onclick={oncopy} disabled={busy || selection === null}>Copy</button>
+        <button onclick={oncut} disabled={busy || selection === null}>Cut</button>
+        <button
+          onclick={onpaste}
+          disabled={busy || clipboard === null || selection === null}
+          title={clipboard === null
+            ? "Copy something first"
+            : selection === null
+              ? "Select where it should go"
+              : `Paste ${clipboard.width}×${clipboard.height}×${clipboard.length} at the selection's corner`}
+        >
+          Paste
+        </button>
+      </div>
+      {#if clipboard}
+        <p class="hint">
+          Clipboard: {clipboard.width}×{clipboard.height}×{clipboard.length},
+          {clipboard.blocks.toLocaleString()} blocks
+        </p>
+      {/if}
       <div class="buttons">
         <button
           onclick={() => ontransform({ kind: "rotate", steps: 1 })}

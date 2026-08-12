@@ -17,7 +17,10 @@ import { getBlock, setBlock, setBlockEntity } from "../src/main/domain/document.
 import {
   applyEdit,
   closeDocument,
+  copySelection,
+  currentClipboard,
   currentSession,
+  cutSelection,
   documentMesh,
   documentState,
   editBlockEntityValue,
@@ -30,6 +33,7 @@ import {
   NoSaveTargetError,
   NotSquareError,
   openDocument,
+  pasteSelection,
   redoEdit,
   requireSession,
   saveSession,
@@ -537,6 +541,118 @@ console.log("\n--- what a turn refuses, and what it carries ---");
   equal("...keeping its contents", JSON.stringify(moved?.nbt), JSON.stringify({ Loot: { type: "string", value: "diamonds" } }));
   equal("...and knowing where it now is", moved?.pos, [1, 0, 0]);
   check("...leaving none behind", (chest.doc.blockEntities.get("0,0,0") ?? null) === null);
+  closeDocument();
+}
+
+// --- copy and paste ------------------------------------------------------------
+console.log("\n--- copying a region ---");
+{
+  const session = newDocument({ width: 8, height: 2, length: 8 });
+  const stair = { namespacedName: "minecraft:oak_stairs", properties: { facing: "north" } };
+  setBlock(session.doc, 0, 0, 0, { namespacedName: "minecraft:stone", properties: {} });
+  setBlock(session.doc, 1, 0, 0, stair);
+  setBlock(session.doc, 0, 0, 1, { namespacedName: "minecraft:chest", properties: {} });
+  setBlockEntity(session.doc, 0, 0, 1, {
+    id: "minecraft:chest",
+    pos: [0, 0, 1],
+    nbt: { Loot: { type: "string", value: "diamonds" } },
+  });
+  session.history.undoStack.length = 0;
+  session.history.savedDepth = 0;
+
+  const source = { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 1 };
+  const held = copySelection(session, source);
+  equal("the clipboard knows its shape", [held.width, held.height, held.length], [2, 1, 2]);
+  equal("...and how much is in it", held.blocks, 3);
+  check("copying alone changes nothing", session.history.undoStack.length === 0);
+
+  // Paste somewhere else and compare cell for cell.
+  pasteSelection(session, { x: 5, y: 0, z: 5 });
+  equal("the plain block arrived", getBlock(session.doc, 5, 0, 5).namespacedName, "minecraft:stone");
+  equal("...the stair too", getBlock(session.doc, 6, 0, 5).namespacedName, "minecraft:oak_stairs");
+  equal("...keeping its block state", getBlock(session.doc, 6, 0, 5).properties.facing, "north");
+  equal("the source is untouched", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:stone");
+  equal("a paste is one undo step", session.history.undoStack.length, 1);
+
+  // A chest must arrive with its contents, and know where it now is.
+  const pasted = session.doc.blockEntities.get("5,0,6") ?? null;
+  check("the chest's data came with it", pasted !== null);
+  equal("...its contents intact", JSON.stringify(pasted?.nbt), JSON.stringify({ Loot: { type: "string", value: "diamonds" } }));
+  equal("...and its position updated", pasted?.pos, [5, 0, 6]);
+
+  undoEdit(session);
+  equal("undo removes the whole paste", getBlock(session.doc, 5, 0, 5).namespacedName, "minecraft:air");
+  check("...including the block entity", (session.doc.blockEntities.get("5,0,6") ?? null) === null);
+
+}
+
+// The default that makes paste usable: a copied box is mostly air, and writing
+// that air would punch a rectangular hole in whatever the paste lands on.
+console.log("\n--- pasted air leaves what is under it alone ---");
+{
+  const session = newDocument({ width: 6, height: 2, length: 6 });
+  // A 2x1x2 box holding a single block: three of its four cells are air.
+  setBlock(session.doc, 0, 0, 0, { namespacedName: "minecraft:glass", properties: {} });
+  copySelection(session, { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 1 });
+
+  // Ground to paste onto.
+  for (let x = 3; x <= 4; x += 1) {
+    for (let z = 3; z <= 4; z += 1) {
+      setBlock(session.doc, x, 0, z, { namespacedName: "minecraft:stone", properties: {} });
+    }
+  }
+  session.history.undoStack.length = 0;
+
+  pasteSelection(session, { x: 3, y: 0, z: 3 });
+  equal("the block landed", getBlock(session.doc, 3, 0, 3).namespacedName, "minecraft:glass");
+  equal("...and the ground beside it survived", getBlock(session.doc, 4, 0, 3).namespacedName, "minecraft:stone");
+  equal("...all of it", getBlock(session.doc, 4, 0, 4).namespacedName, "minecraft:stone");
+
+  // ...and the other behaviour, for when you are moving a region rather than
+  // stamping one.
+  pasteSelection(session, { x: 3, y: 0, z: 3 }, { includeAir: true });
+  equal("asking for air erases instead", getBlock(session.doc, 4, 0, 4).namespacedName, "minecraft:air");
+}
+
+console.log("\n--- cutting, clipping, and an empty clipboard ---");
+{
+  const session = newDocument({ width: 6, height: 2, length: 6 });
+  setBlock(session.doc, 0, 0, 0, { namespacedName: "minecraft:stone", properties: {} });
+  setBlock(session.doc, 1, 0, 0, { namespacedName: "minecraft:stone", properties: {} });
+  session.history.undoStack.length = 0;
+
+  const held = cutSelection(session, { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 0 });
+  equal("a cut fills the clipboard", held.blocks, 2);
+  equal("...and clears the region", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:air");
+  equal("...as one undo step", session.history.undoStack.length, 1);
+  undoEdit(session);
+  equal("undoing a cut puts the blocks back", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:stone");
+
+  // Pasting over an edge writes the part that fits rather than refusing.
+  const changed = pasteSelection(session, { x: 5, y: 0, z: 0 });
+  equal("the half that fits lands", changed, 1);
+  equal("...at the edge", getBlock(session.doc, 5, 0, 0).namespacedName, "minecraft:stone");
+
+  closeDocument();
+}
+
+// The reason the clipboard is not on the session: carrying between documents is
+// most of what a clipboard is for.
+console.log("\n--- the clipboard outlives the document ---");
+{
+  const first = newDocument({ width: 4, height: 1, length: 4 });
+  setBlock(first.doc, 0, 0, 0, { namespacedName: "minecraft:diamond_block", properties: {} });
+  copySelection(first, { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 });
+  closeDocument();
+
+  const second = newDocument({ width: 4, height: 1, length: 4 });
+  check("it survived closing the document it came from", currentClipboard() !== null);
+  pasteSelection(second, { x: 2, y: 0, z: 2 });
+  equal(
+    "...and pastes into a different one",
+    getBlock(second.doc, 2, 0, 2).namespacedName,
+    "minecraft:diamond_block",
+  );
   closeDocument();
 }
 

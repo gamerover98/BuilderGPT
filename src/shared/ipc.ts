@@ -56,6 +56,11 @@ export const IPC = {
   docSetNbt: "bgpt:doc:nbt:set",
   /** Turn or reflect the selection, block states with it. */
   docTransform: "bgpt:doc:transform",
+  /** Copy the selection out; cut also clears it. */
+  docCopy: "bgpt:doc:copy",
+  docCut: "bgpt:doc:cut",
+  /** Write the clipboard in, with its corner at a coordinate. */
+  docPaste: "bgpt:doc:paste",
   docSave: "bgpt:doc:save",
   /** Is there unsaved work from a session that ended badly? */
   docRecoveryPeek: "bgpt:doc:recovery:peek",
@@ -367,6 +372,27 @@ export interface TransformRequest {
   transform: { kind: "rotate"; steps: 0 | 1 | 2 | 3 } | { kind: "mirror"; axis: "x" | "z" };
 }
 
+/**
+ * What the clipboard holds, as much as the renderer needs to enable Paste and
+ * say how big it is. The contents stay in main.
+ */
+export interface ClipboardInfo {
+  width: number;
+  height: number;
+  length: number;
+  blocks: number;
+}
+
+export type ClipboardResponse = Result<{ clipboard: ClipboardInfo; state: DocumentState }>;
+
+export interface PasteRequest {
+  x: number;
+  y: number;
+  z: number;
+  /** Write the copied air too, erasing what it lands on. Off by default. */
+  includeAir?: boolean;
+}
+
 export interface SetNbtRequest {
   x: number;
   y: number;
@@ -521,6 +547,14 @@ export interface BgptApi {
   setNbtValue(request: SetNbtRequest): Promise<EditResponse>;
   /** Turn or reflect the selection. Undoable as one step. */
   transformRegion(request: TransformRequest): Promise<EditResponse>;
+  /**
+   * Copy the selection out, or cut it. The clipboard lives in main and
+   * deliberately outlives the open document, so it can carry between two.
+   */
+  copyRegion(region: RegionSpec): Promise<ClipboardResponse>;
+  cutRegion(region: RegionSpec): Promise<ClipboardResponse>;
+  /** Write the clipboard in. Undoable as one step. */
+  pasteClipboard(request: PasteRequest): Promise<EditResponse>;
   saveDocument(request: SaveRequest): Promise<SaveResponse>;
   /**
    * The filesystem path behind a dropped `File`, or `""` when it has none.

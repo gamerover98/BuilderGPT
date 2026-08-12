@@ -34,6 +34,8 @@ import {
   type SaveRequest,
   type SaveResponse,
   type SetKeyRequest,
+  type ClipboardResponse,
+  type PasteRequest,
   type SetNbtRequest,
   type TransformRequest,
 } from "../shared/ipc.js";
@@ -80,6 +82,10 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docSetNbt, request) as Promise<EditResponse>,
   transformRegion: (request: TransformRequest) =>
     ipcRenderer.invoke(IPC.docTransform, request) as Promise<EditResponse>,
+  copyRegion: (region) => ipcRenderer.invoke(IPC.docCopy, region) as Promise<ClipboardResponse>,
+  cutRegion: (region) => ipcRenderer.invoke(IPC.docCut, region) as Promise<ClipboardResponse>,
+  pasteClipboard: (request: PasteRequest) =>
+    ipcRenderer.invoke(IPC.docPaste, request) as Promise<EditResponse>,
   saveDocument: (request: SaveRequest) =>
     ipcRenderer.invoke(IPC.docSave, request) as Promise<SaveResponse>,
   /**

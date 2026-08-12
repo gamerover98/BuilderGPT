@@ -33,6 +33,7 @@
     type OpenCodeModelInfo,
     type ProgressEvent,
     type RecoveryOffer,
+    type ClipboardInfo,
     type RegionSpec,
     type TransformRequest,
   } from "../../shared/ipc.js";
@@ -118,6 +119,15 @@
 
   /** Recently opened schematics. Owned by main; re-read after every open. */
   let recentDocuments = $state<string[]>([]);
+
+  /**
+   * What main's clipboard holds, as it last reported.
+   *
+   * Mirrored rather than asked for: the clipboard lives in main and outlives
+   * the document, so the renderer only needs enough to enable Paste and say how
+   * big the thing is. It starts null because at launch it genuinely is.
+   */
+  let clipboard = $state<ClipboardInfo | null>(null);
 
   /**
    * Bumped when the viewport starts showing a *different* structure, and only
@@ -475,6 +485,30 @@
       keywords: "selection everything",
       enabled: !busy && docState !== null,
       run: selectAll,
+    },
+    {
+      id: "copy",
+      title: "Copy the selection",
+      group: "Edit",
+      shortcut: "Ctrl+C",
+      enabled: !busy && selection !== null,
+      run: () => void copySelection(false),
+    },
+    {
+      id: "cut",
+      title: "Cut the selection",
+      group: "Edit",
+      shortcut: "Ctrl+X",
+      enabled: !busy && selection !== null,
+      run: () => void copySelection(true),
+    },
+    {
+      id: "paste",
+      title: "Paste at the selection",
+      group: "Edit",
+      shortcut: "Ctrl+V",
+      enabled: !busy && clipboard !== null && selection !== null,
+      run: pasteHere,
     },
     {
       id: "rotate-90",
@@ -936,6 +970,46 @@
     );
   }
 
+  async function copySelection(cut: boolean): Promise<void> {
+    if (!selection) return;
+    const region = selection;
+    busy = true;
+    try {
+      const response = await (cut
+        ? api().cutRegion(forIpc(region))
+        : api().copyRegion(forIpc(region)));
+      if (!response.ok) {
+        status = { tone: "error", text: response.message };
+        return;
+      }
+      clipboard = response.clipboard;
+      docState = response.state;
+      if (cut) await refreshDocument();
+      status = {
+        tone: "ok",
+        text: `${cut ? "Cut" : "Copied"} ${response.clipboard.blocks.toLocaleString()} blocks.`,
+      };
+    } catch (err) {
+      failed(err, cut ? "Cutting the selection" : "Copying the selection");
+    } finally {
+      busy = false;
+    }
+  }
+
+  /**
+   * Pastes at the selection's corner.
+   *
+   * The corner rather than the centre, and rather than wherever the camera is
+   * looking: it is the one point of a selection the user can see and predict,
+   * and it makes pasting back into the place something was cut from exact.
+   */
+  async function pasteHere(): Promise<void> {
+    if (!selection) return;
+    const at = { x: selection.minX, y: selection.minY, z: selection.minZ };
+    const changed = await runDocument("Pasting", () => api().pasteClipboard(at));
+    reportChange(changed);
+  }
+
   /**
    * Turns or reflects the selection.
    *
@@ -1175,6 +1249,10 @@
       onfill={fillSelection}
       onreplace={replaceInSelection}
       ontransform={transformSelection}
+      {clipboard}
+      oncopy={() => void copySelection(false)}
+      oncut={() => void copySelection(true)}
+      onpaste={pasteHere}
       onclearselection={() => {
         selection = null;
         anchor = null;

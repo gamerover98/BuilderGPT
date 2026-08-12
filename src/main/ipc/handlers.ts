@@ -34,6 +34,9 @@ import {
   type RecoveryPeekResponse,
   type SaveRequest,
   type SaveResponse,
+  type ClipboardResponse,
+  type PasteRequest,
+  type RegionSpec,
   type SetNbtRequest,
   type TransformRequest,
 } from "../../shared/ipc.js";
@@ -49,17 +52,21 @@ import {
   applyEdit,
   clearConversation,
   closeDocument,
+  copySelection,
   currentSession,
+  cutSelection,
   documentMesh,
   documentState,
   editBlockEntityValue,
   EditTooLargeError,
+  EmptyClipboardError,
   inspect,
   newDocument,
   NoBlockEntityError,
   NoDocumentError,
   NoSaveTargetError,
   openDocument,
+  pasteSelection,
   redoEdit,
   requireSession,
   saveSession,
@@ -299,6 +306,9 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     if (err instanceof SchematicFormatError || err instanceof EmptyPreviewError) {
       return { ok: false, kind: "invalid-input", message: err.message };
     }
+    if (err instanceof EmptyClipboardError) {
+      return { ok: false, kind: "invalid-input", message: err.message };
+    }
     if (err instanceof NotSquareError) {
       return { ok: false, kind: "invalid-input", message: err.message };
     }
@@ -408,6 +418,41 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     try {
       const session = requireSession();
       const changed = transformRegion(session, request.region, request.transform);
+      return { ok: true, changed, state: documentState(session) };
+    } catch (err) {
+      return failure(err);
+    }
+  });
+
+  const clipboardInfo = (held: { width: number; height: number; length: number; blocks: number }) => ({
+    width: held.width,
+    height: held.height,
+    length: held.length,
+    blocks: held.blocks,
+  });
+
+  ipcMain.handle(IPC.docCopy, async (_event, region: RegionSpec): Promise<ClipboardResponse> => {
+    try {
+      const session = requireSession();
+      return { ok: true, clipboard: clipboardInfo(copySelection(session, region)), state: documentState(session) };
+    } catch (err) {
+      return failure(err);
+    }
+  });
+
+  ipcMain.handle(IPC.docCut, async (_event, region: RegionSpec): Promise<ClipboardResponse> => {
+    try {
+      const session = requireSession();
+      return { ok: true, clipboard: clipboardInfo(cutSelection(session, region)), state: documentState(session) };
+    } catch (err) {
+      return failure(err);
+    }
+  });
+
+  ipcMain.handle(IPC.docPaste, async (_event, request: PasteRequest): Promise<EditResponse> => {
+    try {
+      const session = requireSession();
+      const changed = pasteSelection(session, request, { includeAir: request.includeAir });
       return { ok: true, changed, state: documentState(session) };
     } catch (err) {
       return failure(err);

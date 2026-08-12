@@ -61,6 +61,29 @@ async function findBundledResourcePack(): Promise<string | null> {
   }
 }
 
+
+/** A comparable digest of a mesh payload, for the equality checks below. */
+function meshDigest(payload: {
+  chunks: { positions: Float32Array; normals: Float32Array; uvs: Float32Array; indices: Uint32Array }[];
+  atlas: { width: number; height: number; pixels: Uint8Array } | null;
+}): string {
+  const hash = (array: Float32Array | Uint32Array | Uint8Array): string => {
+    let h = 2166136261;
+    for (let i = 0; i < array.length; i += 1) {
+      h ^= Math.round(array[i] * 1000) | 0;
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16);
+  };
+  const chunks = payload.chunks
+    .map((c) => [c.positions.length, hash(c.positions), hash(c.normals), hash(c.uvs), hash(c.indices)].join(":"))
+    .join("|");
+  const atlas = payload.atlas
+    ? `${payload.atlas.width}x${payload.atlas.height}:${hash(payload.atlas.pixels)}`
+    : "none";
+  return `${chunks}#${atlas}`;
+}
+
 let failures = 0;
 
 function check(label: string, cond: boolean): void {
@@ -165,8 +188,19 @@ try {
     resourcePackPath: null,
     fallbackResourcePackPath: bundledPack,
   });
-  check("GLB magic is 'glTF'", Buffer.from(preview.glb.slice(0, 4)).toString("ascii") === "glTF");
-  check("GLB is non-trivial", preview.glb.byteLength > 512);
+  check("the mesh has geometry", preview.mesh.chunks.length > 0);
+  check(
+    "...with vertices in it",
+    preview.mesh.chunks.every((chunk) => chunk.positions.length > 0),
+  );
+  // Raw RGBA, not a PNG: nothing for the renderer to decode, which is what
+  // let `connect-src` become 'none'.
+  check("...and an atlas of raw pixels", preview.mesh.atlas !== null);
+  check(
+    "...sized exactly width * height * 4",
+    preview.mesh.atlas !== null &&
+      preview.mesh.atlas.pixels.length === preview.mesh.atlas.width * preview.mesh.atlas.height * 4,
+  );
   check("first build is not cached", preview.cached === false);
   const cachedPreview = await buildPreview({
     schemPath,
@@ -176,7 +210,7 @@ try {
   check("second build hits the cache", cachedPreview.cached === true);
   check(
     "cached GLB is byte-identical",
-    Buffer.compare(Buffer.from(preview.glb), Buffer.from(cachedPreview.glb)) === 0,
+    meshDigest(preview.mesh) === meshDigest(cachedPreview.mesh),
   );
 
   // Proves the bundled pack is actually *applied*, not merely accepted: with it,
@@ -190,7 +224,7 @@ try {
   });
   check(
     "bundled pack changes the render (textures vs flat colours)",
-    Buffer.compare(Buffer.from(preview.glb), Buffer.from(untextured.glb)) !== 0,
+    meshDigest(preview.mesh) !== meshDigest(untextured.mesh),
   );
 
   // --- previewing an open document -----------------------------------------
@@ -217,7 +251,7 @@ try {
     // `tests/chunks.ts` compares the chunked path against itself.
     check(
       "a single-chunk document renders byte-identically to the file it came from",
-      Buffer.compare(Buffer.from(preview.glb), Buffer.from(fromDocument.glb)) === 0,
+      meshDigest(preview.mesh) === meshDigest(fromDocument.mesh),
     );
     equal("...with the same bounds", fromDocument.size, preview.size);
     equal("...and the whole structure fits in one chunk, as assumed above", fromDocument.totalChunks, 1);
@@ -235,7 +269,7 @@ try {
     });
     check(
       "editing a block changes the render",
-      Buffer.compare(Buffer.from(fromDocument.glb), Buffer.from(afterEdit.glb)) !== 0,
+      meshDigest(fromDocument.mesh) !== meshDigest(afterEdit.mesh),
     );
 
     // The baker cache is the point of the exercise. Reading the bundled pack is

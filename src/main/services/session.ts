@@ -17,6 +17,7 @@ import path from "path";
 import type {
   DocumentState,
   EditRequest,
+  MeshPayload,
   PaletteCount,
   RegionSpec,
 } from "../../shared/ipc.js";
@@ -76,7 +77,7 @@ export interface DocumentSession {
    * The GLB last handed out, and everything it was built from — the document's
    * revision *and* the preview options that reach the atlas. See `documentMesh`.
    */
-  mesh: { key: string; glb: Uint8Array; center: [number, number, number]; size: [number, number, number] } | null;
+  mesh: { key: string; payload: MeshPayload; center: [number, number, number]; size: [number, number, number] } | null;
   /**
    * Per-chunk geometry carried between rebuilds, so an edit re-meshes only the
    * chunks it touched. Belongs to the session because it is per document; the
@@ -434,7 +435,7 @@ export function editBlockEntityValue(
 export async function documentMesh(
   session: DocumentSession,
   options: DocumentPreviewOptions,
-): Promise<{ glb: Uint8Array; center: [number, number, number]; size: [number, number, number]; cached: boolean }> {
+): Promise<{ mesh: MeshPayload; center: [number, number, number]; size: [number, number, number]; cached: boolean }> {
   // The revision is not the whole key. The two biome tints are multiplied into
   // the texture atlas rather than applied by the viewer, so changing one has to
   // rebuild the mesh — and it changes no revision, because it changes no block.
@@ -449,18 +450,18 @@ export async function documentMesh(
   ].join("|");
 
   if (session.mesh && session.mesh.key === key) {
-    const { glb, center, size } = session.mesh;
-    return { glb, center, size, cached: true };
+    const { payload, center, size } = session.mesh;
+    return { mesh: payload, center, size, cached: true };
   }
   const built = await buildDocumentPreview(session.doc, options, session.meshCache);
   session.meshCache = built.meshCache;
   session.mesh = {
     key,
-    glb: built.glb,
+    payload: built.mesh,
     center: built.center,
     size: built.size,
   };
-  return { glb: built.glb, center: built.center, size: built.size, cached: false };
+  return { mesh: built.mesh, center: built.center, size: built.size, cached: false };
 }
 
 

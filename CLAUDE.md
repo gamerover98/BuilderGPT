@@ -135,19 +135,31 @@ coordinates rejected rather than coerced, block allowlist applied, bridge
 arguments isolated. It must stay green.
 
 **The renderer is powerless by construction.** `nodeIntegration: false`,
-`contextIsolation: true`, `sandbox: true`, and a CSP whose `connect-src` allows
-only `blob:` — a scheme that names no host, so no egress is possible. Every HTTP
-call is made by the main process — that is the whole reason this is an Electron
-app rather than a web app. If a feature seems to need network access in the
-renderer, it belongs in main.
+`contextIsolation: true`, `sandbox: true`, and a CSP whose `connect-src` is
+`'none'` — the renderer opens no connection of any kind. Every HTTP call is made
+by the main process — that is the whole reason this is an Electron app rather
+than a web app. If a feature seems to need network access in the renderer, it
+belongs in main.
 
-`blob:` is there because three.js reads a GLB's embedded texture through
-`ImageBitmapLoader`, which `fetch`es a blob URL. Removing it does not fail
-loudly: `GLTFLoader.loadTextureImage` ends in `.catch(() => null)`, so the model
-loads and renders **untextured white** while `onLoad` reports success. There is
-no way to select a different loader — GLTFLoader only consults
-`manager.getHandler()` for images that carry a `uri`, and ours live in a
-bufferView. `Viewer.svelte`'s `untexturedReason()` is the tripwire for it.
+**The viewport receives geometry, not a container format.** `docMesh` hands over
+per-chunk `Float32Array`/`Uint32Array` attributes plus the atlas as raw RGBA
+pixels; `Viewer.svelte` builds `BufferGeometry` and a `DataTexture` directly.
+There is no glTF and no `GLTFLoader` in the renderer.
+
+This replaced a GLB with the atlas embedded as a PNG, and it is worth knowing
+what that cost, because it is the kind of failure this shape makes impossible:
+three.js decodes an embedded image through `ImageBitmapLoader`, which `fetch`es
+a `blob:` URL, so the CSP had to allow `blob:`. Block it and nothing raises —
+`GLTFLoader.loadTextureImage` ends in `.catch(() => null)`, so the model loads,
+`onLoad` reports success, and it renders **untextured white**. There was no way
+to select a different loader either: GLTFLoader only consults
+`manager.getHandler()` for images carrying a `uri`, and ours lived in a
+bufferView. Raw pixels decode nothing, so nothing can fail quietly; the tripwire
+that used to detect it (`untexturedReason`) is gone with the failure.
+
+`pipeline/gltf_builder.ts` still builds GLBs and is still tested, but nothing in
+the app calls it any more. Delete it or grow an "export .glb" feature — do not
+leave it drifting.
 
 **API keys never travel main → renderer.** They are stored encrypted via
 `safeStorage`; the renderer only ever learns `{ hasKey: true }`.

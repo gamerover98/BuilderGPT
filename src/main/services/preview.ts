@@ -28,13 +28,18 @@ import {
   type PreviewSettings,
 } from "../../shared/settings.js";
 import { buildAtlas } from "../pipeline/atlas.js";
-import { meshToGlb } from "../pipeline/gltf_builder.js";
+import type { MeshPayload } from "../../shared/ipc.js";
 import { loadStructure } from "../pipeline/loader.js";
 import type { SchematicFormat } from "../pipeline/loader_formats.js";
 import { buildMesh, culledFaces } from "../pipeline/mesher.js";
 import { ModelBaker } from "../pipeline/model_baker.js";
 import { normalizePalette } from "../pipeline/translate.js";
-import { paletteEntryCacheKey, paletteEntryIsAir, type StructureData } from "../pipeline/types.js";
+import {
+  paletteEntryCacheKey,
+  paletteEntryIsAir,
+  type MeshBuffers,
+  type StructureData,
+} from "../pipeline/types.js";
 import { toStructureData, type SchematicDocument } from "../domain/document.js";
 import {
   buildChunkedMesh,
@@ -75,9 +80,62 @@ export class EmptyPreviewError extends Error {
 }
 
 export interface PreviewResult {
-  glb: Uint8Array;
+  mesh: MeshPayload;
   center: [number, number, number];
   size: [number, number, number];
+}
+
+/**
+ * The bounding box of some geometry, as `meshToGlb` used to report it.
+ *
+ * Midpoint and extent, which is what the viewer frames on. Computed here now
+ * that nothing builds a container to ask.
+ */
+function boundsOf(pieces: readonly MeshBuffers[]): {
+  center: [number, number, number];
+  size: [number, number, number];
+} {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (const piece of pieces) {
+    for (let i = 0; i < piece.positions.length; i += 3) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        const value = piece.positions[i + axis];
+        if (value < min[axis]) min[axis] = value;
+        if (value > max[axis]) max[axis] = value;
+      }
+    }
+  }
+  if (!Number.isFinite(min[0])) {
+    return { center: [0, 0, 0], size: [0, 0, 0] };
+  }
+  return {
+    center: [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2],
+    size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]],
+  };
+}
+
+/** Geometry and pixels, in the shape the renderer draws from. */
+function toMeshPayload(
+  pieces: readonly MeshBuffers[],
+  atlas: ReturnType<typeof buildAtlas>,
+  version: number,
+): MeshPayload {
+  return {
+    chunks: pieces.map((piece) => ({
+      positions: piece.positions,
+      normals: piece.normals,
+      uvs: piece.uvs,
+      indices: piece.indices,
+    })),
+    atlas: {
+      width: atlas.image.width,
+      height: atlas.image.height,
+      pixels: atlas.image.data,
+      version,
+    },
+    atlasVersion: version,
+  };
 }
 
 /**
@@ -357,21 +415,21 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
   const faces = await culledFaces(normalized, baker);
   // After culling, not before: `culledFaces` is what asks the baker for each
   // blockstate, so the texture set is only complete once it has run.
-  const { atlas } = cachedAtlas(cached);
+  const { atlas, version } = cachedAtlas(cached);
   const mesh = buildMesh(faces, atlas.uvRects);
   await warnAboutBlocksWithNoGeometry(normalized, baker, new Set(Object.keys(atlas.uvRects)));
   if (mesh.indices.length === 0) {
-    // Deliberately raised before `meshToGlb`, which would happily produce a
-    // valid-but-blank GLB. Not cached: the next attempt may use a different
-    // resource pack, which is exactly the fix for this failure.
+    // Raised before anything is assembled: a blank result is not worth
+    // caching, and the next attempt may use a different resource pack, which
+    // is exactly the fix for this failure.
     throw new EmptyPreviewError(countSolidBlocks(structure));
   }
-  const glb = meshToGlb(mesh, atlas);
+  const bounds = boundsOf([mesh]);
 
   const result: CachedPreview = {
-    glb: glb.glbBytes,
-    center: [...glb.center] as [number, number, number],
-    size: [...glb.size] as [number, number, number],
+    mesh: toMeshPayload([mesh], atlas, version),
+    center: bounds.center,
+    size: bounds.size,
     format: structure.format,
     unmappedLegacyIds: structure.unmappedLegacyIds,
   };
@@ -453,11 +511,11 @@ export async function buildDocumentPreview(
   if (chunked.buffers.indices.length === 0) {
     throw new EmptyPreviewError(countSolidBlocks(structure));
   }
-  const glb = meshToGlb(chunked.buffers, atlas);
+  const bounds = boundsOf(chunked.pieces);
   return {
-    glb: glb.glbBytes,
-    center: [...glb.center] as [number, number, number],
-    size: [...glb.size] as [number, number, number],
+    mesh: toMeshPayload(chunked.pieces, atlas, version),
+    center: bounds.center,
+    size: bounds.size,
     meshCache: chunked.cache,
     rebuiltChunks: chunked.rebuilt,
     totalChunks: chunked.total,

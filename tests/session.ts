@@ -45,6 +45,29 @@ import { UnrepresentableBlocksError } from "../src/main/services/writers.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor } from "../src/main/services/versions.js";
 
+
+/** A comparable digest of a mesh payload, for the equality checks below. */
+function meshDigest(payload: {
+  chunks: { positions: Float32Array; normals: Float32Array; uvs: Float32Array; indices: Uint32Array }[];
+  atlas: { width: number; height: number; pixels: Uint8Array } | null;
+}): string {
+  const hash = (array: Float32Array | Uint32Array | Uint8Array): string => {
+    let h = 2166136261;
+    for (let i = 0; i < array.length; i += 1) {
+      h ^= Math.round(array[i] * 1000) | 0;
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16);
+  };
+  const chunks = payload.chunks
+    .map((c) => [c.positions.length, hash(c.positions), hash(c.normals), hash(c.uvs), hash(c.indices)].join(":"))
+    .join("|");
+  const atlas = payload.atlas
+    ? `${payload.atlas.width}x${payload.atlas.height}:${hash(payload.atlas.pixels)}`
+    : "none";
+  return `${chunks}#${atlas}`;
+}
+
 let failures = 0;
 
 function check(label: string, cond: boolean, detail?: string): void {
@@ -228,7 +251,7 @@ try {
     };
 
     const first = await documentMesh(session, previewOptions);
-    check("the first mesh is built", !first.cached && first.glb.length > 0);
+    check("the first mesh is built", !first.cached && first.mesh.chunks.length > 0);
     const second = await documentMesh(session, previewOptions);
     check("asking again with no change returns the cached one", second.cached);
 
@@ -237,7 +260,7 @@ try {
     check("an edit invalidates it", !third.cached);
     check(
       "...and the geometry actually differs",
-      Buffer.compare(Buffer.from(first.glb), Buffer.from(third.glb)) !== 0,
+      meshDigest(first.mesh) !== meshDigest(third.mesh),
     );
 
     // The tints are multiplied into the texture atlas rather than applied by
@@ -272,7 +295,7 @@ try {
     check("undo invalidates the mesh too", !fourth.cached);
     check(
       "...and lands back on the original geometry",
-      Buffer.compare(Buffer.from(first.glb), Buffer.from(fourth.glb)) === 0,
+      meshDigest(first.mesh) === meshDigest(fourth.mesh),
     );
   }
 

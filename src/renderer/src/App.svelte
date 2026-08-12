@@ -34,6 +34,7 @@
     type ProgressEvent,
     type RecoveryOffer,
     type ClipboardInfo,
+    type MeshPayload,
     type RegionSpec,
     type TransformRequest,
   } from "../../shared/ipc.js";
@@ -81,7 +82,7 @@
   let progress = $state<ProgressEvent | null>(null);
   let status = $state<Status>(null);
 
-  let glb = $state<Uint8Array | null>(null);
+  let mesh = $state<MeshPayload | null>(null);
   let bounds = $state<{ center: number[]; size: number[] } | null>(null);
   let sunAzimuth = $state(0);
   let sunElevation = $state(0);
@@ -734,7 +735,7 @@
     if (schemPath !== lastSchemPath) {
       framingEpoch += 1;
     }
-    glb = response.glb;
+    mesh = response.mesh;
     bounds = { center: response.center, size: response.size };
     sunAzimuth = response.sunAzimuth;
     sunElevation = response.sunElevation;
@@ -761,19 +762,19 @@
    */
   async function refreshDocument(): Promise<void> {
     if (docState === null) {
-      glb = null;
+      mesh = null;
       bounds = null;
       return;
     }
-    const mesh = await api().getDocumentMesh(forIpc(settings.preview));
-    if (!mesh.ok) {
-      status = { tone: "warn", text: mesh.message };
+    const response = await api().getDocumentMesh(forIpc(settings.preview));
+    if (!response.ok) {
+      status = { tone: "warn", text: response.message };
       return;
     }
-    glb = mesh.glb;
-    bounds = { center: mesh.center, size: mesh.size };
-    sunAzimuth = mesh.sunAzimuth;
-    sunElevation = mesh.sunElevation;
+    mesh = response.mesh;
+    bounds = { center: response.center, size: response.size };
+    sunAzimuth = response.sunAzimuth;
+    sunElevation = response.sunElevation;
   }
 
   /**
@@ -1471,7 +1472,7 @@
       >
     {/if}
 
-    {#if glb}
+    {#if mesh}
       <div class="camera-modes" role="group" aria-label="Camera mode">
         <button
           class:active={cameraMode === "orbit"}
@@ -1536,7 +1537,7 @@
     {/if}
 
     <Viewer
-      {glb}
+      {mesh}
       {sunAzimuth}
       {sunElevation}
       selection={docState ? selection : null}

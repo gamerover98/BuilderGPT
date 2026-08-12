@@ -54,6 +54,14 @@ export interface ChunkMeshCache {
 
 export interface ChunkedMeshResult {
   buffers: MeshBuffers;
+  /**
+   * The same geometry, still separated by chunk.
+   *
+   * The renderer draws one mesh per chunk rather than one fused mesh, so it
+   * gets per-chunk frustum culling for nothing, and a later change can send
+   * only the chunks that moved.
+   */
+  pieces: MeshBuffers[];
   cache: ChunkMeshCache;
   /** How many chunks had to be re-meshed, and how many there are. */
   rebuilt: number;
@@ -255,6 +263,7 @@ export async function buildChunkedMesh(
 
   return {
     buffers: concatChunks(ordered),
+    pieces: ordered,
     cache: {
       width,
       height,

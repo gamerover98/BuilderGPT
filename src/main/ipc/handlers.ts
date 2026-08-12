@@ -693,7 +693,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       });
       return {
         ok: true,
-        glb: outcome.glb,
+        mesh: outcome.mesh,
         center: outcome.center,
         size: outcome.size,
         sunAzimuth: sun.azimuth,

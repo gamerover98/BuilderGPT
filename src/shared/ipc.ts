@@ -249,13 +249,56 @@ export interface PreviewRequest {
   settings: PreviewSettings;
 }
 
+/**
+ * One chunk's geometry, as three.js consumes it.
+ *
+ * Typed arrays cross the boundary directly. Structured clone carries every
+ * TypedArray — the rule in CLAUDE.md is about `Buffer`, a Node subclass that
+ * arrives as a plain object, not about typed arrays in general.
+ */
+export interface ChunkGeometry {
+  positions: Float32Array;
+  normals: Float32Array;
+  uvs: Float32Array;
+  indices: Uint32Array;
+}
+
+/**
+ * The texture atlas as raw pixels rather than a PNG.
+ *
+ * This is the whole reason the viewport no longer needs `blob:` in its CSP.
+ * A PNG has to be decoded, three.js decodes it through `ImageBitmapLoader`,
+ * and that `fetch`es a blob URL — which the CSP had to allow, and whose
+ * failure mode was a model that rendered white while reporting success. Raw
+ * RGBA has nothing to decode, so there is nothing to fail.
+ */
+export interface MeshAtlas {
+  width: number;
+  height: number;
+  /** RGBA8, row-major, length = width * height * 4. */
+  pixels: Uint8Array;
+  /**
+   * Bumped when the atlas is rebuilt. The renderer keeps its texture while
+   * this is unchanged, so an edit does not re-upload a megabyte of pixels.
+   */
+  version: number;
+}
+
+export interface MeshPayload {
+  /** One entry per non-empty chunk; the renderer draws one mesh from each. */
+  chunks: ChunkGeometry[];
+  /** Omitted when `atlasVersion` matches what the renderer already holds. */
+  atlas: MeshAtlas | null;
+  atlasVersion: number;
+}
+
 export interface PreviewSuccess {
   /**
-   * Raw GLB. ARCHITECTURE.md §3 "Viewer lifecycle": no base64, no `data:` URL
-   * -- `app/preview.py`'s base64 step existed only to embed the payload in the
-   * Streamlit iframe's HTML.
+   * Geometry and pixels, not a container format. ARCHITECTURE.md §3 "Viewer
+   * lifecycle": no base64, no `data:` URL — `app/preview.py`'s base64 step
+   * existed only to embed the payload in the Streamlit iframe's HTML.
    */
-  glb: Uint8Array;
+  mesh: MeshPayload;
   center: [number, number, number];
   size: [number, number, number];
   /** Radians, as the viewer consumes them. */
@@ -330,7 +373,7 @@ export type EditRequest =
   | { kind: "replace"; region: RegionSpec; from: BlockSpec; to: BlockSpec };
 
 export interface DocumentMesh {
-  glb: Uint8Array;
+  mesh: MeshPayload;
   center: [number, number, number];
   size: [number, number, number];
   /** True when the document had not changed since the last mesh was built. */

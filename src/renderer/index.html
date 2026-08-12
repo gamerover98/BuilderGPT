@@ -10,20 +10,25 @@
       context). If a future feature appears to need a host added here, the
       feature belongs in main.
 
-      `connect-src blob:` is not an exception to that rule. A blob: URL is an
-      in-memory object the page created itself; it names no host and permits no
-      egress, so "the renderer makes no network calls" still holds exactly.
+      `connect-src 'none'` is now literal: the renderer opens no connection of
+      any kind, not even to itself.
 
-      It is required because three.js decodes the GLB's embedded PNG through
-      `ImageBitmapLoader`, which reads the blob with `fetch()`. Under
-      `connect-src 'none'` that fetch is blocked, GLTFLoader logs a warning and
-      carries on, and the model renders as untextured white -- silently. There
-      is no way to opt out of that loader for an image stored in a bufferView:
-      GLTFLoader only consults `manager.getHandler()` for images with a `uri`.
+      It used to have to allow `blob:`. The viewer received a GLB with the
+      texture atlas embedded as a PNG, and three.js decodes such an image
+      through `ImageBitmapLoader`, which reads it with `fetch()` from a blob
+      URL. That was safe — a blob URL names no host — but its failure mode was
+      not: blocked, GLTFLoader logged a warning, carried on, and the model
+      rendered untextured white while reporting success. There was no way to
+      opt out, because GLTFLoader only consults `manager.getHandler()` for
+      images carrying a `uri`, and ours lived in a bufferView.
+
+      The atlas now crosses as raw RGBA pixels and becomes a `DataTexture`.
+      Nothing decodes an image, so nothing fetches, so there is no silent
+      failure left to guard against.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src blob:; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <title>Schematic AI Studio</title>
   </head>

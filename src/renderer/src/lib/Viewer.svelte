@@ -17,10 +17,10 @@
    * with depthWrite off, same 1.6·maxDim framing, same R-to-reset.
    */
   import { onMount, untrack } from "svelte";
+  import type { MeshAtlas, MeshPayload } from "../../../shared/ipc.js";
   import * as THREE from "three";
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
   import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
-  import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
   /**
    * How the camera is driven.
@@ -60,7 +60,8 @@
   }
 
   interface Props {
-    glb: Uint8Array | null;
+    /** Geometry and pixels. `null` until the first mesh arrives. */
+    mesh: MeshPayload | null;
     sunAzimuth: number;
     sunElevation: number;
     maxDpr: number;
@@ -83,7 +84,7 @@
      * Identifies *which* structure is being shown, as opposed to which version
      * of it.
      *
-     * Every edit produces a new GLB, and framing the camera on each one threw
+     * Every edit produces new geometry, and framing the camera on each one threw
      * the user back to the establishing shot after every block they placed.
      * The camera is now re-framed only when this changes — a different file, a
      * different generation — so editing leaves the view exactly where they put
@@ -95,7 +96,7 @@
   }
 
   const {
-    glb,
+    mesh,
     sunAzimuth,
     sunElevation,
     maxDpr,
@@ -121,8 +122,16 @@
    */
   let framedFor: string | number | null = null;
 
-  /** Increments per parse, so an overtaken one can tell it has been. */
-  let parseToken = 0;
+  /**
+   * The atlas texture and the material sharing it, kept across rebuilds.
+   *
+   * An edit produces new geometry but the same atlas, and re-uploading a
+   * megabyte of pixels per placed block would be the most expensive thing in
+   * the loop. `textureVersion` is what main last said the atlas was.
+   */
+  let texture: THREE.DataTexture | undefined;
+  let textureVersion = -1;
+  let material: THREE.MeshStandardMaterial | undefined;
 
   /** The block outline under the crosshair; see `updateCrosshairHighlight`. */
   let highlight: THREE.LineSegments | undefined;
@@ -150,10 +159,10 @@
   let error = $state<string | null>(null);
 
   /**
-   * `scene` is reactive while its siblings are not, because the GLB effect
+   * `scene` is reactive while its siblings are not, because the mesh effect
    * below reads it. As a plain `let` that effect captured `undefined` if it
    * ever ran before `onMount` and, having no reactive dependency to re-trigger
-   * on, would drop that GLB permanently. It works today only because `onMount`
+   * on, would drop that mesh permanently. It works today only because `onMount`
    * happens to run first; this makes it true by construction instead.
    */
   let renderer: THREE.WebGLRenderer | undefined;
@@ -426,11 +435,20 @@
     renderer.setSize(width, height, false);
   }
 
-  function disposeObject(object: THREE.Object3D): void {
+  /**
+   * Frees a model's GPU resources.
+   *
+   * `keepMaterials` because the chunks share one material and one atlas
+   * texture that outlive any single model: disposing them on a swap would free
+   * the texture the incoming geometry is about to be drawn with. Only teardown
+   * wants them gone, and it says so.
+   */
+  function disposeObject(object: THREE.Object3D, options: { keepMaterials?: boolean } = {}): void {
     object.traverse((child) => {
       const mesh = child as THREE.Mesh;
       if (!mesh.isMesh) return;
       mesh.geometry?.dispose();
+      if (options.keepMaterials) return;
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       for (const material of materials) {
         const std = material as THREE.MeshStandardMaterial;
@@ -589,6 +607,9 @@
         renderer?.domElement.removeEventListener("pointerup", onPointerUp);
         renderer?.domElement.removeEventListener("contextmenu", onContextMenu);
         if (loaded) disposeObject(loaded);
+        // Shared, so nothing above frees them.
+        material?.dispose();
+        texture?.dispose();
         if (highlight) {
           highlight.geometry.dispose();
           (highlight.material as THREE.Material).dispose();
@@ -676,100 +697,127 @@
   });
 
   /**
-   * Catches the one failure mode GLTFLoader refuses to report.
+   * The material every chunk shares.
    *
-   * `loadTextureImage` ends in `.catch(() => null)`: if the embedded PNG cannot
-   * be decoded, the texture silently becomes null, `material.map` is never
-   * assigned, and the model draws in default white with `onLoad` reporting
-   * success. That is indistinguishable from a resource pack that resolved
-   * nothing -- which is why it went unnoticed until someone asked why their
-   * schematic was a white block. The pipeline always emits a baseColorTexture,
-   * so a map-less standard material here means the decode failed.
+   * One instance rather than one per chunk: they are identical, and three.js
+   * compiles a shader program per material.
+   *
+   * `MASK`/0.5 and double-sided, matching what the glTF this replaced declared
+   * — cross-quads (flowers, grass) are single planes that must be lit and drawn
+   * from both faces, and cutout foliage needs a hard alpha test rather than
+   * blending, or leaves sort against each other.
    */
-  function untexturedReason(root: THREE.Object3D): string | null {
-    let meshes = 0;
-    let mapless = 0;
-    root.traverse((child) => {
-      const mesh = child as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      for (const material of materials) {
-        meshes += 1;
-        if ((material as THREE.MeshStandardMaterial).map == null) mapless += 1;
-      }
-    });
-    if (meshes === 0 || mapless < meshes) return null;
-    return (
-      "The model loaded but its textures did not decode, so it is drawn untextured. " +
-      "This is usually the renderer's Content-Security-Policy blocking the blob: URL " +
-      "three.js reads the embedded texture from — check connect-src in index.html."
-    );
+  function ensureMaterial(texture: THREE.Texture): THREE.MeshStandardMaterial {
+    if (!material) {
+      material = new THREE.MeshStandardMaterial({
+        map: texture,
+        metalness: 0,
+        roughness: 1,
+        alphaTest: 0.5,
+        side: THREE.DoubleSide,
+      });
+    } else if (material.map !== texture) {
+      material.map = texture;
+      material.needsUpdate = true;
+    }
+    return material;
+  }
+
+  /**
+   * The atlas as a texture, rebuilt only when the atlas itself was.
+   *
+   * `DataTexture`, not an image: the pixels arrive as raw RGBA, so there is
+   * nothing to decode. That is what removed `blob:` from the renderer's CSP —
+   * and with it the failure this used to have to guard against, where a texture
+   * that would not decode left the model drawing white while reporting success.
+   * A decode that never happens cannot fail silently.
+   */
+  function ensureTexture(atlas: MeshAtlas): THREE.Texture {
+    if (texture && textureVersion === atlas.version) {
+      return texture;
+    }
+    texture?.dispose();
+    // A fresh array rather than the one that arrived: structured clone can
+    // hand back a view onto a larger buffer, and three.js uploads the whole
+    // buffer it is given.
+    const pixels = new Uint8Array(atlas.pixels);
+    const next = new THREE.DataTexture(pixels, atlas.width, atlas.height, THREE.RGBAFormat);
+    // NEAREST both ways, and no mipmaps: Minecraft textures are pixel art, and
+    // mipmapping an atlas bleeds neighbouring tiles into each other.
+    next.magFilter = THREE.NearestFilter;
+    next.minFilter = THREE.NearestFilter;
+    next.generateMipmaps = false;
+    next.colorSpace = THREE.SRGBColorSpace;
+    next.needsUpdate = true;
+    texture = next;
+    textureVersion = atlas.version;
+    return next;
+  }
+
+  /** One mesh per chunk, under a group the rest of the viewer treats as before. */
+  function buildModel(payload: MeshPayload, texture: THREE.Texture): THREE.Group {
+    const group = new THREE.Group();
+    const shared = ensureMaterial(texture);
+    for (const chunk of payload.chunks) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(chunk.positions, 3));
+      geometry.setAttribute("normal", new THREE.BufferAttribute(chunk.normals, 3));
+      geometry.setAttribute("uv", new THREE.BufferAttribute(chunk.uvs, 2));
+      geometry.setIndex(new THREE.BufferAttribute(chunk.indices, 1));
+      // Per chunk, so three.js can frustum-cull them individually — the reason
+      // for keeping the chunks apart rather than fusing them back together.
+      geometry.computeBoundingSphere();
+      geometry.computeBoundingBox();
+      group.add(new THREE.Mesh(geometry, shared));
+    }
+    return group;
   }
 
   $effect(() => {
-    const bytes = glb;
-    if (!scene || !bytes || bytes.length === 0) return;
+    const payload = mesh;
+    if (!scene || !payload || payload.chunks.length === 0) return;
     const target = scene;
     /*
      * Read without subscribing. If this effect depended on `framingKey` it
      * would run again the moment a new document is opened — before that
-     * document's mesh has arrived — re-parsing the *previous* GLB and framing
-     * the camera on the structure being replaced.
+     * document's mesh has arrived — rebuilding the *previous* geometry and
+     * framing the camera on the structure being replaced.
      */
     const key = untrack(() => framingKey);
 
     /*
-     * The outgoing model stays in the scene until the incoming one is ready.
-     *
-     * Removing it first — which is what this did — left the viewport empty for
-     * the length of the parse, so every edit flashed the structure out and back
-     * in. During an edit the two meshes are nearly identical, and swapping them
-     * in one frame is invisible.
+     * No token guard and no flash of an empty viewport, both of which the GLB
+     * path needed: building buffer geometry is synchronous, so there is no
+     * window in which a slow earlier parse can land after a fast later one, and
+     * the swap happens inside a single frame.
      */
     const previous = loaded;
-    // Guards against two parses overlapping, which is easy to provoke by
-    // holding a key down to place blocks: a slow earlier parse must not finish
-    // after a fast later one and put a stale mesh on screen.
-    parseToken += 1;
-    const token = parseToken;
-
-    // `slice()` guarantees a standalone ArrayBuffer: the payload arrives from
-    // structured clone as a Uint8Array that may be a view into a larger buffer,
-    // and GLTFLoader.parse reads the whole buffer it is handed.
-    const buffer = bytes.slice().buffer;
-    const loader = new GLTFLoader();
-    loader.parse(
-      buffer,
-      "",
-      (gltf) => {
-        if (token !== parseToken) {
-          // Superseded while parsing. Drop what was just built rather than
-          // showing it, and leave the newer parse to do the swap.
-          disposeObject(gltf.scene);
-          return;
-        }
-        if (previous) {
-          target.remove(previous);
-          disposeObject(previous);
-        }
-        loaded = gltf.scene;
-        target.add(loaded);
-        applyWireframe(loaded, wireframe);
-        // Only for a structure the camera has not been framed on before.
-        // Re-framing on every mesh meant every placed block, and every undo,
-        // snapped the view back to the establishing shot.
-        if (key !== framedFor) {
-          fitCameraToObject(loaded);
-          framedFor = key;
-        }
-        error = untexturedReason(loaded);
-      },
-      (err) => {
-        if (token !== parseToken) return;
-        error = err instanceof Error ? err.message : String(err);
-      },
-    );
+    try {
+      if (payload.atlas === null && texture === undefined) {
+        // Main only omits the atlas when the renderer is known to hold it.
+        throw new Error("The mesh arrived without a texture atlas and none is held.");
+      }
+      const built = buildModel(payload, payload.atlas ? ensureTexture(payload.atlas) : texture!);
+      if (previous) {
+        target.remove(previous);
+        disposeObject(previous, { keepMaterials: true });
+      }
+      loaded = built;
+      target.add(built);
+      applyWireframe(built, wireframe);
+      // Only for a structure the camera has not been framed on before.
+      // Re-framing on every mesh meant every placed block, and every undo,
+      // snapped the view back to the establishing shot.
+      if (key !== framedFor) {
+        fitCameraToObject(built);
+        framedFor = key;
+      }
+      error = null;
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
   });
+
 </script>
 
 <div class="viewer" bind:this={container}>
@@ -779,7 +827,7 @@
       Preview unavailable.<br />
       <small>{error}</small>
     </div>
-  {:else if glb}
+  {:else if mesh}
     <!--
       No placeholder for the empty state: an empty viewport is self-evidently
       empty, and a card in the middle of it was noise rather than information.

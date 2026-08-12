@@ -30,6 +30,11 @@
  * a block turns out to sit crooked.
  */
 
+import type { BlockEntityRecord, PaletteEntry } from "../pipeline/types.js";
+import { getBlock, normalizeRegion, type SchematicDocument } from "./document.js";
+import type { TransactionScope } from "./history.js";
+import type { RegionSpec } from "../../shared/ipc.js";
+
 /** Quarter-turns, in the east -> south direction. */
 export type Quarter = 0 | 1 | 2 | 3;
 
@@ -201,4 +206,135 @@ export function mirrorProperties(
     mirrorHandedness,
     false,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Applying it to a region
+// ---------------------------------------------------------------------------
+
+export class NotSquareError extends Error {
+  constructor(width: number, length: number) {
+    super(
+      `A quarter turn needs a square footprint; this region is ${width}×${length}. ` +
+        `Turn it 180°, or square the region off.`,
+    );
+    this.name = "NotSquareError";
+  }
+}
+
+export type RegionTransform =
+  | { kind: "rotate"; steps: Quarter }
+  | { kind: "mirror"; axis: MirrorAxis };
+
+/** What the undo menu — or the agent's step log — should call this. */
+export function describeTransform(transform: RegionTransform): string {
+  return transform.kind === "mirror"
+    ? `Mirror across ${transform.axis.toUpperCase()}`
+    : `Rotate ${transform.steps * 90}°`;
+}
+
+/**
+ * Turns or reflects a region in place, block states and block entities with it.
+ *
+ * Takes a `TransactionScope` rather than opening one, because it has two
+ * callers with different ideas of what a transaction is: the UI wants one step
+ * per turn, and the agent wants the whole request — however many tools it
+ * called — to be a single CTRL+Z. Opening one here would nest inside the
+ * agent's and break that.
+ *
+ * Read whole, then written: every source cell is snapshotted before the first
+ * write, because a turn maps cells onto cells still to be read, and doing it in
+ * one pass would feed half-turned output back in as input.
+ *
+ * A quarter turn needs a square footprint, and says so rather than guessing.
+ * Growing the document to fit a turned oblong is a resize, and a resize is
+ * alone in its command for the reasons `history.ts` sets out.
+ */
+export function applyRegionTransform(
+  doc: SchematicDocument,
+  tx: TransactionScope,
+  request: RegionSpec,
+  transform: RegionTransform,
+): number {
+  const region = normalizeRegion(doc, request);
+  const width = region.maxX - region.minX + 1;
+  const length = region.maxZ - region.minZ + 1;
+
+  if (transform.kind === "rotate" && (transform.steps === 1 || transform.steps === 3)) {
+    if (width !== length) {
+      throw new NotSquareError(width, length);
+    }
+  }
+
+  /** Where a cell in the region ends up, in region-local coordinates. */
+  const move = (x: number, z: number): [number, number] => {
+    if (transform.kind === "mirror") {
+      return transform.axis === "x" ? [width - 1 - x, z] : [x, length - 1 - z];
+    }
+    // The mesher's convention, kept: one step is (x, z) -> (size - 1 - z, x).
+    //
+    // Written out per step rather than composed by repeating the quarter turn.
+    // Composing looks tidier and is wrong: each quarter turn exchanges the two
+    // extents, so repeating one expression that names only `length` holds only
+    // while the region is square — and the half turn, the one case that is
+    // allowed to be oblong, is exactly where that breaks.
+    switch (transform.steps) {
+      case 1:
+        return [length - 1 - z, x];
+      case 2:
+        return [width - 1 - x, length - 1 - z];
+      case 3:
+        return [z, width - 1 - x];
+      default:
+        return [x, z];
+    }
+  };
+
+  const properties = (source: Readonly<Record<string, string>>): Record<string, string> =>
+    transform.kind === "mirror"
+      ? mirrorProperties(source, transform.axis)
+      : rotateProperties(source, transform.steps);
+
+  // The snapshot. Block entities come with it: a chest that moves but loses its
+  // contents is a worse outcome than one that does not move at all.
+  const cells: {
+    x: number;
+    y: number;
+    z: number;
+    entry: PaletteEntry;
+    entity: BlockEntityRecord | null;
+  }[] = [];
+  for (let x = region.minX; x <= region.maxX; x += 1) {
+    for (let y = region.minY; y <= region.maxY; y += 1) {
+      for (let z = region.minZ; z <= region.maxZ; z += 1) {
+        cells.push({
+          x,
+          y,
+          z,
+          entry: getBlock(doc, x, y, z),
+          entity: doc.blockEntities.get(`${x},${y},${z}`) ?? null,
+        });
+      }
+    }
+  }
+
+  // No clearing pass first, though one looks prudent. Both a turn and a
+  // reflection are bijections on the region, so every destination cell is
+  // written by exactly one source and none can keep a stale value; and
+  // `setBlock` detaches the block entity of whatever it replaces, so a chest
+  // that moved away leaves nothing behind either. Clearing first would only add
+  // a second delta for every voxel in the region.
+  let changed = 0;
+  for (const cell of cells) {
+    const [lx, lz] = move(cell.x - region.minX, cell.z - region.minZ);
+    const x = region.minX + lx;
+    const z = region.minZ + lz;
+    if (tx.setBlock(x, cell.y, z, { ...cell.entry, properties: properties(cell.entry.properties) })) {
+      changed += 1;
+    }
+    if (cell.entity !== null) {
+      tx.setBlockEntity(x, cell.y, z, { ...cell.entity, pos: [x, cell.y, z] });
+    }
+  }
+  return changed;
 }

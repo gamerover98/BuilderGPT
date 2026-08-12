@@ -908,5 +908,96 @@ console.log("\n--- a run that changes nothing claims nothing ---");
   );
 }
 
+// --- turning things from chat ---------------------------------------------------
+//
+// The domain grew rotation and mirroring; without a tool the model cannot reach
+// them, and "rotate the tower 90 degrees" is exactly the sort of thing nobody
+// wants to do a block at a time.
+console.log("\n--- the agent can turn a region ---");
+{
+  const session = seeded();
+  // A stair on the floor, so both its position and its facing have to move.
+  setBlock(session.doc, 0, 1, 0, {
+    namespacedName: "minecraft:oak_stairs",
+    properties: { facing: "north" },
+  });
+  session.history.undoStack.length = 0;
+  const before = grid(session.doc);
+
+  const result = await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "turn the whole thing a quarter",
+    modelOverride: scriptedModel([
+      { kind: "tool", toolName: "transform_region", input: { rotate: 1 } },
+      { kind: "text", text: "Turned it." },
+    ]),
+  });
+
+  // One quarter turn of a 6x6x6: (x, z) -> (5 - z, x), east from south.
+  equal("the stair moved", getBlock(session.doc, 5, 1, 0).namespacedName, "minecraft:oak_stairs");
+  equal("...and turned with the region", getBlock(session.doc, 5, 1, 0).properties.facing, "east");
+  check("the run reports what it moved", result.changed > 0, `${result.changed}`);
+  equal("...as one undo step", session.history.undoStack.length, 1);
+
+  undo(session.doc, session.history);
+  equal("one undo puts the whole turn back", grid(session.doc), before);
+}
+
+console.log("\n--- a turn the region cannot take ---");
+{
+  // 6x6x6 is square, so make the selection oblong instead. The floor is uniform
+  // cobblestone, so a turn of it alone would write cobblestone onto cobblestone
+  // and record nothing — this one block is what makes the half turn observable.
+  const session = seeded();
+  setBlock(session.doc, 0, 0, 0, block("minecraft:glass"));
+  session.history.undoStack.length = 0;
+
+  const result = await runAgent({
+    ...baseRequest,
+    session,
+    selection: { minX: 0, minY: 0, minZ: 0, maxX: 5, maxY: 0, maxZ: 2 },
+    prompt: "rotate my selection",
+    modelOverride: scriptedModel([
+      { kind: "tool", toolName: "transform_region", input: { rotate: 1 } },
+      // The refusal comes back as a tool result, so the model gets to correct
+      // itself rather than the run dying.
+      { kind: "tool", toolName: "transform_region", input: { rotate: 2 } },
+      { kind: "text", text: "That selection is not square, so I turned it 180° instead." },
+    ]),
+  });
+
+  equal("it recovered and finished", result.text.includes("180"), true);
+  equal("both attempts are narrated", result.steps.length, 2);
+  equal("...and the run still produced one undo step", session.history.undoStack.length, 1);
+  // The half turn really landed: (x, z) -> (5 - x, 2 - z) within the selection.
+  equal("the half turn moved the block", getBlock(session.doc, 5, 0, 2).namespacedName, "minecraft:glass");
+}
+
+console.log("\n--- mirroring from chat ---");
+{
+  const session = seeded();
+  setBlock(session.doc, 0, 1, 0, {
+    namespacedName: "minecraft:oak_stairs",
+    properties: { facing: "east" },
+  });
+  session.history.undoStack.length = 0;
+
+  await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "flip it east to west",
+    modelOverride: scriptedModel([
+      { kind: "tool", toolName: "transform_region", input: { mirror: "x" } },
+      { kind: "text", text: "Flipped." },
+    ]),
+  });
+
+  equal("the block reflected", getBlock(session.doc, 5, 1, 0).namespacedName, "minecraft:oak_stairs");
+  equal("...and so did its facing", getBlock(session.doc, 5, 1, 0).properties.facing, "west");
+}
+
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exitCode = failures === 0 ? 0 : 1;

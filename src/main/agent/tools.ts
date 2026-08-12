@@ -40,10 +40,36 @@ import {
   type SchematicDocument,
 } from "../domain/document.js";
 import type { TransactionScope } from "../domain/history.js";
+import {
+  applyRegionTransform,
+  describeTransform,
+  NotSquareError,
+  type RegionTransform,
+} from "../domain/transform.js";
 import { executeJsBuild } from "../core.js";
 import { parsePaletteEntry } from "../pipeline/loader_formats.js";
 import { paletteEntryCacheKey, type PaletteEntry } from "../pipeline/types.js";
 import { MAX_EDIT_VOLUME } from "../services/session.js";
+
+/**
+ * The model names a turn or a reflection with two optional fields rather than a
+ * tagged union, because a union of objects is the shape tool schemas describe
+ * worst and models fill in least reliably.
+ */
+function toTransform(args: { rotate?: number; mirror?: string }): RegionTransform {
+  if (args.mirror !== undefined) {
+    const axis = String(args.mirror).toLowerCase();
+    if (axis !== "x" && axis !== "z") {
+      throw new Error(`mirror must be "x" or "z", not "${args.mirror}".`);
+    }
+    return { kind: "mirror", axis };
+  }
+  const steps = Number(args.rotate);
+  if (!Number.isInteger(steps) || steps < 0 || steps > 3) {
+    throw new Error("Pass rotate as 1, 2 or 3 quarter turns, or mirror as \"x\" or \"z\".");
+  }
+  return { kind: "rotate", steps: steps as 0 | 1 | 2 | 3 };
+}
 
 /** Cap on how much of the grid one `get_region` may return. */
 const MAX_REPORTED_BLOCKS = 2048;
@@ -304,6 +330,36 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
             ? undefined
             : "Nothing changed — that coordinate is outside the schematic, or already held that block.",
         };
+      },
+    }),
+
+    transform_region: tool({
+      description:
+        "Rotate or mirror a region in place, carrying block states with it so stairs, logs, doors and signs keep facing the way they should. Defaults to the user's selection. `steps` is quarter turns clockwise seen from above (1 = 90°); a quarter turn needs a region whose x and z extents are equal, a half turn does not.",
+      inputSchema: jsonSchema<Partial<RegionArgs> & { rotate?: number; mirror?: string }>({
+        type: "object",
+        properties: {
+          ...regionSchema.properties,
+          rotate: { type: "integer", description: "Quarter turns: 1, 2 or 3." },
+          mirror: { type: "string", description: '"x" swaps east and west, "z" north and south.' },
+        },
+        additionalProperties: false,
+      }),
+      execute: async (args) => {
+        const region = resolveRegion(context, args ?? {});
+        const transform = toTransform(args ?? {});
+        step("transform_region", `${describeTransform(transform).toLowerCase()} on ${describeRegion(region)}`);
+        // Errors are returned to the model rather than thrown past it — a
+        // quarter turn refused for being oblong is something it can correct by
+        // squaring the region or turning 180° instead.
+        try {
+          return { changed: applyRegionTransform(context.doc, context.tx, region, transform), region };
+        } catch (err) {
+          if (err instanceof NotSquareError) {
+            throw new Error(err.message);
+          }
+          throw err;
+        }
       },
     }),
 

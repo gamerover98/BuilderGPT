@@ -50,13 +50,15 @@ import type { ModelMessage } from "ai";
 
 import { flattenNbt, setNbtValue } from "../domain/nbt_edit.js";
 import {
-  mirrorProperties,
-  rotateProperties,
-  type MirrorAxis,
-  type Quarter,
+  applyRegionTransform,
+  describeTransform,
+  NotSquareError,
+  type RegionTransform,
 } from "../domain/transform.js";
+
+export { NotSquareError, type RegionTransform };
 import { loadStructure } from "../pipeline/loader.js";
-import type { BlockEntityRecord, PaletteEntry } from "../pipeline/types.js";
+import type { PaletteEntry } from "../pipeline/types.js";
 import { buildDocumentPreview, type DocumentPreviewOptions } from "./preview.js";
 import type { ChunkMeshCache } from "../pipeline/chunked_mesh.js";
 import { saveDocument, type WriteResult } from "./writers.js";
@@ -299,32 +301,11 @@ export function inspect(session: DocumentSession, x: number, y: number, z: numbe
   };
 }
 
-export class NotSquareError extends Error {
-  constructor(width: number, length: number) {
-    super(
-      `A quarter turn needs a square footprint; this selection is ${width}×${length}. ` +
-        `Turn it 180°, or square the selection off.`,
-    );
-    this.name = "NotSquareError";
-  }
-}
-
-export type RegionTransform =
-  | { kind: "rotate"; steps: Quarter }
-  | { kind: "mirror"; axis: MirrorAxis };
-
 /**
- * Turns or reflects a region in place, block states and block entities with it.
+ * Turns or reflects a region as one undoable step.
  *
- * Read whole, then written: every source cell is snapshotted before the first
- * write, because a rotation maps cells onto cells still to be read and doing it
- * in one pass would feed half-rotated output back in as input.
- *
- * A quarter turn needs a square footprint, and says so rather than guessing.
- * The alternative — growing the document to fit the rotated box — is a resize,
- * and a resize is alone in its command for reasons `history.ts` sets out; mixing
- * one into this would make the undo two coordinate frames deep for no gain the
- * user asked for.
+ * The mechanics live in `domain/transform.ts` so the agent can drive the same
+ * code inside its own transaction; this is only the UI's wrapper around them.
  */
 export function transformRegion(
   session: DocumentSession,
@@ -332,88 +313,9 @@ export function transformRegion(
   transform: RegionTransform,
 ): number {
   const { doc, history } = session;
-  const region = normalizeRegion(doc, request);
-  const width = region.maxX - region.minX + 1;
-  const length = region.maxZ - region.minZ + 1;
-
-  if (transform.kind === "rotate" && (transform.steps === 1 || transform.steps === 3)) {
-    if (width !== length) {
-      throw new NotSquareError(width, length);
-    }
-  }
-
-  /** Where a cell in the region ends up, in region-local coordinates. */
-  const move = (x: number, z: number): [number, number] => {
-    if (transform.kind === "mirror") {
-      return transform.axis === "x" ? [width - 1 - x, z] : [x, length - 1 - z];
-    }
-    // The mesher's convention, kept: one step is (x, z) -> (size - 1 - z, x).
-    //
-    // Written out per step rather than composed by repeating the quarter turn.
-    // Composing looks tidier and is wrong: each quarter turn exchanges the two
-    // extents, so repeating one expression that names only `length` holds only
-    // while the region is square — and the half turn, the one case that is
-    // allowed to be oblong, is exactly where that breaks.
-    switch (transform.steps) {
-      case 1:
-        return [length - 1 - z, x];
-      case 2:
-        return [width - 1 - x, length - 1 - z];
-      case 3:
-        return [z, width - 1 - x];
-      default:
-        return [x, z];
-    }
-  };
-
-  const properties = (source: Readonly<Record<string, string>>): Record<string, string> =>
-    transform.kind === "mirror"
-      ? mirrorProperties(source, transform.axis)
-      : rotateProperties(source, transform.steps);
-
-  // The snapshot. Block entities come with it: a chest that keeps its position
-  // but loses its contents is a worse outcome than one that does not move.
-  const cells: { x: number; y: number; z: number; entry: PaletteEntry; entity: BlockEntityRecord | null }[] = [];
-  for (let x = region.minX; x <= region.maxX; x += 1) {
-    for (let y = region.minY; y <= region.maxY; y += 1) {
-      for (let z = region.minZ; z <= region.maxZ; z += 1) {
-        cells.push({
-          x,
-          y,
-          z,
-          entry: getBlock(doc, x, y, z),
-          entity: doc.blockEntities.get(`${x},${y},${z}`) ?? null,
-        });
-      }
-    }
-  }
-
-  const label =
-    transform.kind === "mirror"
-      ? `Mirror the selection across ${transform.axis.toUpperCase()}`
-      : `Rotate the selection ${transform.steps * 90}°`;
-
-  return runTransaction(doc, history, label, (tx) => {
-    // No clearing pass first, though one looks prudent. Both a turn and a
-    // reflection are bijections on the region, so every destination cell is
-    // written by exactly one source and none can keep a stale value; and
-    // `setBlock` detaches the block entity of whatever it replaces, so a chest
-    // that moved away leaves nothing behind either. Clearing first would only
-    // add a second delta for every voxel in the selection.
-    let changed = 0;
-    for (const cell of cells) {
-      const [lx, lz] = move(cell.x - region.minX, cell.z - region.minZ);
-      const x = region.minX + lx;
-      const z = region.minZ + lz;
-      if (tx.setBlock(x, cell.y, z, { ...cell.entry, properties: properties(cell.entry.properties) })) {
-        changed += 1;
-      }
-      if (cell.entity !== null) {
-        tx.setBlockEntity(x, cell.y, z, { ...cell.entity, pos: [x, cell.y, z] });
-      }
-    }
-    return changed;
-  });
+  return runTransaction(doc, history, describeTransform(transform), (tx) =>
+    applyRegionTransform(doc, tx, request, transform),
+  );
 }
 
 export class NoBlockEntityError extends Error {

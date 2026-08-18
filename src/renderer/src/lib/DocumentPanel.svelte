@@ -14,83 +14,42 @@
    * store subscription to it (`store_rune_conflict`), so `fromBlock` below
    * would silently stop being reactive.
    */
-  import type {
-    ClipboardInfo,
-    DocumentState,
-    RegionSpec,
-    TransformRequest,
-  } from "../../../shared/ipc.js";
+  import type { DocumentState } from "../../../shared/ipc.js";
   import { SCHEMATIC_FORMAT_LABEL, type SchematicFormat } from "../../../shared/schematic.js";
-  import BlockPicker from "./BlockPicker.svelte";
   import { t } from "./i18n.svelte.js";
 
   interface Props {
     doc: DocumentState | null;
-    selection: RegionSpec | null;
     busy: boolean;
-    /** The registry to search — the same set the agent is judged against. */
-    blocks: readonly string[];
     /** Recently opened schematics, most recent first. */
     recent: readonly string[];
     onopenrecent: (filePath: string) => void;
     /**
      * The block Fill writes and the one Creative mode places. Owned by the app
      * rather than by this panel, because the viewport places it too and the two
-     * must not disagree about what "the current block" is.
+     * must not disagree about what "the current block" is. Set from here by
+     * clicking a material.
      */
-    block: string;
     onblockchange: (block: string) => void;
     onopen: () => void;
     onsave: (format?: SchematicFormat) => void;
     onsaveas: () => void;
     onundo: () => void;
     onredo: () => void;
-    onfill: (block: string) => void;
-    onreplace: (from: string, to: string) => void;
-    ontransform: (transform: TransformRequest["transform"]) => void;
-    /** What the clipboard holds, or null when nothing has been copied. */
-    clipboard: ClipboardInfo | null;
-    oncopy: () => void;
-    oncut: () => void;
-    onpaste: () => void;
-    onclearselection: () => void;
-    onselectall: () => void;
   }
 
   const {
     doc,
-    selection,
     busy,
-    blocks,
     recent,
     onopenrecent,
-    block,
     onblockchange,
     onopen,
     onsave,
     onsaveas,
     onundo,
     onredo,
-    onfill,
-    onreplace,
-    ontransform,
-    clipboard,
-    oncopy,
-    oncut,
-    onpaste,
-    onclearselection,
-    onselectall,
   }: Props = $props();
-
-  let fromBlock = $state("");
-
-  const selectedVolume = $derived(
-    selection === null
-      ? 0
-      : (selection.maxX - selection.minX + 1) *
-          (selection.maxY - selection.minY + 1) *
-          (selection.maxZ - selection.minZ + 1),
-  );
 
   /** A palette key is `name[a=b,c=d]`; the base name is enough to type back. */
   function baseName(block: string): string {
@@ -190,127 +149,6 @@
       </div>
     {/if}
 
-    <!-- Selection -->
-    <div class="field">
-      <label for="selection">{t("selection.legend")}</label>
-      {#if selection === null}
-        <p class="hint" id="selection">{t("selection.hint")}</p>
-      {:else}
-        <p class="hint" id="selection">
-          {t("selection.range", {
-            minX: selection.minX,
-            minY: selection.minY,
-            minZ: selection.minZ,
-            maxX: selection.maxX,
-            maxY: selection.maxY,
-            maxZ: selection.maxZ,
-            volume: selectedVolume.toLocaleString(),
-          })}
-        </p>
-      {/if}
-      <div class="buttons">
-        <button onclick={onselectall} disabled={busy}>{t("selection.all")}</button>
-        <button onclick={onclearselection} disabled={busy || selection === null}>
-          {t("selection.clear")}
-        </button>
-      </div>
-      <div class="buttons">
-        <button onclick={oncopy} disabled={busy || selection === null}>{t("selection.copy")}</button>
-        <button onclick={oncut} disabled={busy || selection === null}>{t("selection.cut")}</button>
-        <button
-          onclick={onpaste}
-          disabled={busy || clipboard === null || selection === null}
-          title={clipboard === null
-            ? t("selection.pasteNoClipboard")
-            : selection === null
-              ? t("selection.pasteNoSelection")
-              : t("selection.pasteHint", {
-                  width: clipboard.width,
-                  height: clipboard.height,
-                  length: clipboard.length,
-                })}
-        >
-          {t("selection.paste")}
-        </button>
-      </div>
-      {#if clipboard}
-        <p class="hint">
-          {t("selection.clipboard", {
-            width: clipboard.width,
-            height: clipboard.height,
-            length: clipboard.length,
-            blocks: clipboard.blocks.toLocaleString(),
-          })}
-        </p>
-      {/if}
-      <div class="buttons">
-        <button
-          onclick={() => ontransform({ kind: "rotate", steps: 1 })}
-          disabled={busy || selection === null}
-          title={t("selection.rotate90Hint")}
-        >
-          {t("selection.rotate90")}
-        </button>
-        <button
-          onclick={() => ontransform({ kind: "rotate", steps: 2 })}
-          disabled={busy || selection === null}
-          title={t("selection.rotate180Hint")}
-        >
-          {t("selection.rotate180")}
-        </button>
-        <button
-          onclick={() => ontransform({ kind: "mirror", axis: "x" })}
-          disabled={busy || selection === null}
-          title={t("selection.flipXHint")}
-        >
-          {t("selection.flipX")}
-        </button>
-        <button
-          onclick={() => ontransform({ kind: "mirror", axis: "z" })}
-          disabled={busy || selection === null}
-          title={t("selection.flipZHint")}
-        >
-          {t("selection.flipZ")}
-        </button>
-      </div>
-    </div>
-
-    <!-- Editing -->
-    <div class="field">
-      <label for="to-block">{t("selection.block")}</label>
-      <BlockPicker id="to-block" value={block} placeholder="minecraft:stone" {blocks} onchange={onblockchange} />
-      <div class="buttons">
-        <button
-          class="primary"
-          onclick={() => onfill(block)}
-          disabled={busy || selection === null || block.trim() === ""}
-          title={selection === null ? t("selection.selectFirst") : t("selection.fillHint")}
-        >
-          {t("selection.fill")}
-        </button>
-      </div>
-    </div>
-
-    <div class="field">
-      <label for="from-block">{t("selection.replace")}</label>
-      <BlockPicker
-        id="from-block"
-        value={fromBlock}
-        placeholder="minecraft:cobblestone"
-        {blocks}
-        onchange={(next) => (fromBlock = next)}
-      />
-      <div class="buttons">
-        <button
-          onclick={() => onreplace(fromBlock, block)}
-          disabled={busy || selection === null || fromBlock.trim() === "" || block.trim() === ""}
-          title={selection === null ? t("selection.selectFirst") : t("selection.replaceHint")}
-        >
-          {t("selection.replaceButton")}
-        </button>
-      </div>
-    </div>
-
     <!-- Palette -->
     {#if doc.palette.length > 0}
       <div class="field">
@@ -320,8 +158,8 @@
             <li>
               <button
                 class="link"
-                onclick={() => (fromBlock = baseName(entry.block))}
-                title={t("doc.useAsReplace", { block: entry.block })}
+                onclick={() => onblockchange(baseName(entry.block))}
+                title={t("doc.useAsBlock", { block: entry.block })}
               >
                 {entry.block}
               </button>

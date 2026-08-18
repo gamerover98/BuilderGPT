@@ -652,6 +652,8 @@ console.log("\n--- settings coercion ---");
     sidebarCollapsed: true,
     theme: "light",
     language: "en",
+    toolWindowX: 240,
+    toolWindowY: 96,
   } satisfies UiSettings;
 
   equal("every ui field survives a round-trip", coerceUi(ui), ui);

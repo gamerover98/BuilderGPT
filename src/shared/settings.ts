@@ -156,6 +156,16 @@ export interface UiSettings {
   theme: Theme;
   /** UI language. The renderer's strings only; main's errors are not translated. */
   language: Language;
+  /**
+   * Where the floating tool window sits, in pixels from the viewport's
+   * top-left corner.
+   *
+   * Clamped on read the way the sidebar width is, and again against the live
+   * window at drag time: a position saved on a second monitor is otherwise a
+   * panel nobody can reach.
+   */
+  toolWindowX: number;
+  toolWindowY: number;
 }
 
 /**
@@ -170,6 +180,8 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   sidebarCollapsed: false,
   theme: "system",
   language: "en",
+  toolWindowX: 16,
+  toolWindowY: 16,
 };
 
 export interface Settings {

@@ -57,7 +57,17 @@ export function coerceUi(raw: unknown): UiSettings {
     sidebarCollapsed: source.sidebarCollapsed === true,
     theme: isTheme(source.theme) ? source.theme : DEFAULT_UI_SETTINGS.theme,
     language: isLanguage(source.language) ? source.language : DEFAULT_UI_SETTINGS.language,
+    // Only non-negative here. The real clamp is the live window, which this
+    // process cannot see, so the renderer applies it again on every drag and on
+    // resize -- the same two-stage arrangement `sidebarWidth` uses.
+    toolWindowX: coordinate(source.toolWindowX, DEFAULT_UI_SETTINGS.toolWindowX),
+    toolWindowY: coordinate(source.toolWindowY, DEFAULT_UI_SETTINGS.toolWindowY),
   };
+}
+
+function coordinate(raw: unknown, fallback: number): number {
+  const value = Number(raw);
+  return Number.isFinite(value) ? Math.max(0, Math.round(value)) : fallback;
 }
 
 /**

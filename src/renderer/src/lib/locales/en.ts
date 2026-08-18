@@ -95,10 +95,11 @@ export const en = {
   "doc.summary": "{width}×{height}×{length} · {blocks} blocks",
   "doc.summaryDirty": "{width}×{height}×{length} · {blocks} blocks · unsaved changes",
   "doc.materials": "Materials",
-  "doc.useAsReplace": "Use {block} as the block to replace",
+  "doc.useAsBlock": "Make {block} the current block",
   "doc.moreMaterials": "…and {count} more",
 
   "selection.legend": "Selection",
+  "selection.size": "{width}×{height}×{length}",
   "selection.hint":
     "Click a block in the viewport to select it, Shift-click another to extend the box.",
   "selection.range":
@@ -302,6 +303,9 @@ export const en = {
   "command.cameraOrbit.keywords": "turntable rotate",
   "command.cameraFly": "Camera: Creative flight",
   "command.cameraFly.keywords": "wasd walk fly first person",
+  "command.showTools": "Show the selection tools",
+  "command.showTools.keywords": "panel palette fill replace floating window",
+  "command.hideTools": "Hide the selection tools",
   "command.hideGrid": "Hide the grid",
   "command.showGrid": "Show the grid",
   "command.wireframeOff": "Turn off wireframe",

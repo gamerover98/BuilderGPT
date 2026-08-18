@@ -19,6 +19,7 @@ import { readdirSync, readFileSync, statSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import { clampToBounds, isWithinBounds } from "../src/renderer/src/lib/floating.js";
 import { missingKeys, translate, translatePlural } from "../src/renderer/src/lib/i18n_core.js";
 import { en } from "../src/renderer/src/lib/locales/en.js";
 
@@ -187,6 +188,70 @@ console.log("\n--- catalogue coverage ---");
     console.log(`         unused in en.ts: ${orphans.join(", ")}`);
   }
   check("no message sits in the catalogue unused", orphans.length === 0);
+}
+
+// --- keeping the floating tool window reachable ---------------------------
+console.log("\n--- floating panel bounds ---");
+{
+  // A 232px panel in an 800x600 pane, keeping 24px reachable.
+  const bounds = { paneWidth: 800, paneHeight: 600, panelWidth: 232, margin: 24 };
+
+  equal("a position already inside is left alone", clampToBounds({ x: 100, y: 80 }, bounds), {
+    x: 100,
+    y: 80,
+  });
+  check("...and reported as within", isWithinBounds({ x: 100, y: 80 }, bounds));
+
+  // Dragged off the bottom-right: a corner has to stay grabbable.
+  equal("the right edge stops with a margin showing", clampToBounds({ x: 5000, y: 80 }, bounds), {
+    x: 776,
+    y: 80,
+  });
+  equal("...and so does the bottom", clampToBounds({ x: 100, y: 5000 }, bounds), {
+    x: 100,
+    y: 576,
+  });
+
+  /*
+   * The two edges are deliberately not symmetrical, and this is the pair of
+   * cases that says why. Off the left, the panel may hang out until only a
+   * sliver of its right edge shows -- the title bar runs its whole width, so a
+   * sliver is still something to grab. Off the top it may not go at all,
+   * because the first thing to disappear upwards is that title bar, and a panel
+   * dragged up by its own height could never be dragged back.
+   */
+  equal("off the left, a sliver stays", clampToBounds({ x: -5000, y: 80 }, bounds), {
+    x: 24 - 232,
+    y: 80,
+  });
+  equal("off the top, nothing goes above zero", clampToBounds({ x: 100, y: -5000 }, bounds), {
+    x: 100,
+    y: 0,
+  });
+
+  // The case the ResizeObserver exists for: the pane shrinks under a panel
+  // parked in the far corner. This is the decision it makes; its trigger runs
+  // in the rendering steps and cannot be driven from a hidden page.
+  const parked = { x: 776, y: 576 };
+  const shrunk = { paneWidth: 133, paneHeight: 396, panelWidth: 232, margin: 24 };
+  check("a parked panel falls outside a shrunken pane", !isWithinBounds(parked, shrunk));
+  equal("...and is pulled back to the new corner", clampToBounds(parked, shrunk), {
+    x: 109,
+    y: 372,
+  });
+
+  // A pane narrower than the margin must not produce a negative maximum.
+  equal("a pane narrower than the margin still clamps to zero", clampToBounds({ x: 500, y: 500 }, {
+    paneWidth: 10,
+    paneHeight: 10,
+    panelWidth: 232,
+    margin: 24,
+  }), { x: 0, y: 0 });
+
+  equal("fractional positions are rounded", clampToBounds({ x: 10.4, y: 10.6 }, bounds), {
+    x: 10,
+    y: 11,
+  });
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

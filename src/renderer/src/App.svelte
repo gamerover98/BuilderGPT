@@ -19,7 +19,9 @@
   import DocumentPanel from "./lib/DocumentPanel.svelte";
   import InspectorPanel from "./lib/InspectorPanel.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
+  import SelectionTools from "./lib/SelectionTools.svelte";
   import SidebarTabs, { type SidebarTab } from "./lib/SidebarTabs.svelte";
+  import ToolWindow from "./lib/ToolWindow.svelte";
   import { findOpenCodeModel, loadOpenCodeModels } from "./lib/models.svelte.js";
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
   import Viewer, { type CameraMode, type PickedBlock } from "./lib/Viewer.svelte";
@@ -439,6 +441,8 @@
       settings = await api().getSettings();
       sidebarWidth = settings.ui.sidebarWidth;
       sidebarCollapsed = settings.ui.sidebarCollapsed;
+      toolWindowX = settings.ui.toolWindowX;
+      toolWindowY = settings.ui.toolWindowY;
       keyStatus = await api().getKeyStatus();
       versions = await api().listVersions();
       artifacts = await api().listArtifacts();
@@ -526,6 +530,19 @@
    * tab is exactly the kind of thing tabs make easy to do by accident.
    */
   let chatDraft = $state("");
+
+  /**
+   * Whether the floating tool window is showing.
+   *
+   * Not persisted, and closing it is not permanent: it comes back with the next
+   * selection. A tool palette you can dismiss for good is one a user can lose,
+   * and the command palette is a poor place to have to go looking for it.
+   */
+  let toolsOpen = $state(true);
+
+  /** Mirrored locally so a drag repaints at pointer speed, like the sidebar. */
+  let toolWindowX = $state(DEFAULT_UI_SETTINGS.toolWindowX);
+  let toolWindowY = $state(DEFAULT_UI_SETTINGS.toolWindowY);
 
   /**
    * Fetches OpenCode's model list when the provider calls for it.
@@ -712,6 +729,14 @@
       group: t("group.view"),
       enabled: true,
       run: () => void patchPreview({ wireframe: !settings.preview.wireframe }),
+    },
+    {
+      id: "toggle-tools",
+      title: toolsOpen ? t("command.hideTools") : t("command.showTools"),
+      group: t("group.view"),
+      keywords: t("command.showTools.keywords"),
+      enabled: docState !== null,
+      run: () => (toolsOpen = !toolsOpen),
     },
     {
       id: "settings",
@@ -1018,6 +1043,10 @@
       return;
     }
     void inspectBlock(block.x, block.y, block.z);
+    // Selecting something is the gesture that wants the tools. Closing the
+    // panel is therefore "not now" rather than "never" -- which is what keeps
+    // it from being a thing a user can lose.
+    toolsOpen = true;
     if (block.extend && anchor !== null) {
       selection = {
         minX: Math.min(anchor.x, block.x),
@@ -1042,6 +1071,7 @@
 
   function selectAll(): void {
     if (!docState) return;
+    toolsOpen = true;
     anchor = { x: 0, y: 0, z: 0 };
     selection = {
       minX: 0,
@@ -1479,32 +1509,17 @@
         />
       {:else}
         <DocumentPanel
-      doc={docState}
-      {selection}
-      {busy}
-      blocks={blockRegistry}
-      recent={recentDocuments}
-      onopenrecent={openDocumentAt}
-      block={activeBlock}
-      onblockchange={(next) => (activeBlock = next)}
-      onopen={openDocument}
-      onsave={(format) => saveDocument(format)}
-      onsaveas={saveDocumentAs}
-      onundo={() => runDocument(t("task.undoing"), () => api().undo())}
-      onredo={() => runDocument(t("task.redoing"), () => api().redo())}
-      onfill={fillSelection}
-      onreplace={replaceInSelection}
-      ontransform={transformSelection}
-      {clipboard}
-      oncopy={() => void copySelection(false)}
-      oncut={() => void copySelection(true)}
-      onpaste={pasteHere}
-      onclearselection={() => {
-        selection = null;
-        anchor = null;
-      }}
-      onselectall={selectAll}
-    />
+          doc={docState}
+          {busy}
+          recent={recentDocuments}
+          onopenrecent={openDocumentAt}
+          onblockchange={(next) => (activeBlock = next)}
+          onopen={openDocument}
+          onsave={(format) => saveDocument(format)}
+          onsaveas={saveDocumentAs}
+          onundo={() => runDocument(t("task.undoing"), () => api().undo())}
+          onredo={() => runDocument(t("task.redoing"), () => api().redo())}
+        />
 
         <fieldset>
       <legend>{t("structure.legend")}</legend>
@@ -1711,6 +1726,45 @@
           &#x00d7;
         </button>
       </div>
+    {/if}
+
+    {#if docState && toolsOpen}
+      <ToolWindow
+        title={t("selection.legend")}
+        x={toolWindowX}
+        y={toolWindowY}
+        closeLabel={t("common.close")}
+        onmove={(x, y) => {
+          toolWindowX = x;
+          toolWindowY = y;
+        }}
+        oncommit={(x, y) => {
+          toolWindowX = x;
+          toolWindowY = y;
+          void patchUi({ toolWindowX: x, toolWindowY: y });
+        }}
+        onclose={() => (toolsOpen = false)}
+      >
+        <SelectionTools
+          {selection}
+          {busy}
+          blocks={blockRegistry}
+          block={activeBlock}
+          onblockchange={(next) => (activeBlock = next)}
+          {clipboard}
+          onfill={fillSelection}
+          onreplace={replaceInSelection}
+          ontransform={transformSelection}
+          oncopy={() => void copySelection(false)}
+          oncut={() => void copySelection(true)}
+          onpaste={pasteHere}
+          onclearselection={() => {
+            selection = null;
+            anchor = null;
+          }}
+          onselectall={selectAll}
+        />
+      </ToolWindow>
     {/if}
 
     <Viewer

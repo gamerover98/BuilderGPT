@@ -29,6 +29,33 @@ export const en = {
   "common.open": "Open",
   "common.reset": "Reset",
   "common.save": "Save",
+  "common.close": "Close",
+
+  "settings.title": "Settings",
+  "settings.openShortcut": "Settings (Ctrl+,)",
+  "settings.keywords": "preferences options theme language api key",
+  "settings.appearance": "Appearance",
+  "settings.viewport": "Viewport",
+  "settings.quality": "Quality",
+  "settings.textures": "Textures & colours",
+  "settings.providers": "Providers",
+  "settings.theme": "Theme",
+  "settings.theme.system": "Match the system",
+  "settings.theme.light": "Light",
+  "settings.theme.dark": "Dark",
+  "settings.themeHint":
+    "“Match the system” follows your desktop, and changes with it while the app is running.",
+  "settings.language": "Language",
+  "settings.language.en": "English",
+  "settings.languageHint":
+    "Applies to this window straight away. Messages from the schematic reader and writers are " +
+    "not translated.",
+  "settings.qualityHint":
+    "These cost frame time, not accuracy — lower them if the viewport feels heavy on a large " +
+    "schematic.",
+  "settings.rebuildsHint":
+    "These are baked into the texture atlas, so changing one rebuilds the preview. Everything " +
+    "under Viewport and Quality applies to the next frame instead.",
 
   "sidebar.hide": "Hide the control panel",
   "sidebar.show": "Show the control panel",
@@ -143,7 +170,8 @@ export const en = {
   "provider.provider": "Provider",
   "provider.model": "Model name",
   "provider.baseUrl": "Base URL",
-  "provider.apiKey": "API key",
+  "provider.baseUrlHint":
+    "Only needed for a custom OpenAI-compatible endpoint. Leave it empty to use the provider's own.",
   "provider.apiKeyOptional": "API key (only for paid models)",
   "provider.keyStoredPlaceholder": "•••••••• stored",
   "provider.keyPlaceholder": "Paste your key",
@@ -157,6 +185,7 @@ export const en = {
   "provider.needsKey":
     "{model} is billed per token, so it needs a key. The free models in the list above do not.",
   "provider.keyStored": "A key is stored for {provider}. It is never sent back to this window.",
+  "provider.addKey": "Add one in Settings",
   "provider.noEncryption":
     "OS-backed encryption is unavailable on this system, so keys are kept in memory for this " +
     "session only and are never written to disk.",
@@ -183,7 +212,6 @@ export const en = {
   "structure.rerender": "Re-render",
   "structure.rerenderHint": "Refresh the preview using the last schematic without regenerating",
 
-  "preview.legend": "Preview settings",
   "preview.resourcePack": "Resource pack (.zip)",
   "preview.resourcePackPlaceholder": "Faithful 64x (bundled)",
   "preview.resourcePackHint":
@@ -207,9 +235,6 @@ export const en = {
   "preview.showGrid": "Show grid",
   "preview.wireframe": "Wireframe",
   "preview.ambientOcclusion": "Ambient occlusion",
-  "preview.renderExisting": "Render an existing .schem (skip generation)",
-  "preview.noFile": "No file chosen",
-  "preview.render": "Render",
 
   "artifacts.legend": "Generated files",
   "artifacts.empty": "Nothing generated yet.",
@@ -287,6 +312,7 @@ export const en = {
   "task.savingLayout": "Saving the panel layout",
   "task.rendering": "Rendering the schematic",
   "task.openingChooser": "Opening the schematic chooser",
+  "task.openingPicker": "Opening the file chooser",
   "task.opening": "Opening the schematic",
   "task.saving": "Saving the schematic",
   "task.choosingSaveLocation": "Choosing where to save",

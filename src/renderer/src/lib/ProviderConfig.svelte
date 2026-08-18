@@ -7,10 +7,12 @@
    * a free-text field when the fetch fails), same Base URL field shown only for
    * the Custom provider.
    *
-   * One structural change (ARCHITECTURE.md §3 "Secrets"): the API key is no
-   * longer a `st.text_input(type="password")` re-typed every session. It is
-   * saved through `safeStorage` and this component only ever learns whether one
-   * exists -- it can show "key stored", it cannot read the key back.
+   * The API key and Base URL used to live here too. They are account-level
+   * facts rather than part of the job in front of you, and showing only the
+   * selected provider's key made "is Gemini set up?" a question you answered by
+   * switching provider and looking. They now live in the settings modal, which
+   * lists all four at once. This component is the model picker and nothing
+   * else.
    */
   import { openCodeModelRequiresKey, type OpenCodeModelInfo } from "../../../shared/ipc.js";
   import { api, bridgeAvailable } from "./bridge.svelte.js";
@@ -18,7 +20,6 @@
   import {
     PROVIDERS,
     PROVIDER_DEFAULT_MODEL,
-    providerRequiresApiKey,
     type KeyStorageStatus,
     type Provider,
     type Settings,
@@ -28,18 +29,16 @@
     settings: Settings;
     keyStatus: KeyStorageStatus | null;
     onchange: (patch: Partial<Settings>) => void;
-    onsavekey: (provider: Provider, apiKey: string) => Promise<void>;
-    onclearkey: (provider: Provider) => Promise<void>;
     /** Lifted so App can gate the reference-image picker on the same fact. */
     onmodelinfo?: (model: OpenCodeModelInfo | null) => void;
+    /** Opens the settings modal, where the keys are. */
+    onopensettings: () => void;
   }
 
-  const { settings, keyStatus, onchange, onsavekey, onclearkey, onmodelinfo }: Props = $props();
+  const { settings, keyStatus, onchange, onmodelinfo, onopensettings }: Props = $props();
 
   let openCodeModels = $state<OpenCodeModelInfo[] | null>(null);
   let openCodeFetchFailed = $state(false);
-  let keyDraft = $state("");
-  let saving = $state(false);
 
   const hasKey = $derived(
     keyStatus?.keys.find((entry) => entry.provider === settings.provider)?.hasKey ?? false,
@@ -105,17 +104,6 @@
   function selectProvider(provider: Provider): void {
     // component.py:239-243 reset the model box to the provider's default.
     onchange({ provider, model: PROVIDER_DEFAULT_MODEL[provider] });
-    keyDraft = "";
-  }
-
-  async function saveKey(): Promise<void> {
-    saving = true;
-    try {
-      await onsavekey(settings.provider, keyDraft);
-      keyDraft = "";
-    } finally {
-      saving = false;
-    }
   }
 </script>
 
@@ -198,64 +186,26 @@
     </div>
   </div>
 
-  {#if settings.provider === "Custom (OpenAI Compatible)"}
-    <div class="field">
-      <label for="base-url">{t("provider.baseUrl")}</label>
-      <input
-        id="base-url"
-        value={settings.baseUrl}
-        placeholder="https://api.openai.com/v1"
-        oninput={(event) => onchange({ baseUrl: event.currentTarget.value })}
-      />
-    </div>
+  {#if needsKeyForModel}
+    <p class="hint warn">
+      {t("provider.needsKey", { model: selectedModel?.name ?? "" })}
+      <button class="link" onclick={onopensettings}>{t("provider.addKey")}</button>
+    </p>
   {/if}
-
-  <div class="field">
-    <label for="api-key">
-      {providerRequiresApiKey(settings.provider)
-        ? t("provider.apiKey")
-        : t("provider.apiKeyOptional")}
-    </label>
-    <div class="key-row">
-      <input
-        id="api-key"
-        type="password"
-        autocomplete="off"
-        bind:value={keyDraft}
-        placeholder={hasKey ? t("provider.keyStoredPlaceholder") : t("provider.keyPlaceholder")}
-      />
-      <button onclick={saveKey} disabled={saving || keyDraft.trim() === ""}>{t("common.save")}</button>
-      <button onclick={() => onclearkey(settings.provider)} disabled={!hasKey}>
-        {t("common.clear")}
-      </button>
-    </div>
-    {#if needsKeyForModel}
-      <p class="hint warn">{t("provider.needsKey", { model: selectedModel?.name ?? "" })}</p>
-    {/if}
-    {#if hasKey}
-      <p class="hint ok">{t("provider.keyStored", { provider: settings.provider })}</p>
-    {/if}
-    {#if keyStatus && !keyStatus.encryptionAvailable}
-      <p class="hint warn">{t("provider.noEncryption")}</p>
-    {/if}
-  </div>
 </fieldset>
 
 <style>
-  .key-row {
-    display: flex;
-    gap: 8px;
-  }
-
-  .key-row input {
-    flex: 1;
-  }
-
-  .ok {
-    color: var(--ok);
-  }
-
   .warn {
     color: var(--warn);
+  }
+
+  button.link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font: inherit;
+    text-decoration: underline;
   }
 </style>

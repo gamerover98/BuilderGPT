@@ -18,7 +18,7 @@
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
   import DocumentPanel from "./lib/DocumentPanel.svelte";
   import InspectorPanel from "./lib/InspectorPanel.svelte";
-  import PreviewSettingsPanel from "./lib/PreviewSettingsPanel.svelte";
+  import SettingsModal from "./lib/SettingsModal.svelte";
   import ProviderConfig from "./lib/ProviderConfig.svelte";
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
   import Viewer, { type CameraMode, type PickedBlock } from "./lib/Viewer.svelte";
@@ -74,8 +74,6 @@
   let imageName = $state<string | null>(null);
   let resourcePackPath = $state<string | null>(null);
   let resourcePackName = $state<string | null>(null);
-  let pickedSchemPath = $state<string | null>(null);
-  let pickedSchemName = $state<string | null>(null);
 
   /** component.py:281-282's `st.session_state["bgpt_last_schem_path"]`. */
   let lastSchemPath = $state<string | null>(null);
@@ -105,8 +103,24 @@
 
   let mesh = $state<MeshPayload | null>(null);
   let bounds = $state<{ center: number[]; size: number[] } | null>(null);
-  let sunAzimuth = $state(0);
-  let sunElevation = $state(0);
+  /**
+   * The sun's direction, in radians, straight from the two sliders.
+   *
+   * These used to be `$state` initialised to zero and written only by whatever
+   * came back from a preview or a mesh rebuild. Since neither of the sun
+   * settings rebuilds anything, `patchPreview` returned early and no round trip
+   * ever happened -- so moving the sliders persisted the numbers and changed
+   * nothing on screen until some unrelated action happened to refresh the mesh.
+   * The viewer's effect was ready the whole time; the props feeding it never
+   * moved.
+   *
+   * Derived from the settings instead, using the same degrees-to-radians the
+   * main process applies in `sunAnglesRadians`. `PreviewSuccess` still carries
+   * the angles and nothing reads them now; they are the main process's answer
+   * to a question the renderer can answer itself.
+   */
+  const sunAzimuth = $derived((settings.preview.sunAzimuthDeg * Math.PI) / 180);
+  const sunElevation = $derived((settings.preview.sunElevationDeg * Math.PI) / 180);
 
   /**
    * The open document, as main last described it. The renderer holds no
@@ -465,6 +479,12 @@
       toggleSidebar();
       return;
     }
+    // Ctrl+, is what every editor binds settings to.
+    if (event.key === ",") {
+      event.preventDefault();
+      settingsOpen = !settingsOpen;
+      return;
+    }
     // The document shortcuts only exist while a document does, and never while
     // something else is already running -- an undo racing an edit would apply
     // to a state neither of them saw.
@@ -485,6 +505,7 @@
   }
 
   let paletteOpen = $state(false);
+  let settingsOpen = $state(false);
 
   function togglePalette(): void {
     const next = !paletteOpen;
@@ -659,6 +680,15 @@
       run: () => void patchPreview({ wireframe: !settings.preview.wireframe }),
     },
     {
+      id: "settings",
+      title: t("settings.title"),
+      group: t("group.view"),
+      keywords: t("settings.keywords"),
+      shortcut: "Ctrl+,",
+      enabled: true,
+      run: () => (settingsOpen = true),
+    },
+    {
       id: "toggle-sidebar",
       title: sidebarCollapsed ? t("sidebar.show") : t("sidebar.hide"),
       group: t("group.view"),
@@ -751,12 +781,12 @@
     status = { tone: "error", text: t("status.failed", { doing, message }) };
   }
 
-  async function pick(kind: "image" | "resource-pack" | "schem" | "directory"): Promise<void> {
+  async function pick(kind: "image" | "resource-pack" | "directory"): Promise<void> {
     let picked: Awaited<ReturnType<ReturnType<typeof api>["pickFile"]>>;
     try {
       picked = await api().pickFile({ kind });
     } catch (err) {
-      failed(err, `Opening the ${kind} chooser`);
+      failed(err, t("task.openingPicker"));
       return;
     }
     if (picked.error) {
@@ -774,9 +804,6 @@
       resourcePackName = picked.name;
     } else if (kind === "directory") {
       void patchSettings({ outputDir: picked.path });
-    } else {
-      pickedSchemPath = picked.path;
-      pickedSchemName = picked.name;
     }
   }
 
@@ -807,8 +834,6 @@
     }
     mesh = response.mesh;
     bounds = { center: response.center, size: response.size };
-    sunAzimuth = response.sunAzimuth;
-    sunElevation = response.sunElevation;
     lastSchemPath = schemPath;
   }
 
@@ -843,8 +868,6 @@
     }
     mesh = response.mesh;
     bounds = { center: response.center, size: response.size };
-    sunAzimuth = response.sunAzimuth;
-    sunElevation = response.sunElevation;
   }
 
   /**
@@ -1310,6 +1333,26 @@
 
 <CommandPalette open={paletteOpen} {commands} onclose={() => (paletteOpen = false)} />
 
+<SettingsModal
+  open={settingsOpen}
+  {settings}
+  {keyStatus}
+  {resourcePackPath}
+  {resourcePackName}
+  {busy}
+  onclose={() => (settingsOpen = false)}
+  onchange={patchSettings}
+  onpreviewchange={patchPreview}
+  onuichange={patchUi}
+  onpickresourcepack={() => pick("resource-pack")}
+  onclearresourcepack={() => {
+    resourcePackPath = null;
+    resourcePackName = null;
+  }}
+  onsavekey={saveKey}
+  onclearkey={clearKey}
+/>
+
 <main
   class:collapsed={sidebarCollapsed}
   style={`--sidebar-w: ${sidebarCollapsed ? 0 : sidebarWidth}px`}
@@ -1341,6 +1384,13 @@
         {t("viewport.creative")}
       </button>
     </div>
+
+    <button
+      class="icon gear"
+      onclick={() => (settingsOpen = true)}
+      title={t("settings.openShortcut")}
+      aria-label={t("settings.title")}>&#x2699;</button
+    >
   </header>
 
   <section class="controls">
@@ -1407,9 +1457,8 @@
       {settings}
       {keyStatus}
       onchange={patchSettings}
-      onsavekey={saveKey}
-      onclearkey={clearKey}
       onmodelinfo={(model) => (openCodeModel = model)}
+      onopensettings={() => (settingsOpen = true)}
     />
 
     <fieldset>
@@ -1519,23 +1568,6 @@
       {/if}
 
     </fieldset>
-
-    <PreviewSettingsPanel
-      settings={settings.preview}
-      {resourcePackPath}
-      {resourcePackName}
-      schemPath={pickedSchemPath}
-      schemName={pickedSchemName}
-      {busy}
-      onchange={patchPreview}
-      onpickresourcepack={() => pick("resource-pack")}
-      onclearresourcepack={() => {
-        resourcePackPath = null;
-        resourcePackName = null;
-      }}
-      onpickschem={() => pick("schem")}
-      onrenderschem={() => pickedSchemPath && runPreview(pickedSchemPath)}
-    />
 
     <ArtifactList {artifacts} onselect={(artifact) => runPreview(artifact.path)} />
   </section>
@@ -1815,6 +1847,12 @@
   .recovery .buttons {
     display: flex;
     gap: 8px;
+  }
+
+  /* Pushed against the title and the modes, not floated to the far edge:
+     the bar's contents are one left-aligned group by request. */
+  .gear {
+    font-size: 18px;
   }
 
   .camera-modes {

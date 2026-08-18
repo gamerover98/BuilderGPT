@@ -153,11 +153,35 @@ console.log("\n--- catalogue coverage ---");
 
   /*
    * And the other direction. An unused message is not a bug the way a missing
-   * one is, but it is how a catalogue rots: strings outlive the components that
-   * showed them, a translator pays to translate them, and nobody can tell which
-   * ones still matter.
+   * one is, but it is how a catalogue rots: strings outlive the components
+   * that showed them, a translator pays to translate them, and nobody can
+   * tell which ones still matter.
+   *
+   * This direction has to be more generous than the one above, because not
+   * every key reaches `t()` as a literal, and the two shapes that do not are
+   * both legitimate: a key sitting in a data table (the `{ id, key }` rows
+   * the settings rail iterates) and a key assembled from a template
+   * (`settings.theme.${theme}`). Counting only strict call sites here would
+   * report those as unused, and a check that cries wolf gets deleted. The
+   * strict set is still what the *missing* check above uses, so nothing is
+   * loosened where it matters.
    */
   const asked = new Set(wanted);
+  const KEY_LITERAL = /"([a-z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+)+)"/g;
+  const KEY_TEMPLATE = /`([a-z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+)*\.)\$\{/g;
+  for (const file of files) {
+    const text = readFileSync(file, "utf8");
+    // A key-shaped literal that *is* in the catalogue is being used as a key.
+    for (const literal of text.matchAll(KEY_LITERAL)) {
+      if (en[literal[1] as keyof typeof en] !== undefined) asked.add(literal[1]);
+    }
+    // `prefix.${…}` claims every catalogue key under that prefix.
+    for (const template of text.matchAll(KEY_TEMPLATE)) {
+      for (const key of Object.keys(en)) {
+        if (key.startsWith(template[1])) asked.add(key);
+      }
+    }
+  }
   const orphans = Object.keys(en).filter((key) => !asked.has(key));
   if (orphans.length > 0) {
     console.log(`         unused in en.ts: ${orphans.join(", ")}`);

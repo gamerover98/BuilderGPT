@@ -258,6 +258,22 @@ never moves. The same gesture also has to suppress the click-to-select path on
 and the 4px tolerance does not help, so it would collapse the selection the
 user was about to resize.
 
+**A popover is positioned against the window, not against its control.**
+Everything from `.controls` down is `overflow: hidden`, and the controls that
+open popovers sit at the trailing edge of a right-hand panel — so a popover laid
+out from its trigger is either cut off by an ancestor or off the screen
+entirely. The model picker's was the latter: 340px growing rightwards from a
+control ~60px from the right edge of the window. They are therefore
+`position: fixed` with `left`/`top` from `placePopover` in `floating.ts`, which
+prefers a readable side and then *clamps* — the preference is the design, the
+clamp is the guarantee, and only the clamp is load-bearing.
+
+`fixed` escapes the clipping because no ancestor here has a `transform`,
+`filter`, `perspective`, `contain` or `will-change`; any one of those on a
+wrapper makes it the containing block again and the popover starts being
+clipped. The popover also stays a DOM child of the picker, so dismiss-on-
+outside-click remains a plain `contains()` test rather than needing a portal.
+
 **Renderer logic that runs from the rendering steps cannot be verified in the
 browser harness here.** `requestAnimationFrame` callbacks and `ResizeObserver`
 deliveries both belong to those steps, and the Browser pane is often not

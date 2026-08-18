@@ -55,3 +55,59 @@ export function isWithinBounds(point: Point, bounds: Bounds): boolean {
   const clamped = clampToBounds(point, bounds);
   return clamped.x === point.x && clamped.y === point.y;
 }
+
+/** Where a popover's control is, in viewport coordinates. */
+export interface AnchorRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface PopoverBounds {
+  viewportWidth: number;
+  viewportHeight: number;
+  popoverWidth: number;
+  popoverHeight: number;
+  /** Kept clear of every window edge. */
+  margin: number;
+  /** Left between the popover and the control that opened it. */
+  gap: number;
+}
+
+/**
+ * Where to put a popover so that all of it is on screen.
+ *
+ * The preferences are the readable placement; the clamp is the guarantee, and
+ * the guarantee is the point. A popover positioned only by preference is
+ * correct exactly where it was designed and wrong everywhere else -- the model
+ * picker grew rightwards from a control that lives at the *right* edge of a
+ * right-hand panel, so most of it was outside the window.
+ *
+ * - Horizontally it hangs to the left, its right edge on the control's. That
+ *   is the side with room when the control is in a trailing rail, which is
+ *   where popovers in this app are.
+ * - Vertically it opens upwards, and only falls below when there is no room
+ *   above. The chat composer is pinned to the bottom of its panel, so upwards
+ *   is where the space is.
+ *
+ * Both are then clamped into the window. A popover too large to fit even so is
+ * pinned to the top-left margin rather than centred on nothing: the controls
+ * are read from the top down, so that is the half worth keeping.
+ */
+export function placePopover(anchor: AnchorRect, bounds: PopoverBounds): Point {
+  const preferredLeft = anchor.left + anchor.width - bounds.popoverWidth;
+  const above = anchor.top - bounds.gap - bounds.popoverHeight;
+  const preferredTop =
+    above >= bounds.margin ? above : anchor.top + anchor.height + bounds.gap;
+
+  // `max` last, so it wins when the popover is wider or taller than the window
+  // allows -- `maxLeft` is below `margin` then, and clamping the other way
+  // round would push the popover off the near edge instead of the far one.
+  const maxLeft = bounds.viewportWidth - bounds.popoverWidth - bounds.margin;
+  const maxTop = bounds.viewportHeight - bounds.popoverHeight - bounds.margin;
+  return {
+    x: Math.round(Math.max(bounds.margin, Math.min(preferredLeft, maxLeft))),
+    y: Math.round(Math.max(bounds.margin, Math.min(preferredTop, maxTop))),
+  };
+}

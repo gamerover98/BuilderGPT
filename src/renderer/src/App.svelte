@@ -1495,26 +1495,15 @@
   style={`--sidebar-w: ${sidebarCollapsed ? 0 : sidebarWidth}px`}
 >
   <!--
-    The application bar. Everything in it is left-aligned by request, and the
-    order is identity, then mode, then configuration.
+    The application bar: identity and mode on the left, configuration on the
+    right. The gear is deliberately apart from the other two -- they say what
+    you are looking at and how, it opens something that covers all of it.
 
     The camera switch used to float over the viewport's top-right corner. It is
     here now because it is a mode the whole window is in, not a control that
     belongs to the canvas -- and moving it gives the canvas that corner back.
   -->
   <header class="navbar">
-    <!--
-      Settings first, at the very edge. It sat after the camera modes before,
-      which is still the left-hand group but reads as trailing them rather than
-      anchoring the bar.
-    -->
-    <button
-      class="icon gear"
-      onclick={() => (settingsOpen = true)}
-      title={t("settings.openShortcut")}
-      aria-label={t("settings.title")}>&#x2699;</button
-    >
-
     <h1>{t("app.title")}</h1>
 
     <div class="camera-modes" role="group" aria-label={t("viewport.cameraMode")}>
@@ -1533,6 +1522,13 @@
         {t("viewport.creative")}
       </button>
     </div>
+
+    <button
+      class="icon gear"
+      onclick={() => (settingsOpen = true)}
+      title={t("settings.openShortcut")}
+      aria-label={t("settings.title")}>&#x2699;</button
+    >
   </header>
 
   <section class="controls">
@@ -2057,9 +2053,9 @@
     gap: 8px;
   }
 
-  /* Pushed against the title and the modes, not floated to the far edge:
-     the bar's contents are one left-aligned group by request. */
+  /* Floated to the trailing edge, away from the title-and-mode group. */
   .gear {
+    margin-left: auto;
     font-size: 18px;
   }
 

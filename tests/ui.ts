@@ -19,7 +19,7 @@ import { readdirSync, readFileSync, statSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { clampToBounds, isWithinBounds } from "../src/renderer/src/lib/floating.js";
+import { clampToBounds, isWithinBounds, placePopover } from "../src/renderer/src/lib/floating.js";
 import {
   dragFace,
   dragPlaneNormal,
@@ -261,6 +261,92 @@ console.log("\n--- floating panel bounds ---");
     x: 10,
     y: 11,
   });
+}
+
+// --- putting a popover somewhere it can be seen ---------------------------
+console.log("\n--- popover placement ---");
+{
+  /*
+   * The window and the control that produced the bug: a 1440x900 window, the
+   * model picker at the right-hand end of the chat composer, which is itself at
+   * the bottom of the right-hand panel. Laid out from the control's left edge
+   * -- the obvious way, and what the CSS did -- a 340px popover reaches
+   * x=1590 in a 1440px window, and a good half of it is off the screen.
+   */
+  const trigger = { left: 1250, top: 820, width: 120, height: 22 };
+  const window1440 = {
+    viewportWidth: 1440,
+    viewportHeight: 900,
+    popoverWidth: 340,
+    popoverHeight: 260,
+    margin: 8,
+    gap: 6,
+  };
+
+  const placed = placePopover(trigger, window1440);
+  equal("it hangs to the left of the control that opened it", placed, { x: 1030, y: 554 });
+  check(
+    "...and clears it rather than covering it",
+    placed.y + window1440.popoverHeight <= trigger.top,
+  );
+
+  /*
+   * The property the bug violated, over every place the control could be
+   * rather than the one it is: all of the popover is on screen. Stated as a
+   * sweep because a single position proves nothing here -- with the preference
+   * the picker had, the popover is inside the window for most anchors and
+   * outside it only near the edge the picker actually sits at.
+   */
+  {
+    let worst: { x: number; y: number; at: number } | null = null;
+    for (let left = 0; left <= 1440; left += 40) {
+      for (const top of [0, 430, 878]) {
+        const at = placePopover({ ...trigger, left, top }, window1440);
+        const inside =
+          at.x >= window1440.margin &&
+          at.y >= window1440.margin &&
+          at.x + window1440.popoverWidth <= window1440.viewportWidth - window1440.margin &&
+          at.y + window1440.popoverHeight <= window1440.viewportHeight - window1440.margin;
+        if (!inside && worst === null) worst = { x: at.x, y: at.y, at: left };
+      }
+    }
+    check(
+      "wherever the control is, all of the popover is on screen",
+      worst === null,
+      worst === null ? "" : `anchor at x=${worst.at} placed it at ${worst.x},${worst.y}`,
+    );
+  }
+
+  // Narrow enough that the preferred position does not fit either: the clamp,
+  // not the preference, is what keeps it on screen.
+  const narrow = placePopover(trigger, { ...window1440, viewportWidth: 420 });
+  equal("a window too narrow for the preference pins it to the far margin", narrow.x, 72);
+
+  /*
+   * Upwards is the preference because the composer is at the bottom. A control
+   * near the *top* of the window has no room above it, and a popover that
+   * insisted would be clamped to the top margin and cover the control it
+   * belongs to -- so it goes below instead.
+   */
+  const high = placePopover({ ...trigger, top: 100 }, window1440);
+  equal("with no room above, it opens downwards", high.y, 128);
+  check("...still below the control", high.y >= 100 + trigger.height);
+
+  // Bigger than the window in both directions. Something has to give; what
+  // gives is the far edge, because these panels are read from the top down.
+  const cramped = placePopover(trigger, {
+    ...window1440,
+    viewportWidth: 300,
+    viewportHeight: 200,
+  });
+  equal("a popover larger than the window keeps its near corner", cramped, { x: 8, y: 8 });
+
+  // Element rects are fractional; CSS pixels here should not be.
+  equal(
+    "a fractional anchor gives whole pixels",
+    placePopover({ left: 1250.4, top: 820.5, width: 120.2, height: 22 }, window1440),
+    { x: 1031, y: 555 },
+  );
 }
 
 // --- dragging a face of the selection box ---------------------------------

@@ -21,6 +21,7 @@
     type Provider,
     type Settings,
   } from "../../../shared/settings.js";
+  import { placePopover } from "./floating.js";
   import { t } from "./i18n.svelte.js";
   import { findOpenCodeModel, openCodeCatalogue, openCodeFetchFailed } from "./models.svelte.js";
 
@@ -36,6 +37,13 @@
 
   let open = $state(false);
   let root: HTMLDivElement | undefined;
+  // Both are `$state`, because the effect below is driven by them binding:
+  // the popover element only exists once `open` is true.
+  let trigger = $state<HTMLButtonElement | undefined>(undefined);
+  let panel = $state<HTMLDivElement | undefined>(undefined);
+  let placement = $state<{ x: number; y: number } | null>(null);
+  let innerWidth = $state(0);
+  let innerHeight = $state(0);
 
   const catalogue = $derived(openCodeCatalogue());
   const selected = $derived(findOpenCodeModel(settings.provider, settings.model));
@@ -69,16 +77,50 @@
   }
 
   function onWindowClick(event: MouseEvent): void {
+    // The popover is `position: fixed` but still a child of `root`, so a click
+    // inside it is still inside `root` and this stays a plain containment test.
     if (root && !root.contains(event.target as Node)) open = false;
   }
+
+  /*
+   * Measure, then place. The popover has to be in the DOM to know how tall it
+   * is, so it renders hidden for one flush and `placement` reveals it -- an
+   * `$effect` runs after the DOM is updated and before paint, so there is
+   * nothing to see in between.
+   */
+  $effect(() => {
+    if (!open || !panel || !trigger) {
+      placement = null;
+      return;
+    }
+    // Read what changes the popover's height, so a catalogue that arrives late
+    // or a warning that appears re-places it rather than leaving it stale.
+    void catalogue;
+    void needsKey;
+
+    const anchor = trigger.getBoundingClientRect();
+    const box = panel.getBoundingClientRect();
+    placement = placePopover(
+      { left: anchor.left, top: anchor.top, width: anchor.width, height: anchor.height },
+      {
+        viewportWidth: innerWidth,
+        viewportHeight: innerHeight,
+        popoverWidth: box.width,
+        popoverHeight: box.height,
+        margin: 8,
+        gap: 6,
+      },
+    );
+  });
 </script>
 
-<svelte:window onclick={onWindowClick} />
+<svelte:window onclick={onWindowClick} bind:innerWidth bind:innerHeight />
 
 <div class="picker" bind:this={root}>
   <button
     class="trigger"
     class:warn={needsKey}
+    bind:this={trigger}
     onclick={() => (open = !open)}
     title={t("chat.modelPickerHint")}
   >
@@ -87,7 +129,15 @@
   </button>
 
   {#if open}
-    <div class="popover" role="dialog" aria-label={t("chat.modelPickerHint")}>
+    <div
+      class="popover"
+      role="dialog"
+      aria-label={t("chat.modelPickerHint")}
+      bind:this={panel}
+      style={placement === null
+        ? "visibility: hidden"
+        : `left: ${placement.x}px; top: ${placement.y}px`}
+    >
       <div class="field">
         <label for="picker-provider">{t("provider.provider")}</label>
         <select
@@ -179,7 +229,6 @@
 
 <style>
   .picker {
-    position: relative;
     min-width: 0;
   }
 
@@ -216,14 +265,19 @@
     font-size: 10px;
   }
 
-  /* Opens upwards: the composer is pinned to the bottom of the panel, so a
-     popover hanging down would be off-screen. */
+  /*
+   * Positioned against the window, by `placePopover`, not against the picker.
+   * Two reasons, and either one is enough: the picker sits at the right-hand
+   * end of the right-hand panel, so anything laid out from it grows off the
+   * screen; and every panel between here and `<body>` is `overflow: hidden`,
+   * so a popover wider than the sidebar would be cut off rather than overhang
+   * the canvas. `fixed` escapes both -- no ancestor here has a transform or a
+   * filter, which are what would make it a containing block again.
+   */
   .popover {
-    position: absolute;
-    bottom: calc(100% + 6px);
-    left: 0;
+    position: fixed;
     z-index: 20;
-    width: min(340px, calc(100vw - 64px));
+    width: min(340px, calc(100vw - 16px));
     padding: 12px;
     border: 1px solid var(--border);
     border-radius: 10px;

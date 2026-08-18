@@ -36,6 +36,7 @@
     type EditResponse,
     type OpenCodeModelInfo,
     type ProgressEvent,
+    type RecentDocument,
     type RecoveryOffer,
     type ClipboardInfo,
     type MeshPayload,
@@ -157,7 +158,7 @@
   let blockRegistry = $state<string[]>([]);
 
   /** Recently opened schematics. Owned by main; re-read after every open. */
-  let recentDocuments = $state<string[]>([]);
+  let recentDocuments = $state<RecentDocument[]>([]);
 
   /**
    * What main's clipboard holds, as it last reported.
@@ -586,7 +587,7 @@
       enabled: !busy,
       run: () => void openDocument(),
     },
-    ...recentDocuments.slice(0, 5).map((filePath) => ({
+    ...recentDocuments.slice(0, 5).map(({ filePath }) => ({
       id: `recent:${filePath}`,
       title: t("command.openRecent", { name: filePath.split(/[\\/]/).pop() ?? filePath }),
       group: t("group.recent"),
@@ -812,6 +813,25 @@
     } else if (lastSchemPath) {
       await runPreview(lastSchemPath);
     }
+  }
+
+  /**
+   * The nothing-open path: generate, then report into the log.
+   *
+   * `generateFrom` already raises its own banner for the file it wrote (and for
+   * any blocks it had to drop), so this adds only what the conversation needs:
+   * a line saying the build happened, or the reason it did not.
+   */
+  async function buildFromChat(prompt: string): Promise<void> {
+    chat = [...chat, { role: "user", text: prompt }];
+    liveSteps = [];
+    const failure = await generateFrom(prompt);
+    chat = [
+      ...chat,
+      failure === null
+        ? { role: "agent", text: t("chat.built"), changed: docState?.blockCount }
+        : { role: "error", text: failure },
+    ];
   }
 
   async function saveKey(provider: Provider, apiKey: string): Promise<void> {
@@ -1286,7 +1306,24 @@
     await saveDocument(docState.format, `${picked.path}/${name}`);
   }
 
+  /**
+   * A message to the AI, meaning whichever of the two things it can mean.
+   *
+   * With a document open the agent edits it. With nothing open there is nothing
+   * to edit, and the prompt is a description of something to *build* -- so it
+   * goes to the generator, which writes a schematic and opens it. Every message
+   * after that edits what the first one created.
+   *
+   * The chat used to refuse outright and tell the user to open a schematic
+   * first, which was only ever true of half the app: the generator has always
+   * been able to make one from a sentence. It was asking people to go and find
+   * a second text box to type the same sentence into.
+   */
   async function askAgent(prompt: string): Promise<void> {
+    if (docState === null) {
+      await buildFromChat(prompt);
+      return;
+    }
     chat = [...chat, { role: "user", text: prompt }];
     liveSteps = [];
     busy = true;
@@ -1337,7 +1374,19 @@
     }
   }
 
-  async function onGenerate(): Promise<void> {
+  function onGenerate(): Promise<string | null> {
+    return generateFrom(description);
+  }
+
+  /**
+   * Builds a schematic from a description and opens it.
+   *
+   * Returns `null` on success, or the failure's message. Both callers -- the
+   * Generate button and the chat with nothing open -- want the file written and
+   * opened; only the way they report it differs, so that is the only part left
+   * to them.
+   */
+  async function generateFrom(prompt: string): Promise<string | null> {
     busy = true;
     status = null;
     try {
@@ -1345,14 +1394,14 @@
       try {
         response = await api().generate({
           requestId: requestId(),
-          description,
+          description: prompt,
           version: settings.version,
           exportType: settings.exportType,
           imagePath,
         });
       } catch (err) {
         failed(err, t("task.generating"));
-        return;
+        return err instanceof Error ? err.message : String(err);
       }
       if (!response.ok) {
         status = {
@@ -1363,7 +1412,7 @@
           text: response.message,
           detail: response.detail,
         };
-        return;
+        return response.message;
       }
       // Two independent things worth saying about a successful save, either of
       // which may be absent. Dropped blocks downgrade the tone: the file was
@@ -1402,6 +1451,7 @@
         // a document now, like anything else that arrives on screen.
         await openDocumentAt(response.path);
       }
+      return null;
     } finally {
       busy = false;
       progress = null;
@@ -1444,6 +1494,18 @@
     belongs to the canvas -- and moving it gives the canvas that corner back.
   -->
   <header class="navbar">
+    <!--
+      Settings first, at the very edge. It sat after the camera modes before,
+      which is still the left-hand group but reads as trailing them rather than
+      anchoring the bar.
+    -->
+    <button
+      class="icon gear"
+      onclick={() => (settingsOpen = true)}
+      title={t("settings.openShortcut")}
+      aria-label={t("settings.title")}>&#x2699;</button
+    >
+
     <h1>{t("app.title")}</h1>
 
     <div class="camera-modes" role="group" aria-label={t("viewport.cameraMode")}>
@@ -1462,13 +1524,6 @@
         {t("viewport.creative")}
       </button>
     </div>
-
-    <button
-      class="icon gear"
-      onclick={() => (settingsOpen = true)}
-      title={t("settings.openShortcut")}
-      aria-label={t("settings.title")}>&#x2699;</button
-    >
   </header>
 
   <section class="controls">
@@ -1499,7 +1554,7 @@
           live={liveSteps}
           {selection}
           {remembered}
-          enabled={docState !== null}
+          hasDocument={docState !== null}
           {busy}
           {settings}
           {keyStatus}

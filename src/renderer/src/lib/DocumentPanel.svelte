@@ -14,15 +14,16 @@
    * store subscription to it (`store_rune_conflict`), so `fromBlock` below
    * would silently stop being reactive.
    */
-  import type { DocumentState } from "../../../shared/ipc.js";
+  import type { DocumentState, RecentDocument } from "../../../shared/ipc.js";
   import { SCHEMATIC_FORMAT_LABEL, type SchematicFormat } from "../../../shared/schematic.js";
   import { t } from "./i18n.svelte.js";
+  import { openedAge } from "./recent_age.js";
 
   interface Props {
     doc: DocumentState | null;
     busy: boolean;
     /** Recently opened schematics, most recent first. */
-    recent: readonly string[];
+    recent: readonly RecentDocument[];
     onopenrecent: (filePath: string) => void;
     /**
      * The block Fill writes and the one Creative mode places. Owned by the app
@@ -66,8 +67,36 @@
    * already open is a button that does nothing visible.
    */
   const reopenable = $derived(
-    recent.filter((entry) => doc === null || entry !== doc.filePath).slice(0, 6),
+    recent.filter((entry) => doc === null || entry.filePath !== doc.filePath).slice(0, 6),
   );
+
+  /**
+   * When a schematic was last opened, in the shortest form that is still
+   * unambiguous.
+   *
+   * Empty for `openedAt === 0`, which is what an entry written before this list
+   * carried timestamps has. Showing "1 Jan 1970" there would be inventing a
+   * fact; showing nothing says plainly that none was recorded.
+   */
+  function openedLabel(openedAt: number): string {
+    const age = openedAge(openedAt, Date.now());
+    switch (age.kind) {
+      case "none":
+        return "";
+      case "justNow":
+        return t("doc.openedJustNow");
+      case "minutes":
+        return t("doc.openedMinutes", { count: age.count });
+      case "hours":
+        return t("doc.openedHours", { count: age.count });
+      case "days":
+        return t("doc.openedDays", { count: age.count });
+      default:
+        // `toLocaleDateString` follows the OS rather than our locale, which is
+        // the right authority for how a date is written.
+        return new Date(openedAt).toLocaleDateString();
+    }
+  }
 </script>
 
 <fieldset>
@@ -82,11 +111,17 @@
       <div class="field">
         <label for="recent-empty">{t("doc.recent")}</label>
         <ul id="recent-empty" class="recent">
-          {#each reopenable as filePath (filePath)}
+          {#each reopenable as entry (entry.filePath)}
             <li>
-              <button class="link" onclick={() => onopenrecent(filePath)} disabled={busy} title={filePath}>
-                {fileName(filePath)}
+              <button
+                class="link"
+                onclick={() => onopenrecent(entry.filePath)}
+                disabled={busy}
+                title={entry.filePath}
+              >
+                {fileName(entry.filePath)}
               </button>
+              <span class="when">{openedLabel(entry.openedAt)}</span>
             </li>
           {/each}
         </ul>
@@ -138,11 +173,17 @@
       <div class="field">
         <label for="recent">{t("doc.recent")}</label>
         <ul id="recent" class="recent">
-          {#each reopenable as filePath (filePath)}
+          {#each reopenable as entry (entry.filePath)}
             <li>
-              <button class="link" onclick={() => onopenrecent(filePath)} disabled={busy} title={filePath}>
-                {fileName(filePath)}
+              <button
+                class="link"
+                onclick={() => onopenrecent(entry.filePath)}
+                disabled={busy}
+                title={entry.filePath}
+              >
+                {fileName(entry.filePath)}
               </button>
+              <span class="when">{openedLabel(entry.openedAt)}</span>
             </li>
           {/each}
         </ul>
@@ -214,7 +255,17 @@
   }
 
   .recent li {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
     padding: 2px 0;
+  }
+
+  .when {
+    flex: none;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
   }
 
   button.link:disabled {

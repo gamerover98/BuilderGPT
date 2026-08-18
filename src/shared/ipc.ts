@@ -518,6 +518,20 @@ export interface AgentSuccess {
 export type AgentResponse = Result<AgentSuccess>;
 
 /**
+ * A schematic opened before, and when.
+ *
+ * `openedAt` is epoch milliseconds, and `0` means "no date recorded" rather
+ * than 1970: settings files written before this list carried timestamps hold
+ * bare paths, and those entries keep their place in the list without inventing
+ * a time they were never opened at. The renderer shows nothing in that column
+ * rather than a date it made up.
+ */
+export interface RecentDocument {
+  filePath: string;
+  openedAt: number;
+}
+
+/**
  * Unsaved work found on disk from a previous session.
  *
  * Offered on launch. `null` is the normal case and is not an error — most
@@ -577,7 +591,7 @@ export interface BgptApi {
    * Recently opened schematics, most recent first. Main-owned: it is not part
    * of `Settings`, so saving settings cannot overwrite it with a stale copy.
    */
-  listRecentDocuments(): Promise<string[]>;
+  listRecentDocuments(): Promise<RecentDocument[]>;
   newDocument(size: { width: number; height: number; length: number }): Promise<DocumentStateResponse>;
   closeDocument(): Promise<void>;
   getDocumentState(): Promise<DocumentStateResponse>;

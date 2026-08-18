@@ -28,6 +28,7 @@ import {
 } from "../../shared/settings.js";
 import { coerceRecents, forgetRecent, rememberRecent } from "./recent_documents.js";
 import { coerceSettings } from "./settings_coerce.js";
+import type { RecentDocument } from "../../shared/ipc.js";
 
 interface PersistedFile {
   settings: Settings;
@@ -43,7 +44,7 @@ interface PersistedFile {
    * changed a preview slider — the file opened five minutes ago would silently
    * vanish from the list. Only main writes this.
    */
-  recentDocuments: string[];
+  recentDocuments: RecentDocument[];
 }
 
 /** Windows reaches the same file through paths differing only in case. */
@@ -103,12 +104,12 @@ export async function setSettings(next: Settings): Promise<Settings> {
   return data.settings;
 }
 
-export async function getRecentDocuments(): Promise<string[]> {
+export async function getRecentDocuments(): Promise<RecentDocument[]> {
   return [...(await load()).recentDocuments];
 }
 
 /** Moves a path to the front of the list, or adds it there. */
-export async function rememberRecentDocument(filePath: string): Promise<string[]> {
+export async function rememberRecentDocument(filePath: string): Promise<RecentDocument[]> {
   const data = await load();
   data.recentDocuments = rememberRecent(
     data.recentDocuments,
@@ -120,7 +121,7 @@ export async function rememberRecentDocument(filePath: string): Promise<string[]
 }
 
 /** Drops one — used when opening it fails, because it has moved or gone. */
-export async function forgetRecentDocument(filePath: string): Promise<string[]> {
+export async function forgetRecentDocument(filePath: string): Promise<RecentDocument[]> {
   const data = await load();
   const before = data.recentDocuments.length;
   data.recentDocuments = forgetRecent(data.recentDocuments, filePath, RECENTS_ARE_CASE_SENSITIVE);

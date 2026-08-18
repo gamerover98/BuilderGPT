@@ -588,45 +588,93 @@ console.log("\n--- recent documents ---");
   const B = "C:/builds/castle.schem";
   const C = "C:/builds/tower.schem";
 
-  equal("a new list starts with what was opened", rememberRecent([], A, true), [A]);
-  equal("the newest goes first", rememberRecent([A], B, true), [B, A]);
+  /** A list from paths, oldest timestamps first, so order is visible. */
+  const list = (...entries: [string, number][]) =>
+    entries.map(([filePath, openedAt]) => ({ filePath, openedAt }));
+  const paths = (entries: readonly { filePath: string }[]) => entries.map((e) => e.filePath);
+
+  equal("a new list starts with what was opened", rememberRecent([], A, true, 100), [
+    { filePath: A, openedAt: 100 },
+  ]);
+  equal("the newest goes first", paths(rememberRecent(list([A, 1]), B, true, 2)), [B, A]);
 
   // The point of the list: reopening something you already have moves it up
   // rather than giving it a second slot that opens the same file.
-  equal("reopening promotes rather than duplicates", rememberRecent([A, B, C], C, true), [C, A, B]);
+  equal(
+    "reopening promotes rather than duplicates",
+    paths(rememberRecent(list([A, 1], [B, 2], [C, 3]), C, true, 9)),
+    [C, A, B],
+  );
   equal(
     "...and the list does not grow doing it",
-    rememberRecent([A, B, C], C, true).length,
+    rememberRecent(list([A, 1], [B, 2], [C, 3]), C, true, 9).length,
     3,
+  );
+  equal(
+    "...and the promoted entry carries the new time",
+    rememberRecent(list([A, 1], [C, 3]), C, true, 9)[0].openedAt,
+    9,
   );
 
   // On Windows the same schematic reached through the picker and through a drop
   // can differ only in the drive letter's case.
   equal(
     "a path differing only in case is the same file when case is ignored",
-    rememberRecent([A], A.toUpperCase(), false),
+    paths(rememberRecent(list([A, 1]), A.toUpperCase(), false, 2)),
     [A.toUpperCase()],
   );
   equal(
     "...and a different one where case matters",
-    rememberRecent([A], A.toUpperCase(), true).length,
+    rememberRecent(list([A, 1]), A.toUpperCase(), true, 2).length,
     2,
   );
 
   // The cap has to drop the *oldest*, which is the end of the list.
-  const many = Array.from({ length: 10 }, (_, i) => `C:/builds/${i}.schem`);
-  const capped = rememberRecent(many, "C:/builds/new.schem", true, 10);
+  const many = Array.from({ length: 10 }, (_, i) => ({
+    filePath: `C:/builds/${i}.schem`,
+    openedAt: i + 1,
+  }));
+  const capped = rememberRecent(many, "C:/builds/new.schem", true, 99, 10);
   equal("the list stops at the cap", capped.length, 10);
-  equal("...keeping the newest", capped[0], "C:/builds/new.schem");
-  check("...and dropping the oldest", !capped.includes("C:/builds/9.schem"));
+  equal("...keeping the newest", capped[0].filePath, "C:/builds/new.schem");
+  check("...and dropping the oldest", !paths(capped).includes("C:/builds/9.schem"));
 
-  equal("forgetting removes it", forgetRecent([A, B], A, true), [B]);
-  equal("forgetting something absent changes nothing", forgetRecent([A, B], C, true), [A, B]);
+  equal("forgetting removes it", paths(forgetRecent(list([A, 1], [B, 2]), A, true)), [B]);
+  equal(
+    "forgetting something absent changes nothing",
+    paths(forgetRecent(list([A, 1], [B, 2]), C, true)),
+    [A, B],
+  );
 
   // A settings file written by another build, or edited by hand.
   equal("a non-array reads as empty", coerceRecents({ nope: true }), []);
-  equal("nulls and numbers are dropped", coerceRecents([A, null, 7, "", B]), [A, B]);
+  equal(
+    "malformed entries are dropped",
+    coerceRecents([{ filePath: A, openedAt: 5 }, null, 7, { openedAt: 9 }, { filePath: "" }]),
+    [{ filePath: A, openedAt: 5 }],
+  );
   equal("...and the cap still applies", coerceRecents(many, 3).length, 3);
+
+  /*
+   * The upgrade path. Every settings file written before this list carried
+   * timestamps holds bare strings; dropping them would empty the recents of
+   * anyone who updated, to gain a column. They are kept with `openedAt: 0`,
+   * which the UI reads as "no date recorded" rather than as 1970.
+   */
+  equal("a pre-timestamp file still reads", coerceRecents([A, B]), [
+    { filePath: A, openedAt: 0 },
+    { filePath: B, openedAt: 0 },
+  ]);
+  equal(
+    "a nonsense timestamp becomes no timestamp",
+    coerceRecents([{ filePath: A, openedAt: "yesterday" }])[0].openedAt,
+    0,
+  );
+  equal(
+    "a negative timestamp becomes no timestamp",
+    coerceRecents([{ filePath: A, openedAt: -5 }])[0].openedAt,
+    0,
+  );
 }
 
 // --- settings coercion: the fields that vanish when nobody names them ------

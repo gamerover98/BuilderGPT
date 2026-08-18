@@ -31,6 +31,7 @@ import {
   type PreviewRequest,
   type PreviewResponse,
   type ProgressEvent,
+  type RecentDocument,
   type RecoveryPeekResponse,
   type SaveRequest,
   type SaveResponse,
@@ -339,7 +340,10 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     }
   });
 
-  ipcMain.handle(IPC.docRecentList, async (): Promise<string[]> => await getRecentDocuments());
+  ipcMain.handle(
+    IPC.docRecentList,
+    async (): Promise<RecentDocument[]> => await getRecentDocuments(),
+  );
 
   ipcMain.handle(
     IPC.docNew,

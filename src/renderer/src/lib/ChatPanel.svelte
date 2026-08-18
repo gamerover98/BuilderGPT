@@ -44,7 +44,14 @@
     selection: RegionSpec | null;
     /** Exchanges the agent is carrying into the next question. */
     remembered: number;
-    enabled: boolean;
+    /**
+     * Whether a schematic is open.
+     *
+     * Not a gate any more — it decides what a message *means*. With something
+     * open the agent edits it; with nothing open the prompt describes a
+     * schematic to build, and the generator makes one.
+     */
+    hasDocument: boolean;
     busy: boolean;
     settings: Settings;
     keyStatus: KeyStorageStatus | null;
@@ -70,7 +77,7 @@
     live,
     selection,
     remembered,
-    enabled,
+    hasDocument,
     busy,
     settings,
     keyStatus,
@@ -88,7 +95,15 @@
   /** The few tallies that matter, and how many were left out. */
   const SHOWN = 4;
 
-  const EXAMPLES = ["chat.example1", "chat.example2", "chat.example3"];
+  /**
+   * Starters for each of the two things a first message can be.
+   *
+   * With nothing open they describe a build, because that is what a prompt
+   * does then; with a document they describe an edit.
+   */
+  const EDIT_EXAMPLES = ["chat.example1", "chat.example2", "chat.example3"];
+  const BUILD_EXAMPLES = ["chat.build1", "chat.build2", "chat.build3"];
+  const examples = $derived(hasDocument ? EDIT_EXAMPLES : BUILD_EXAMPLES);
 
   let log = $state<HTMLDivElement | undefined>(undefined);
   /** Which agent turns have had their tool list opened, by index. */
@@ -134,14 +149,12 @@
   <div class="log" bind:this={log}>
     {#if entries.length === 0 && live.length === 0}
       <div class="empty">
-        <p>{enabled ? t("chat.emptyTitle") : t("chat.needDocument")}</p>
-        {#if enabled}
-          <ul class="examples">
-            {#each EXAMPLES as key (key)}
-              <li><button class="example" onclick={() => onask(t(key))}>{t(key)}</button></li>
-            {/each}
-          </ul>
-        {/if}
+        <p>{hasDocument ? t("chat.emptyTitle") : t("chat.emptyBuildTitle")}</p>
+        <ul class="examples">
+          {#each examples as key (key)}
+            <li><button class="example" onclick={() => onask(t(key))}>{t(key)}</button></li>
+          {/each}
+        </ul>
       </div>
     {/if}
 
@@ -229,7 +242,7 @@
     <ChatComposer
       {selection}
       {busy}
-      {enabled}
+      {hasDocument}
       {settings}
       {keyStatus}
       {draft}

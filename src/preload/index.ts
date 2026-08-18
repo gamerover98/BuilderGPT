@@ -30,6 +30,7 @@ import {
   type PreviewRequest,
   type PreviewResponse,
   type ProgressEvent,
+  type RecentDocument,
   type RecoveryPeekResponse,
   type SaveRequest,
   type SaveResponse,
@@ -66,7 +67,8 @@ const api: BgptApi = {
 
   openDocument: (filePath: string) =>
     ipcRenderer.invoke(IPC.docOpen, filePath) as Promise<DocumentStateResponse>,
-  listRecentDocuments: () => ipcRenderer.invoke(IPC.docRecentList) as Promise<string[]>,
+  listRecentDocuments: () =>
+    ipcRenderer.invoke(IPC.docRecentList) as Promise<RecentDocument[]>,
   newDocument: (size) => ipcRenderer.invoke(IPC.docNew, size) as Promise<DocumentStateResponse>,
   closeDocument: () => ipcRenderer.invoke(IPC.docClose) as Promise<void>,
   getDocumentState: () => ipcRenderer.invoke(IPC.docState) as Promise<DocumentStateResponse>,

@@ -21,7 +21,8 @@
   interface Props {
     selection: RegionSpec | null;
     busy: boolean;
-    enabled: boolean;
+    /** Whether a schematic is open; decides what a message means, not whether one can be sent. */
+    hasDocument: boolean;
     settings: Settings;
     keyStatus: KeyStorageStatus | null;
     /**
@@ -43,7 +44,7 @@
   const {
     selection,
     busy,
-    enabled,
+    hasDocument,
     settings,
     keyStatus,
     draft,
@@ -84,7 +85,7 @@
 
   function submit(): void {
     const prompt = draft.trim();
-    if (prompt === "" || busy || !enabled) return;
+    if (prompt === "" || busy) return;
     ondraftchange("");
     onask(prompt);
   }
@@ -98,20 +99,22 @@
   }
 </script>
 
-<div class="composer" class:disabled={!enabled}>
+<div class="composer">
   <textarea
     bind:this={input}
     value={draft}
     oninput={(event) => ondraftchange(event.currentTarget.value)}
     onkeydown={onKeydown}
-    placeholder={enabled ? t("chat.placeholder") : t("chat.needDocument")}
-    disabled={!enabled}
+    placeholder={hasDocument ? t("chat.placeholder") : t("chat.buildPlaceholder")}
     rows="1"
     aria-label={t("chat.legend")}
   ></textarea>
 
   <div class="context">
-    {#if selection}
+    {#if !hasDocument}
+      <!-- Nothing to act *on*: the message describes what to make. -->
+      <span class="chip dim" title={t("chat.actsAsBuild")}>#new-schematic</span>
+    {:else if selection}
       <span class="chip" title={t("chat.actsOnSelection")}>
         #selection
         <em>
@@ -140,7 +143,7 @@
       <button
         class="send primary"
         onclick={submit}
-        disabled={!enabled || draft.trim() === ""}
+        disabled={draft.trim() === ""}
         aria-label={t("chat.send")}
         title={t("chat.send")}
       >
@@ -166,10 +169,6 @@
 
   .composer:focus-within {
     border-color: var(--accent);
-  }
-
-  .composer.disabled {
-    opacity: 0.65;
   }
 
   textarea {

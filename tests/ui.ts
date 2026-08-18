@@ -29,6 +29,7 @@ import {
   type Ray,
 } from "../src/renderer/src/lib/selection_drag.js";
 import { missingKeys, translate, translatePlural } from "../src/renderer/src/lib/i18n_core.js";
+import { openedAge } from "../src/renderer/src/lib/recent_age.js";
 import { en } from "../src/renderer/src/lib/locales/en.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -351,6 +352,39 @@ console.log("\n--- selection face drag ---");
     }),
     null,
   );
+}
+
+// --- how long ago a schematic was opened ----------------------------------
+console.log("\n--- recent document age ---");
+{
+  const NOW = 1_700_000_000_000;
+  const ago = (ms: number) => openedAge(NOW - ms, NOW);
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+  const DAY = 24 * HOUR;
+
+  equal("no timestamp is no date", openedAge(0, NOW), { kind: "none" });
+  equal("...and neither is a negative one", openedAge(-1, NOW), { kind: "none" });
+
+  equal("this second is just now", ago(0), { kind: "justNow" });
+  equal("...and so is 59 seconds", ago(59_000), { kind: "justNow" });
+
+  // Each boundary, from both sides. Five thresholds, five chances to be off by
+  // one, and a label that is only ever wrong by a little is a label nobody
+  // notices is wrong.
+  equal("one minute becomes minutes", ago(MINUTE), { kind: "minutes", count: 1 });
+  equal("59 minutes is still minutes", ago(59 * MINUTE), { kind: "minutes", count: 59 });
+  equal("one hour becomes hours", ago(HOUR), { kind: "hours", count: 1 });
+  equal("23 hours is still hours", ago(23 * HOUR), { kind: "hours", count: 23 });
+  equal("one day becomes days", ago(DAY), { kind: "days", count: 1 });
+  equal("six days is still days", ago(6 * DAY), { kind: "days", count: 6 });
+  equal("a week becomes a date", ago(7 * DAY), { kind: "date" });
+  equal("...and so does a year", ago(365 * DAY), { kind: "date" });
+
+  // A clock that moved backwards -- a timezone change, an NTP correction --
+  // leaves a stamp in the future. "Just now" is the honest reading of a moment
+  // that has not happened yet; a negative count would not be.
+  equal("a future timestamp reads as just now", openedAge(NOW + DAY, NOW), { kind: "justNow" });
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

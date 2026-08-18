@@ -69,7 +69,8 @@ export const en = {
   "viewport.creative": "Creative",
   "viewport.orbitHint": "Orbit around the structure, and click to select",
   "viewport.creativeHint": "Fly through it — WASD, Space and Shift",
-  "viewport.hudOrbit": "Left: pan · Right: rotate · Wheel: zoom · Click: select · R: reset",
+  "viewport.hudOrbit":
+    "Left: pan · Right: rotate · Wheel: zoom · Click: select · Drag a face: resize · R: reset",
   "viewport.hudFlying":
     "WASD: move · Space/Shift: up, down · Ctrl: faster · Left: break · Right: place · Esc: release",
   "viewport.hudClickToFly": "Click the viewport to fly",

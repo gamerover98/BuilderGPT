@@ -215,6 +215,23 @@ rebuilt rather than recoloured.
 `BrowserWindow`'s `backgroundColor` in `main/index.ts` is outside all of this on
 purpose — it is painted before there is a renderer to ask.
 
+**The left mouse button pans, so anything else that drags must take it.** The
+viewer maps `LEFT` to `THREE.MOUSE.PAN`. A selection-face drag therefore sets
+`controls.enabled = false` for the duration, or the camera pans and the face
+never moves. The same gesture also has to suppress the click-to-select path on
+`pointerup`: a press that lands on a handle and does not move is still a press,
+and the 4px tolerance does not help, so it would collapse the selection the
+user was about to resize.
+
+**Renderer logic that runs from the rendering steps cannot be verified in the
+browser harness here.** `requestAnimationFrame` callbacks and `ResizeObserver`
+deliveries both belong to those steps, and the Browser pane is often not
+compositing — measurably: zero frames, and an observer that does not even fire
+its initial call. Code driven that way (the hover raycast, the tool window's
+pull-back on resize) will look broken when it is fine. The response is to keep
+the *decision* in a plain module — `selection_drag.ts`, `floating.ts` — and test
+that; only the trigger stays unobservable. `tests/ui.ts` is where those live.
+
 **Every renderer string comes from `t()`; main's do not.** The catalogue is
 `renderer/src/lib/locales/en.ts`, flat dotted keys, and a key with no entry
 renders as *the key itself* — visible and greppable, where a blank would look

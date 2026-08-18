@@ -1069,6 +1069,20 @@
     };
   }
 
+  /**
+   * A face of the selection box was dragged in the viewport.
+   *
+   * The region arrives already snapped to whole blocks and clamped to the
+   * document, so there is nothing to validate here. The anchor moves to the
+   * box's near corner so a following Shift-click extends from where the box now
+   * is rather than from wherever it was first clicked — otherwise resizing a
+   * selection and then extending it would jump somewhere unrelated.
+   */
+  function onSelectionDragged(region: RegionSpec): void {
+    selection = region;
+    anchor = { x: region.minX, y: region.minY, z: region.minZ };
+  }
+
   function selectAll(): void {
     if (!docState) return;
     toolsOpen = true;
@@ -1777,6 +1791,10 @@
       flySpeed={settings.preview.flySpeed}
       framingKey={framingEpoch}
       onbuild={docState ? onBuild : undefined}
+      extent={docState
+        ? { width: docState.size[0], height: docState.size[1], length: docState.size[2] }
+        : null}
+      onselectionchange={docState ? onSelectionDragged : undefined}
       maxDpr={settings.preview.maxDpr}
       renderScale={settings.preview.renderScale}
       maxDrawDistance={settings.preview.maxDrawDistance}

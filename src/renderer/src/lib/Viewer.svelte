@@ -20,6 +20,13 @@
   import type { MeshAtlas, MeshPayload } from "../../../shared/ipc.js";
   import type { ResolvedTheme } from "../../../shared/settings.js";
   import { t } from "./i18n.svelte.js";
+  import {
+    dragFace,
+    plateScale,
+    type Axis,
+    type Extent,
+    type Side,
+  } from "./selection_drag.js";
   import * as THREE from "three";
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
   import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
@@ -51,6 +58,34 @@
 
   /** Placing or removing one block, from the crosshair in flight. */
   export type BuildAction = "place" | "break";
+
+  /** One of the six faces of the selection box, as a drag handle. */
+  interface FaceHandle {
+    axis: Axis;
+    side: Side;
+  }
+
+  /**
+   * The six, in a fixed order.
+   *
+   * Built once at module scope so each plate's `userData.face` is a stable
+   * object: hover comparisons then have an identity to fall back on, and the
+   * table cannot drift out of step with the meshes built from it.
+   */
+  const FACES: readonly FaceHandle[] = [
+    { axis: "x", side: "min" },
+    { axis: "x", side: "max" },
+    { axis: "y", side: "min" },
+    { axis: "y", side: "max" },
+    { axis: "z", side: "min" },
+    { axis: "z", side: "max" },
+  ];
+
+  /** The cursor a face suggests: faces move along their own axis. */
+  function cursorFor(face: FaceHandle | null): string {
+    if (face === null) return "";
+    return face.axis === "y" ? "ns-resize" : "ew-resize";
+  }
 
   interface Region {
     minX: number;
@@ -96,6 +131,16 @@
     /** Building from the crosshair, in flight. */
     onbuild?: (action: BuildAction, at: { x: number; y: number; z: number }) => void;
     /**
+     * The document's dimensions, so a dragged face cannot leave it.
+     *
+     * `null` disables the drag handles: without knowing how big the schematic
+     * is there is nothing to clamp against, and a face dragged off the end
+     * would select cells that do not exist.
+     */
+    extent?: Extent | null;
+    /** A face was dragged; the region is already snapped and clamped. */
+    onselectionchange?: (region: Region) => void;
+    /**
      * The palette in force, already resolved against the OS preference.
      *
      * The viewer never reads this value -- the colours come from the same CSS
@@ -123,6 +168,8 @@
     onbuild,
     framingKey = 0,
     theme = "dark",
+    extent = null,
+    onselectionchange,
   }: Props = $props();
 
   /**
@@ -240,6 +287,25 @@
   let grid: THREE.GridHelper | undefined;
   let loaded: THREE.Object3D | null = null;
   let selectionBox: THREE.LineSegments | undefined;
+
+  /**
+   * The six draggable faces of the selection box.
+   *
+   * Kept and re-shaped rather than rebuilt, unlike the wire box beside them.
+   * They are re-shaped on every frame of a drag, and allocating six geometries
+   * and six materials per frame to throw them away again is the kind of litter
+   * that shows up as stutter on a large schematic. The pattern is
+   * `ensureHighlight`'s, for the same reason.
+   */
+  let handles: THREE.Group | undefined;
+  /** Which face the pointer is over, or being dragged. */
+  let hovered: FaceHandle | null = $state(null);
+  let dragged: FaceHandle | null = null;
+  /** Suppresses the click-to-select path after a handle gesture. */
+  let draggedThisGesture = false;
+  /** Latest pointer position, read by the hover raycast in the render loop. */
+  let pointerAt: { x: number; y: number } | null = null;
+  let lastHoverAt = 0;
   let fly: PointerLockControls | undefined;
   /** True while the pointer is captured; drives the "click to fly" overlay. */
   let flying = $state(false);
@@ -428,6 +494,144 @@
     return pickBlockAt(rect.left + rect.width / 2, rect.top + rect.height / 2);
   }
 
+  /**
+   * Builds the six face plates once.
+   *
+   * Each is a unit plane oriented along its axis; `updateSelectionBox` scales
+   * and positions them to the current box. They are invisible until hovered --
+   * a permanently shaded box hides the structure it is selecting -- but they
+   * are always present, because an invisible mesh still raycasts and that is
+   * what makes the face findable in the first place.
+   */
+  function ensureHandles(): THREE.Group | undefined {
+    if (!scene) return undefined;
+    if (handles) return handles;
+
+    handles = new THREE.Group();
+    handles.renderOrder = 998;
+    for (const face of FACES) {
+      const material = new THREE.MeshBasicMaterial({
+        color: themeColor("--selection", 0x6ea8fe),
+        transparent: true,
+        opacity: 0,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      });
+      const plate = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+      plate.userData.face = face;
+      plate.renderOrder = 998;
+      // PlaneGeometry faces +Z; turn it to face its own axis.
+      if (face.axis === "x") plate.rotation.y = Math.PI / 2;
+      else if (face.axis === "y") plate.rotation.x = Math.PI / 2;
+      handles.add(plate);
+    }
+    scene.add(handles);
+    return handles;
+  }
+
+  /** Positions and scales the six plates onto the current selection. */
+  function updateHandles(): void {
+    const group = ensureHandles();
+    if (!group) return;
+    group.visible = selection !== null && extent !== null && onselectionchange !== undefined;
+    if (!group.visible || !selection) return;
+
+    const min = [selection.minX, selection.minY, selection.minZ];
+    const max = [selection.maxX + 1, selection.maxY + 1, selection.maxZ + 1];
+    const size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    const mid = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
+
+    for (const plate of group.children as THREE.Mesh[]) {
+      const face = plate.userData.face as FaceHandle;
+      const index = face.axis === "x" ? 0 : face.axis === "y" ? 1 : 2;
+      const position = [mid[0], mid[1], mid[2]];
+      position[index] = face.side === "min" ? min[index] : max[index];
+      plate.position.set(position[0], position[1], position[2]);
+
+      const { width, height } = plateScale(face.axis, { x: size[0], y: size[1], z: size[2] });
+      plate.scale.set(width, height, 1);
+
+      const material = plate.material as THREE.MeshBasicMaterial;
+      const active = hovered !== null && hovered.axis === face.axis && hovered.side === face.side;
+      material.opacity = active ? 0.28 : 0;
+      material.color = themeColor("--selection", 0x6ea8fe);
+    }
+  }
+
+  /** The face under the pointer, or null. Raycasts the plates only. */
+  function faceAt(clientX: number, clientY: number): FaceHandle | null {
+    if (!camera || !container || !handles || !handles.visible) return null;
+    const rect = container.getBoundingClientRect();
+    raycaster.setFromCamera(
+      new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1,
+      ),
+      camera,
+    );
+    const hit = raycaster.intersectObjects(handles.children, false)[0];
+    return hit ? ((hit.object.userData.face as FaceHandle) ?? null) : null;
+  }
+
+  /**
+   * Moves the dragged face to wherever the pointer now points.
+   *
+   * The arithmetic is in `selection_drag.ts`, over plain triples: it is the
+   * part with edges worth testing, and a test runner has no camera.
+   */
+  function dragTo(clientX: number, clientY: number): void {
+    if (!dragged || !camera || !container || !selection || !extent || !onselectionchange) return;
+    const rect = container.getBoundingClientRect();
+    raycaster.setFromCamera(
+      new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1,
+      ),
+      camera,
+    );
+    const forward = camera.getWorldDirection(new THREE.Vector3());
+    const next = dragFace({
+      region: selection,
+      axis: dragged.axis,
+      side: dragged.side,
+      ray: {
+        origin: {
+          x: raycaster.ray.origin.x,
+          y: raycaster.ray.origin.y,
+          z: raycaster.ray.origin.z,
+        },
+        direction: {
+          x: raycaster.ray.direction.x,
+          y: raycaster.ray.direction.y,
+          z: raycaster.ray.direction.z,
+        },
+      },
+      view: { x: forward.x, y: forward.y, z: forward.z },
+      extent,
+    });
+    // Null means there was no usable answer -- an axis pointed at the camera,
+    // or a ray that missed the plane. Leave the selection where it is rather
+    // than move it somewhere the user did not indicate.
+    if (next !== null) onselectionchange(next);
+  }
+
+  /** Refreshes the hovered face, throttled like the crosshair highlight. */
+  function updateHover(now: number): void {
+    if (dragged !== null) return;
+    if (cameraMode !== "orbit" || pointerAt === null || !handles?.visible) {
+      if (hovered !== null) hovered = null;
+      return;
+    }
+    if (now - lastHoverAt < HIGHLIGHT_INTERVAL_MS) return;
+    lastHoverAt = now;
+
+    const face = faceAt(pointerAt.x, pointerAt.y);
+    const same =
+      face === hovered ||
+      (face !== null && hovered !== null && face.axis === hovered.axis && face.side === hovered.side);
+    if (!same) hovered = face;
+  }
+
   function updateSelectionBox(): void {
     if (!scene) return;
     if (selectionBox) {
@@ -575,6 +779,7 @@
           controls?.update();
         }
         updateCrosshairHighlight(performance.now());
+        updateHover(performance.now());
         if (renderer && scene && camera) {
           renderer.render(scene, camera);
         }
@@ -613,10 +818,64 @@
       let downAt: { x: number; y: number } | null = null;
       const onPointerDown = (event: PointerEvent) => {
         downAt = event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
+
+        /*
+         * A press on a face handle takes over the gesture.
+         *
+         * Disabling OrbitControls is not optional here: the left button is
+         * mapped to `THREE.MOUSE.PAN`, so without this the drag would pan the
+         * camera and the face would never move. Pointer capture keeps the
+         * gesture alive if the pointer leaves the canvas mid-drag.
+         */
+        if (event.button !== 0 || cameraMode !== "orbit") return;
+        const face = faceAt(event.clientX, event.clientY);
+        if (face === null) return;
+        dragged = face;
+        hovered = face;
+        draggedThisGesture = true;
+        if (controls) controls.enabled = false;
+        try {
+          renderer?.domElement.setPointerCapture(event.pointerId);
+        } catch {
+          // Best effort; the drag still tracks while the pointer is in bounds.
+        }
+        event.preventDefault();
+      };
+
+      const onPointerMove = (event: PointerEvent) => {
+        pointerAt = { x: event.clientX, y: event.clientY };
+        if (dragged !== null) dragTo(event.clientX, event.clientY);
+      };
+
+      const onPointerLeave = () => {
+        pointerAt = null;
       };
       const onPointerUp = (event: PointerEvent) => {
         const start = downAt;
         downAt = null;
+
+        if (dragged !== null) {
+          dragged = null;
+          if (controls) controls.enabled = true;
+          try {
+            renderer?.domElement.releasePointerCapture(event.pointerId);
+          } catch {
+            // Nothing captured; nothing to release.
+          }
+          return;
+        }
+
+        /*
+         * A press that started on a handle but never moved still ends here.
+         * Without this it would fall through to the block pick below and
+         * collapse the selection the user was about to resize back to the one
+         * block under the cursor -- the 4px tolerance does not help, because
+         * the pointer genuinely did not move.
+         */
+        if (draggedThisGesture) {
+          draggedThisGesture = false;
+          return;
+        }
         // In fly mode the first click captures the pointer — it is the only
         // thing a click can mean while the cursor is still visible. After
         // that, clicks build: left breaks, right places, from the crosshair.
@@ -654,6 +913,8 @@
         }
       };
       renderer.domElement.addEventListener("pointerdown", onPointerDown);
+      renderer.domElement.addEventListener("pointermove", onPointerMove);
+      renderer.domElement.addEventListener("pointerleave", onPointerLeave);
       renderer.domElement.addEventListener("pointerup", onPointerUp);
       renderer.domElement.addEventListener("contextmenu", onContextMenu);
 
@@ -664,6 +925,8 @@
         window.removeEventListener("keydown", onKeyDown);
         window.removeEventListener("keyup", onKeyUp);
         renderer?.domElement.removeEventListener("pointerdown", onPointerDown);
+        renderer?.domElement.removeEventListener("pointermove", onPointerMove);
+        renderer?.domElement.removeEventListener("pointerleave", onPointerLeave);
         renderer?.domElement.removeEventListener("pointerup", onPointerUp);
         renderer?.domElement.removeEventListener("contextmenu", onContextMenu);
         if (loaded) disposeObject(loaded);
@@ -673,6 +936,12 @@
         if (highlight) {
           highlight.geometry.dispose();
           (highlight.material as THREE.Material).dispose();
+        }
+        if (handles) {
+          for (const plate of handles.children as THREE.Mesh[]) {
+            plate.geometry.dispose();
+            (plate.material as THREE.Material).dispose();
+          }
         }
         fly?.dispose();
         controls?.dispose();
@@ -723,6 +992,34 @@
     void scene;
     void theme;
     updateSelectionBox();
+  });
+
+  /**
+   * Re-shapes the six drag handles onto the current box.
+   *
+   * Separate from the wire box above because it does not rebuild anything:
+   * `hovered` changes twenty times a second while the pointer moves over the
+   * selection, and rebuilding geometry at that rate is exactly the churn these
+   * plates are kept around to avoid.
+   */
+  $effect(() => {
+    void selection;
+    void scene;
+    void theme;
+    void hovered;
+    void extent;
+    updateHandles();
+  });
+
+  /**
+   * The cursor says which way a face will move before it is grabbed.
+   *
+   * Set on the container rather than the canvas so it survives the canvas
+   * being replaced, and cleared to "" rather than "default" so the CSS `cursor`
+   * on `.viewer` still applies when nothing is hovered.
+   */
+  $effect(() => {
+    if (container) container.style.cursor = cursorFor(hovered);
   });
 
   /**

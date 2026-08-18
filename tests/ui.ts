@@ -20,6 +20,14 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import { clampToBounds, isWithinBounds } from "../src/renderer/src/lib/floating.js";
+import {
+  dragFace,
+  dragPlaneNormal,
+  faceCentre,
+  intersectPlane,
+  plateScale,
+  type Ray,
+} from "../src/renderer/src/lib/selection_drag.js";
 import { missingKeys, translate, translatePlural } from "../src/renderer/src/lib/i18n_core.js";
 import { en } from "../src/renderer/src/lib/locales/en.js";
 
@@ -252,6 +260,97 @@ console.log("\n--- floating panel bounds ---");
     x: 10,
     y: 11,
   });
+}
+
+// --- dragging a face of the selection box ---------------------------------
+console.log("\n--- selection face drag ---");
+{
+  const extent = { width: 32, height: 32, length: 32 };
+  // A 4x4x4 box in the middle of a 32-cube document.
+  const region = { minX: 10, minY: 10, minZ: 10, maxX: 13, maxY: 13, maxZ: 13 };
+
+  /** A ray straight down -Z from above the far side, as an orbit camera gives. */
+  const rayAt = (x: number): Ray => ({
+    origin: { x, y: 12, z: 60 },
+    direction: { x: 0, y: 0, z: -1 },
+  });
+  // Looking down -Z, so the X axis is fully across the view: the best drag
+  // plane for X is the one facing the camera.
+  const view = { x: 0, y: 0, z: -1 };
+
+  equal(
+    "the plane for X drops the X component of the view",
+    dragPlaneNormal("x", { x: 0.6, y: 0, z: -0.8 }),
+    { x: 0, y: 0, z: -1 },
+  );
+  equal("an axis pointed at the camera has no usable plane", dragPlaneNormal("z", view), null);
+
+  equal("a face centre sits on the near edge for min", faceCentre(region, "x", "min").x, 10);
+  equal("...and past the far cell for max", faceCentre(region, "x", "max").x, 14);
+
+  equal(
+    "a ray parallel to the plane misses it",
+    intersectPlane({ origin: { x: 0, y: 0, z: 0 }, direction: { x: 1, y: 0, z: 0 } },
+      { x: 0, y: 0, z: 5 }, { x: 0, y: 0, z: 1 }),
+    null,
+  );
+  equal(
+    "a plane behind the ray is not a hit",
+    intersectPlane({ origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 0, z: 1 } },
+      { x: 0, y: 0, z: -5 }, { x: 0, y: 0, z: 1 }),
+    null,
+  );
+
+  const dragX = (x: number, side: "min" | "max") =>
+    dragFace({ region, axis: "x", side, ray: rayAt(x), view, extent });
+
+  equal("dragging the max face out grows the box", dragX(20.2, "max")?.maxX, 19);
+  equal("dragging the max face in shrinks it", dragX(12.4, "max")?.maxX, 11);
+  equal("dragging the min face out grows the box", dragX(4.6, "min")?.minX, 5);
+  equal("the untouched face does not move", dragX(20.2, "max")?.minX, 10);
+
+  /*
+   * The two clamps. A face pushed past its partner stops at one block thick
+   * rather than swapping the two: an inverted box would leave every subsequent
+   * fill acting on a region the user is no longer looking at.
+   */
+  equal("max cannot be pushed below min", dragX(-100, "max")?.maxX, 10);
+  equal("min cannot be pushed above max", dragX(500, "min")?.minX, 13);
+  check("...and the box stays at least one block thick", (dragX(-100, "max")?.maxX ?? -1) >= region.minX);
+
+  equal("a face stops at the far end of the document", dragX(500, "max")?.maxX, 31);
+  equal("...and at the near end", dragX(-500, "min")?.minX, 0);
+
+  /*
+   * The plate mapping, on a deliberately oblong box so a transposition shows.
+   * On a cube every answer is the same number and the bug is invisible, which
+   * is exactly how the X face shipped wrong the first time.
+   */
+  const size = { x: 2, y: 3, z: 5 };
+  equal("the X plate takes its width from Z and height from Y", plateScale("x", size), {
+    width: 5,
+    height: 3,
+  });
+  equal("the Y plate takes X and Z", plateScale("y", size), { width: 2, height: 5 });
+  equal("the Z plate takes X and Y", plateScale("z", size), { width: 2, height: 3 });
+
+  equal(
+    "an unusable drag plane changes nothing",
+    dragFace({ region, axis: "z", side: "max", ray: rayAt(12), view, extent }),
+    null,
+  );
+  equal(
+    "a ray that misses the plane changes nothing",
+    dragFace({
+      region,
+      axis: "x",
+      side: "max",
+      ray: { origin: { x: 12, y: 12, z: 60 }, direction: { x: 0, y: 0, z: 1 } },
+      view,
+      extent,
+    }),
+    null,
+  );
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

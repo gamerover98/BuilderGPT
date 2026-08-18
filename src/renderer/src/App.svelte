@@ -19,7 +19,8 @@
   import DocumentPanel from "./lib/DocumentPanel.svelte";
   import InspectorPanel from "./lib/InspectorPanel.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
-  import ProviderConfig from "./lib/ProviderConfig.svelte";
+  import SidebarTabs, { type SidebarTab } from "./lib/SidebarTabs.svelte";
+  import { findOpenCodeModel, loadOpenCodeModels } from "./lib/models.svelte.js";
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
   import Viewer, { type CameraMode, type PickedBlock } from "./lib/Viewer.svelte";
   import { api, bridgeAvailable, forIpc, bridgeMissingMessage } from "./lib/bridge.svelte.js";
@@ -346,7 +347,17 @@
    * mirroring: `ipc/handlers.ts` applies the same two rules authoritatively,
    * because a renderer check is a courtesy, not a gate.
    */
-  let openCodeModel = $state<OpenCodeModelInfo | null>(null);
+  /**
+   * The catalogue entry for the chosen model, when there is a catalogue.
+   *
+   * Used to gate the reference-image picker on whether the model reads
+   * pictures. It used to be pushed up from `ProviderConfig` through an
+   * `onmodelinfo` callback; now that the model picker lives in the chat and the
+   * catalogue is shared, both readers derive it from the same place.
+   */
+  const openCodeModel = $derived<OpenCodeModelInfo | null>(
+    findOpenCodeModel(settings.provider, settings.model),
+  );
 
   const hasProviderKey = $derived(
     keyStatus?.keys.find((entry) => entry.provider === settings.provider)?.hasKey ?? false,
@@ -506,6 +517,29 @@
 
   let paletteOpen = $state(false);
   let settingsOpen = $state(false);
+  let sidebarTab = $state<SidebarTab>("chat");
+  /**
+   * The half-written chat message.
+   *
+   * Up here rather than in the composer because switching sidebar tabs
+   * unmounts it, and losing a half-typed question to a glance at the Schematic
+   * tab is exactly the kind of thing tabs make easy to do by accident.
+   */
+  let chatDraft = $state("");
+
+  /**
+   * Fetches OpenCode's model list when the provider calls for it.
+   *
+   * Lives here rather than in the picker because the answer can rewrite
+   * `settings.model` -- when the stored model is not in the list, the port's
+   * behaviour (component.py:251-255) is to fall back to `mimo-v2.5-free` -- and
+   * the settings belong to this component.
+   */
+  $effect(() => {
+    loadOpenCodeModels(settings.provider, settings.model, (model) => {
+      void patchSettings({ model });
+    });
+  });
 
   function togglePalette(): void {
     const next = !paletteOpen;
@@ -1403,7 +1437,48 @@
       >
     </header>
 
-    <DocumentPanel
+    <SidebarTabs
+      active={sidebarTab}
+      hasInspection={inspection !== null}
+      onselect={(tab) => (sidebarTab = tab)}
+    />
+
+    <!--
+      The chat is the one tab that manages its own scrolling, so it must not be
+      put inside a second scroller: nesting them is what made the old panel's
+      input drift away down the column.
+    -->
+    <div class="tab-body" class:owns-scroll={sidebarTab === "chat"}>
+      {#if sidebarTab === "chat"}
+        <ChatPanel
+          entries={chat}
+          live={liveSteps}
+          {selection}
+          {remembered}
+          enabled={docState !== null}
+          {busy}
+          {settings}
+          {keyStatus}
+          draft={chatDraft}
+          ondraftchange={(next) => (chatDraft = next)}
+          undoLabel={docState?.undoLabel ?? null}
+          onask={askAgent}
+          onforget={forgetConversation}
+          onstop={stopAgent}
+          onundo={() => runDocument(t("task.undoing"), () => api().undo())}
+          onsettingschange={patchSettings}
+          onopensettings={() => (settingsOpen = true)}
+        />
+      {:else if sidebarTab === "inspector"}
+        <InspectorPanel
+          {inspection}
+          at={inspectedAt}
+          {busy}
+          onchangeproperty={changeBlockProperty}
+          onchangenbt={changeNbtValue}
+        />
+      {:else}
+        <DocumentPanel
       doc={docState}
       {selection}
       {busy}
@@ -1431,37 +1506,7 @@
       onselectall={selectAll}
     />
 
-    <InspectorPanel
-      {inspection}
-      at={inspectedAt}
-      {busy}
-      onchangeproperty={changeBlockProperty}
-      onchangenbt={changeNbtValue}
-    />
-
-    <ChatPanel
-      entries={chat}
-      live={liveSteps}
-      {selection}
-      {remembered}
-      enabled={docState !== null}
-      {busy}
-      undoLabel={docState?.undoLabel ?? null}
-      onask={askAgent}
-      onforget={forgetConversation}
-      onstop={stopAgent}
-      onundo={() => runDocument(t("task.undoing"), () => api().undo())}
-    />
-
-    <ProviderConfig
-      {settings}
-      {keyStatus}
-      onchange={patchSettings}
-      onmodelinfo={(model) => (openCodeModel = model)}
-      onopensettings={() => (settingsOpen = true)}
-    />
-
-    <fieldset>
+        <fieldset>
       <legend>{t("structure.legend")}</legend>
 
       <div class="row">
@@ -1559,6 +1604,15 @@
           {t("structure.rerender")}
         </button>
       </div>
+      <!--
+        The model picker lives in the chat now, so this says which model
+        Generate will actually run on. There is one LLM configuration in the
+        app and both use it; leaving that implicit here would make choosing a
+        model in the chat look like it had nothing to do with this button.
+      -->
+      <p class="hint">
+        {t("structure.usesModel", { model: openCodeModel?.name ?? settings.model })}
+      </p>
 
       {#if progress}
         <div class="progress" role="progressbar" aria-valuenow={Math.round(progress.fraction * 100)}>
@@ -1569,7 +1623,9 @@
 
     </fieldset>
 
-    <ArtifactList {artifacts} onselect={(artifact) => runPreview(artifact.path)} />
+        <ArtifactList {artifacts} onselect={(artifact) => runPreview(artifact.path)} />
+      {/if}
+    </div>
   </section>
 
   {#if !sidebarCollapsed}
@@ -1733,15 +1789,34 @@
    * viewport slid into the (0px) splitter track and rendered at zero width --
    * the precise opposite of what collapsing is for.
    */
+  /*
+   * A flex column that does not scroll: the tab body below does. The column
+   * itself scrolling is what put the chat's input off the bottom of the window
+   * as a conversation grew, and it is why the chat gets a tab of its own.
+   */
   .controls {
     grid-column: 3;
     grid-row: 2;
-    overflow-y: auto;
-    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     min-width: 0;
     min-height: 0;
-    padding: 20px;
+    padding: 12px 18px 16px;
     border-left: 1px solid var(--border);
+  }
+
+  .tab-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  /* The chat scrolls its own log and pins its own composer; a scroller around
+     it would defeat both. */
+  .tab-body.owns-scroll {
+    overflow: hidden;
   }
 
   main :global(.splitter) {

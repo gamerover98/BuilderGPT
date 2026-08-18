@@ -129,6 +129,7 @@ export const en = {
   "selection.replaceButton": "Replace with the block above",
   "selection.replaceHint": "Replace within the selection",
 
+  "inspector.empty": "Click a block in the viewport to see what it is.",
   "inspector.legend": "Block",
   "inspector.at": "at ({x}, {y}, {z})",
   "inspector.blockStates": "Block states",
@@ -153,7 +154,6 @@ export const en = {
   "chat.actsOnAll": "Acts on the whole schematic — select a region to narrow it",
   "chat.placeholder": "Replace the cobblestone with stone…",
   "chat.send": "Send",
-  "chat.working": "Working…",
   "chat.stop": "Stop",
   "chat.stopHint": "Stop this request; nothing will be changed",
   "chat.newChat": "New chat",
@@ -162,11 +162,19 @@ export const en = {
   "chat.blocksChanged": "{count} blocks changed",
   "chat.andMore": "and {count} more",
   "chat.done": "Done.",
+  "chat.emptyTitle": "Ask for a change to the schematic you have open.",
+  "chat.example1": "Replace every cobblestone block with stone bricks",
+  "chat.example2": "Add a flat roof over the selection",
+  "chat.example3": "What is this build made of?",
+  "chat.toolsUsed.one": "1 tool used",
+  "chat.toolsUsed.other": "{count} tools used",
+  "chat.modelPickerHint": "Which model answers",
+  "chat.modelSharedHint":
+    "Generate uses this model too — there is one LLM configuration for the whole app.",
   "chat.remembered.one": "Follow-ups can refer back — the AI remembers this exchange.",
   "chat.remembered.other":
     "Follow-ups can refer back — the AI remembers the last {count} exchanges.",
 
-  "provider.legend": "🤖 LLM provider",
   "provider.provider": "Provider",
   "provider.model": "Model name",
   "provider.baseUrl": "Base URL",
@@ -209,6 +217,7 @@ export const en = {
     "overwritten.",
   "structure.default": "Default",
   "structure.generate": "Generate",
+  "structure.usesModel": "Uses {model}, the model chosen in the chat.",
   "structure.rerender": "Re-render",
   "structure.rerenderHint": "Refresh the preview using the last schematic without regenerating",
 
@@ -255,6 +264,11 @@ export const en = {
   "recovery.notOnDisk": "It has not been written to disk yet — save when you are happy with it.",
   "recovery.restore": "Restore it",
   "recovery.discard": "Discard",
+
+  "tabs.label": "Sidebar panels",
+  "tabs.chat": "Chat",
+  "tabs.schematic": "Schematic",
+  "tabs.inspector": "Inspector",
 
   "group.file": "File",
   "group.recent": "Recent",

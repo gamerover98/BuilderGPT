@@ -86,7 +86,14 @@
   );
 </script>
 
-{#if inspection && at}
+{#if !inspection || !at}
+  <!--
+    An empty state, which this panel did not need until it became a tab. As one
+    card in a stack it could simply not render; as a tab of its own, rendering
+    nothing looks like something failed to load.
+  -->
+  <p class="hint empty">{t("inspector.empty")}</p>
+{:else}
   <fieldset>
     <legend>{t("inspector.legend")}</legend>
 
@@ -163,6 +170,10 @@
 {/if}
 
 <style>
+  .empty {
+    padding: 20px 2px;
+  }
+
   .id {
     margin: 0;
     font-weight: 600;

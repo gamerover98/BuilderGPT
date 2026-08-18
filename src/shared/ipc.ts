@@ -464,6 +464,16 @@ export interface SaveSuccess {
    * container cannot carry their state. Always empty for Sponge.
    */
   degraded: string[];
+  /**
+   * The schematic was trimmed to its content before being written, and by how
+   * much. `null` when it was already tight, or when there was nothing but air
+   * to bound.
+   *
+   * Reported rather than done silently: the file on disk has different
+   * dimensions from the document still open in the editor, and someone who
+   * built inside a deliberately roomy box should be told where the edges went.
+   */
+  cropped: { from: [number, number, number]; to: [number, number, number] } | null;
   state: DocumentState;
 }
 

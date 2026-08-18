@@ -357,6 +357,7 @@ export const en = {
   "status.cut": "Cut {count} blocks.",
   "status.nothingMatched": "No blocks matched, so nothing changed.",
   "status.saved": "Saved {name}",
+  "status.cropped": "Trimmed to fit the build: {from} → {to}",
   "status.degraded":
     "{count} block type(s) cannot keep their block state in this format and will come back " +
     "changed: {blocks}",

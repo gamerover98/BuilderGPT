@@ -507,6 +507,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         filePath: result.filePath,
         format: result.format,
         degraded: [...result.degraded],
+        cropped: result.cropped,
         state: documentState(session),
       };
     } catch (err) {

@@ -1278,13 +1278,22 @@
       status = {
         tone: response.degraded.length > 0 ? "warn" : "ok",
         text: t("status.saved", { name: response.filePath.split(/[\\/]/).pop() ?? "" }),
-        detail:
+        detail: [
+          response.cropped
+            ? t("status.cropped", {
+                from: response.cropped.from.join("×"),
+                to: response.cropped.to.join("×"),
+              })
+            : null,
           response.degraded.length > 0
             ? t("status.degraded", {
                 count: response.degraded.length,
                 blocks: response.degraded.slice(0, 3).join(", "),
               })
-            : undefined,
+            : null,
+        ]
+          .filter((note) => note !== null)
+          .join(" · ") || undefined,
       };
     } catch (err) {
       failed(err, t("task.saving"));

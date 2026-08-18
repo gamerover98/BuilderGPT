@@ -41,6 +41,8 @@ import {
   undoEdit,
 } from "../src/main/services/session.js";
 import { clearBakerCache } from "../src/main/services/preview.js";
+import { loadStructure } from "../src/main/pipeline/loader.js";
+import { countBlocks, documentFromLoaded } from "../src/main/domain/document.js";
 import { UnrepresentableBlocksError } from "../src/main/services/writers.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor } from "../src/main/services/versions.js";
@@ -701,6 +703,49 @@ console.log("\n--- the clipboard outlives the document ---");
     getBlock(second.doc, 2, 0, 2).namespacedName,
     "minecraft:diamond_block",
   );
+  closeDocument();
+}
+
+// --- saving trims the air the editor left behind --------------------------
+console.log("\n--- crop on save ---");
+{
+  const session = newDocument({ width: 24, height: 24, length: 24 });
+  applyEdit(session, {
+    kind: "fill",
+    region: { minX: 8, minY: 3, minZ: 5, maxX: 11, maxY: 4, maxZ: 9 },
+    block: { namespacedName: "minecraft:stone", properties: {} },
+  });
+
+  const target = path.join(workDir, "trimmed.schem");
+  const saved = await saveSession(session, { filePath: target, format: "sponge3" });
+
+  equal("the save reports the trim", saved.cropped, { from: [24, 24, 24], to: [4, 2, 5] });
+
+  const reloaded = documentFromLoaded(await loadStructure(saved.filePath), saved.filePath);
+  equal(
+    "the file on disk is the trimmed box",
+    [reloaded.width, reloaded.height, reloaded.length],
+    [4, 2, 5],
+  );
+  equal("...with every block still in it", countBlocks(reloaded), 4 * 2 * 5);
+
+  /*
+   * The reason the crop copies instead of resizing in place. A block delta is
+   * an index into a voxel array of a particular shape; re-dimensioning the live
+   * document would leave every entry on the undo stack pointing at a cell that
+   * is no longer the one it described. Saving must not cost the user their
+   * history.
+   */
+  const state = documentState(session);
+  equal("the open document keeps its size", state.size, [24, 24, 24]);
+  check("...and its undo stack", state.canUndo);
+  undoEdit(session);
+  equal("...which still undoes the right thing", documentState(session).blockCount, 0);
+
+  // A second save with nothing left to trim says so rather than inventing a box.
+  const empty = await saveSession(session, { filePath: target, format: "sponge3" });
+  equal("an all-air document reports no trim", empty.cropped, null);
+
   closeDocument();
 }
 

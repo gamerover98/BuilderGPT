@@ -69,6 +69,7 @@ import type { PaletteEntry } from "../pipeline/types.js";
 import { buildDocumentPreview, type DocumentPreviewOptions } from "./preview.js";
 import type { ChunkMeshCache } from "../pipeline/chunked_mesh.js";
 import { saveDocument, type WriteResult } from "./writers.js";
+import { cropToContent, type CropSummary } from "../domain/crop.js";
 
 export interface DocumentSession {
   readonly doc: SchematicDocument;
@@ -486,7 +487,7 @@ export class NoSaveTargetError extends Error {
 export async function saveSession(
   session: DocumentSession,
   options: SaveOptions = {},
-): Promise<WriteResult & { filePath: string }> {
+): Promise<WriteResult & { filePath: string; cropped: CropSummary | null }> {
   const format = options.format ?? session.doc.format;
   let target = options.filePath ?? session.doc.filePath;
   if (!target) {
@@ -499,7 +500,16 @@ export async function saveSession(
     target = target.slice(0, target.length - path.extname(target).length) + wanted;
   }
 
-  const result = await saveDocument(session.doc, target, {
+  /*
+   * Trim the air the editor left around the build.
+   *
+   * The *copy* is written, never the open document: a voxel index means
+   * nothing except relative to the dimensions in force when it was recorded,
+   * so re-dimensioning the live document would invalidate every delta on the
+   * undo stack. Saving must not cost you your history.
+   */
+  const cropped = cropToContent(session.doc);
+  const result = await saveDocument(cropped?.doc ?? session.doc, target, {
     format,
     legacyBlocksPath: options.legacyBlocksPath ?? null,
   });
@@ -509,5 +519,5 @@ export async function saveSession(
   session.doc.format = format;
   markSaved(session.doc, target);
   markHistorySaved(session.history);
-  return { ...result, filePath: target };
+  return { ...result, filePath: target, cropped: cropped?.summary ?? null };
 }

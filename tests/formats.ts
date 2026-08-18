@@ -30,6 +30,7 @@ import {
   type SchematicDocument,
 } from "../src/main/domain/document.js";
 import { loadStructure } from "../src/main/pipeline/loader.js";
+import { contentBounds, cropToContent } from "../src/main/domain/crop.js";
 import { paletteEntryCacheKey, type PaletteEntry } from "../src/main/pipeline/types.js";
 import {
   extensionFor,
@@ -384,6 +385,121 @@ try {
     equal("...at the right size", [reloaded.width, reloaded.height, reloaded.length], [1, 1, 1]);
     equal("...with no block entities invented", reloaded.blockEntities.size, 0);
   }
+
+  // --- cropping to the content ---------------------------------------------
+  console.log("\n--- crop on save ---");
+  {
+    const stone: PaletteEntry = { namespacedName: "minecraft:stone", properties: {} };
+
+    /** A roomy box with a small build sitting off-centre inside it. */
+    const padded = () => {
+      const doc = createDocument({ width: 16, height: 16, length: 16, format: "sponge3" });
+      doc.offset = [100, 64, -20];
+      for (let x = 4; x <= 6; x += 1) {
+        for (let y = 2; y <= 3; y += 1) {
+          for (let z = 9; z <= 12; z += 1) {
+            setBlock(doc, x, y, z, stone);
+          }
+        }
+      }
+      return doc;
+    };
+
+    equal("the content box is the outermost block on each side", contentBounds(padded()), {
+      minX: 4,
+      minY: 2,
+      minZ: 9,
+      maxX: 6,
+      maxY: 3,
+      maxZ: 12,
+    });
+
+    const cropped = cropToContent(padded());
+    equal("the crop reports what it did", cropped?.summary, {
+      from: [16, 16, 16],
+      to: [3, 2, 4],
+    });
+    equal("...and the copy is that size", [
+      cropped?.doc.width,
+      cropped?.doc.height,
+      cropped?.doc.length,
+    ], [3, 2, 4]);
+    equal("no blocks are lost to the trim", countBlocks(cropped!.doc), 3 * 2 * 4);
+    equal("the corner block moved to the origin", getBlock(cropped!.doc, 0, 0, 0)?.namespacedName, "minecraft:stone");
+
+    /*
+     * The offset moves the *opposite* way to the content, so the file dropped
+     * back into the world it came from lands where it was. Getting this
+     * backwards is silent -- the schematic looks right and pastes 4 blocks off.
+     */
+    equal("the world offset follows the trim", cropped?.doc.offset, [104, 66, -11]);
+
+    // The invariant this whole design exists for: a voxel index means nothing
+    // except against the dimensions it was recorded under, so saving must not
+    // re-dimension the document the undo stack is describing.
+    const live = padded();
+    const before = [live.width, live.height, live.length, live.voxels.length, live.revision];
+    cropToContent(live);
+    equal(
+      "cropping never touches the open document",
+      [live.width, live.height, live.length, live.voxels.length, live.revision],
+      before,
+    );
+
+    // Block entities travel with their blocks.
+    {
+      const doc = padded();
+      setBlockEntity(doc, 4, 2, 9, {
+        id: "minecraft:chest",
+        pos: [4, 2, 9],
+        nbt: { Items: { type: "list", value: { type: "compound", value: [] } } },
+      });
+      const trimmed = cropToContent(doc);
+      equal("a block entity keeps its block", trimmed?.doc.blockEntities.size, 1);
+      equal(
+        "...at the shifted position",
+        getBlockEntity(trimmed!.doc, 0, 0, 0)?.pos,
+        [0, 0, 0],
+      );
+    }
+
+    // Nothing to do, in both of the ways there can be nothing to do.
+    {
+      const tight = createDocument({ width: 2, height: 2, length: 2, format: "sponge3" });
+      for (let x = 0; x < 2; x += 1)
+        for (let y = 0; y < 2; y += 1)
+          for (let z = 0; z < 2; z += 1) setBlock(tight, x, y, z, stone);
+      equal("an already tight document is not cropped", cropToContent(tight), null);
+
+      const empty = createDocument({ width: 8, height: 8, length: 8, format: "sponge3" });
+      equal("an all-air document has no content box", contentBounds(empty), null);
+      equal("...and is written as it stands", cropToContent(empty), null);
+    }
+
+    /*
+     * A cropped copy round-trips like any other document.
+     *
+     * The trim itself is applied by `saveSession`, not by the writers -- the
+     * writers are also what autosave calls, and a crash snapshot must keep the
+     * roomy box the user was working in rather than hand back a trimmed one.
+     * `tests/session.ts` covers the save path; this covers the shape the crop
+     * produces.
+     */
+    {
+      const trimmed = cropToContent(padded())!.doc;
+      const filePath = path.join(workDir, "cropped.schem");
+      await saveDocument(trimmed, filePath);
+      const reloaded = documentFromLoaded(await loadStructure(filePath), filePath);
+      equal(
+        "a cropped copy writes at its trimmed size",
+        [reloaded.width, reloaded.height, reloaded.length],
+        [3, 2, 4],
+      );
+      equal("...and keeps every block", countBlocks(reloaded), 3 * 2 * 4);
+      equal("...and its shifted offset", [...reloaded.offset], [104, 66, -11]);
+    }
+  }
+
 } finally {
   await rm(workDir, { recursive: true, force: true });
 }

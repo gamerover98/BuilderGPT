@@ -78,6 +78,22 @@ whatever an earlier comment claimed: the writers build their own local palette
 from the voxels instead, which reaches the same file without touching the
 document.
 
+**Saving trims the schematic to its content, on a copy.** `domain/crop.ts`
+finds the outermost non-air block on each of the six sides and writes that box,
+so a build made inside a deliberately roomy editing volume does not ship a shell
+of air around it. Block entities, entities and `offset` all move with the
+content — the offset the *opposite* way, so the file pasted back into the world
+it came from lands where it was.
+
+It is a copy for the same reason `compactPalette` is not a save-time step: a
+voxel index means nothing except against the dimensions in force when it was
+recorded, so re-dimensioning the live document would invalidate every delta on
+the undo stack. Saving must not cost you your history.
+
+The trim belongs to `saveSession`, not to the writers. **Autosave calls the
+writers directly and must keep the full working box** — a crash snapshot that
+came back trimmed would silently discard the room the user had made to build in.
+
 **`doc.revision` is a cache key, not a dirty flag.** It is monotonic and is
 bumped by every mutation *including an undo*, which is what makes it safe for
 "is my mesh still current". It cannot answer "have you undone back to what is on

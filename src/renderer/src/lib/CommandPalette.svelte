@@ -166,7 +166,7 @@
     position: fixed;
     inset: 0;
     z-index: 100;
-    background: rgba(0, 0, 0, 0.45);
+    background: var(--scrim);
     display: flex;
     justify-content: center;
     /* Not centred: a dialog that grows and shrinks around the midpoint moves
@@ -180,7 +180,7 @@
     background: var(--bg-panel);
     border: 1px solid var(--border);
     border-radius: 8px;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 12px 40px var(--shadow);
     overflow: hidden;
   }
 

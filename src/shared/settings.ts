@@ -112,6 +112,34 @@ export const PREVIEW_SETTING_RANGES = {
 } as const;
 
 /**
+ * The three values a theme setting can take.
+ *
+ * `"system"` is deliberately a stored value rather than the absence of one:
+ * "follow the OS" is a choice the user made and can go back to, and a nullable
+ * field could not tell it apart from "never asked".
+ */
+export const THEMES = ["system", "light", "dark"] as const;
+
+export type Theme = (typeof THEMES)[number];
+
+/**
+ * `Theme` with `"system"` already resolved against the OS preference.
+ *
+ * The distinction matters to anything that has to *draw* rather than store:
+ * "system" names a source of truth, not a colour, and a renderer asked to paint
+ * it has nothing to paint.
+ */
+export type ResolvedTheme = Exclude<Theme, "system">;
+
+/**
+ * UI languages. English only for now, and the default -- the list exists so
+ * adding a second one is a data change rather than a type change.
+ */
+export const LANGUAGES = ["en"] as const;
+
+export type Language = (typeof LANGUAGES)[number];
+
+/**
  * Window chrome the user can rearrange. Streamlit owned its own layout and
  * offered none of this, so there is nothing to port -- these exist because the
  * 3D viewport and the control column now share one window and compete for it.
@@ -120,6 +148,14 @@ export interface UiSettings {
   /** Sidebar width in CSS pixels; clamped to SIDEBAR_WIDTH on both sides. */
   sidebarWidth: number;
   sidebarCollapsed: boolean;
+  /**
+   * Which palette the window paints itself with. `"system"` is not a third
+   * palette -- it is the absence of a choice, and defers to the OS through
+   * `prefers-color-scheme`.
+   */
+  theme: Theme;
+  /** UI language. The renderer's strings only; main's errors are not translated. */
+  language: Language;
 }
 
 /**
@@ -132,6 +168,8 @@ export const SIDEBAR_WIDTH = { min: 320, max: 720, minViewport: 360 } as const;
 export const DEFAULT_UI_SETTINGS: UiSettings = {
   sidebarWidth: 420,
   sidebarCollapsed: false,
+  theme: "system",
+  language: "en",
 };
 
 export interface Settings {

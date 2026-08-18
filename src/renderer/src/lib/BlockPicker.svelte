@@ -155,7 +155,7 @@
     background: var(--bg-panel);
     border: 1px solid var(--border);
     border-radius: 4px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 4px 12px var(--shadow);
   }
 
   .count {

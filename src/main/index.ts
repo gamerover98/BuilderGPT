@@ -26,7 +26,15 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 640,
     show: false,
-    // `layout="wide"` + the dark viewer background from app/viewer/index.html.
+    /*
+     * What the frame paints before the renderer's first frame arrives, and the
+     * one colour in the app that themes cannot reach: it is chosen here, in the
+     * main process, before there is a window to ask about `prefers-color-scheme`
+     * and before `settings.json` has been read. It stays the dark value from
+     * app/viewer/index.html because a wrong guess shows for a few milliseconds,
+     * whereas plumbing the theme this far forward would mean blocking the
+     * window on a disk read.
+     */
     backgroundColor: "#0b0f14",
     title: "Schematic AI Studio", // run_app.py:6 set a title too
     webPreferences: {

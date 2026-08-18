@@ -18,6 +18,7 @@
    */
   import { onMount, untrack } from "svelte";
   import type { MeshAtlas, MeshPayload } from "../../../shared/ipc.js";
+  import type { ResolvedTheme } from "../../../shared/settings.js";
   import * as THREE from "three";
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
   import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
@@ -93,6 +94,15 @@
     framingKey?: string | number;
     /** Building from the crosshair, in flight. */
     onbuild?: (action: BuildAction, at: { x: number; y: number; z: number }) => void;
+    /**
+     * The palette in force, already resolved against the OS preference.
+     *
+     * The viewer never reads this value -- the colours come from the same CSS
+     * custom properties the rest of the window uses. The prop exists so an
+     * effect has something to depend on: a `THREE.Color` cannot inherit, so the
+     * scene has to be told when to go and look again.
+     */
+    theme?: ResolvedTheme;
   }
 
   const {
@@ -111,6 +121,7 @@
     flySpeed = 12,
     onbuild,
     framingKey = 0,
+    theme = "dark",
   }: Props = $props();
 
   /**
@@ -152,6 +163,60 @@
     }
     const tag = element.tagName.toLowerCase();
     return tag === "input" || tag === "textarea" || tag === "select" || element.isContentEditable;
+  }
+
+  /**
+   * A palette token as a three.js colour.
+   *
+   * The scene's background, its grid and the selection box are `THREE.Color`s
+   * rather than CSS, so they inherit nothing and a theme change leaves them
+   * where they were -- a light window with a black viewport. Reading the same
+   * custom properties the DOM uses keeps one source of truth; copying the hex
+   * values in here would give two, and they would drift.
+   *
+   * The fallback is the pre-theme value, so a token that fails to resolve
+   * renders as the app always did rather than as black.
+   */
+  function themeColor(token: string, fallback: number): THREE.Color {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+    return raw === "" ? new THREE.Color(fallback) : new THREE.Color(raw);
+  }
+
+  /**
+   * (Re)builds the ground grid in the current theme's colours.
+   *
+   * `GridHelper` bakes its two colours into a vertex-colour attribute when it
+   * is constructed, so recolouring is not a property assignment -- the helper
+   * has to be replaced. It is 32 divisions of flat lines; this is cheap enough
+   * to do on a theme change.
+   */
+  function buildGrid(): void {
+    if (!scene) return;
+    if (grid) {
+      scene.remove(grid);
+      grid.geometry.dispose();
+      for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
+        material.dispose();
+      }
+    }
+    grid = new THREE.GridHelper(
+      256,
+      32,
+      themeColor("--grid-major", 0x516079),
+      themeColor("--grid-minor", 0x202937),
+    );
+    grid.position.y = -0.01;
+    for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
+      material.depthWrite = false;
+      material.transparent = true;
+      material.opacity = 0.5;
+    }
+    grid.renderOrder = -1;
+    // The freshly built helper needs the current visibility, but reading it
+    // tracked would make the theme effect below depend on `showGrid` too, and
+    // rebuild the grid every time the checkbox is toggled.
+    grid.visible = untrack(() => showGrid);
+    scene.add(grid);
   }
 
   let canvas: HTMLCanvasElement;
@@ -385,7 +450,10 @@
         box.max.z - box.min.z,
       ),
     );
-    const material = new THREE.LineBasicMaterial({ color: 0x6ea8fe, depthTest: false });
+    const material = new THREE.LineBasicMaterial({
+      color: themeColor("--selection", 0x6ea8fe),
+      depthTest: false,
+    });
     selectionBox = new THREE.LineSegments(geometry, material);
     box.getCenter(selectionBox.position);
     selectionBox.renderOrder = 999;
@@ -462,7 +530,7 @@
     try {
       renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
       scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x0b0f14);
+      scene.background = themeColor("--viewport-bg", 0x0b0f14);
 
       camera = new THREE.PerspectiveCamera(60, 1, 0.1, maxDrawDistance || 2048);
       camera.position.set(32, 32, 32);
@@ -482,16 +550,7 @@
       sun = new THREE.DirectionalLight(0xffffff, 1.0);
       scene.add(sun);
 
-      grid = new THREE.GridHelper(256, 32, 0x516079, 0x202937);
-      grid.position.y = -0.01;
-      const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
-      for (const material of gridMaterials) {
-        material.depthWrite = false;
-        material.transparent = true;
-        material.opacity = 0.5;
-      }
-      grid.renderOrder = -1;
-      scene.add(grid);
+      buildGrid();
 
       resize();
 
@@ -656,10 +715,30 @@
   });
 
   $effect(() => {
-    // Reads `selection` and `scene` so it reruns when either changes.
+    // Reads `selection`, `scene` and `theme` so it reruns when any changes.
+    // The box's material is built fresh each time, so a theme change is
+    // simply a rebuild with a different colour.
     void selection;
     void scene;
+    void theme;
     updateSelectionBox();
+  });
+
+  /**
+   * Repaints what CSS cannot reach.
+   *
+   * `theme` is read only to make this rerun; the values themselves come from
+   * the custom properties, which `App.svelte` has already switched over by
+   * writing `data-theme` in an `$effect.pre` -- and *that* is why it is `pre`:
+   * pre-effects all flush before regular ones, so by the time this reads the
+   * computed style the attribute is on `<html>`. As a plain effect it would be
+   * a race, and the viewport would lag the window by one theme change.
+   */
+  $effect(() => {
+    void theme;
+    if (!scene) return;
+    scene.background = themeColor("--viewport-bg", 0x0b0f14);
+    buildGrid();
   });
 
   /**
@@ -857,7 +936,7 @@
     width: 100%;
     height: 100%;
     min-height: 320px;
-    background: #0b0f14;
+    background: var(--viewport-bg);
     overflow: hidden;
   }
 
@@ -872,7 +951,7 @@
     top: 16px;
     left: 16px;
     padding: 8px 12px;
-    background: rgba(10, 14, 20, 0.65);
+    background: var(--overlay-bg);
     border-radius: 6px;
     backdrop-filter: blur(6px);
     font-size: 13px;
@@ -891,8 +970,8 @@
     /* Two hairlines rather than a glyph: a text crosshair sits on the baseline
        and is never quite centred on the point being aimed at. */
     background:
-      linear-gradient(var(--text, #e6edf3), var(--text, #e6edf3)) center / 100% 1px no-repeat,
-      linear-gradient(var(--text, #e6edf3), var(--text, #e6edf3)) center / 1px 100% no-repeat;
+      linear-gradient(var(--text), var(--text)) center / 100% 1px no-repeat,
+      linear-gradient(var(--text), var(--text)) center / 1px 100% no-repeat;
     opacity: 0.7;
     mix-blend-mode: difference;
   }
@@ -905,7 +984,7 @@
     padding: 12px 16px;
     max-width: 720px;
     text-align: center;
-    background: rgba(10, 14, 20, 0.8);
+    background: var(--overlay-bg);
     border: 1px solid var(--border);
     border-radius: 8px;
     pointer-events: none;

@@ -46,6 +46,14 @@ import {
 import { documentFromLoaded, setBlock } from "../src/main/domain/document.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/services/versions.js";
+import { coerceSettings, coerceUi } from "../src/main/services/settings_coerce.js";
+import {
+  DEFAULT_SETTINGS,
+  DEFAULT_UI_SETTINGS,
+  SIDEBAR_WIDTH,
+  type Settings,
+  type UiSettings,
+} from "../src/shared/settings.js";
 
 /**
  * Mirrors `services/resources.ts`'s `defaultResourcePackPath()` without pulling
@@ -619,6 +627,72 @@ console.log("\n--- recent documents ---");
   equal("a non-array reads as empty", coerceRecents({ nope: true }), []);
   equal("nulls and numbers are dropped", coerceRecents([A, null, 7, "", B]), [A, B]);
   equal("...and the cap still applies", coerceRecents(many, 3).length, 3);
+}
+
+// --- settings coercion: the fields that vanish when nobody names them ------
+console.log("\n--- settings coercion ---");
+{
+  /*
+   * The point of this block is the two `satisfies` annotations below.
+   *
+   * `coerceUi` and `coerceSettings` build fresh object literals and run on read
+   * *and* on write, so a field added to the type but not to the function is
+   * dropped when the renderer saves -- it works for the rest of the session and
+   * is gone after a reload, with nothing logged. That is the failure this
+   * guards, and a test that merely checked today's fields would not: it would
+   * still pass on the day someone adds the twelfth one.
+   *
+   * Annotating these as the full types is what closes it. Add a required field
+   * to `UiSettings` and this file stops compiling until the literal names it;
+   * name it here and the round-trip below fails until `coerceUi` names it too.
+   * The type system supplies the reminder, the assertion supplies the referee.
+   */
+  const ui = {
+    sidebarWidth: 555,
+    sidebarCollapsed: true,
+    theme: "light",
+    language: "en",
+  } satisfies UiSettings;
+
+  equal("every ui field survives a round-trip", coerceUi(ui), ui);
+
+  const settings = {
+    provider: "OpenAI",
+    model: "gpt-4o-mini",
+    baseUrl: "https://example.invalid/v1",
+    version: "JE_1_20_1",
+    exportType: "mcfunction",
+    outputDir: "C:/builds",
+    preview: { ...DEFAULT_SETTINGS.preview, wireframe: true, maxDrawDistance: 1024 },
+    ui,
+  } satisfies Settings;
+
+  equal("every settings field survives a round-trip", coerceSettings(settings), settings);
+
+  // A file written by an older build, or edited by hand into nonsense.
+  const fallback = coerceUi({ theme: "neon", language: "xx", sidebarWidth: "wide" });
+  equal("an unknown theme falls back", fallback.theme, DEFAULT_UI_SETTINGS.theme);
+  equal("an unknown language falls back", fallback.language, DEFAULT_UI_SETTINGS.language);
+  equal(
+    "a non-numeric width falls back",
+    fallback.sidebarWidth,
+    DEFAULT_UI_SETTINGS.sidebarWidth,
+  );
+  equal("a missing ui block is all defaults", coerceUi(undefined), DEFAULT_UI_SETTINGS);
+
+  // A settings file copied from a 4K screen onto a laptop.
+  equal(
+    "an over-wide sidebar is clamped down",
+    coerceUi({ sidebarWidth: 9999 }).sidebarWidth,
+    SIDEBAR_WIDTH.max,
+  );
+  equal(
+    "...and a hairline one clamped up",
+    coerceUi({ sidebarWidth: 10 }).sidebarWidth,
+    SIDEBAR_WIDTH.min,
+  );
+
+  equal("an empty file is the defaults", coerceSettings({}), DEFAULT_SETTINGS);
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

@@ -178,10 +178,42 @@ calls the `$state.snapshot` rune, which is only compiled inside `.svelte` and
 `.svelte.js/ts` modules. In a plain `.ts` it typechecks and then throws
 `rune_outside_svelte` at runtime, so `svelte-check` will not catch the mistake.
 
-**`coerceSettings` in `settings-store.ts` whitelists every field by name.** It
-runs on read *and* on write, and it does not spread. A field added to `Settings`
-but not to that function is silently dropped on save — it appears to work until
-the next reload.
+**`coerceSettings` whitelists every field by name.** It runs on read *and* on
+write, and it does not spread. A field added to `Settings` but not to that
+function is silently dropped on save — it appears to work until the next
+reload. It lives in `services/settings_coerce.ts`, split out of
+`settings-store.ts` for the same reason `recent_documents.ts` was: that module
+imports Electron, which puts it out of reach of the tests. `tests/services.ts`
+now round-trips a fully-populated `Settings` annotated `satisfies Settings`, so
+adding a required field breaks the *compile* until the test names it and then
+breaks the *assertion* until `coerceSettings` does.
+
+The one deliberate exception is `preview`, which **is** spread over the
+defaults: a new `PreviewSettings` field survives with no change, at the cost of
+no validation. That trade is right for numbers a slider wrote and wrong for
+`ui`, which decides what the window looks like before anything is drawn.
+
+**Three themes, two token sets, and some colours CSS cannot reach.** The dark
+palette sits on bare `:root` — which is what made themes safe to add, because
+every component written before them keeps reading the values it always did.
+Light is layered over it twice, once for `[data-theme="light"]` and once for
+`prefers-color-scheme: light`, and the media query excludes `[data-theme="dark"]`
+so an explicit dark choice survives a light desktop. `"system"` *removes* the
+attribute rather than setting a third value: there is no third palette, only a
+different place to ask.
+
+The trap is the viewport. The scene background, the grid and the selection box
+are `THREE.Color`s, so they inherit nothing and a theme change leaves them
+where they were — a light window with a black hole in it. `Viewer.svelte` reads
+them back out of the same custom properties with `getComputedStyle`, which is
+why `App.svelte` writes `data-theme` in an **`$effect.pre`**: pre-effects all
+flush before regular ones, so the attribute is on `<html>` before the viewer
+looks. As a plain `$effect` the two race and the viewport trails by one change.
+`GridHelper` bakes its colours into a vertex attribute at construction, so it is
+rebuilt rather than recoloured.
+
+`BrowserWindow`'s `backgroundColor` in `main/index.ts` is outside all of this on
+purpose — it is painted before there is a renderer to ask.
 
 **Do not adopt `@opencode-ai/sdk`.** It looks like the obvious dependency for
 the OpenCode provider and is not: it is a client for a *local opencode agent

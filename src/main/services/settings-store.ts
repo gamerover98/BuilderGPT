@@ -21,15 +21,13 @@ import { app, safeStorage } from "electron";
 
 import {
   DEFAULT_SETTINGS,
-  DEFAULT_UI_SETTINGS,
   PROVIDERS,
-  SIDEBAR_WIDTH,
   type KeyStorageStatus,
   type Provider,
   type Settings,
-  type UiSettings,
 } from "../../shared/settings.js";
 import { coerceRecents, forgetRecent, rememberRecent } from "./recent_documents.js";
+import { coerceSettings } from "./settings_coerce.js";
 
 interface PersistedFile {
   settings: Settings;
@@ -60,46 +58,7 @@ const memoryKeys = new Map<Provider, string>();
 
 let cache: PersistedFile | null = null;
 
-function isProvider(value: unknown): value is Provider {
-  return typeof value === "string" && (PROVIDERS as readonly string[]).includes(value);
-}
 
-/**
- * Merges a persisted blob over the defaults field by field. A settings file
- * written by an older build must not be able to produce `undefined` where the
- * renderer expects a value, so nothing is spread blindly.
- */
-function coerceSettings(raw: unknown): Settings {
-  const source = (raw ?? {}) as Partial<Settings>;
-  const preview = { ...DEFAULT_SETTINGS.preview, ...(source.preview ?? {}) };
-  const ui = coerceUi(source.ui);
-  return {
-    provider: isProvider(source.provider) ? source.provider : DEFAULT_SETTINGS.provider,
-    model: typeof source.model === "string" ? source.model : DEFAULT_SETTINGS.model,
-    baseUrl: typeof source.baseUrl === "string" ? source.baseUrl : DEFAULT_SETTINGS.baseUrl,
-    version: typeof source.version === "string" ? source.version : DEFAULT_SETTINGS.version,
-    exportType: source.exportType === "mcfunction" ? "mcfunction" : "schem",
-    outputDir: typeof source.outputDir === "string" ? source.outputDir : DEFAULT_SETTINGS.outputDir,
-    preview,
-    ui,
-  };
-}
-
-/**
- * The sidebar width is the one persisted number a user can drive to a value
- * that makes the window unusable (a settings file copied from a 4K screen onto
- * a laptop), so it is clamped on read rather than trusted.
- */
-function coerceUi(raw: unknown): UiSettings {
-  const source = (raw ?? {}) as Partial<UiSettings>;
-  const width = Number(source.sidebarWidth);
-  return {
-    sidebarWidth: Number.isFinite(width)
-      ? Math.min(SIDEBAR_WIDTH.max, Math.max(SIDEBAR_WIDTH.min, Math.round(width)))
-      : DEFAULT_UI_SETTINGS.sidebarWidth,
-    sidebarCollapsed: source.sidebarCollapsed === true,
-  };
-}
 
 async function load(): Promise<PersistedFile> {
   if (cache) {

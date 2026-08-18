@@ -47,6 +47,7 @@
     type KeyStorageStatus,
     type PreviewSettings,
     type Provider,
+    type ResolvedTheme,
     type Settings,
   } from "../../shared/settings.js";
 
@@ -81,6 +82,25 @@
   let busy = $state(false);
   let progress = $state<ProgressEvent | null>(null);
   let status = $state<Status>(null);
+
+  /**
+   * Whether the OS is asking for a dark window right now.
+   *
+   * Only consulted when the theme setting is `"system"`, but tracked
+   * unconditionally: the listener is one line and the alternative is
+   * subscribing and unsubscribing as the setting changes, for no gain.
+   */
+  let systemDark = $state(true);
+
+  /**
+   * The theme with `"system"` resolved -- what is actually on screen.
+   *
+   * Anything that has to *draw* a colour needs this rather than the setting:
+   * "system" names where to look, not what to paint.
+   */
+  const resolvedTheme = $derived<ResolvedTheme>(
+    settings.ui.theme === "system" ? (systemDark ? "dark" : "light") : settings.ui.theme,
+  );
 
   let mesh = $state<MeshPayload | null>(null);
   let bounds = $state<{ center: number[]; size: number[] } | null>(null);
@@ -330,15 +350,48 @@
    */
   const canRerender = $derived(lastSchemPath !== null && docState === null && !busy);
 
+  /**
+   * Puts the chosen palette on `<html>`, where `app.css` can see it.
+   *
+   * `"system"` *removes* the attribute rather than setting a third value,
+   * because there is no third palette: it hands the decision to the
+   * `prefers-color-scheme` rule, which is the only thing that knows the answer.
+   *
+   * `$effect.pre` rather than `$effect`, and that is load-bearing. `Viewer`
+   * reads these same custom properties back out with `getComputedStyle` to
+   * colour the 3D scene, which CSS cannot reach. Pre-effects all flush before
+   * regular ones, so the attribute is guaranteed to be in place before the
+   * viewer looks; as a plain effect the two would race and the viewport would
+   * trail the window by one theme change.
+   */
+  $effect.pre(() => {
+    const root = document.documentElement;
+    if (settings.ui.theme === "system") {
+      root.removeAttribute("data-theme");
+    } else {
+      root.setAttribute("data-theme", settings.ui.theme);
+    }
+  });
+
   onMount(() => {
     // Registered before the bridge check on purpose: collapsing the panel is
     // pure UI, and a window whose preload failed to load is exactly the one
     // where reaching the whole viewport still matters.
     window.addEventListener("keydown", onWindowKey);
 
+    // The OS preference is a live thing -- a desktop on a sunset schedule
+    // changes it under a running window -- so it is watched, not sampled once.
+    const dark = window.matchMedia("(prefers-color-scheme: dark)");
+    systemDark = dark.matches;
+    const onSystemTheme = (event: MediaQueryListEvent) => (systemDark = event.matches);
+    dark.addEventListener("change", onSystemTheme);
+
     if (!bridgeAvailable) {
       status = { tone: "error", text: BRIDGE_MISSING_MESSAGE };
-      return () => window.removeEventListener("keydown", onWindowKey);
+      return () => {
+        window.removeEventListener("keydown", onWindowKey);
+        dark.removeEventListener("change", onSystemTheme);
+      };
     }
 
     void (async () => {
@@ -368,6 +421,7 @@
     });
     return () => {
       window.removeEventListener("keydown", onWindowKey);
+      dark.removeEventListener("change", onSystemTheme);
       unsubscribe();
       unsubscribeSteps();
     };
@@ -1552,6 +1606,7 @@
       showGrid={settings.preview.showGrid}
       wireframe={settings.preview.wireframe}
       ambientOcclusion={settings.preview.ambientOcclusion}
+      theme={resolvedTheme}
     />
     {#if bounds}
       <!-- component.py:465-469's caption, same two-decimal formatting. -->
@@ -1650,7 +1705,7 @@
     z-index: 4;
     border: 2px dashed var(--accent);
     border-radius: 10px;
-    background: rgb(110 168 254 / 8%);
+    background: var(--accent-tint);
     /* The overlay must not eat the drop event it is drawn for. */
     pointer-events: none;
   }
@@ -1668,7 +1723,7 @@
     padding: 14px 22px;
     border-radius: 10px;
     background: var(--bg-panel);
-    box-shadow: 0 8px 28px rgb(0 0 0 / 45%);
+    box-shadow: 0 8px 28px var(--shadow);
     pointer-events: none;
   }
 
@@ -1688,7 +1743,7 @@
     border: 1px solid var(--accent);
     border-radius: 10px;
     background: var(--bg-panel);
-    box-shadow: 0 12px 40px rgb(0 0 0 / 55%);
+    box-shadow: 0 12px 40px var(--shadow);
   }
 
   .recovery p {
@@ -1711,7 +1766,7 @@
     gap: 2px;
     padding: 2px;
     border-radius: 8px;
-    background: rgb(10 14 20 / 65%);
+    background: var(--overlay-bg);
     backdrop-filter: blur(6px);
   }
 
@@ -1725,7 +1780,7 @@
 
   .camera-modes button.active {
     background: var(--accent);
-    color: #fff;
+    color: var(--accent-contrast);
   }
 
   .preview :global(.viewer) {
@@ -1782,7 +1837,7 @@
     border-radius: 8px;
     border: 1px solid var(--border);
     background: var(--bg-panel);
-    box-shadow: 0 6px 20px rgb(0 0 0 / 45%);
+    box-shadow: 0 6px 20px var(--shadow);
     font-size: 13px;
   }
 

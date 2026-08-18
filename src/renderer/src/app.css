@@ -2,6 +2,24 @@
  * Palette taken from app/viewer/index.html (#0b0f14 background, #f3f6fb text,
  * #2a3546 borders) so the 3D viewport and the surrounding chrome are one
  * surface rather than an iframe pasted onto a white Streamlit page.
+ *
+ * Three themes out of two token sets. The dark palette stays on bare `:root`,
+ * which is what makes this safe to add: every component written before themes
+ * existed keeps rendering exactly as it did, because the values it reads have
+ * not moved. Light is layered over it twice --
+ *
+ *   [data-theme="light"]        an explicit choice
+ *   prefers-color-scheme: light the "system" setting, which stores no attribute
+ *
+ * -- and the media query excludes [data-theme="dark"] so an explicit dark
+ * choice survives a light desktop. `App.svelte` writes the attribute; "system"
+ * removes it rather than setting a third value, because there is no third
+ * palette to select.
+ *
+ * The last six tokens have no `--bg`/`--text` counterpart because they are read
+ * from script, not from CSS: the 3D scene's background, grid and selection
+ * colours are three.js `Color`s, and `Viewer.svelte` resolves them through
+ * getComputedStyle. Without them a light window keeps a black viewport.
  */
 
 :root {
@@ -13,13 +31,77 @@
   --text-dim: #97a3b6;
   --accent: #4f8cff;
   --accent-dim: #2f5fb3;
+  --accent-contrast: #ffffff;
+  --accent-tint: rgb(110 168 254 / 8%);
   --danger: #ff6b6b;
   --warn: #ffc857;
   --ok: #5ddc9a;
 
+  --scrim: rgb(0 0 0 / 55%);
+  --shadow: rgb(0 0 0 / 45%);
+  --overlay-bg: rgb(10 14 20 / 65%);
+  --viewport-bg: #0b0f14;
+  --grid-major: #516079;
+  --grid-minor: #202937;
+  --selection: #6ea8fe;
+
   color-scheme: dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px;
+}
+
+:root[data-theme="light"] {
+  --bg: #f4f6fa;
+  --bg-panel: #ffffff;
+  --bg-input: #ffffff;
+  --border: #d2dae6;
+  --text: #101720;
+  --text-dim: #5b6879;
+  --accent: #2f6fe0;
+  --accent-dim: #cfe0fb;
+  --accent-contrast: #ffffff;
+  --accent-tint: rgb(47 111 224 / 10%);
+  --danger: #c8332f;
+  --warn: #8a5d00;
+  --ok: #15794a;
+
+  --scrim: rgb(15 23 35 / 35%);
+  --shadow: rgb(20 30 45 / 18%);
+  --overlay-bg: rgb(255 255 255 / 82%);
+  --viewport-bg: #e7ecf4;
+  --grid-major: #97a5ba;
+  --grid-minor: #c4cedc;
+  --selection: #1f5fd0;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f4f6fa;
+    --bg-panel: #ffffff;
+    --bg-input: #ffffff;
+    --border: #d2dae6;
+    --text: #101720;
+    --text-dim: #5b6879;
+    --accent: #2f6fe0;
+    --accent-dim: #cfe0fb;
+    --accent-contrast: #ffffff;
+    --accent-tint: rgb(47 111 224 / 10%);
+    --danger: #c8332f;
+    --warn: #8a5d00;
+    --ok: #15794a;
+
+    --scrim: rgb(15 23 35 / 35%);
+    --shadow: rgb(20 30 45 / 18%);
+    --overlay-bg: rgb(255 255 255 / 82%);
+    --viewport-bg: #e7ecf4;
+    --grid-major: #97a5ba;
+    --grid-minor: #c4cedc;
+    --selection: #1f5fd0;
+
+    color-scheme: light;
+  }
 }
 
 * {

@@ -1855,9 +1855,6 @@
       flySpeed={settings.preview.flySpeed}
       framingKey={framingEpoch}
       onbuild={docState ? onBuild : undefined}
-      extent={docState
-        ? { width: docState.size[0], height: docState.size[1], length: docState.size[2] }
-        : null}
       onselectionchange={docState ? onSelectionDragged : undefined}
       maxDpr={settings.preview.maxDpr}
       renderScale={settings.preview.renderScale}

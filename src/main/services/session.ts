@@ -70,6 +70,12 @@ import { buildDocumentPreview, type DocumentPreviewOptions } from "./preview.js"
 import type { ChunkMeshCache } from "../pipeline/chunked_mesh.js";
 import { saveDocument, type WriteResult } from "./writers.js";
 import { cropToContent, type CropSummary } from "../domain/crop.js";
+import {
+  extentVolume,
+  growthToInclude,
+  orderRegion,
+  shiftRegion,
+} from "../domain/grow.js";
 
 export interface DocumentSession {
   readonly doc: SchematicDocument;
@@ -233,6 +239,28 @@ export class EditTooLargeError extends Error {
 }
 
 /**
+ * How large the schematic itself may become.
+ *
+ * The editor imposes no footprint of its own -- a region may be dragged outside
+ * the box and filling it grows the document to suit. This is not that kind of
+ * limit; it is the one that stops the process dying. The voxels are an
+ * `Int32Array`, so this is four bytes each, and a document big enough to
+ * exhaust memory would take the app down rather than report anything.
+ */
+export const MAX_DOCUMENT_VOLUME = 32_000_000;
+
+export class DocumentTooLargeError extends Error {
+  constructor(volume: number) {
+    super(
+      `That would make the schematic ${volume.toLocaleString()} blocks, more than the ` +
+        `${MAX_DOCUMENT_VOLUME.toLocaleString()} one may hold. Build it in pieces, or trim ` +
+        `it back by saving -- saving keeps only what is not air.`,
+    );
+    this.name = "DocumentTooLargeError";
+  }
+}
+
+/**
  * Applies one request as one undoable step.
  *
  * The label is what the undo menu will say, so it is built from the request
@@ -248,17 +276,39 @@ export function applyEdit(session: DocumentSession, request: EditRequest): numbe
     );
   }
 
-  const region = normalizeRegion(doc, request.region);
+  /*
+   * A region may reach outside the document, and a fill into it grows the
+   * document to suit. `replace` deliberately does not: it rewrites blocks that
+   * are already there, and there are none outside the box -- growing first would
+   * add air and then replace nothing in it, which is a resize the user did not
+   * ask for and would have to undo.
+   */
+  const asked = orderRegion(request.region);
+  const growth = request.kind === "fill" ? growthToInclude(doc, asked) : null;
+
+  // In the document's coordinates *after* the resize: existing content moves by
+  // `shift`, and so does the region naming the cells to write.
+  const region =
+    growth === null ? normalizeRegion(doc, asked) : shiftRegion(asked, growth.shift);
+
   const volume = regionVolume(region);
   if (volume > MAX_EDIT_VOLUME) {
     throw new EditTooLargeError(volume);
   }
+  if (growth !== null && extentVolume(growth.size) > MAX_DOCUMENT_VOLUME) {
+    throw new DocumentTooLargeError(extentVolume(growth.size));
+  }
 
   if (request.kind === "fill") {
     const entry = toEntry(request.block);
-    return runTransaction(doc, history, `Fill with ${entry.namespacedName}`, (tx) =>
-      tx.fill(region, entry),
-    );
+    return runTransaction(doc, history, `Fill with ${entry.namespacedName}`, (tx) => {
+      // One transaction, so growing and filling are one undo step -- and the
+      // resize goes in first, because a block delta recorded before it would be
+      // an index into the old shape. `history.ts` flushes on resize for exactly
+      // that reason.
+      if (growth !== null) tx.resize(growth.size, growth.shift);
+      return tx.fill(region, entry);
+    });
   }
 
   const from = toEntry(request.from);

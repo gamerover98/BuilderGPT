@@ -266,7 +266,6 @@ console.log("\n--- floating panel bounds ---");
 // --- dragging a face of the selection box ---------------------------------
 console.log("\n--- selection face drag ---");
 {
-  const extent = { width: 32, height: 32, length: 32 };
   // A 4x4x4 box in the middle of a 32-cube document.
   const region = { minX: 10, minY: 10, minZ: 10, maxX: 13, maxY: 13, maxZ: 13 };
 
@@ -303,7 +302,7 @@ console.log("\n--- selection face drag ---");
   );
 
   const dragX = (x: number, side: "min" | "max") =>
-    dragFace({ region, axis: "x", side, ray: rayAt(x), view, extent });
+    dragFace({ region, axis: "x", side, ray: rayAt(x), view });
 
   equal("dragging the max face out grows the box", dragX(20.2, "max")?.maxX, 19);
   equal("dragging the max face in shrinks it", dragX(12.4, "max")?.maxX, 11);
@@ -319,8 +318,19 @@ console.log("\n--- selection face drag ---");
   equal("min cannot be pushed above max", dragX(500, "min")?.minX, 13);
   check("...and the box stays at least one block thick", (dragX(-100, "max")?.maxX ?? -1) >= region.minX);
 
-  equal("a face stops at the far end of the document", dragX(500, "max")?.maxX, 31);
-  equal("...and at the near end", dragX(-500, "min")?.minX, 0);
+  /*
+   * The document is *not* a limit. A face may be dragged out past the edge --
+   * that is where the next thing is going to be built -- and filling the region
+   * grows the schematic to contain it, with saving trimming the air back off.
+   * Only the sanity bound applies, and only to keep a near-parallel ray from
+   * reporting a selection in the millions.
+   */
+  equal("a face may be dragged past the far edge", dragX(500.2, "max")?.maxX, 499);
+  equal("...and below the origin", dragX(-40.4, "min")?.minX, -40);
+  check(
+    "a runaway ray still stops somewhere sane",
+    (dragX(1e9, "max")?.maxX ?? 0) === 100_000,
+  );
 
   /*
    * The plate mapping, on a deliberately oblong box so a transposition shows.
@@ -337,7 +347,7 @@ console.log("\n--- selection face drag ---");
 
   equal(
     "an unusable drag plane changes nothing",
-    dragFace({ region, axis: "z", side: "max", ray: rayAt(12), view, extent }),
+    dragFace({ region, axis: "z", side: "max", ray: rayAt(12), view }),
     null,
   );
   equal(
@@ -348,7 +358,6 @@ console.log("\n--- selection face drag ---");
       side: "max",
       ray: { origin: { x: 12, y: 12, z: 60 }, direction: { x: 0, y: 0, z: 1 } },
       view,
-      extent,
     }),
     null,
   );

@@ -24,6 +24,7 @@ import {
   documentMesh,
   documentState,
   editBlockEntityValue,
+  DocumentTooLargeError,
   EditTooLargeError,
   inspect,
   MAX_EDIT_VOLUME,
@@ -210,14 +211,37 @@ try {
   console.log("\n--- oversized edits ---");
   {
     const session = newDocument({ width: 8, height: 8, length: 8 });
-    // The region is clipped to the document before the volume is measured, so
-    // asking for the universe on a small schematic is simply a full fill.
+    /*
+     * A fill used to be clipped to the document before its volume was measured,
+     * so asking for the universe quietly became a full fill of whatever was
+     * open. That silence is the thing the free-footprint editor replaces: a
+     * region outside the box now grows the box, and one that could not
+     * possibly be built says so instead of doing something smaller than what
+     * was asked.
+     */
+    check(
+      "an unbounded region is refused rather than quietly clipped",
+      (() => {
+        try {
+          applyEdit(session, {
+            kind: "fill",
+            region: { minX: -1000, minY: -1000, minZ: -1000, maxX: 1000, maxY: 1000, maxZ: 1000 },
+            block: stone,
+          });
+          return false;
+        } catch (err) {
+          return err instanceof EditTooLargeError || err instanceof DocumentTooLargeError;
+        }
+      })(),
+    );
+    equal("...and the document is untouched", documentState(session).size, [8, 8, 8]);
+
     const changed = applyEdit(session, {
       kind: "fill",
-      region: { minX: -1000, minY: -1000, minZ: -1000, maxX: 1000, maxY: 1000, maxZ: 1000 },
+      region: { minX: 0, minY: 0, minZ: 0, maxX: 7, maxY: 7, maxZ: 7 },
       block: stone,
     });
-    equal("an unbounded region is clipped to the document", changed, 512);
+    equal("a fill of the whole document still works", changed, 512);
 
     // ...but a genuinely enormous document must still refuse.
     const huge = newDocument({ width: 256, height: 256, length: 256 });
@@ -704,6 +728,110 @@ console.log("\n--- the clipboard outlives the document ---");
     "minecraft:diamond_block",
   );
   closeDocument();
+}
+
+// --- a fill outside the box grows the box ---------------------------------
+console.log("\n--- growing to reach a region ---");
+{
+  const stone = { namespacedName: "minecraft:stone", properties: {} };
+
+  // Outwards, on the high side: the document simply gets bigger.
+  {
+    const session = newDocument({ width: 8, height: 8, length: 8 });
+    const changed = applyEdit(session, {
+      kind: "fill",
+      region: { minX: 6, minY: 0, minZ: 0, maxX: 11, maxY: 1, maxZ: 1 },
+      block: stone,
+    });
+    equal("the fill writes every cell it asked for", changed, 6 * 2 * 2);
+    equal("...and the document grew to hold them", documentState(session).size, [12, 8, 8]);
+    equal(
+      "the far corner is where it was asked for",
+      getBlock(session.doc, 11, 1, 1)?.namespacedName,
+      "minecraft:stone",
+    );
+
+    // Growing and filling are one gesture, so they are one undo step.
+    undoEdit(session);
+    equal("one undo puts the size back", documentState(session).size, [8, 8, 8]);
+    equal("...and takes the blocks with it", documentState(session).blockCount, 0);
+    closeDocument();
+  }
+
+  /*
+   * Downwards, which is the case with a sign in it. There is no index -1, so
+   * reaching below the origin moves the *content* up and grows the box; the
+   * blocks already in the document must come along rather than staying at the
+   * coordinates they had.
+   */
+  {
+    const session = newDocument({ width: 8, height: 8, length: 8 });
+    applyEdit(session, { kind: "setBlock", x: 0, y: 0, z: 0, block: stone });
+    applyEdit(session, {
+      kind: "fill",
+      region: { minX: -3, minY: 0, minZ: 0, maxX: -1, maxY: 0, maxZ: 0 },
+      block: stone,
+    });
+    equal("reaching below zero grows the box", documentState(session).size, [11, 8, 8]);
+    equal(
+      "the block that was at the origin moved with the content",
+      getBlock(session.doc, 3, 0, 0)?.namespacedName,
+      "minecraft:stone",
+    );
+    equal(
+      "...and the new blocks are where the region pointed",
+      getBlock(session.doc, 0, 0, 0)?.namespacedName,
+      "minecraft:stone",
+    );
+    equal("nothing was lost or invented", documentState(session).blockCount, 4);
+    closeDocument();
+  }
+
+  // Replace deliberately does not grow: there are no blocks outside the box to
+  // rewrite, so growing would add air and then replace nothing in it.
+  {
+    const session = newDocument({ width: 8, height: 8, length: 8 });
+    applyEdit(session, {
+      kind: "fill",
+      region: { minX: 0, minY: 0, minZ: 0, maxX: 7, maxY: 0, maxZ: 0 },
+      block: stone,
+    });
+    applyEdit(session, {
+      kind: "replace",
+      region: { minX: 0, minY: 0, minZ: 0, maxX: 40, maxY: 0, maxZ: 0 },
+      from: stone,
+      to: { namespacedName: "minecraft:oak_planks", properties: {} },
+    });
+    equal("a replace past the edge leaves the size alone", documentState(session).size, [8, 8, 8]);
+    equal(
+      "...and still rewrites what is there",
+      getBlock(session.doc, 7, 0, 0)?.namespacedName,
+      "minecraft:oak_planks",
+    );
+    closeDocument();
+  }
+
+  // The one limit left is the one that stops the process dying, and it says so.
+  {
+    const session = newDocument({ width: 8, height: 8, length: 8 });
+    let raised: unknown = null;
+    try {
+      applyEdit(session, {
+        kind: "fill",
+        region: { minX: 0, minY: 0, minZ: 0, maxX: 4000, maxY: 4000, maxZ: 4000 },
+        block: stone,
+      });
+    } catch (err) {
+      raised = err;
+    }
+    check(
+      "an impossible footprint is refused rather than attempted",
+      raised instanceof DocumentTooLargeError || raised instanceof EditTooLargeError,
+      raised instanceof Error ? raised.name : String(raised),
+    );
+    equal("...leaving the document as it was", documentState(session).size, [8, 8, 8]);
+    closeDocument();
+  }
 }
 
 // --- saving trims the air the editor left behind --------------------------

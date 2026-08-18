@@ -20,13 +20,7 @@
   import type { MeshAtlas, MeshPayload } from "../../../shared/ipc.js";
   import type { ResolvedTheme } from "../../../shared/settings.js";
   import { t } from "./i18n.svelte.js";
-  import {
-    dragFace,
-    plateScale,
-    type Axis,
-    type Extent,
-    type Side,
-  } from "./selection_drag.js";
+  import { dragFace, plateScale, type Axis, type Side } from "./selection_drag.js";
   import * as THREE from "three";
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
   import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
@@ -130,14 +124,6 @@
     framingKey?: string | number;
     /** Building from the crosshair, in flight. */
     onbuild?: (action: BuildAction, at: { x: number; y: number; z: number }) => void;
-    /**
-     * The document's dimensions, so a dragged face cannot leave it.
-     *
-     * `null` disables the drag handles: without knowing how big the schematic
-     * is there is nothing to clamp against, and a face dragged off the end
-     * would select cells that do not exist.
-     */
-    extent?: Extent | null;
     /** A face was dragged; the region is already snapped and clamped. */
     onselectionchange?: (region: Region) => void;
     /**
@@ -168,7 +154,6 @@
     onbuild,
     framingKey = 0,
     theme = "dark",
-    extent = null,
     onselectionchange,
   }: Props = $props();
 
@@ -533,7 +518,7 @@
   function updateHandles(): void {
     const group = ensureHandles();
     if (!group) return;
-    group.visible = selection !== null && extent !== null && onselectionchange !== undefined;
+    group.visible = selection !== null && onselectionchange !== undefined;
     if (!group.visible || !selection) return;
 
     const min = [selection.minX, selection.minY, selection.minZ];
@@ -580,7 +565,7 @@
    * part with edges worth testing, and a test runner has no camera.
    */
   function dragTo(clientX: number, clientY: number): void {
-    if (!dragged || !camera || !container || !selection || !extent || !onselectionchange) return;
+    if (!dragged || !camera || !container || !selection || !onselectionchange) return;
     const rect = container.getBoundingClientRect();
     raycaster.setFromCamera(
       new THREE.Vector2(
@@ -607,7 +592,6 @@
         },
       },
       view: { x: forward.x, y: forward.y, z: forward.z },
-      extent,
     });
     // Null means there was no usable answer -- an axis pointed at the camera,
     // or a ray that missed the plane. Leave the selection where it is rather
@@ -1007,7 +991,6 @@
     void scene;
     void theme;
     void hovered;
-    void extent;
     updateHandles();
   });
 

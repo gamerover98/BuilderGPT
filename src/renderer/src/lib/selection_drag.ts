@@ -34,12 +34,17 @@ export interface Ray {
   direction: Vec3;
 }
 
-/** The document's dimensions; a face may not be dragged outside them. */
-export interface Extent {
-  width: number;
-  height: number;
-  length: number;
-}
+/**
+ * How far a face may be dragged from the origin, on either side.
+ *
+ * Not a design limit — the editor deliberately imposes no footprint, because a
+ * fill past the edge grows the schematic and saving trims the air back off. It
+ * is a sanity bound on the arithmetic: a ray nearly parallel to its drag plane
+ * produces enormous intersections, and a selection reported in millions would
+ * be useless to everything downstream. The near-parallel guard catches the
+ * worst of it; this catches the rest.
+ */
+export const MAX_COORDINATE = 100_000;
 
 const AXES: Readonly<Record<Axis, Vec3>> = {
   x: { x: 1, y: 0, z: 0 },
@@ -134,11 +139,6 @@ export function faceCentre(region: Region, axis: Axis, side: Side): Vec3 {
   return centre;
 }
 
-function limitFor(axis: Axis, extent: Extent): number {
-  if (axis === "x") return extent.width - 1;
-  if (axis === "y") return extent.height - 1;
-  return extent.length - 1;
-}
 
 function read(region: Region, axis: Axis, side: Side): number {
   if (axis === "x") return side === "min" ? region.minX : region.maxX;
@@ -164,14 +164,17 @@ function write(region: Region, axis: Axis, side: Side, value: number): Region {
 /**
  * The region with one face moved to wherever the ray now points.
  *
- * Snapped to whole blocks, and clamped twice:
+ * Snapped to whole blocks, and clamped only against its opposite face, so the
+ * box never turns inside out. Pushing a face past its partner stops at one
+ * block thick rather than swapping the two, which is what MCEdit does and what
+ * people expect; a box that silently inverted would make every subsequent fill
+ * act on a region the user was no longer looking at.
  *
- * - to the document, because a selection outside it selects nothing; and
- * - against its opposite face, so the box never turns inside out. Pushing a
- *   face past its partner stops at one block thick rather than swapping the
- *   two, which is what MCEdit does and what people expect. A box that silently
- *   inverted would make every subsequent fill act on a region the user was no
- *   longer looking at.
+ * It is **not** clamped to the document. A face may be dragged out past the
+ * edge, because that is where the next thing is going to be built: filling
+ * such a region grows the schematic to contain it, and saving trims the air
+ * back off. Clamping here would have made the editor's box the thing the user
+ * has to manage, which is the job this pair of features exists to remove.
  *
  * Returns null when there is no usable answer -- an unusable drag plane, or a
  * ray that misses it -- rather than a guess. The caller leaves the selection
@@ -184,9 +187,8 @@ export function dragFace(params: {
   ray: Ray;
   /** The camera's viewing direction; need not be normalised. */
   view: Vec3;
-  extent: Extent;
 }): Region | null {
-  const { region, axis, side, ray, view, extent } = params;
+  const { region, axis, side, ray, view } = params;
 
   const normal = dragPlaneNormal(axis, view);
   if (normal === null) return null;
@@ -200,11 +202,9 @@ export function dragFace(params: {
   const raw = side === "min" ? Math.round(along) : Math.round(along) - 1;
 
   const opposite = read(region, axis, side === "min" ? "max" : "min");
-  const limit = limitFor(axis, extent);
+  const bounded = Math.max(-MAX_COORDINATE, Math.min(MAX_COORDINATE, raw));
   const value =
-    side === "min"
-      ? Math.min(Math.max(raw, 0), opposite)
-      : Math.max(Math.min(raw, limit), opposite);
+    side === "min" ? Math.min(bounded, opposite) : Math.max(bounded, opposite);
 
   return write(region, axis, side, value);
 }

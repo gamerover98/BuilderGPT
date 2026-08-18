@@ -78,6 +78,25 @@ whatever an earlier comment claimed: the writers build their own local palette
 from the voxels instead, which reaches the same file without touching the
 document.
 
+**The editor imposes no footprint; the document follows the region.** A
+selection may be dragged outside the schematic, and a **fill** into it grows the
+document to contain it (`domain/grow.ts`) — one transaction, so growing and
+filling are one undo step, with the resize first because a block delta recorded
+before it would index the old shape. The grid has no negative coordinates, so
+reaching below the origin moves the *content* up and the region with it; that
+sign is the part that fails silently.
+
+**`replace` deliberately does not grow.** It rewrites blocks that are already
+there and there are none outside the box, so growing first would add air and
+then replace nothing in it — a resize the user did not ask for and would have
+to undo.
+
+A fill used to be *clipped* to the document before its volume was measured, so
+asking for the universe quietly became a full fill of whatever was open. That
+silence is what this replaces: too big now says so, by name.
+`MAX_DOCUMENT_VOLUME` is not a design limit, it is the one that stops the
+process dying — the voxels are an `Int32Array`.
+
 **Saving trims the schematic to its content, on a copy.** `domain/crop.ts`
 finds the outermost non-air block on each of the six sides and writes that box,
 so a build made inside a deliberately roomy editing volume does not ship a shell

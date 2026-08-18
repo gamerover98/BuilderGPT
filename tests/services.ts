@@ -48,6 +48,12 @@ import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/services/versions.js";
 import { coerceSettings, coerceUi } from "../src/main/services/settings_coerce.js";
 import {
+  extentVolume,
+  growthToInclude,
+  orderRegion,
+  shiftRegion,
+} from "../src/main/domain/grow.js";
+import {
   DEFAULT_SETTINGS,
   DEFAULT_UI_SETTINGS,
   SIDEBAR_WIDTH,
@@ -675,6 +681,65 @@ console.log("\n--- recent documents ---");
     coerceRecents([{ filePath: A, openedAt: -5 }])[0].openedAt,
     0,
   );
+}
+
+// --- growing the document to reach a region outside it ---------------------
+console.log("\n--- growth ---");
+{
+  const extent = { width: 16, height: 16, length: 16 };
+  const box = (minX: number, maxX: number) => ({
+    minX, minY: 0, minZ: 0, maxX, maxY: 0, maxZ: 0,
+  });
+
+  equal("a region already inside needs no growth", growthToInclude(extent, box(2, 5)), null);
+  equal("...and neither does one exactly filling it", growthToInclude(extent, box(0, 15)), null);
+
+  equal("reaching past the far edge grows that side", growthToInclude(extent, box(2, 19)), {
+    size: { width: 20, height: 16, length: 16 },
+    shift: [0, 0, 0],
+  });
+
+  /*
+   * The sign of the shift, which is the whole reason this is a function and not
+   * two lines at the call site. The grid has no negative coordinates, so a
+   * region reaching below zero cannot be reached by growing downwards -- the
+   * *content* moves up instead, and the region has to move with it. Get this
+   * backwards and the new space appears on the wrong side, silently.
+   */
+  equal("reaching below the origin moves the content up", growthToInclude(extent, box(-4, 5)), {
+    size: { width: 20, height: 16, length: 16 },
+    shift: [4, 0, 0],
+  });
+  equal(
+    "the region moves with the content it sits in",
+    shiftRegion(box(-4, 5), [4, 0, 0]),
+    box(0, 9),
+  );
+
+  equal("both sides at once", growthToInclude(extent, box(-4, 19)), {
+    size: { width: 24, height: 16, length: 16 },
+    shift: [4, 0, 0],
+  });
+
+  equal(
+    "each axis grows independently",
+    growthToInclude(extent, { minX: -1, minY: 3, minZ: 0, maxX: 3, maxY: 20, maxZ: 4 }),
+    { size: { width: 17, height: 21, length: 16 }, shift: [1, 0, 0] },
+  );
+
+  // Corners arrive in whatever order the drag left them.
+  equal(
+    "an inverted region is ordered first",
+    orderRegion({ minX: 9, minY: 2, minZ: 7, maxX: 1, maxY: 5, maxZ: 3 }),
+    { minX: 1, minY: 2, minZ: 3, maxX: 9, maxY: 5, maxZ: 7 },
+  );
+  equal(
+    "...and growth reads it the same way round",
+    growthToInclude(extent, { minX: 19, minY: 0, minZ: 0, maxX: 2, maxY: 0, maxZ: 0 }),
+    { size: { width: 20, height: 16, length: 16 }, shift: [0, 0, 0] },
+  );
+
+  equal("volume is the product", extentVolume({ width: 3, height: 4, length: 5 }), 60);
 }
 
 // --- settings coercion: the fields that vanish when nobody names them ------

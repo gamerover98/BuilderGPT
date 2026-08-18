@@ -15,6 +15,7 @@
    * property, and pretending to would be worse than admitting it.
    */
   import type { BlockInspection } from "../../../shared/ipc.js";
+  import { t } from "./i18n.svelte.js";
 
   interface Props {
     inspection: BlockInspection | null;
@@ -87,14 +88,14 @@
 
 {#if inspection && at}
   <fieldset>
-    <legend>Block</legend>
+    <legend>{t("inspector.legend")}</legend>
 
     <p class="id">{inspection.block}</p>
-    <p class="hint">at ({at.x}, {at.y}, {at.z})</p>
+    <p class="hint">{t("inspector.at", { x: at.x, y: at.y, z: at.z })}</p>
 
     {#if properties.length > 0}
       <div class="field">
-        <label for="props">Block states</label>
+        <label for="props">{t("inspector.blockStates")}</label>
         <ul id="props" class="props">
           {#each properties as [name, value] (name)}
             <li>
@@ -116,17 +117,17 @@
             </li>
           {/each}
         </ul>
-        <p class="hint">Changing one places the block again — undoable like any edit.</p>
+        <p class="hint">{t("inspector.blockStatesHint")}</p>
       </div>
     {:else if inspection.block !== "minecraft:air"}
-      <p class="hint">This block has no block states.</p>
+      <p class="hint">{t("inspector.noBlockStates")}</p>
     {/if}
 
     {#if inspection.blockEntity}
       <div class="field">
-        <label for="nbt-fields">{inspection.blockEntity.id} data</label>
+        <label for="nbt-fields">{t("inspector.entityData", { id: inspection.blockEntity.id })}</label>
         {#if inspection.blockEntity.fields.length === 0}
-          <p class="hint" id="nbt-fields">This block entity carries no data.</p>
+          <p class="hint" id="nbt-fields">{t("inspector.noEntityData")}</p>
         {:else}
           <ul id="nbt-fields" class="props nbt">
             {#each inspection.blockEntity.fields as field (field.label)}
@@ -139,22 +140,22 @@
                   value={field.value}
                   disabled={busy || !field.editable}
                   spellcheck="false"
-                  title={field.editable ? undefined : `A ${field.type} cannot be edited here`}
+                  title={field.editable
+                    ? undefined
+                    : t("inspector.notEditable", { type: field.type })}
                   onchange={(event) => onchangenbt(field.path, event.currentTarget.value)}
                 />
               </li>
             {/each}
           </ul>
-          <p class="hint">
-            Each value keeps its NBT type, and each change is its own undo step.
-          </p>
+          <p class="hint">{t("inspector.nbtHint")}</p>
         {/if}
 
         <button class="link" onclick={() => (showRaw = !showRaw)}>
-          {showRaw ? "Hide" : "Show"} the raw tree
+          {showRaw ? t("inspector.hideRaw") : t("inspector.showRaw")}
         </button>
         {#if showRaw}
-          <pre>{nbtText || "(empty)"}</pre>
+          <pre>{nbtText || t("inspector.emptyTree")}</pre>
         {/if}
       </div>
     {/if}

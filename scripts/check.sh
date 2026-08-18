@@ -15,6 +15,7 @@
 #   session     the open document as the IPC handlers drive it
 #   agent       the AI tool loop, driven by a scripted model
 #   autosave    crash recovery: snapshot, lose the session, get the work back
+#   ui          the renderer's pure modules: i18n lookup and catalogue coverage
 #
 # Unlike build.sh, this does NOT stop at the first failure: a test runner that
 # aborts early hides how much else is broken. Every suite runs, results are
@@ -32,8 +33,8 @@ set +e
 
 install_dependencies_if_missing
 
-STEP_NAMES=(typecheck hello smoke sandbox services schematics blocks chunks document history formats session agent autosave)
-STEP_SCRIPTS=(typecheck smoke:hello smoke smoke:sandbox smoke:services smoke:schematics smoke:blocks smoke:chunks smoke:document smoke:history smoke:formats smoke:session smoke:agent smoke:autosave)
+STEP_NAMES=(typecheck hello smoke sandbox services schematics blocks chunks document history formats session agent autosave ui)
+STEP_SCRIPTS=(typecheck smoke:hello smoke smoke:sandbox smoke:services smoke:schematics smoke:blocks smoke:chunks smoke:document smoke:history smoke:formats smoke:session smoke:agent smoke:autosave smoke:ui)
 STEP_RESULTS=()
 
 # ASCII only, to stay readable in terminals that are not UTF-8.

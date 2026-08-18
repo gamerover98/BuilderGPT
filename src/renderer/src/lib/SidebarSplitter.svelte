@@ -11,6 +11,7 @@
    * grid-track change is already a resize as far as it is concerned.
    */
   import { SIDEBAR_WIDTH } from "../../../shared/settings.js";
+  import { t } from "./i18n.svelte.js";
 
   interface Props {
     width: number;
@@ -100,7 +101,7 @@
   role="separator"
   tabindex="0"
   aria-orientation="vertical"
-  aria-label="Resize the control panel"
+  aria-label={t("sidebar.resize")}
   aria-valuenow={Math.round(width)}
   aria-valuemin={SIDEBAR_WIDTH.min}
   aria-valuemax={SIDEBAR_WIDTH.max}

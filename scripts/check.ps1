@@ -1,7 +1,6 @@
 <#
 .SYNOPSIS
-    Runs every automated check for BuilderGPT: typecheck plus the five test
-    suites.
+    Runs every automated check for BuilderGPT: typecheck plus every test suite.
 
 .DESCRIPTION
     Runs, in order:
@@ -11,7 +10,15 @@
       * sandbox     — RULEBOOK.md section 3 containment guarantees
       * services    — main-process services, incl. the schematic write/read round-trip
       * schematics  — Sponge v2/v3 and MCEdit all decode to the same voxel grid
-      * blocks       — block geometry: shapes, culling, texture orientation
+      * blocks      — block geometry: shapes, culling, texture orientation
+      * chunks      — incremental meshing: incremental output equals a rebuild
+      * document    — the mutable schematic document: palette, resize, revision
+      * history     — transactions, undo/redo, and the N-edits-N-undos property
+      * formats     — writing a document back out, round-tripped through the reader
+      * session     — the open document as the IPC handlers drive it
+      * agent       — the AI tool loop, driven by a scripted model
+      * autosave    — crash recovery: snapshot, lose the session, get the work back
+      * ui          — the renderer's pure modules: i18n lookup and catalogue coverage
 
     Unlike build.ps1, this does NOT stop at the first failure: a test runner that
     aborts early hides how much else is broken. Every suite runs, results are
@@ -42,6 +49,7 @@ $steps = @(
     @{ Name = 'session';    Script = 'smoke:session' }
     @{ Name = 'agent';      Script = 'smoke:agent' }
     @{ Name = 'autosave';   Script = 'smoke:autosave' }
+    @{ Name = 'ui';         Script = 'smoke:ui' }
 )
 
 $failed = @()

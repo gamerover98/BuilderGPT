@@ -22,6 +22,7 @@
   } from "../../../shared/ipc.js";
   import { SCHEMATIC_FORMAT_LABEL, type SchematicFormat } from "../../../shared/schematic.js";
   import BlockPicker from "./BlockPicker.svelte";
+  import { t } from "./i18n.svelte.js";
 
   interface Props {
     doc: DocumentState | null;
@@ -111,16 +112,16 @@
 </script>
 
 <fieldset>
-  <legend>Schematic</legend>
+  <legend>{t("doc.legend")}</legend>
 
   {#if doc === null}
-    <p class="hint">Nothing open. Open a <code>.schem</code> or <code>.schematic</code> to edit it.</p>
+    <p class="hint">{t("doc.empty")}</p>
     <div class="buttons">
-      <button class="primary" onclick={onopen} disabled={busy}>Open…</button>
+      <button class="primary" onclick={onopen} disabled={busy}>{t("doc.open")}</button>
     </div>
     {#if reopenable.length > 0}
       <div class="field">
-        <label for="recent-empty">Recent</label>
+        <label for="recent-empty">{t("doc.recent")}</label>
         <ul id="recent-empty" class="recent">
           {#each reopenable as filePath (filePath)}
             <li>
@@ -134,45 +135,49 @@
     {/if}
   {:else}
     <div class="file">
-      <strong title={doc.filePath ?? "Not saved yet"}>
-        {doc.fileName ?? "Untitled"}{doc.dirty ? " •" : ""}
+      <strong title={doc.filePath ?? t("doc.notSaved")}>
+        {doc.fileName ?? t("doc.untitled")}{doc.dirty ? " •" : ""}
       </strong>
       <span class="hint">{SCHEMATIC_FORMAT_LABEL[doc.format]}</span>
     </div>
     <p class="hint">
-      {doc.size[0]}×{doc.size[1]}×{doc.size[2]} · {doc.blockCount.toLocaleString()} blocks
-      {#if doc.dirty}· unsaved changes{/if}
+      {t(doc.dirty ? "doc.summaryDirty" : "doc.summary", {
+        width: doc.size[0],
+        height: doc.size[1],
+        length: doc.size[2],
+        blocks: doc.blockCount.toLocaleString(),
+      })}
     </p>
 
     <div class="buttons">
-      <button onclick={onopen} disabled={busy}>Open…</button>
-      <button onclick={() => onsave()} disabled={busy || !doc.dirty}>Save</button>
-      <button onclick={onsaveas} disabled={busy}>Save as…</button>
+      <button onclick={onopen} disabled={busy}>{t("doc.open")}</button>
+      <button onclick={() => onsave()} disabled={busy || !doc.dirty}>{t("doc.save")}</button>
+      <button onclick={onsaveas} disabled={busy}>{t("doc.saveAs")}</button>
     </div>
 
     <div class="buttons">
       <button
         onclick={onundo}
         disabled={busy || !doc.canUndo}
-        title={doc.undoLabel ?? "Nothing to undo"}
+        title={doc.undoLabel ?? t("doc.nothingToUndo")}
       >
-        Undo
+        {t("doc.undo")}
       </button>
       <button
         onclick={onredo}
         disabled={busy || !doc.canRedo}
-        title={doc.redoLabel ?? "Nothing to redo"}
+        title={doc.redoLabel ?? t("doc.nothingToRedo")}
       >
-        Redo
+        {t("doc.redo")}
       </button>
     </div>
     {#if doc.undoLabel}
-      <p class="hint">Next undo: {doc.undoLabel}</p>
+      <p class="hint">{t("doc.nextUndo", { label: doc.undoLabel })}</p>
     {/if}
 
     {#if reopenable.length > 0}
       <div class="field">
-        <label for="recent">Recent</label>
+        <label for="recent">{t("doc.recent")}</label>
         <ul id="recent" class="recent">
           {#each reopenable as filePath (filePath)}
             <li>
@@ -187,92 +192,107 @@
 
     <!-- Selection -->
     <div class="field">
-      <label for="selection">Selection</label>
+      <label for="selection">{t("selection.legend")}</label>
       {#if selection === null}
-        <p class="hint" id="selection">
-          Click a block in the viewport to select it, Shift-click another to extend the box.
-        </p>
+        <p class="hint" id="selection">{t("selection.hint")}</p>
       {:else}
         <p class="hint" id="selection">
-          ({selection.minX}, {selection.minY}, {selection.minZ}) → ({selection.maxX}, {selection.maxY},
-          {selection.maxZ}) · {selectedVolume.toLocaleString()} blocks
+          {t("selection.range", {
+            minX: selection.minX,
+            minY: selection.minY,
+            minZ: selection.minZ,
+            maxX: selection.maxX,
+            maxY: selection.maxY,
+            maxZ: selection.maxZ,
+            volume: selectedVolume.toLocaleString(),
+          })}
         </p>
       {/if}
       <div class="buttons">
-        <button onclick={onselectall} disabled={busy}>Select all</button>
-        <button onclick={onclearselection} disabled={busy || selection === null}>Clear</button>
+        <button onclick={onselectall} disabled={busy}>{t("selection.all")}</button>
+        <button onclick={onclearselection} disabled={busy || selection === null}>
+          {t("selection.clear")}
+        </button>
       </div>
       <div class="buttons">
-        <button onclick={oncopy} disabled={busy || selection === null}>Copy</button>
-        <button onclick={oncut} disabled={busy || selection === null}>Cut</button>
+        <button onclick={oncopy} disabled={busy || selection === null}>{t("selection.copy")}</button>
+        <button onclick={oncut} disabled={busy || selection === null}>{t("selection.cut")}</button>
         <button
           onclick={onpaste}
           disabled={busy || clipboard === null || selection === null}
           title={clipboard === null
-            ? "Copy something first"
+            ? t("selection.pasteNoClipboard")
             : selection === null
-              ? "Select where it should go"
-              : `Paste ${clipboard.width}×${clipboard.height}×${clipboard.length} at the selection's corner`}
+              ? t("selection.pasteNoSelection")
+              : t("selection.pasteHint", {
+                  width: clipboard.width,
+                  height: clipboard.height,
+                  length: clipboard.length,
+                })}
         >
-          Paste
+          {t("selection.paste")}
         </button>
       </div>
       {#if clipboard}
         <p class="hint">
-          Clipboard: {clipboard.width}×{clipboard.height}×{clipboard.length},
-          {clipboard.blocks.toLocaleString()} blocks
+          {t("selection.clipboard", {
+            width: clipboard.width,
+            height: clipboard.height,
+            length: clipboard.length,
+            blocks: clipboard.blocks.toLocaleString(),
+          })}
         </p>
       {/if}
       <div class="buttons">
         <button
           onclick={() => ontransform({ kind: "rotate", steps: 1 })}
           disabled={busy || selection === null}
-          title="Turn the selection a quarter clockwise — needs a square footprint"
+          title={t("selection.rotate90Hint")}
         >
-          ⟳ 90°
+          {t("selection.rotate90")}
         </button>
         <button
           onclick={() => ontransform({ kind: "rotate", steps: 2 })}
           disabled={busy || selection === null}
-          title="Turn the selection halfway round"
+          title={t("selection.rotate180Hint")}
         >
-          180°
+          {t("selection.rotate180")}
         </button>
         <button
           onclick={() => ontransform({ kind: "mirror", axis: "x" })}
           disabled={busy || selection === null}
-          title="Reflect the selection east to west"
+          title={t("selection.flipXHint")}
         >
-          Flip X
+          {t("selection.flipX")}
         </button>
         <button
           onclick={() => ontransform({ kind: "mirror", axis: "z" })}
           disabled={busy || selection === null}
-          title="Reflect the selection north to south"
+          title={t("selection.flipZHint")}
         >
-          Flip Z
+          {t("selection.flipZ")}
         </button>
       </div>
     </div>
 
     <!-- Editing -->
     <div class="field">
-      <label for="to-block">Block</label>
+      <label for="to-block">{t("selection.block")}</label>
       <BlockPicker id="to-block" value={block} placeholder="minecraft:stone" {blocks} onchange={onblockchange} />
       <div class="buttons">
         <button
           class="primary"
           onclick={() => onfill(block)}
           disabled={busy || selection === null || block.trim() === ""}
-          title={selection === null ? "Select a region first" : "Fill the selection"}
+          title={selection === null ? t("selection.selectFirst") : t("selection.fillHint")}
         >
-          Fill
+          {t("selection.fill")}
         </button>
       </div>
     </div>
 
     <div class="field">
-      <label for="from-block">Replace</label>
+      <label for="from-block">{t("selection.replace")}</label>
       <BlockPicker
         id="from-block"
         value={fromBlock}
@@ -284,9 +304,9 @@
         <button
           onclick={() => onreplace(fromBlock, block)}
           disabled={busy || selection === null || fromBlock.trim() === "" || block.trim() === ""}
-          title={selection === null ? "Select a region first" : "Replace within the selection"}
+          title={selection === null ? t("selection.selectFirst") : t("selection.replaceHint")}
         >
-          Replace with the block above
+          {t("selection.replaceButton")}
         </button>
       </div>
     </div>
@@ -294,14 +314,14 @@
     <!-- Palette -->
     {#if doc.palette.length > 0}
       <div class="field">
-        <label for="palette">Materials</label>
+        <label for="palette">{t("doc.materials")}</label>
         <ul id="palette" class="palette">
           {#each doc.palette.slice(0, 12) as entry (entry.block)}
             <li>
               <button
                 class="link"
                 onclick={() => (fromBlock = baseName(entry.block))}
-                title={`Use ${entry.block} as the block to replace`}
+                title={t("doc.useAsReplace", { block: entry.block })}
               >
                 {entry.block}
               </button>
@@ -310,7 +330,7 @@
           {/each}
         </ul>
         {#if doc.palette.length > 12}
-          <p class="hint">…and {doc.palette.length - 12} more</p>
+          <p class="hint">{t("doc.moreMaterials", { count: doc.palette.length - 12 })}</p>
         {/if}
       </div>
     {/if}

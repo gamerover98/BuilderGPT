@@ -215,6 +215,29 @@ rebuilt rather than recoloured.
 `BrowserWindow`'s `backgroundColor` in `main/index.ts` is outside all of this on
 purpose — it is painted before there is a renderer to ask.
 
+**Every renderer string comes from `t()`; main's do not.** The catalogue is
+`renderer/src/lib/locales/en.ts`, flat dotted keys, and a key with no entry
+renders as *the key itself* — visible and greppable, where a blank would look
+like a styling bug and ship. `tests/ui.ts` walks the source for `t(…)`/`tn(…)`
+call sites and fails on a key the catalogue lacks **and** on a message nobody
+asks for, because a catalogue rots from both ends.
+
+Main-process wording — every `Failure.message` — is **not** translated. It
+arrives already phrased and is shown as it came; translating it would mean
+replacing those messages with error codes, which is a different job.
+
+Two traps, both already paid for:
+
+- `i18n.svelte.ts` holds the locale in a `$state` and so **must** keep that
+  extension, exactly like `bridge.svelte.ts`. The lookup lives in the plain
+  `i18n_core.ts` so it can be tested at all.
+- **`setLocale` assigns unconditionally.** An `if (locale !== next)` guard looks
+  free and is not: it *reads* `locale`, and `App.svelte` calls `setLocale` from
+  an `$effect.pre`, so the read made that effect depend on the variable it
+  sets — every change put the old value straight back and choosing a language
+  did nothing. Svelte already skips an assignment of the same primitive, so the
+  guard was never buying anything either.
+
 **Do not adopt `@opencode-ai/sdk`.** It looks like the obvious dependency for
 the OpenCode provider and is not: it is a client for a *local opencode agent
 server*, spawns the opencode CLI, and has no path to a chat completion against

@@ -14,6 +14,7 @@
     PREVIEW_SETTING_RANGES,
     type PreviewSettings,
   } from "../../../shared/settings.js";
+  import { t } from "./i18n.svelte.js";
 
   interface Props {
     settings: PreviewSettings;
@@ -48,35 +49,31 @@
 </script>
 
 <fieldset>
-  <legend>Preview settings</legend>
+  <legend>{t("preview.legend")}</legend>
 
   <div class="field">
-    <label for="resource-pack">Resource pack (.zip)</label>
+    <label for="resource-pack">{t("preview.resourcePack")}</label>
     <div class="pick-row">
       <input
         id="resource-pack"
         readonly
         value={resourcePackName ?? ""}
-        placeholder="Faithful 64x (bundled)"
+        placeholder={t("preview.resourcePackPlaceholder")}
       />
-      <button onclick={onpickresourcepack}>Choose…</button>
-      <button onclick={onclearresourcepack} disabled={!resourcePackPath}>Reset</button>
+      <button onclick={onpickresourcepack}>{t("common.choose")}</button>
+      <button onclick={onclearresourcepack} disabled={!resourcePackPath}>{t("common.reset")}</button>
     </div>
-    <p class="hint">
-      A pack ships with the app and is used by default. Choosing your own takes
-      priority, with the bundled one filling in any textures it does not provide.
-      Affects the preview only, never the generated file.
-    </p>
+    <p class="hint">{t("preview.resourcePackHint")}</p>
   </div>
 
   <div class="field">
-    <label for="biome-color">Biome colours</label>
+    <label for="biome-color">{t("preview.biomeColors")}</label>
     <div class="pick-row">
       <input
         id="biome-color"
         class="swatch"
         type="color"
-        title="Grass, leaves, vines"
+        title={t("preview.foliage")}
         value={settings.biomeColor}
         oninput={(event) => onchange({ biomeColor: (event.currentTarget as HTMLInputElement).value })}
       />
@@ -84,7 +81,7 @@
         id="water-color"
         class="swatch"
         type="color"
-        title="Water"
+        title={t("preview.water")}
         value={settings.waterColor}
         oninput={(event) => onchange({ waterColor: (event.currentTarget as HTMLInputElement).value })}
       />
@@ -92,19 +89,15 @@
         onclick={() =>
           onchange({ biomeColor: DEFAULT_BIOME_COLOR, waterColor: DEFAULT_WATER_COLOR })}
         disabled={settings.biomeColor.toLowerCase() === DEFAULT_BIOME_COLOR &&
-          settings.waterColor.toLowerCase() === DEFAULT_WATER_COLOR}>Plains</button
+          settings.waterColor.toLowerCase() === DEFAULT_WATER_COLOR}>{t("preview.plains")}</button
       >
     </div>
-    <p class="hint">
-      Foliage (left) and water (right) ship greyscale and are tinted per biome — they are
-      separate colours in Minecraft, so they are separate here. Changing either rebuilds
-      the preview.
-    </p>
+    <p class="hint">{t("preview.biomeHint")}</p>
   </div>
 
   <div class="row">
     <div>
-      <label for="sun-az">Sun azimuth — {settings.sunAzimuthDeg.toFixed(0)}°</label>
+      <label for="sun-az">{t("preview.sunAzimuth", { value: settings.sunAzimuthDeg.toFixed(0) })}</label>
       <input
         id="sun-az"
         type="range"
@@ -116,7 +109,9 @@
       />
     </div>
     <div>
-      <label for="sun-el">Sun elevation — {settings.sunElevationDeg.toFixed(0)}°</label>
+      <label for="sun-el">
+        {t("preview.sunElevation", { value: settings.sunElevationDeg.toFixed(0) })}
+      </label>
       <input
         id="sun-el"
         type="range"
@@ -128,7 +123,7 @@
       />
     </div>
     <div>
-      <label for="max-dpr">Max device pixel ratio — {settings.maxDpr.toFixed(1)}</label>
+      <label for="max-dpr">{t("preview.maxDpr", { value: settings.maxDpr.toFixed(1) })}</label>
       <input
         id="max-dpr"
         type="range"
@@ -143,7 +138,9 @@
 
   <div class="row">
     <div>
-      <label for="render-scale">Render scale — {settings.renderScale.toFixed(1)}</label>
+      <label for="render-scale">
+        {t("preview.renderScale", { value: settings.renderScale.toFixed(1) })}
+      </label>
       <input
         id="render-scale"
         type="range"
@@ -155,7 +152,9 @@
       />
     </div>
     <div>
-      <label for="max-distance">Max draw distance — {settings.maxDrawDistance.toFixed(0)}</label>
+      <label for="max-distance">
+        {t("preview.maxDrawDistance", { value: settings.maxDrawDistance.toFixed(0) })}
+      </label>
       <input
         id="max-distance"
         type="range"
@@ -167,7 +166,7 @@
       />
     </div>
     <div>
-      <label for="fly-speed">Flight speed — {settings.flySpeed.toFixed(0)} blocks/s</label>
+      <label for="fly-speed">{t("preview.flySpeed", { value: settings.flySpeed.toFixed(0) })}</label>
       <input
         id="fly-speed"
         type="range"
@@ -184,21 +183,21 @@
           type="checkbox"
           checked={settings.showGrid}
           onchange={(event) => onchange({ showGrid: checked(event) })}
-        /> Show grid
+        /> {t("preview.showGrid")}
       </label>
       <label class="toggle">
         <input
           type="checkbox"
           checked={settings.wireframe}
           onchange={(event) => onchange({ wireframe: checked(event) })}
-        /> Wireframe
+        /> {t("preview.wireframe")}
       </label>
       <label class="toggle">
         <input
           type="checkbox"
           checked={settings.ambientOcclusion}
           onchange={(event) => onchange({ ambientOcclusion: checked(event) })}
-        /> Ambient occlusion
+        /> {t("preview.ambientOcclusion")}
       </label>
     </div>
   </div>
@@ -206,11 +205,18 @@
   <hr />
 
   <div class="field">
-    <label for="schem-upload">Render an existing .schem (skip generation)</label>
+    <label for="schem-upload">{t("preview.renderExisting")}</label>
     <div class="pick-row">
-      <input id="schem-upload" readonly value={schemName ?? ""} placeholder="No file chosen" />
-      <button onclick={onpickschem}>Choose…</button>
-      <button class="primary" onclick={onrenderschem} disabled={!schemPath || busy}>Render</button>
+      <input
+        id="schem-upload"
+        readonly
+        value={schemName ?? ""}
+        placeholder={t("preview.noFile")}
+      />
+      <button onclick={onpickschem}>{t("common.choose")}</button>
+      <button class="primary" onclick={onrenderschem} disabled={!schemPath || busy}>
+        {t("preview.render")}
+      </button>
     </div>
   </div>
 </fieldset>

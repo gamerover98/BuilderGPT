@@ -51,6 +51,8 @@
    * The commands are built in `App.svelte`, beside the handlers they call, so
    * the palette cannot drift into offering something the buttons no longer do.
    */
+  import { t } from "./i18n.svelte.js";
+
   interface Props {
     open: boolean;
     commands: readonly Command[];
@@ -125,17 +127,17 @@
       if (event.target === event.currentTarget) onclose();
     }}
   >
-    <div class="palette" role="dialog" aria-label="Commands">
+    <div class="palette" role="dialog" aria-label={t("palette.label")}>
       <input
         bind:this={input}
         bind:value={query}
-        placeholder="Type a command…"
+        placeholder={t("palette.placeholder")}
         spellcheck="false"
         autocomplete="off"
         oninput={() => (highlighted = 0)}
       />
       {#if matches.length === 0}
-        <p class="empty">Nothing matches “{query}”.</p>
+        <p class="empty">{t("palette.noMatch", { query })}</p>
       {:else}
         <ul bind:this={list}>
           {#each matches as command, i (command.id)}

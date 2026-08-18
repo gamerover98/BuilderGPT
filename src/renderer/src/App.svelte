@@ -22,7 +22,8 @@
   import ProviderConfig from "./lib/ProviderConfig.svelte";
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
   import Viewer, { type CameraMode, type PickedBlock } from "./lib/Viewer.svelte";
-  import { api, bridgeAvailable, forIpc, BRIDGE_MISSING_MESSAGE } from "./lib/bridge.svelte.js";
+  import { api, bridgeAvailable, forIpc, bridgeMissingMessage } from "./lib/bridge.svelte.js";
+  import { t, tn, setLocale } from "./lib/i18n.svelte.js";
   import {
     openCodeModelRequiresKey,
     type AgentStepEvent,
@@ -173,7 +174,7 @@
     if (busy) return;
     const block =
       action === "break" ? { namespacedName: "minecraft:air" } : parseBlock(activeBlock);
-    await runDocument(action === "break" ? "Breaking a block" : "Placing a block", () =>
+    await runDocument(action === "break" ? t("task.breakingBlock") : t("task.placingBlock"), () =>
       api().applyEdit({ kind: "setBlock", x: at.x, y: at.y, z: at.z, block }),
     );
   }
@@ -277,13 +278,13 @@
 
     const filePath = api().pathForDroppedFile(file);
     if (!filePath) {
-      status = { tone: "warn", text: `${file.name} does not come from a file on disk.` };
+      status = { tone: "warn", text: t("status.notOnDisk", { name: file.name }) };
       return;
     }
     if (!isSchematicPath(filePath)) {
       status = {
         tone: "warn",
-        text: `${file.name} is not a schematic — open a .schem or .schematic.`,
+        text: t("status.notASchematic", { name: file.name }),
       };
       return;
     }
@@ -313,12 +314,14 @@
         await refreshDocument();
         status = {
           tone: "ok",
-          text: `Recovered your unsaved work${offer?.fileName ? ` on ${offer.fileName}` : ""}.`,
-          detail: "It has not been written to disk yet — save when you are happy with it.",
+          text: offer?.fileName
+            ? t("status.recoveredNamed", { name: offer.fileName })
+            : t("status.recovered"),
+          detail: t("recovery.notOnDisk"),
         };
       }
     } catch (err) {
-      failed(err, "Recovering unsaved work");
+      failed(err, t("task.recovering"));
     } finally {
       busy = false;
     }
@@ -373,6 +376,19 @@
     }
   });
 
+  /**
+   * Puts the chosen language into force.
+   *
+   * `setLocale` writes the `$state` every `t()` reads, so this re-renders every
+   * string in the window rather than needing a reload. `lang` goes on `<html>`
+   * beside it for the things CSS and the OS read rather than us: hyphenation,
+   * spellcheck dictionaries, and what a screen reader pronounces.
+   */
+  $effect.pre(() => {
+    setLocale(settings.ui.language);
+    document.documentElement.setAttribute("lang", settings.ui.language);
+  });
+
   onMount(() => {
     // Registered before the bridge check on purpose: collapsing the panel is
     // pure UI, and a window whose preload failed to load is exactly the one
@@ -387,7 +403,7 @@
     dark.addEventListener("change", onSystemTheme);
 
     if (!bridgeAvailable) {
-      status = { tone: "error", text: BRIDGE_MISSING_MESSAGE };
+      status = { tone: "error", text: bridgeMissingMessage() };
       return () => {
         window.removeEventListener("keydown", onWindowKey);
         dark.removeEventListener("change", onSystemTheme);
@@ -457,10 +473,10 @@
     }
     if (key === "z" && !event.shiftKey) {
       event.preventDefault();
-      void runDocument("Undoing", () => api().undo());
+      void runDocument(t("task.undoing"), () => api().undo());
     } else if (key === "y" || (key === "z" && event.shiftKey)) {
       event.preventDefault();
-      void runDocument("Redoing", () => api().redo());
+      void runDocument(t("task.redoing"), () => api().redo());
     } else if (key === "s") {
       event.preventDefault();
       // Nowhere to save to yet means Save As, which is what every editor does.
@@ -492,120 +508,120 @@
   const commands = $derived<Command[]>([
     {
       id: "open",
-      title: "Open schematic…",
-      group: "File",
-      keywords: "load import schem",
+      title: t("command.open"),
+      group: t("group.file"),
+      keywords: t("command.open.keywords"),
       enabled: !busy,
       run: () => void openDocument(),
     },
     ...recentDocuments.slice(0, 5).map((filePath) => ({
       id: `recent:${filePath}`,
-      title: `Open ${filePath.split(/[\\/]/).pop() ?? filePath}`,
-      group: "Recent",
+      title: t("command.openRecent", { name: filePath.split(/[\\/]/).pop() ?? filePath }),
+      group: t("group.recent"),
       keywords: filePath,
       enabled: !busy,
       run: () => void openDocumentAt(filePath),
     })),
     {
       id: "save",
-      title: "Save",
-      group: "File",
+      title: t("command.save"),
+      group: t("group.file"),
       shortcut: "Ctrl+S",
       enabled: !busy && docState !== null,
       run: () => void (docState?.filePath === null ? saveDocumentAs() : saveDocument()),
     },
     {
       id: "save-as",
-      title: "Save as…",
-      group: "File",
-      keywords: "export format sponge mcedit",
+      title: t("command.saveAs"),
+      group: t("group.file"),
+      keywords: t("command.saveAs.keywords"),
       enabled: !busy && docState !== null,
       run: () => void saveDocumentAs(),
     },
     {
       id: "undo",
-      title: "Undo",
-      group: "Edit",
+      title: t("command.undo"),
+      group: t("group.edit"),
       shortcut: "Ctrl+Z",
       enabled: !busy && docState?.canUndo === true,
-      run: () => void runDocument("Undoing", () => api().undo()),
+      run: () => void runDocument(t("task.undoing"), () => api().undo()),
     },
     {
       id: "redo",
-      title: "Redo",
-      group: "Edit",
+      title: t("command.redo"),
+      group: t("group.edit"),
       shortcut: "Ctrl+Y",
       enabled: !busy && docState?.canRedo === true,
-      run: () => void runDocument("Redoing", () => api().redo()),
+      run: () => void runDocument(t("task.redoing"), () => api().redo()),
     },
     {
       id: "select-all",
-      title: "Select the whole schematic",
-      group: "Edit",
-      keywords: "selection everything",
+      title: t("command.selectAll"),
+      group: t("group.edit"),
+      keywords: t("command.selectAll.keywords"),
       enabled: !busy && docState !== null,
       run: selectAll,
     },
     {
       id: "copy",
-      title: "Copy the selection",
-      group: "Edit",
+      title: t("command.copy"),
+      group: t("group.edit"),
       shortcut: "Ctrl+C",
       enabled: !busy && selection !== null,
       run: () => void copySelection(false),
     },
     {
       id: "cut",
-      title: "Cut the selection",
-      group: "Edit",
+      title: t("command.cut"),
+      group: t("group.edit"),
       shortcut: "Ctrl+X",
       enabled: !busy && selection !== null,
       run: () => void copySelection(true),
     },
     {
       id: "paste",
-      title: "Paste at the selection",
-      group: "Edit",
+      title: t("command.paste"),
+      group: t("group.edit"),
       shortcut: "Ctrl+V",
       enabled: !busy && clipboard !== null && selection !== null,
       run: pasteHere,
     },
     {
       id: "rotate-90",
-      title: "Rotate the selection 90°",
-      group: "Edit",
-      keywords: "turn quarter clockwise",
+      title: t("command.rotate90"),
+      group: t("group.edit"),
+      keywords: t("command.rotate90.keywords"),
       enabled: !busy && selection !== null,
       run: () => void transformSelection({ kind: "rotate", steps: 1 }),
     },
     {
       id: "rotate-180",
-      title: "Rotate the selection 180°",
-      group: "Edit",
-      keywords: "turn half",
+      title: t("command.rotate180"),
+      group: t("group.edit"),
+      keywords: t("command.rotate180.keywords"),
       enabled: !busy && selection !== null,
       run: () => void transformSelection({ kind: "rotate", steps: 2 }),
     },
     {
       id: "mirror-x",
-      title: "Mirror the selection east to west",
-      group: "Edit",
-      keywords: "flip reflect x",
+      title: t("command.mirrorX"),
+      group: t("group.edit"),
+      keywords: t("command.mirrorX.keywords"),
       enabled: !busy && selection !== null,
       run: () => void transformSelection({ kind: "mirror", axis: "x" }),
     },
     {
       id: "mirror-z",
-      title: "Mirror the selection north to south",
-      group: "Edit",
-      keywords: "flip reflect z",
+      title: t("command.mirrorZ"),
+      group: t("group.edit"),
+      keywords: t("command.mirrorZ.keywords"),
       enabled: !busy && selection !== null,
       run: () => void transformSelection({ kind: "mirror", axis: "z" }),
     },
     {
       id: "clear-selection",
-      title: "Clear the selection",
-      group: "Edit",
+      title: t("command.clearSelection"),
+      group: t("group.edit"),
       enabled: !busy && selection !== null,
       run: () => {
         selection = null;
@@ -614,55 +630,55 @@
     },
     {
       id: "camera-orbit",
-      title: "Camera: orbit",
-      group: "View",
-      keywords: "turntable rotate",
+      title: t("command.cameraOrbit"),
+      group: t("group.view"),
+      keywords: t("command.cameraOrbit.keywords"),
       enabled: cameraMode !== "orbit",
       run: () => (cameraMode = "orbit"),
     },
     {
       id: "camera-fly",
-      title: "Camera: Creative flight",
-      group: "View",
-      keywords: "wasd walk fly first person",
+      title: t("command.cameraFly"),
+      group: t("group.view"),
+      keywords: t("command.cameraFly.keywords"),
       enabled: cameraMode !== "fly",
       run: () => (cameraMode = "fly"),
     },
     {
       id: "toggle-grid",
-      title: settings.preview.showGrid ? "Hide the grid" : "Show the grid",
-      group: "View",
+      title: settings.preview.showGrid ? t("command.hideGrid") : t("command.showGrid"),
+      group: t("group.view"),
       enabled: true,
       run: () => void patchPreview({ showGrid: !settings.preview.showGrid }),
     },
     {
       id: "toggle-wireframe",
-      title: settings.preview.wireframe ? "Turn off wireframe" : "Turn on wireframe",
-      group: "View",
+      title: settings.preview.wireframe ? t("command.wireframeOff") : t("command.wireframeOn"),
+      group: t("group.view"),
       enabled: true,
       run: () => void patchPreview({ wireframe: !settings.preview.wireframe }),
     },
     {
       id: "toggle-sidebar",
-      title: sidebarCollapsed ? "Show the control panel" : "Hide the control panel",
-      group: "View",
+      title: sidebarCollapsed ? t("sidebar.show") : t("sidebar.hide"),
+      group: t("group.view"),
       shortcut: "Ctrl+B",
       enabled: true,
       run: toggleSidebar,
     },
     {
       id: "new-chat",
-      title: "Start a new chat",
-      group: "AI",
-      keywords: "forget conversation reset clear",
+      title: t("command.newChat"),
+      group: t("group.ai"),
+      keywords: t("command.newChat.keywords"),
       enabled: !busy && (chat.length > 0 || remembered > 0),
       run: () => void forgetConversation(),
     },
     {
       id: "stop-agent",
-      title: "Stop the AI",
-      group: "AI",
-      keywords: "cancel abort",
+      title: t("command.stopAgent"),
+      group: t("group.ai"),
+      keywords: t("command.stopAgent.keywords"),
       enabled: agentRequestId !== null,
       run: () => void stopAgent(),
     },
@@ -682,7 +698,7 @@
     try {
       await patchSettings({ ui: { ...settings.ui, ...patch } });
     } catch (err) {
-      failed(err, "Saving the panel layout");
+      failed(err, t("task.savingLayout"));
     }
   }
 
@@ -732,7 +748,7 @@
     // is the entire message -- so without naming the operation there is
     // nothing to act on.
     const message = err instanceof Error ? err.message : String(err);
-    status = { tone: "error", text: `${doing}: ${message}` };
+    status = { tone: "error", text: t("status.failed", { doing, message }) };
   }
 
   async function pick(kind: "image" | "resource-pack" | "schem" | "directory"): Promise<void> {
@@ -774,7 +790,7 @@
         settings: forIpc(settings.preview),
       });
     } catch (err) {
-      failed(err, "Rendering the schematic");
+      failed(err, t("task.rendering"));
       return;
     }
     if (!response.ok) {
@@ -868,7 +884,7 @@
     try {
       picked = await api().pickFile({ kind: "schem" });
     } catch (err) {
-      failed(err, "Opening the schematic chooser");
+      failed(err, t("task.openingChooser"));
       return;
     }
     if (picked.error) {
@@ -909,7 +925,7 @@
       framingEpoch += 1;
       await refreshDocument();
     } catch (err) {
-      failed(err, "Opening the schematic");
+      failed(err, t("task.opening"));
     } finally {
       busy = false;
     }
@@ -1009,7 +1025,7 @@
     if (!inspection || !inspectedAt) return;
     const at = inspectedAt;
     const properties = { ...inspection.properties, [name]: value.trim() };
-    await runDocument("Changing a block state", () =>
+    await runDocument(t("task.changingBlockState"), () =>
       api().applyEdit({
         kind: "setBlock",
         x: at.x,
@@ -1032,7 +1048,7 @@
   async function changeNbtValue(path: (string | number)[], value: string): Promise<void> {
     if (!inspectedAt) return;
     const at = inspectedAt;
-    await runDocument("Editing block entity data", () =>
+    await runDocument(t("task.editingNbt"), () =>
       api().setNbtValue({ x: at.x, y: at.y, z: at.z, path: forIpc(path), value }),
     );
   }
@@ -1054,10 +1070,12 @@
       if (cut) await refreshDocument();
       status = {
         tone: "ok",
-        text: `${cut ? "Cut" : "Copied"} ${response.clipboard.blocks.toLocaleString()} blocks.`,
+        text: t(cut ? "status.cut" : "status.copied", {
+          count: response.clipboard.blocks.toLocaleString(),
+        }),
       };
     } catch (err) {
-      failed(err, cut ? "Cutting the selection" : "Copying the selection");
+      failed(err, cut ? t("task.cutting") : t("task.copying"));
     } finally {
       busy = false;
     }
@@ -1073,7 +1091,7 @@
   async function pasteHere(): Promise<void> {
     if (!selection) return;
     const at = { x: selection.minX, y: selection.minY, z: selection.minZ };
-    const changed = await runDocument("Pasting", () => api().pasteClipboard(at));
+    const changed = await runDocument(t("task.pasting"), () => api().pasteClipboard(at));
     reportChange(changed);
   }
 
@@ -1087,7 +1105,7 @@
   async function transformSelection(transform: TransformRequest["transform"]): Promise<void> {
     if (!selection) return;
     const region = selection;
-    const changed = await runDocument("Transforming the selection", () =>
+    const changed = await runDocument(t("task.transforming"), () =>
       api().transformRegion({ region: forIpc(region), transform }),
     );
     reportChange(changed);
@@ -1096,7 +1114,7 @@
   async function fillSelection(block: string): Promise<void> {
     if (!selection) return;
     const region = selection;
-    const changed = await runDocument("Filling the selection", () =>
+    const changed = await runDocument(t("task.filling"), () =>
       api().applyEdit({ kind: "fill", region: forIpc(region), block: parseBlock(block) }),
     );
     reportChange(changed);
@@ -1105,7 +1123,7 @@
   async function replaceInSelection(from: string, to: string): Promise<void> {
     if (!selection) return;
     const region = selection;
-    const changed = await runDocument("Replacing blocks", () =>
+    const changed = await runDocument(t("task.replacing"), () =>
       api().applyEdit({
         kind: "replace",
         region: forIpc(region),
@@ -1123,7 +1141,7 @@
    */
   function reportChange(changed: number | null): void {
     if (changed === 0) {
-      status = { tone: "info", text: "No blocks matched, so nothing changed." };
+      status = { tone: "info", text: t("status.nothingMatched") };
     }
   }
 
@@ -1138,15 +1156,17 @@
       docState = response.state;
       status = {
         tone: response.degraded.length > 0 ? "warn" : "ok",
-        text: `Saved ${response.filePath.split(/[\\/]/).pop()}`,
+        text: t("status.saved", { name: response.filePath.split(/[\\/]/).pop() ?? "" }),
         detail:
           response.degraded.length > 0
-            ? `${response.degraded.length} block type(s) cannot keep their block state in this ` +
-              `format and will come back changed: ${response.degraded.slice(0, 3).join(", ")}`
+            ? t("status.degraded", {
+                count: response.degraded.length,
+                blocks: response.degraded.slice(0, 3).join(", "),
+              })
             : undefined,
       };
     } catch (err) {
-      failed(err, "Saving the schematic");
+      failed(err, t("task.saving"));
     } finally {
       busy = false;
     }
@@ -1157,7 +1177,7 @@
     try {
       picked = await api().pickFile({ kind: "directory" });
     } catch (err) {
-      failed(err, "Choosing where to save");
+      failed(err, t("task.choosingSaveLocation"));
       return;
     }
     if (!picked.path || !docState) return;
@@ -1195,7 +1215,7 @@
           role: "agent",
           // A model can answer with tool calls and no closing text; saying
           // nothing at all would read as a failure.
-          text: response.text.trim() === "" ? "Done." : response.text,
+          text: response.text.trim() === "" ? t("chat.done") : response.text,
           steps: response.steps,
           changed: response.changed,
           summary: response.summary,
@@ -1230,7 +1250,7 @@
           imagePath,
         });
       } catch (err) {
-        failed(err, "Generating the structure");
+        failed(err, t("task.generating"));
         return;
       }
       if (!response.ok) {
@@ -1250,23 +1270,25 @@
       const notes: string[] = [];
       if (response.backedUpTo) {
         notes.push(
-          `The previous file of that name was kept as ${response.backedUpTo.split(/[\\/]/).pop()}`,
+          t("status.backedUp", { name: response.backedUpTo.split(/[\\/]/).pop() ?? "" }),
         );
       }
       if (response.droppedBlocks.length > 0) {
         const named = response.droppedBlocks
           .slice(0, 3)
-          .map((dropped) => `${dropped.blockId ?? "(empty)"} ×${dropped.calls}`)
+          .map((dropped) => `${dropped.blockId ?? t("status.emptyBlock")} ×${dropped.calls}`)
           .join(", ");
         const rest = response.droppedBlocks.length - 3;
         notes.push(
-          `${response.droppedBlocks.length} block type(s) were left out because they are not in ` +
-            `block_id_list.txt: ${named}${rest > 0 ? `, and ${rest} more` : ""}`,
+          t("status.droppedBlocks", {
+            count: response.droppedBlocks.length,
+            blocks: named + (rest > 0 ? t("status.droppedAndMore", { count: rest }) : ""),
+          }),
         );
       }
       status = {
         tone: response.droppedBlocks.length > 0 ? "warn" : "ok",
-        text: `Saved ${response.name}.${response.exportType}`,
+        text: t("status.saved", { name: `${response.name}.${response.exportType}` }),
         detail: notes.length > 0 ? notes.join(". ") : undefined,
       };
       artifacts = await api().listArtifacts();
@@ -1294,12 +1316,12 @@
 >
   <section class="controls">
     <header class="sidebar-head">
-      <h1>Schematic AI Studio</h1>
+      <h1>{t("app.title")}</h1>
       <button
         class="icon"
         onclick={toggleSidebar}
-        title="Hide the control panel (Ctrl+B)"
-        aria-label="Hide the control panel">&#x2039;</button
+        title={t("sidebar.hideShortcut")}
+        aria-label={t("sidebar.hide")}>&#x2039;</button
       >
     </header>
 
@@ -1315,8 +1337,8 @@
       onopen={openDocument}
       onsave={(format) => saveDocument(format)}
       onsaveas={saveDocumentAs}
-      onundo={() => runDocument("Undoing", () => api().undo())}
-      onredo={() => runDocument("Redoing", () => api().redo())}
+      onundo={() => runDocument(t("task.undoing"), () => api().undo())}
+      onredo={() => runDocument(t("task.redoing"), () => api().redo())}
       onfill={fillSelection}
       onreplace={replaceInSelection}
       ontransform={transformSelection}
@@ -1350,7 +1372,7 @@
       onask={askAgent}
       onforget={forgetConversation}
       onstop={stopAgent}
-      onundo={() => runDocument("Undoing", () => api().undo())}
+      onundo={() => runDocument(t("task.undoing"), () => api().undo())}
     />
 
     <ProviderConfig
@@ -1363,11 +1385,11 @@
     />
 
     <fieldset>
-      <legend>Structure</legend>
+      <legend>{t("structure.legend")}</legend>
 
       <div class="row">
         <div>
-          <label for="version">Game version</label>
+          <label for="version">{t("structure.version")}</label>
           <select
             id="version"
             value={settings.version}
@@ -1379,7 +1401,7 @@
           </select>
         </div>
         <div>
-          <label for="export-type">Export type</label>
+          <label for="export-type">{t("structure.exportType")}</label>
           <select
             id="export-type"
             value={settings.exportType}
@@ -1393,42 +1415,41 @@
       </div>
 
       <div class="field">
-        <label for="description">Description</label>
+        <label for="description">{t("structure.description")}</label>
         <textarea
           id="description"
           bind:value={description}
-          placeholder="Describe the structure you want to build..."
+          placeholder={t("structure.descriptionPlaceholder")}
         ></textarea>
       </div>
 
       <div class="field">
-        <label for="image">Optional reference image</label>
+        <label for="image">{t("structure.image")}</label>
         <div class="pick-row">
           <input
             id="image"
             readonly
             value={imageName ?? ""}
-            placeholder={acceptsImages ? "No image chosen" : "Not supported by this model"}
+            placeholder={acceptsImages
+              ? t("structure.noImage")
+              : t("structure.imageUnsupported")}
           />
-          <button onclick={() => pick("image")} disabled={!acceptsImages}>Choose…</button>
+          <button onclick={() => pick("image")} disabled={!acceptsImages}>{t("common.choose")}</button>
           <button
             onclick={() => {
               imagePath = null;
               imageName = null;
             }}
-            disabled={!imagePath}>Clear</button
+            disabled={!imagePath}>{t("common.clear")}</button
           >
         </div>
         {#if !acceptsImages}
-          <p class="hint">
-            {openCodeModel?.name} takes text only. Pick a model marked “images” to use a reference
-            picture.
-          </p>
+          <p class="hint">{t("structure.imageHint", { model: openCodeModel?.name ?? "" })}</p>
         {/if}
       </div>
 
       <div class="field">
-        <label for="output-dir">Output folder</label>
+        <label for="output-dir">{t("structure.outputDir")}</label>
         <div class="pick-row">
           <input
             id="output-dir"
@@ -1437,29 +1458,28 @@
             placeholder={defaultOutputDir}
             title={settings.outputDir || defaultOutputDir}
           />
-          <button onclick={() => pick("directory")}>Choose…</button>
+          <button onclick={() => pick("directory")}>{t("common.choose")}</button>
           <button
             onclick={() => patchSettings({ outputDir: "" })}
-            disabled={settings.outputDir === ""}>Default</button
+            disabled={settings.outputDir === ""}>{t("structure.default")}</button
           >
           <button onclick={() => api().revealPath(settings.outputDir || defaultOutputDir)}>
-            Open
+            {t("common.open")}
           </button>
         </div>
-        <p class="hint">
-          A file of the same name is renamed with a timestamp before being replaced, never
-          overwritten.
-        </p>
+        <p class="hint">{t("structure.outputHint")}</p>
       </div>
 
       <div class="buttons">
-        <button class="primary" onclick={onGenerate} disabled={!canGenerate}>Generate</button>
+        <button class="primary" onclick={onGenerate} disabled={!canGenerate}>
+          {t("structure.generate")}
+        </button>
         <button
           onclick={() => lastSchemPath && runPreview(lastSchemPath)}
           disabled={!canRerender}
-          title="Refresh the preview using the last schematic without regenerating"
+          title={t("structure.rerenderHint")}
         >
-          Re-render
+          {t("structure.rerender")}
         </button>
       </div>
 
@@ -1511,7 +1531,7 @@
   <section
     class="preview"
     class:drop-active={dropActive}
-    aria-label="3D viewport"
+    aria-label={t("viewport.label")}
     ondragenter={onDragEnter}
     ondragover={onDragOver}
     ondragleave={onDragLeave}
@@ -1521,26 +1541,26 @@
       <button
         class="icon show-panel"
         onclick={toggleSidebar}
-        title="Show the control panel (Ctrl+B)"
-        aria-label="Show the control panel">&#x203a;</button
+        title={t("sidebar.showShortcut")}
+        aria-label={t("sidebar.show")}>&#x203a;</button
       >
     {/if}
 
     {#if mesh}
-      <div class="camera-modes" role="group" aria-label="Camera mode">
+      <div class="camera-modes" role="group" aria-label={t("viewport.cameraMode")}>
         <button
           class:active={cameraMode === "orbit"}
           onclick={() => (cameraMode = "orbit")}
-          title="Orbit around the structure, and click to select"
+          title={t("viewport.orbitHint")}
         >
-          Orbit
+          {t("viewport.orbit")}
         </button>
         <button
           class:active={cameraMode === "fly"}
           onclick={() => (cameraMode = "fly")}
-          title="Fly through it — WASD, Space and Shift"
+          title={t("viewport.creativeHint")}
         >
-          Creative
+          {t("viewport.creative")}
         </button>
       </div>
     {/if}
@@ -1553,8 +1573,8 @@
     -->
     {#if dropActive}
       <div class="drop-hint" aria-hidden="true">
-        <strong>Drop to open</strong>
-        <span>.schem or .schematic</span>
+        <strong>{t("viewport.dropTitle")}</strong>
+        <span>{t("viewport.dropTypes")}</span>
       </div>
     {/if}
 
@@ -1565,17 +1585,21 @@
         does not have a close button and both answers are explicit.
       -->
       <div class="recovery" role="alertdialog" aria-labelledby="recovery-title">
-        <strong id="recovery-title">Unsaved work was found</strong>
+        <strong id="recovery-title">{t("recovery.title")}</strong>
         <p>
-          {recovery.fileName ?? "An unsaved schematic"} — {recovery.blockCount.toLocaleString()}
-          blocks, from {new Date(recovery.savedAt).toLocaleString()}. The last session ended before
-          it was saved.
+          {t("recovery.body", {
+            name: recovery.fileName ?? t("recovery.unnamed"),
+            blocks: recovery.blockCount.toLocaleString(),
+            when: new Date(recovery.savedAt).toLocaleString(),
+          })}
         </p>
         <div class="buttons">
           <button class="primary" onclick={() => resolveRecovery(true)} disabled={busy}>
-            Restore it
+            {t("recovery.restore")}
           </button>
-          <button onclick={() => resolveRecovery(false)} disabled={busy}>Discard</button>
+          <button onclick={() => resolveRecovery(false)} disabled={busy}>
+            {t("recovery.discard")}
+          </button>
         </div>
       </div>
     {/if}
@@ -1586,7 +1610,9 @@
           {status.text}
           {#if status.detail}<br /><small>{status.detail}</small>{/if}
         </div>
-        <button class="icon" onclick={() => (status = null)} aria-label="Dismiss">&#x00d7;</button>
+        <button class="icon" onclick={() => (status = null)} aria-label={t("common.dismiss")}>
+          &#x00d7;
+        </button>
       </div>
     {/if}
 
@@ -1611,9 +1637,10 @@
     {#if bounds}
       <!-- component.py:465-469's caption, same two-decimal formatting. -->
       <footer>
-        Preview bounds center: ({bounds.center.map((n) => n.toFixed(2)).join(", ")}) · size: ({bounds.size
-          .map((n) => n.toFixed(2))
-          .join(", ")})
+        {t("viewport.bounds", {
+          center: bounds.center.map((n) => n.toFixed(2)).join(", "),
+          size: bounds.size.map((n) => n.toFixed(2)).join(", "),
+        })}
       </footer>
     {/if}
   </section>

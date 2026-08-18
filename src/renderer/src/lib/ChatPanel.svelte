@@ -7,6 +7,7 @@
    * is indistinguishable from one that has hung.
    */
   import type { AgentStepEvent, EditSummary, RegionSpec } from "../../../shared/ipc.js";
+  import { t, tn } from "./i18n.svelte.js";
 
   export interface ChatEntry {
     /** `note` is something that happened but did not go wrong — a stopped run. */
@@ -78,17 +79,17 @@
 </script>
 
 <fieldset>
-  <legend>Ask the AI</legend>
+  <legend>{t("chat.legend")}</legend>
 
   {#if !enabled}
-    <p class="hint">Open a schematic first — the AI edits the one you have open.</p>
+    <p class="hint">{t("chat.needDocument")}</p>
   {:else}
     {#if entries.length > 0 || live.length > 0}
       <ul class="log">
         {#each entries as entry, index (index)}
           <li class={entry.role}>
             <span class="who">
-              {#if entry.role === "user"}You{:else if entry.role === "error"}Failed{:else if entry.role === "note"}Stopped{:else}AI{/if}
+              {#if entry.role === "user"}{t("chat.you")}{:else if entry.role === "error"}{t("chat.failed")}{:else if entry.role === "note"}{t("chat.stopped")}{:else}{t("chat.ai")}{/if}
             </span>
             <span class="text">{entry.text}</span>
             {#if entry.steps && entry.steps.length > 0}
@@ -107,7 +108,7 @@
                       {tally.block}
                     {/each}
                     {#if entry.summary.removed.length > SHOWN}
-                      and {entry.summary.removed.length - SHOWN} more
+                      {t("chat.andMore", { count: entry.summary.removed.length - SHOWN })}
                     {/if}
                   </p>
                 {/if}
@@ -118,24 +119,24 @@
                       {tally.block}
                     {/each}
                     {#if entry.summary.added.length > SHOWN}
-                      and {entry.summary.added.length - SHOWN} more
+                      {t("chat.andMore", { count: entry.summary.added.length - SHOWN })}
                     {/if}
                   </p>
                 {/if}
               </div>
               {#if entry.undoLabel && entry.undoLabel === undoLabel}
                 <div class="buttons">
-                  <button onclick={onundo} disabled={busy}>Undo this</button>
+                  <button onclick={onundo} disabled={busy}>{t("chat.undoThis")}</button>
                 </div>
               {/if}
             {:else if entry.changed !== undefined && entry.changed > 0}
-              <span class="hint">{entry.changed.toLocaleString()} blocks changed</span>
+              <span class="hint">{t("chat.blocksChanged", { count: entry.changed.toLocaleString() })}</span>
             {/if}
           </li>
         {/each}
         {#if live.length > 0}
           <li class="agent">
-            <span class="who">AI</span>
+            <span class="who">{t("chat.ai")}</span>
             <ul class="steps">
               {#each live as step, index (index)}
                 <li>{step.summary}</li>
@@ -148,24 +149,20 @@
 
     <div class="field">
       <label for="prompt">
-        {#if selection}
-          Acts on your selection unless you say otherwise
-        {:else}
-          Acts on the whole schematic — select a region to narrow it
-        {/if}
+        {selection ? t("chat.actsOnSelection") : t("chat.actsOnAll")}
       </label>
       <textarea
         id="prompt"
         bind:value={draft}
         onkeydown={onKeydown}
-        placeholder="Replace the cobblestone with stone…"
+        placeholder={t("chat.placeholder")}
         rows="3"
       ></textarea>
     </div>
 
     <div class="buttons">
       <button class="primary" onclick={submit} disabled={busy || draft.trim() === ""}>
-        {busy ? "Working…" : "Send"}
+        {busy ? t("chat.working") : t("chat.send")}
       </button>
       {#if busy}
         <!--
@@ -173,23 +170,20 @@
           greyed out while the thing it stops is running is the one state this
           button must not have.
         -->
-        <button onclick={onstop} title="Stop this request; nothing will be changed">Stop</button>
+        <button onclick={onstop} title={t("chat.stopHint")}>{t("chat.stop")}</button>
       {:else}
         <button
           onclick={onforget}
           disabled={entries.length === 0 && remembered === 0}
-          title="Forget what has been said so far and start over"
+          title={t("chat.newChatHint")}
         >
-          New chat
+          {t("chat.newChat")}
         </button>
       {/if}
     </div>
 
     {#if remembered > 0}
-      <p class="hint">
-        Follow-ups can refer back — the AI remembers
-        {remembered === 1 ? "this exchange" : `the last ${remembered} exchanges`}.
-      </p>
+      <p class="hint">{tn("chat.remembered", remembered)}</p>
     {/if}
   {/if}
 </fieldset>

@@ -6,6 +6,7 @@
    */
   import type { Artifact } from "../../../shared/ipc.js";
   import { api } from "./bridge.svelte.js";
+  import { t } from "./i18n.svelte.js";
 
   interface Props {
     artifacts: Artifact[];
@@ -16,9 +17,9 @@
 </script>
 
 <fieldset>
-  <legend>Generated files</legend>
+  <legend>{t("artifacts.legend")}</legend>
   {#if artifacts.length === 0}
-    <p class="hint">Nothing generated yet.</p>
+    <p class="hint">{t("artifacts.empty")}</p>
   {:else}
     <ul>
       {#each artifacts as artifact (artifact.path)}
@@ -29,9 +30,9 @@
           </div>
           <div class="actions">
             {#if artifact.type === "schem"}
-              <button onclick={() => onselect(artifact)}>Preview</button>
+              <button onclick={() => onselect(artifact)}>{t("artifacts.preview")}</button>
             {/if}
-            <button onclick={() => api().revealPath(artifact.path)}>Reveal</button>
+            <button onclick={() => api().revealPath(artifact.path)}>{t("artifacts.reveal")}</button>
           </div>
         </li>
       {/each}

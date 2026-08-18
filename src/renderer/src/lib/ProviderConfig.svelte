@@ -14,6 +14,7 @@
    */
   import { openCodeModelRequiresKey, type OpenCodeModelInfo } from "../../../shared/ipc.js";
   import { api, bridgeAvailable } from "./bridge.svelte.js";
+  import { t } from "./i18n.svelte.js";
   import {
     PROVIDERS,
     PROVIDER_DEFAULT_MODEL,
@@ -65,13 +66,13 @@
   function describe(model: OpenCodeModelInfo): string {
     const bits: string[] = [model.name];
     if (model.contextTokens) {
-      bits.push(`${Math.round(model.contextTokens / 1000)}k ctx`);
+      bits.push(t("provider.contextTokens", { count: Math.round(model.contextTokens / 1000) }));
     }
     if (model.imageInput === "yes") {
-      bits.push("images");
+      bits.push(t("provider.images"));
     }
     if (model.pricing === "paid" && model.cost) {
-      bits.push(`$${model.cost.input}/$${model.cost.output} per M`);
+      bits.push(t("provider.cost", { input: model.cost.input, output: model.cost.output }));
     }
     return bits.join(" · ");
   }
@@ -119,11 +120,11 @@
 </script>
 
 <fieldset>
-  <legend>🤖 LLM provider</legend>
+  <legend>{t("provider.legend")}</legend>
 
   <div class="row">
     <div>
-      <label for="provider">Provider</label>
+      <label for="provider">{t("provider.provider")}</label>
       <select
         id="provider"
         value={settings.provider}
@@ -136,7 +137,7 @@
     </div>
 
     <div>
-      <label for="model">Model name</label>
+      <label for="model">{t("provider.model")}</label>
       {#if settings.provider === "OpenCode" && openCodeModels}
         <select
           id="model"
@@ -149,21 +150,21 @@
             they belong at the top and visibly separated.
           -->
           {#if freeModels.length > 0}
-            <optgroup label={`Free (${freeModels.length}) — no API key needed`}>
+            <optgroup label={t("provider.free", { count: freeModels.length })}>
               {#each freeModels as model (model.id)}
                 <option value={model.id}>{describe(model)}</option>
               {/each}
             </optgroup>
           {/if}
           {#if paidModels.length > 0}
-            <optgroup label={`Paid (${paidModels.length}) — API key required`}>
+            <optgroup label={t("provider.paid", { count: paidModels.length })}>
               {#each paidModels as model (model.id)}
                 <option value={model.id}>{describe(model)}</option>
               {/each}
             </optgroup>
           {/if}
           {#if unknownModels.length > 0}
-            <optgroup label={`Pricing unknown (${unknownModels.length})`}>
+            <optgroup label={t("provider.unknownPricing", { count: unknownModels.length })}>
               {#each unknownModels as model (model.id)}
                 <option value={model.id}>{describe(model)}</option>
               {/each}
@@ -172,11 +173,14 @@
         </select>
         {#if selectedModel}
           <p class="hint">
-            {selectedModel.id} · {openCodeModels.length} models available
+            {t("provider.modelSummary", {
+              id: selectedModel.id,
+              count: openCodeModels.length,
+            })}
             {#if selectedModel.imageInput === "no"}
-              · text only, no reference image
+              {t("provider.textOnly")}
             {:else if selectedModel.imageInput === "unknown"}
-              · image support unknown
+              {t("provider.imageUnknown")}
             {/if}
           </p>
         {/if}
@@ -188,7 +192,7 @@
           oninput={(event) => onchange({ model: event.currentTarget.value })}
         />
         {#if openCodeFetchFailed}
-          <p class="hint">Model list fetch failed — type the model id manually.</p>
+          <p class="hint">{t("provider.fetchFailed")}</p>
         {/if}
       {/if}
     </div>
@@ -196,7 +200,7 @@
 
   {#if settings.provider === "Custom (OpenAI Compatible)"}
     <div class="field">
-      <label for="base-url">Base URL</label>
+      <label for="base-url">{t("provider.baseUrl")}</label>
       <input
         id="base-url"
         value={settings.baseUrl}
@@ -208,7 +212,9 @@
 
   <div class="field">
     <label for="api-key">
-      API key{providerRequiresApiKey(settings.provider) ? "" : " (only for paid models)"}
+      {providerRequiresApiKey(settings.provider)
+        ? t("provider.apiKey")
+        : t("provider.apiKeyOptional")}
     </label>
     <div class="key-row">
       <input
@@ -216,25 +222,21 @@
         type="password"
         autocomplete="off"
         bind:value={keyDraft}
-        placeholder={hasKey ? "•••••••• stored" : "Paste your key"}
+        placeholder={hasKey ? t("provider.keyStoredPlaceholder") : t("provider.keyPlaceholder")}
       />
-      <button onclick={saveKey} disabled={saving || keyDraft.trim() === ""}>Save</button>
-      <button onclick={() => onclearkey(settings.provider)} disabled={!hasKey}>Clear</button>
+      <button onclick={saveKey} disabled={saving || keyDraft.trim() === ""}>{t("common.save")}</button>
+      <button onclick={() => onclearkey(settings.provider)} disabled={!hasKey}>
+        {t("common.clear")}
+      </button>
     </div>
     {#if needsKeyForModel}
-      <p class="hint warn">
-        {selectedModel?.name} is billed per token, so it needs a key. The free models in the list
-        above do not.
-      </p>
+      <p class="hint warn">{t("provider.needsKey", { model: selectedModel?.name ?? "" })}</p>
     {/if}
     {#if hasKey}
-      <p class="hint ok">A key is stored for {settings.provider}. It is never sent back to this window.</p>
+      <p class="hint ok">{t("provider.keyStored", { provider: settings.provider })}</p>
     {/if}
     {#if keyStatus && !keyStatus.encryptionAvailable}
-      <p class="hint warn">
-        OS-backed encryption is unavailable on this system, so keys are kept in memory for this
-        session only and are never written to disk.
-      </p>
+      <p class="hint warn">{t("provider.noEncryption")}</p>
     {/if}
   </div>
 </fieldset>

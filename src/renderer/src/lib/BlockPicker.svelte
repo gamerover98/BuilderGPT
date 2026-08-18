@@ -13,6 +13,7 @@
    * text field, which was the thing this replaced.
    */
   import { searchBlocks } from "./block_search.js";
+  import { t } from "./i18n.svelte.js";
 
   interface Props {
     id?: string;
@@ -107,9 +108,9 @@
       -->
       <p class="count">
         {#if matches.length === blocks.length}
-          all {blocks.length} blocks
+          {t("blocks.all", { count: blocks.length })}
         {:else}
-          {matches.length} of {blocks.length}
+          {t("blocks.matches", { count: matches.length, total: blocks.length })}
         {/if}
       </p>
       <ul role="listbox" bind:this={list}>

@@ -15,17 +15,24 @@
  */
 
 import type { BgptApi } from "../../../shared/ipc.js";
+import { t } from "./i18n.svelte.js";
 
 export const bridgeAvailable = typeof window !== "undefined" && Boolean(window.bgpt);
 
-export const BRIDGE_MISSING_MESSAGE =
-  "This page is not running inside the Schematic AI Studio desktop app, so the backend is " +
-  "unavailable. Start it with `npm run dev` (or the packaged app) rather than " +
-  "opening the dev-server URL in a browser.";
+/**
+ * A function rather than the constant it used to be, and that is not cosmetic.
+ * A `const` is evaluated once when the module is first imported, which is
+ * before the persisted language has arrived from main -- so it would freeze the
+ * English wording even in a window that later switched locale. Asking at throw
+ * time asks the locale in force at throw time.
+ */
+export function bridgeMissingMessage(): string {
+  return t("bridge.missing");
+}
 
 export function api(): BgptApi {
   if (!window.bgpt) {
-    throw new Error(BRIDGE_MISSING_MESSAGE);
+    throw new Error(bridgeMissingMessage());
   }
   return window.bgpt;
 }

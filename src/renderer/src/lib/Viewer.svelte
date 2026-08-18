@@ -19,6 +19,7 @@
   import { onMount, untrack } from "svelte";
   import type { MeshAtlas, MeshPayload } from "../../../shared/ipc.js";
   import type { ResolvedTheme } from "../../../shared/settings.js";
+  import { t } from "./i18n.svelte.js";
   import * as THREE from "three";
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
   import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
@@ -874,7 +875,7 @@
     try {
       if (payload.atlas === null && texture === undefined) {
         // Main only omits the atlas when the renderer is known to hold it.
-        throw new Error("The mesh arrived without a texture atlas and none is held.");
+        throw new Error(t("viewport.noAtlas"));
       }
       const built = buildModel(payload, payload.atlas ? ensureTexture(payload.atlas) : texture!);
       if (previous) {
@@ -903,7 +904,7 @@
   <canvas bind:this={canvas}></canvas>
   {#if error}
     <div class="error">
-      Preview unavailable.<br />
+      {t("viewport.unavailable")}<br />
       <small>{error}</small>
     </div>
   {:else if mesh}
@@ -913,14 +914,9 @@
     -->
     <div class="overlay">
       {#if cameraMode === "fly"}
-        {#if flying}
-          WASD: move · Space/Shift: up, down · Ctrl: faster · Left: break · Right: place · Esc:
-          release
-        {:else}
-          Click the viewport to fly
-        {/if}
+        {flying ? t("viewport.hudFlying") : t("viewport.hudClickToFly")}
       {:else}
-        Left: pan · Right: rotate · Wheel: zoom · Click: select · R: reset
+        {t("viewport.hudOrbit")}
       {/if}
     </div>
     {#if cameraMode === "fly" && flying}

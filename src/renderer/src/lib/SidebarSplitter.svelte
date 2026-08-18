@@ -58,9 +58,15 @@
     event.preventDefault();
   }
 
+  /**
+   * The panel is on the *right*, so its width is the distance from the pointer
+   * to the right-hand edge of the window -- not `clientX`, which is how wide
+   * the viewport is. Getting this backwards does not fail loudly: the splitter
+   * still drags, it just grows the panel when you pull it narrower.
+   */
   function onPointerMove(event: PointerEvent): void {
     if (!dragging) return;
-    onresize(clamp(event.clientX));
+    onresize(clamp(window.innerWidth - event.clientX));
   }
 
   function endDrag(event: PointerEvent): void {
@@ -72,10 +78,15 @@
 
   const STEP = 16;
 
+  /**
+   * Arrow keys move the *splitter*, not the number. With the panel on the
+   * right, dragging the divider left makes the panel wider -- so ArrowLeft has
+   * to grow it, or the keyboard would disagree with the mouse.
+   */
   function onKeyDown(event: KeyboardEvent): void {
     let next: number | null = null;
-    if (event.key === "ArrowLeft") next = width - STEP;
-    else if (event.key === "ArrowRight") next = width + STEP;
+    if (event.key === "ArrowLeft") next = width + STEP;
+    else if (event.key === "ArrowRight") next = width - STEP;
     else if (event.key === "Home") next = SIDEBAR_WIDTH.min;
     else if (event.key === "End") next = SIDEBAR_WIDTH.max;
     if (next === null) return;
@@ -120,7 +131,7 @@
     width: 7px;
     cursor: col-resize;
     background: var(--bg);
-    border-right: 1px solid var(--border);
+    border-left: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: center;

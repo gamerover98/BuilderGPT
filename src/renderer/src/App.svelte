@@ -1314,14 +1314,42 @@
   class:collapsed={sidebarCollapsed}
   style={`--sidebar-w: ${sidebarCollapsed ? 0 : sidebarWidth}px`}
 >
+  <!--
+    The application bar. Everything in it is left-aligned by request, and the
+    order is identity, then mode, then configuration.
+
+    The camera switch used to float over the viewport's top-right corner. It is
+    here now because it is a mode the whole window is in, not a control that
+    belongs to the canvas -- and moving it gives the canvas that corner back.
+  -->
+  <header class="navbar">
+    <h1>{t("app.title")}</h1>
+
+    <div class="camera-modes" role="group" aria-label={t("viewport.cameraMode")}>
+      <button
+        class:active={cameraMode === "orbit"}
+        onclick={() => (cameraMode = "orbit")}
+        title={t("viewport.orbitHint")}
+      >
+        {t("viewport.orbit")}
+      </button>
+      <button
+        class:active={cameraMode === "fly"}
+        onclick={() => (cameraMode = "fly")}
+        title={t("viewport.creativeHint")}
+      >
+        {t("viewport.creative")}
+      </button>
+    </div>
+  </header>
+
   <section class="controls">
     <header class="sidebar-head">
-      <h1>{t("app.title")}</h1>
       <button
         class="icon"
         onclick={toggleSidebar}
         title={t("sidebar.hideShortcut")}
-        aria-label={t("sidebar.hide")}>&#x2039;</button
+        aria-label={t("sidebar.hide")}>&#x203a;</button
       >
     </header>
 
@@ -1542,27 +1570,8 @@
         class="icon show-panel"
         onclick={toggleSidebar}
         title={t("sidebar.showShortcut")}
-        aria-label={t("sidebar.show")}>&#x203a;</button
+        aria-label={t("sidebar.show")}>&#x2039;</button
       >
-    {/if}
-
-    {#if mesh}
-      <div class="camera-modes" role="group" aria-label={t("viewport.cameraMode")}>
-        <button
-          class:active={cameraMode === "orbit"}
-          onclick={() => (cameraMode = "orbit")}
-          title={t("viewport.orbitHint")}
-        >
-          {t("viewport.orbit")}
-        </button>
-        <button
-          class:active={cameraMode === "fly"}
-          onclick={() => (cameraMode = "fly")}
-          title={t("viewport.creativeHint")}
-        >
-          {t("viewport.creative")}
-        </button>
-      </div>
     {/if}
 
     <!--
@@ -1660,15 +1669,30 @@
    * refuses to shrink into the row no matter what the row says.
    */
   main {
+    --navbar-h: 44px;
+
     display: grid;
-    grid-template-columns: var(--sidebar-w) auto 1fr;
-    grid-template-rows: 100%;
+    /* Viewport, splitter, sidebar -- the sidebar is the *last* column now. */
+    grid-template-columns: 1fr auto var(--sidebar-w);
+    grid-template-rows: var(--navbar-h) minmax(0, 1fr);
     height: 100%;
     overflow: hidden;
   }
 
   main.collapsed {
-    grid-template-columns: 0 0 1fr;
+    grid-template-columns: 1fr 0 0;
+  }
+
+  .navbar {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 14px;
+    min-width: 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel);
   }
 
   /*
@@ -1678,39 +1702,47 @@
    * the precise opposite of what collapsing is for.
    */
   .controls {
-    grid-column: 1;
+    grid-column: 3;
+    grid-row: 2;
     overflow-y: auto;
     overflow-x: hidden;
     min-width: 0;
     min-height: 0;
     padding: 20px;
-    border-right: 1px solid var(--border);
+    border-left: 1px solid var(--border);
   }
 
   main :global(.splitter) {
     grid-column: 2;
+    grid-row: 2;
   }
 
   main.collapsed .controls {
     display: none;
   }
 
+  /*
+   * The collapse arrow alone, and pushed to the right-hand edge: the title it
+   * used to sit beside now lives in the navbar, and the arrow has to point at
+   * the edge the panel disappears towards or it reads as the wrong control.
+   */
   .sidebar-head {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin-bottom: 20px;
+    justify-content: flex-end;
+    margin-bottom: 12px;
   }
 
   h1 {
     margin: 0;
-    font-size: 22px;
+    font-size: 16px;
+    font-weight: 600;
     letter-spacing: -0.01em;
+    white-space: nowrap;
   }
 
   .preview {
-    grid-column: 3;
+    grid-column: 1;
+    grid-row: 2;
     position: relative;
     display: flex;
     flex-direction: column;
@@ -1718,10 +1750,11 @@
     min-height: 0;
   }
 
+  /* Against the edge the panel will slide back in from. */
   .show-panel {
     position: absolute;
     top: 12px;
-    left: 12px;
+    right: 12px;
     z-index: 3;
   }
 
@@ -1785,16 +1818,12 @@
   }
 
   .camera-modes {
-    position: absolute;
-    top: 12px;
-    right: 12px;
-    z-index: 3;
     display: flex;
     gap: 2px;
     padding: 2px;
     border-radius: 8px;
-    background: var(--overlay-bg);
-    backdrop-filter: blur(6px);
+    background: var(--bg-input);
+    border: 1px solid var(--border);
   }
 
   .camera-modes button {

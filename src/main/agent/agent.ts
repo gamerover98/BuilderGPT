@@ -23,9 +23,12 @@
  *
  * ## The conversation is remembered, the schematic is not
  *
- * Prior turns — the user's words, the tool calls, their results — are kept on
- * the session and replayed, so "now make it taller" knows what "it" is. What is
- * *not* replayed is the description of the schematic: it is regenerated into
+ * Prior turns — the user's words, the tool calls, their results — are passed in
+ * and replayed, so "now make it taller" knows what "it" is. They are passed
+ * rather than read off the session because the conversation outlives it: it is
+ * saved per schematic and restored when that file is opened again, which is
+ * `services/conversation.ts`'s job, not this file's. What is *not* replayed is
+ * the description of the schematic: it is regenerated into
  * the instructions on every turn instead of being prepended to each user
  * message. A transcript of stale descriptions is worse than none, because the
  * model has no way to tell which of five conflicting block counts is current.
@@ -83,6 +86,14 @@ export interface AgentRequest {
   baseUrl: string;
   /** What the user typed. */
   prompt: string;
+  /**
+   * Prior turns to replay, oldest first.
+   *
+   * Trimmed here rather than by the caller, because the window is this file's
+   * rule (`MAX_REMEMBERED_TURNS`) and the caller storing an already-trimmed
+   * transcript would lose turns it is meant to be keeping.
+   */
+  history: ModelMessage[];
   selection: Region | null;
   allowedBlocks: ReadonlySet<string>;
   onStep?: (step: AgentStep) => void;
@@ -104,6 +115,14 @@ export interface AgentResult {
   steps: AgentStep[];
   /** Exchanges the next request will carry, this one included. */
   remembered: number;
+  /**
+   * The conversation after this turn, for the caller to store.
+   *
+   * Returned rather than written through the session: a run that throws never
+   * reaches this, which is exactly the property that keeps a rolled-back edit
+   * from being described to the next turn as though it had happened.
+   */
+  messages: ModelMessage[];
   /** What it took out and what it put in, by block type. */
   summary: { removed: BlockTally[]; added: BlockTally[]; changed: number };
   /**
@@ -197,7 +216,7 @@ export async function runAgent(request: AgentRequest): Promise<AgentResult> {
   const { session } = request;
 
   const asked: ModelMessage = { role: "user", content: request.prompt };
-  const history = trimToRecentTurns(session.conversation ?? [], MAX_REMEMBERED_TURNS - 1);
+  const history = trimToRecentTurns(request.history, MAX_REMEMBERED_TURNS - 1);
   const label = undoLabel(request.prompt);
 
   // Held so the transaction this run commits can be told apart afterwards. By
@@ -262,7 +281,7 @@ export async function runAgent(request: AgentRequest): Promise<AgentResult> {
   // remembered as its closing sentence and nothing else — the model would have
   // no record of what it had already looked up. Replaying the tool traffic is
   // affordable because `tools.ts` caps a result at MAX_REPORTED_BLOCKS.
-  session.conversation = [...history, asked, ...result.responseMessages];
+  const messages: ModelMessage[] = [...history, asked, ...result.responseMessages];
 
   // `changed` is counted from the tool results rather than from the transaction,
   // which does not expose its size once committed.
@@ -281,7 +300,8 @@ export async function runAgent(request: AgentRequest): Promise<AgentResult> {
     text: result.text,
     changed,
     steps,
-    remembered: countTurns(session.conversation),
+    remembered: countTurns(messages),
+    messages,
     summary,
     undoLabel: summary.changed > 0 ? label : null,
   };

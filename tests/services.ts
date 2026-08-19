@@ -24,6 +24,21 @@ import { fileURLToPath } from "url";
 import { loadStructure } from "../src/main/pipeline/loader.js";
 import { openCodeModelRequiresKey } from "../src/shared/ipc.js";
 import { rememberedFromIndex } from "../src/main/services/conversation_core.js";
+import {
+  adoptSubject,
+  appendEntry,
+  conversationMessages,
+  conversationState,
+  noteTurn,
+  resetConversation,
+  saveConversation,
+  useConversationDirectory,
+} from "../src/main/services/conversation.js";
+import {
+  mostRecent,
+  storeFileName,
+  titleFor,
+} from "../src/main/services/conversation_store.js";
 import type { ChatEntry } from "../src/shared/ipc.js";
 import { callLlm, LlmError, resolveBaseUrl } from "../src/main/services/llm.js";
 import { describeFor, sanitizeName } from "../src/main/services/naming.js";
@@ -869,6 +884,162 @@ console.log("\n--- chat memory boundary ---");
   // shape. Both must put the divider above everything, not below.
   equal("nothing remembered puts the line at the top of nothing", rememberedFromIndex(log, 0), 6);
   equal("an empty log has no boundary", rememberedFromIndex([], 4), 0);
+}
+
+// --- conversations on disk -------------------------------------------------
+console.log("\n--- conversation persistence ---");
+{
+  const dir = path.join(workDir, "conversations");
+  useConversationDirectory(dir);
+
+  const houseA = path.join(workDir, "house.schem");
+  const houseB = path.join(workDir, "tower.schem");
+
+  // A conversation about one schematic, saved and read back with both halves.
+  {
+    resetConversation(null);
+    await adoptSubject(houseA);
+    appendEntry({ role: "user", text: "add a roof" });
+    noteTurn([{ role: "user", content: "add a roof" }], 1);
+    appendEntry({ role: "agent", text: "Added one." });
+    await saveConversation();
+
+    // Somewhere else entirely, then back.
+    await adoptSubject(houseB);
+    equal("opening another schematic starts empty", conversationState().entries.length, 0);
+
+    await adoptSubject(houseA);
+    const back = conversationState();
+    equal("reopening brings the log back", back.entries.map((e) => e.text), [
+      "add a roof",
+      "Added one.",
+    ]);
+    equal("...with the memory boundary intact", back.rememberedFrom, 0);
+    check(
+      "...and the model's half too, which is what makes the next turn work",
+      JSON.stringify(conversationMessages()).includes("add a roof"),
+      JSON.stringify(conversationMessages()),
+    );
+  }
+
+  /*
+   * The build-from-chat case, which is the reason a conversation has a subject
+   * at all. Typing with nothing open, then saving what got built, must file the
+   * conversation under the new document rather than lose it.
+   */
+  {
+    resetConversation(null);
+    appendEntry({ role: "user", text: "build me a shed" });
+    appendEntry({ role: "agent", text: "Built shed.schem." });
+    const shed = path.join(workDir, "shed.schem");
+    await adoptSubject(shed);
+
+    equal("adoption keeps what was said", conversationState().entries.length, 2);
+    resetConversation(null);
+    await adoptSubject(shed);
+    equal("...and it was filed under the new document", conversationState().entries.length, 2);
+  }
+
+  // Windows reaches the same file through paths differing only in case, and two
+  // records for one schematic would each hold half a history.
+  {
+    resetConversation(null);
+    await adoptSubject(houseA);
+    const shouted = houseA.toUpperCase();
+    resetConversation(null);
+    await adoptSubject(shouted);
+    equal(
+      "a differently-cased path finds the same conversation",
+      conversationState().entries.map((e) => e.text),
+      ["add a roof", "Added one."],
+    );
+  }
+
+  /*
+   * A record from a build that stored `messages` differently. The entries are
+   * the user's own words and cannot be regenerated; the messages can be lived
+   * without. So the log survives, marked entirely as history -- which is
+   * exactly what the memory divider was built to show.
+   */
+  {
+    const orphan = path.join(workDir, "orphan.schem");
+    await writeFile(
+      path.join(dir, storeFileName(orphan)),
+      JSON.stringify({
+        version: 999,
+        filePath: orphan,
+        conversations: [
+          {
+            id: "old",
+            title: "from the future",
+            createdAt: 1,
+            updatedAt: 2,
+            entries: [{ role: "user", text: "something I typed", remembered: true }],
+            messages: [{ shape: "nobody here recognises" }],
+            rememberedFrom: 0,
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    resetConversation(null);
+    await adoptSubject(orphan);
+    const salvaged = conversationState();
+    equal("an unreadable version keeps the words", salvaged.entries.length, 1);
+    equal("...and marks the whole log as history", salvaged.rememberedFrom, 1);
+    equal("...having dropped the part it cannot trust", conversationMessages().length, 0);
+  }
+
+  // A file that is not this schematic's -- a hash collision, or a record copied
+  // between machines. Showing it would be worse than showing nothing.
+  {
+    const stranger = path.join(workDir, "stranger.schem");
+    await writeFile(
+      path.join(dir, storeFileName(stranger)),
+      JSON.stringify({
+        version: 1,
+        filePath: path.join(workDir, "somebody-else.schem"),
+        conversations: [
+          { id: "x", title: "t", createdAt: 1, updatedAt: 2, entries: [{ role: "user", text: "not yours" }], messages: [], rememberedFrom: 0 },
+        ],
+      }),
+      "utf8",
+    );
+    resetConversation(null);
+    await adoptSubject(stranger);
+    equal("a record for another path is not shown", conversationState().entries.length, 0);
+  }
+
+  // Nonsense on disk must not take the app down with it.
+  {
+    const broken = path.join(workDir, "broken.schem");
+    await writeFile(path.join(dir, storeFileName(broken)), "{ this is not json", "utf8");
+    resetConversation(null);
+    await adoptSubject(broken);
+    equal("a corrupt file reads as no conversation", conversationState().entries.length, 0);
+  }
+
+  // The pure arithmetic, which the file cases above exercise only indirectly.
+  equal("a title is the first thing the user said", titleFor([
+    { role: "agent", text: "hello" },
+    { role: "user", text: "  make   it taller " },
+  ]), "make it taller");
+  equal("...and something readable when they have said nothing", titleFor([]), "New chat");
+  check(
+    "a long first message is cut, not wrapped",
+    titleFor([{ role: "user", text: "x".repeat(200) }]).length <= 60,
+  );
+  equal(
+    "the newest conversation is the one reopened",
+    mostRecent([
+      { id: "a", title: "a", createdAt: 0, updatedAt: 10, entries: [], messages: [], rememberedFrom: 0 },
+      { id: "b", title: "b", createdAt: 0, updatedAt: 99, entries: [], messages: [], rememberedFrom: 0 },
+    ])?.id,
+    "b",
+  );
+
+  resetConversation(null);
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

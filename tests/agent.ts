@@ -16,7 +16,7 @@ import { AgentCancelledError, runAgent } from "../src/main/agent/agent.js";
 import { LlmError } from "../src/main/services/llm.js";
 import { getBlock, setBlock, type SchematicDocument } from "../src/main/domain/document.js";
 import { canUndo, runTransaction, undo } from "../src/main/domain/history.js";
-import { clearConversation, newDocument, type DocumentSession } from "../src/main/services/session.js";
+import { newDocument, type DocumentSession } from "../src/main/services/session.js";
 
 let failures = 0;
 
@@ -172,6 +172,16 @@ function scriptedModel(turns: Turn[], seen?: Seen) {
 }
 
 const baseRequest = {
+  /**
+   * No prior turns, which is what all but the continuity tests want.
+   *
+   * It is a parameter now rather than something read off the session: the
+   * conversation is stored per schematic and restored when that file is opened
+   * again, so `runAgent` is handed what to replay instead of reaching for it.
+   * That also makes the memory *visible* to these tests, which previously had
+   * to infer it from what the model was sent.
+   */
+  history: [],
   provider: "OpenCode" as const,
   model: "test",
   apiKey: "none",
@@ -377,7 +387,7 @@ console.log("\n--- the agent remembers the conversation ---");
   const session = seeded();
   const seen: Seen = { prompts: [], systems: [] };
 
-  await runAgent({
+  const first = await runAgent({
     ...baseRequest,
     session,
     selection: null,
@@ -394,6 +404,7 @@ console.log("\n--- the agent remembers the conversation ---");
   const second = await runAgent({
     ...baseRequest,
     session,
+    history: first.messages,
     selection: null,
     prompt: "now make it taller",
     modelOverride: scriptedModel(
@@ -491,7 +502,7 @@ console.log("\n--- a failed turn is not remembered ---");
   const session = seeded();
   const seen: Seen = { prompts: [], systems: [] };
 
-  await runAgent({
+  const good = await runAgent({
     ...baseRequest,
     session,
     selection: null,
@@ -499,10 +510,17 @@ console.log("\n--- a failed turn is not remembered ---");
     modelOverride: scriptedModel([{ kind: "text", text: "Placed it." }], seen),
   });
 
+  /*
+   * The invariant, stated more plainly than it used to be. A failed run throws
+   * and therefore *returns no history at all*, so the caller still holds the
+   * last good one and hands that to the next turn. It is not that the failed
+   * turn is removed afterwards -- it is that it never became history.
+   */
   try {
     await runAgent({
       ...baseRequest,
       session,
+      history: good.messages,
       selection: null,
       prompt: "this request will fail",
       modelOverride: scriptedModel([{ kind: "throw", message: "upstream reset" }], seen),
@@ -514,6 +532,7 @@ console.log("\n--- a failed turn is not remembered ---");
   const third = await runAgent({
     ...baseRequest,
     session,
+    history: good.messages,
     selection: null,
     prompt: "carry on",
     modelOverride: scriptedModel([{ kind: "text", text: "Carrying on." }], seen),
@@ -540,10 +559,14 @@ console.log("\n--- old exchanges fall off the end, at turn boundaries ---");
   const seen: Seen = { prompts: [], systems: [] };
 
   let last = 0;
+  // Threaded, as the app threads it: each turn is handed what the one before
+  // returned. The cap is `runAgent`'s own, applied to whatever it is given.
+  let history: Awaited<ReturnType<typeof runAgent>>["messages"] = [];
   for (let turn = 0; turn < 16; turn += 1) {
     const result = await runAgent({
       ...baseRequest,
       session,
+      history,
       selection: null,
       prompt: `turn number ${turn}`,
       modelOverride: scriptedModel(
@@ -555,6 +578,7 @@ console.log("\n--- old exchanges fall off the end, at turn boundaries ---");
       ),
     });
     last = result.remembered;
+    history = result.messages;
   }
 
   check("the transcript stops growing", last === 12, `remembered ${last}`);
@@ -583,63 +607,72 @@ console.log("\n--- old exchanges fall off the end, at turn boundaries ---");
   equal("no tool result was cut away from its call", orphans, 0);
 }
 
-// --- starting over -----------------------------------------------------------
-console.log("\n--- clearing the conversation ---");
+/*
+ * --- what "remembering" is, and whose job it is -------------------------------
+ *
+ * These two used to poke at `session.conversation` -- clearing it, or making a
+ * second session and checking the first one's talk did not leak in. Neither is
+ * `runAgent`'s rule any more. The conversation is stored per schematic and
+ * restored when that file is opened, so *which* history applies is decided by
+ * `services/conversation.ts` and tested against real files in tests/services.ts.
+ *
+ * What is left here is the contract this function actually has, and it is
+ * sharper than what was being asserted before: it replays exactly the history
+ * it is handed, and it returns the history the next turn should be handed. The
+ * memory used to be invisible from the outside -- these had to infer it from
+ * what the model was sent -- and now it is a value.
+ */
+console.log("\n--- the agent replays what it is given, and nothing else ---");
 {
   const session = seeded();
   const seen: Seen = { prompts: [], systems: [] };
 
-  await runAgent({
+  const first = await runAgent({
     ...baseRequest,
     session,
     selection: null,
     prompt: "something memorable",
     modelOverride: scriptedModel([{ kind: "text", text: "Noted." }], seen),
   });
-  clearConversation(session);
 
+  check(
+    "the turn comes back as history for the next one",
+    textOf(first.messages).includes("something memorable"),
+    textOf(first.messages),
+  );
+
+  // Handed nothing, it replays nothing -- which is what "new chat" amounts to
+  // from this side, and what a conversation belonging to another document
+  // amounts to as well.
   const after = await runAgent({
     ...baseRequest,
     session,
+    history: [],
     selection: null,
     prompt: "a fresh start",
     modelOverride: scriptedModel([{ kind: "text", text: "Hello." }], seen),
   });
 
   const fresh = textOf(seen.prompts[seen.prompts.length - 1]);
-  check("the old exchange is gone", !fresh.includes("something memorable"), fresh);
-  check("...and the new one is there", fresh.includes("a fresh start"));
+  check("the old exchange is not sent", !fresh.includes("something memorable"), fresh);
+  check("...and the new one is", fresh.includes("a fresh start"));
   equal("counting starts again", after.remembered, 1);
-}
 
-// --- a conversation belongs to its document ----------------------------------
-console.log("\n--- opening another document starts over ---");
-{
-  const session = seeded();
-  const seen: Seen = { prompts: [], systems: [] };
-  await runAgent({
+  // And handed the earlier history, it replays that -- even though the run in
+  // between never touched it. Nothing is carried implicitly.
+  const resumed = await runAgent({
     ...baseRequest,
     session,
+    history: first.messages,
     selection: null,
-    prompt: "about the first schematic",
-    modelOverride: scriptedModel([{ kind: "text", text: "Noted." }], seen),
+    prompt: "and again",
+    modelOverride: scriptedModel([{ kind: "text", text: "Sure." }], seen),
   });
-
-  // What `newDocument`/`openDocument`/`adoptDocument` all do: a new session.
-  const other = seeded();
-  const next = await runAgent({
-    ...baseRequest,
-    session: other,
-    selection: null,
-    prompt: "about the second",
-    modelOverride: scriptedModel([{ kind: "text", text: "Noted." }], seen),
-  });
-
   check(
-    "the other document's conversation does not follow it",
-    !textOf(seen.prompts[seen.prompts.length - 1]).includes("about the first schematic"),
+    "an old history handed back is replayed",
+    textOf(seen.prompts[seen.prompts.length - 1]).includes("something memorable"),
   );
-  equal("...it starts at one", next.remembered, 1);
+  equal("...and counts both turns", resumed.remembered, 2);
 }
 
 // --- stopping a run -----------------------------------------------------------
@@ -717,7 +750,7 @@ console.log("\n--- a stopped run is not remembered ---");
   const session = seeded();
   const seen: Seen = { prompts: [], systems: [] };
 
-  await runAgent({
+  const before = await runAgent({
     ...baseRequest,
     session,
     selection: null,
@@ -730,6 +763,7 @@ console.log("\n--- a stopped run is not remembered ---");
     await runAgent({
       ...baseRequest,
       session,
+      history: before.messages,
       selection: null,
       signal: controller.signal,
       prompt: "the stopped thing",
@@ -739,9 +773,12 @@ console.log("\n--- a stopped run is not remembered ---");
     // Asserted above.
   }
 
+  // Same shape as the failure case: a stopped run returns nothing, so the
+  // caller is still holding the history from before it.
   const after = await runAgent({
     ...baseRequest,
     session,
+    history: before.messages,
     selection: null,
     prompt: "the third thing",
     modelOverride: scriptedModel([{ kind: "text", text: "Done." }], seen),

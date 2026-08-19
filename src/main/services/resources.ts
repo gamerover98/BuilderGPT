@@ -129,6 +129,19 @@ export function autosaveDir(): string {
   return path.join(app.getPath("userData"), "autosave");
 }
 
+/**
+ * Where a schematic's chat history is kept.
+ *
+ * Beside the autosaves and for the same reason: it belongs to the app, not to
+ * the user's project folder. Worth knowing, and not hidden: these files are
+ * plain JSON. API keys are encrypted through `safeStorage`; conversations are
+ * not, so anything typed into the chat is readable by anything that can read
+ * the user's own profile.
+ */
+export function conversationsDir(): string {
+  return path.join(app.getPath("userData"), "conversations");
+}
+
 /** `generated/` (component.py:137-138), relocated to a writable location. */
 export function generatedDir(): string {
   return path.join(app.getPath("userData"), "generated");

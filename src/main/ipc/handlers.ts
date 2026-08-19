@@ -53,7 +53,6 @@ import {
 import {
   adoptDocument,
   applyEdit,
-  clearConversation,
   closeDocument,
   copySelection,
   currentSession,
@@ -83,9 +82,12 @@ import { AgentCancelledError, runAgent } from "../agent/agent.js";
 import {
   adoptSubject,
   appendEntry,
+  conversationMessages,
   conversationState,
+  noteTurn,
   resetConversation,
-  noteTurnRemembered,
+  saveConversation,
+  useConversationDirectory,
 } from "../services/conversation.js";
 import { clearAutosave, readAutosave, restoreAutosave, startAutosave } from "../services/autosave.js";
 import { loadAllowedBlocks } from "../core.js";
@@ -102,6 +104,7 @@ import {
 import { assertWritableDirectory } from "../services/output.js";
 import {
   autosaveDir,
+  conversationsDir,
   defaultResourcePackPath,
   generatedDir,
   legacyBlocksPath,
@@ -159,6 +162,11 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     getSession: currentSession,
     onError: (err) => console.warn("[autosave] snapshot failed:", err),
   });
+
+  // Injected rather than imported: `conversation.ts` must not pull in Electron,
+  // or the suites cannot reach it -- the same split `recent_documents.ts` was
+  // made for.
+  useConversationDirectory(conversationsDir());
 
   ipcMain.handle(IPC.settingsGet, async (): Promise<Settings> => await getSettings());
 
@@ -368,7 +376,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
        * here is what used to erase the question and leave only the answer.
        * Opening some other file is still a change of subject and still clears.
        */
-      adoptSubject(filePath);
+      await adoptSubject(filePath);
       return { ok: true, state: documentState(session) };
     } catch (err) {
       // Moved, deleted, or no longer readable: take it off the list rather than
@@ -391,7 +399,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     ): Promise<DocumentStateResponse> => {
       try {
         const state = documentState(newDocument(size));
-        adoptSubject(null);
+        await adoptSubject(null);
         return { ok: true, state };
       } catch (err) {
         return failure(err);
@@ -399,7 +407,13 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     },
   );
 
-  ipcMain.handle(IPC.docClose, async (): Promise<void> => closeDocument());
+  ipcMain.handle(IPC.docClose, async (): Promise<void> => {
+    // The last chance to write it: nothing further happens to a conversation
+    // whose document has gone.
+    await saveConversation();
+    resetConversation(null);
+    closeDocument();
+  });
 
   ipcMain.handle(IPC.docState, async (): Promise<DocumentStateResponse> => {
     const session = currentSession();
@@ -542,6 +556,13 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         format: request.format,
         legacyBlocksPath: legacyBlocksPath(),
       });
+      /*
+       * A conversation started with nothing open has no key to be stored under
+       * -- this is the moment it gets one. A *Save As* onto a different path is
+       * the same call and does the same thing: the conversation follows the
+       * document to where the document went.
+       */
+      await adoptSubject(result.filePath);
       return {
         ok: true,
         filePath: result.filePath,
@@ -663,6 +684,10 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           apiKey,
           baseUrl: settings.baseUrl,
           prompt: req.prompt,
+          // What the conversation holds, replayed. `runAgent` trims it to its
+          // own window; handing it something already trimmed would quietly
+          // shorten what gets stored.
+          history: conversationMessages() as Parameters<typeof runAgent>[0]["history"],
           selection: req.selection,
           signal: controller.signal,
           allowedBlocks: await loadAllowedBlocks(resourcesDir()),
@@ -677,8 +702,9 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           },
         });
         // Only now is the user's turn actually in the model's memory --
-        // `runAgent` updates the conversation past everything that throws.
-        noteTurnRemembered(result.remembered);
+        // `runAgent` returns past everything that throws, which is what keeps a
+        // rolled-back edit from being described to the next turn.
+        noteTurn(result.messages, result.remembered);
         const summary = {
           removed: [...result.summary.removed],
           added: [...result.summary.added],
@@ -695,6 +721,10 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           summary,
           undoLabel: result.undoLabel,
         });
+        // Both halves are one record, so this is one write. Not awaited: the
+        // answer is ready and the user should have it now, and a conversation
+        // that fails to reach disk is not worth stalling the reply for.
+        void saveConversation();
         return {
           ok: true,
           text: result.text,
@@ -750,13 +780,13 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   ipcMain.handle(IPC.chatState, async (): Promise<ChatState> => conversationState());
 
   ipcMain.handle(IPC.docAgentReset, async (): Promise<void> => {
-    // Nothing open is not a failure -- the log is main's either way, and with
-    // no session there is simply no model-side half to clear.
+    /*
+     * Saved before it is thrown away. "New chat" means the next question starts
+     * fresh, not "delete what I said" -- and the saved copy is what Part 4 of
+     * this work turns into something you can go back to.
+     */
+    await saveConversation();
     resetConversation();
-    const session = currentSession();
-    if (session) {
-      clearConversation(session);
-    }
   });
 
   ipcMain.handle(IPC.preview, async (_event, req: PreviewRequest): Promise<PreviewResponse> => {

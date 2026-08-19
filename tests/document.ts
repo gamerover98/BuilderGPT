@@ -514,7 +514,10 @@ console.log("\n--- block states follow a rotation ---");
     north: "true",
     east: "false",
   };
-  let turned = { ...varied };
+  // `Record<string, string>`, because that is what `rotateProperties` returns;
+  // inferring the narrow shape of `varied` made the reassignment below a type
+  // error that nothing was compiling to notice.
+  let turned: Record<string, string> = { ...varied };
   for (let i = 0; i < 4; i += 1) turned = rotateProperties(turned, 1);
   equal("four quarter turns return every property to itself", turned, varied);
 }

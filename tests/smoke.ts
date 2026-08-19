@@ -25,11 +25,12 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 
 let failures = 0;
 
-function check(label: string, cond: boolean): void {
+function check(label: string, cond: boolean, detail?: string): void {
   if (cond) {
     console.log(`  PASS: ${label}`);
   } else {
     console.log(`  FAIL: ${label}`);
+    if (detail) console.log(`         ${detail}`);
     failures++;
   }
 }
@@ -70,7 +71,10 @@ console.log("\n--- schem2glb ---");
   const structure = await loadStructure(path.join(REPO_ROOT, "tests/fixtures/sample.schem"));
   check("loadStructure read the fixture", structure.voxels.length > 0);
 
-  const normalized = normalizePalette(structure); // no translator injected -> pass-through
+  // Explicitly no translator, which is the case being exercised. It used to
+  // be an omitted argument, which reads the same and is a different thing:
+  // `normalizePalette` takes two, and only tests/ going unchecked hid it.
+  const normalized = normalizePalette(structure, undefined);
   check("normalizePalette pass-through (no translator) returns input unchanged", normalized === structure);
 
   const baker = await ModelBaker.create(null);

@@ -100,11 +100,12 @@ function meshDigest(payload: {
 
 let failures = 0;
 
-function check(label: string, cond: boolean): void {
+function check(label: string, cond: boolean, detail?: string): void {
   if (cond) {
     console.log(`  PASS: ${label}`);
   } else {
     console.log(`  FAIL: ${label}`);
+    if (detail) console.log(`         ${detail}`);
     failures += 1;
   }
 }
@@ -313,15 +314,16 @@ try {
     );
   }
 
+  /*
+   * Over the defaults rather than a hand-written literal: this call only cares
+   * about two of the fields, and listing the rest meant the literal drifted out
+   * of date every time `PreviewSettings` grew -- silently, because tests/ was
+   * not typechecked.
+   */
   const sun = sunAnglesRadians({
+    ...DEFAULT_SETTINGS.preview,
     sunAzimuthDeg: 180,
     sunElevationDeg: 90,
-    maxDpr: 1,
-    renderScale: 1,
-    maxDrawDistance: 512,
-    showGrid: true,
-    wireframe: false,
-    ambientOcclusion: true,
   });
   check("180 deg -> pi rad", Math.abs(sun.azimuth - Math.PI) < 1e-12);
   check("90 deg -> pi/2 rad", Math.abs(sun.elevation - Math.PI / 2) < 1e-12);
@@ -767,6 +769,8 @@ console.log("\n--- settings coercion ---");
     language: "en",
     toolWindowX: 240,
     toolWindowY: 96,
+    inspectorWindowX: 300,
+    inspectorWindowY: 480,
   } satisfies UiSettings;
 
   equal("every ui field survives a round-trip", coerceUi(ui), ui);

@@ -247,10 +247,15 @@ try {
     const result = await saveDocument(doc, filePath, { legacyBlocksPath: LEGACY_BLOCKS });
     equal("written as MCEdit", result.format, "mcedit");
 
-    const reloaded = documentFromLoaded(
-      await loadStructure(filePath, { legacyBlocksPath: LEGACY_BLOCKS }),
-      filePath,
-    );
+    /*
+     * The loaded structure is kept, not just the document built from it:
+     * `unmappedLegacyIds` is reported by the *loader* and does not survive into
+     * `SchematicDocument`. Reading it off the document -- which is what this
+     * did until tests/ was typechecked -- yields `undefined`, so the assertion
+     * below compared `[]` against `[]` and could never fail.
+     */
+    const loaded = await loadStructure(filePath, { legacyBlocksPath: LEGACY_BLOCKS });
+    const reloaded = documentFromLoaded(loaded, filePath);
     equal("the reader agrees", reloaded.format, "mcedit");
     equal(
       "dimensions survive",
@@ -264,7 +269,7 @@ try {
     // that is what is asserted; the difference is reported through `degraded`,
     // checked below.
     equal("every block survives the numeric-id round trip", names(reloaded), names(doc));
-    equal("no legacy id went unmapped on the way back", reloaded.unmappedLegacyIds ?? [], []);
+    equal("no legacy id went unmapped on the way back", [...loaded.unmappedLegacyIds], []);
     check(
       "the chest, whose orientation the format invents, is reported",
       result.degraded.includes("minecraft:chest"),

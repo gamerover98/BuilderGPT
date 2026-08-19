@@ -1,0 +1,17 @@
+{
+  "//": "The suites in tests/ import from src/main, src/shared and src/renderer, and until this file existed none of them were typechecked at all -- tsx strips types without checking them. That mattered more than it sounds: tests/services.ts carries a `satisfies Settings` annotation whose entire job is to break the build when a field is added to Settings and not named in the round-trip, and it could not, because nothing ever compiled it. The renderer's DOM types are in `lib` because tests/ui.ts drives the real DOMPurify through jsdom.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "resolveJsonModule": true
+  },
+  "include": ["tests/**/*.ts"]
+}

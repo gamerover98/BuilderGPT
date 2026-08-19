@@ -22,9 +22,12 @@ import type { BakedFace, PaletteEntry, StructureData } from "../src/main/pipelin
 
 let failures = 0;
 
-function check(label: string, cond: boolean): void {
+function check(label: string, cond: boolean, detail?: string): void {
   console.log(`  ${cond ? "PASS" : "FAIL"}: ${label}`);
-  if (!cond) failures += 1;
+  if (!cond) {
+    if (detail) console.log(`         ${detail}`);
+    failures += 1;
+  }
 }
 
 function equal(label: string, actual: unknown, expected: unknown): void {

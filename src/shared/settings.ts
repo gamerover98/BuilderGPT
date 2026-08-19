@@ -166,6 +166,14 @@ export interface UiSettings {
    */
   toolWindowX: number;
   toolWindowY: number;
+  /**
+   * The inspector's own floating window.
+   *
+   * A separate pair rather than one shared position, because both windows can
+   * be open at once and a single stored position would stack them.
+   */
+  inspectorWindowX: number;
+  inspectorWindowY: number;
 }
 
 /**
@@ -182,6 +190,10 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   language: "en",
   toolWindowX: 16,
   toolWindowY: 16,
+  // Below the tool window rather than beside it: the viewport is wider than it
+  // is tall, and two panels down the same edge leave the middle clear.
+  inspectorWindowX: 16,
+  inspectorWindowY: 320,
 };
 
 export interface Settings {

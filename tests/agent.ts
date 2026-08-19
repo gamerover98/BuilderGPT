@@ -9,6 +9,7 @@
  * breaks when a vendor changes a temperature default.
  */
 
+import type { LanguageModelV3GenerateResult } from "@ai-sdk/provider";
 import { MockLanguageModelV3 } from "ai/test";
 
 import { AgentCancelledError, runAgent } from "../src/main/agent/agent.js";
@@ -104,10 +105,26 @@ interface Seen {
   systems: string[];
 }
 
+/**
+ * A token count in the shape the provider contract wants.
+ *
+ * Nothing in `runAgent` reads it -- it is here because
+ * `LanguageModelV3GenerateResult` requires it. It was a flat
+ * `{ inputTokens: 1, outputTokens: 1, totalTokens: 2 }` until tests/ started
+ * being typechecked, which is a shape the SDK moved away from: both counts are
+ * now objects that break the total down by cache and by reasoning.
+ */
+const USAGE: LanguageModelV3GenerateResult["usage"] = {
+  inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+  outputTokens: { total: 1, text: 1, reasoning: 0 },
+};
+
 function scriptedModel(turns: Turn[], seen?: Seen) {
   let index = 0;
   return new MockLanguageModelV3({
-    doGenerate: async (options: { prompt: unknown }) => {
+    doGenerate: async (
+      options: { prompt: unknown },
+    ): Promise<LanguageModelV3GenerateResult> => {
       if (seen) {
         const messages = options.prompt as { role: string; content: unknown }[];
         seen.prompts.push(messages.filter((m) => m.role !== "system"));
@@ -131,15 +148,15 @@ function scriptedModel(turns: Turn[], seen?: Seen) {
       }
       if (turn.kind === "text") {
         return {
-          finishReason: "stop" as const,
-          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          finishReason: { unified: "stop" as const, raw: "stop" },
+          usage: USAGE,
           content: [{ type: "text" as const, text: turn.text }],
           warnings: [],
         };
       }
       return {
-        finishReason: "tool-calls" as const,
-        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        finishReason: { unified: "tool-calls" as const, raw: "tool_calls" },
+        usage: USAGE,
         content: [
           {
             type: "tool-call" as const,

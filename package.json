@@ -12,7 +12,7 @@
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
     "preview": "electron-vite preview",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "typecheck": "npm run typecheck:node && npm run typecheck:tests && npm run typecheck:web",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "svelte-check --tsconfig tsconfig.web.json",
     "package": "npm run build && electron-builder",
@@ -32,7 +32,8 @@
     "smoke:session": "tsx tests/session.ts",
     "smoke:agent": "tsx tests/agent.ts",
     "smoke:autosave": "tsx tests/autosave.ts",
-    "smoke:ui": "tsx tests/ui.ts"
+    "smoke:ui": "tsx tests/ui.ts",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.27",

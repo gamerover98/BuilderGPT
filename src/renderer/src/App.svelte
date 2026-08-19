@@ -26,10 +26,11 @@
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
   import Viewer, { type CameraMode, type PickedBlock } from "./lib/Viewer.svelte";
   import { api, bridgeAvailable, forIpc, bridgeMissingMessage } from "./lib/bridge.svelte.js";
+  import { applyTraceEvent } from "./lib/trace.js";
   import { t, tn, setLocale } from "./lib/i18n.svelte.js";
   import {
     openCodeModelRequiresKey,
-    type AgentStepEvent,
+    type TraceItem,
     type Artifact,
     type BlockInspection,
     type ChatEntry,
@@ -221,7 +222,16 @@
   let conversations = $state<ConversationSummary[]>([]);
   let activeConversationId = $state("");
   /** Tool calls for the turn in flight, so the panel narrates rather than hangs. */
-  let liveSteps = $state<AgentStepEvent[]>([]);
+  /**
+   * What the turn in flight is doing, folded from main's events.
+   *
+   * A mirror, not a record: main assembles the same array and hands back the
+   * finished one on the chat entry, which this is then thrown away in favour
+   * of. The fold lives in `trace.ts` beside the emitter, because the two have
+   * to agree about what an append means and the surest way to make them agree
+   * is to keep them in one file.
+   */
+  let liveTrace = $state<TraceItem[]>([]);
   /**
    * How many exchanges the agent is carrying, as main last reported. The
    * transcript itself lives there — this is only enough to tell the user
@@ -283,7 +293,7 @@
    */
   async function forgetConversation(): Promise<void> {
     chat = [];
-    liveSteps = [];
+    liveTrace = [];
     remembered = 0;
     rememberedFrom = 0;
     if (bridgeAvailable) {
@@ -379,7 +389,7 @@
         framingEpoch += 1;
         // ...and a session whose conversation did not survive the crash.
         chat = [];
-        liveSteps = [];
+        liveTrace = [];
         remembered = 0;
         await refreshDocument();
         status = {
@@ -515,27 +525,18 @@
 
     const unsubscribe = api().onProgress((event) => {
       progress = event.phase === "done" ? null : event;
-      /*
-       * A build asked for from the chat says so in the chat.
-       *
-       * The progress bar it used to report through lives in the Structure
-       * panel, which since the sidebar became tabs is a tab you are not looking
-       * at while you chat -- so asking the chat to build something showed the
-       * message and then nothing at all, for as long as the model took. Same
-       * events, put where the person who asked is looking.
-       */
-      if (inFlight?.kind === "build" && event.requestId === buildRequestId && event.phase !== "done") {
-        liveSteps = [...liveSteps, { requestId: event.requestId, tool: event.phase, summary: event.message }];
-      }
     });
-    const unsubscribeSteps = api().onAgentStep((event) => {
-      liveSteps = [...liveSteps, event];
+    const unsubscribeTrace = api().onAgentTrace((event) => {
+      // Every run in flight sends on one channel; a reply from a run this
+      // window has already finished with would otherwise reopen its panel.
+      if (event.requestId !== inFlight?.id) return;
+      liveTrace = applyTraceEvent(liveTrace, event);
     });
     return () => {
       window.removeEventListener("keydown", onWindowKey);
       dark.removeEventListener("change", onSystemTheme);
       unsubscribe();
-      unsubscribeSteps();
+      unsubscribeTrace();
     };
   });
 
@@ -920,7 +921,7 @@
    */
   async function buildFromChat(prompt: string): Promise<void> {
     chat = [...chat, { role: "user", text: prompt }];
-    liveSteps = [];
+    liveTrace = [];
     await generateFrom(prompt, true);
     if (bridgeAvailable) adoptChat(await api().getChatState());
   }
@@ -943,7 +944,7 @@
     busy = true;
     try {
       adoptChat(await api().openConversation(id));
-      liveSteps = [];
+      liveTrace = [];
       await refreshConversations();
     } finally {
       busy = false;
@@ -969,7 +970,7 @@
       }
       docState = response.state;
       adoptChat(response.chat);
-      liveSteps = [];
+      liveTrace = [];
       remembered = 0;
       selection = null;
       anchor = null;
@@ -1179,7 +1180,7 @@
        * it when the conversation is the reason this file exists. Clearing here
        * unconditionally is what erased the prompt that built it.
        */
-      liveSteps = [];
+      liveTrace = [];
       remembered = 0;
       if (bridgeAvailable) {
         adoptChat(await api().getChatState());
@@ -1502,7 +1503,7 @@
     // Optimistic, because a request takes seconds and the message has to
     // appear now. Main appends its own copy and the response replaces this.
     chat = [...chat, { role: "user", text: prompt }];
-    liveSteps = [];
+    liveTrace = [];
     busy = true;
     const id = requestId();
     // Held so Stop can name the run. Cleared in `finally`, which is what makes
@@ -1528,7 +1529,7 @@
       ];
     } finally {
       inFlight = null;
-      liveSteps = [];
+      liveTrace = [];
       busy = false;
     }
   }
@@ -1626,7 +1627,7 @@
     } finally {
       if (inFlight?.id === id) inFlight = null;
       buildRequestId = null;
-      liveSteps = [];
+      liveTrace = [];
       busy = false;
       progress = null;
     }
@@ -1717,7 +1718,7 @@
       {#if sidebarTab === "chat"}
         <ChatPanel
           entries={chat}
-          live={liveSteps}
+          live={liveTrace}
           {selection}
           {remembered}
           {rememberedFrom}

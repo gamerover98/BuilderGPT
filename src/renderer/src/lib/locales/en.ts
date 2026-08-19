@@ -185,6 +185,20 @@ export const en = {
   "chat.example3": "What is this build made of?",
   "chat.toolsUsed.one": "1 tool used",
   "chat.toolsUsed.other": "{count} tools used",
+
+  // The trace: what a turn did, in order. `trace.wrote` covers both the prose
+  // an agent writes between tool calls and the build script a generation
+  // produces — from the reader's side they are the same thing, the model
+  // writing something rather than doing something.
+  "trace.request": "Request sent",
+  "trace.reasoning": "Thinking",
+  "trace.tool": "Tool",
+  "trace.note": "Step",
+  "trace.wrote": "Wrote",
+  "trace.arguments": "Arguments",
+  "trace.result": "Result",
+  "trace.stepCount.one": "1 step so far",
+  "trace.stepCount.other": "{count} steps so far",
   "chat.modelPickerHint": "Which model answers",
   "chat.modelSharedHint":
     "Generate uses this model too — there is one LLM configuration for the whole app.",

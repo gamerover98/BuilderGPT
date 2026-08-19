@@ -36,8 +36,10 @@
  * holds only what was said.
  */
 
-import { generateText, stepCountIs, type ModelMessage } from "ai";
+import { generateText, stepCountIs, streamText, type ModelMessage } from "ai";
 
+import type { TraceItem } from "../../shared/ipc.js";
+import { formatJson, TraceRecorder, type TraceSink } from "../services/trace.js";
 import { runTransactionAsync, summarizeTransaction, type BlockTally } from "../domain/history.js";
 import type { Region } from "../domain/document.js";
 import { countBlocks, normalizeRegion, paletteHistogram } from "../domain/document.js";
@@ -79,6 +81,8 @@ export interface AgentStep {
 }
 
 export interface AgentRequest {
+  /** Which run this is, so trace events can be told from another run's. */
+  requestId: string;
   session: DocumentSession;
   provider: import("../../shared/settings.js").Provider;
   model: string;
@@ -97,14 +101,29 @@ export interface AgentRequest {
   selection: Region | null;
   allowedBlocks: ReadonlySet<string>;
   onStep?: (step: AgentStep) => void;
+  /**
+   * Where the running commentary goes.
+   *
+   * Optional, and the loop is identical without it: the tests drive `runAgent`
+   * with no sink and assert on the trace it returns, which is the same array
+   * these events describe.
+   */
+  onTrace?: TraceSink;
   signal?: AbortSignal;
   /**
    * Test seam: a language model to use instead of the one the provider fields
    * would resolve to. Exists so the tool loop can be driven by a scripted model
    * without a network or an API key — the tools and the transaction are what
    * this app owns and what is worth testing.
+   *
+   * Typed off `generateText` and handed to `streamText`, which take the same
+   * `LanguageModel`. Naming the type through the function that no longer runs
+   * the loop would be a trap, so it names neither: the scripted model must
+   * implement `doStream`, because that is what the loop calls now.
    */
-  modelOverride?: Parameters<typeof generateText>[0]["model"];
+  modelOverride?: Parameters<typeof streamText>[0]["model"];
+  /** Test seam: the clock the trace times itself against. */
+  now?: () => number;
 }
 
 export interface AgentResult {
@@ -125,6 +144,14 @@ export interface AgentResult {
   messages: ModelMessage[];
   /** What it took out and what it put in, by block type. */
   summary: { removed: BlockTally[]; added: BlockTally[]; changed: number };
+  /**
+   * Everything the turn did, in order — the request, the thinking, the calls.
+   *
+   * Returned rather than only streamed, because the stream is a courtesy and
+   * this is the record: it goes onto the chat entry, and it is what the panel
+   * draws when the conversation is opened again tomorrow.
+   */
+  trace: TraceItem[];
   /**
    * The undo entry this run created, or `null` if it changed nothing. The UI
    * offers "Undo this" only while this still matches the top of the stack.
@@ -213,9 +240,64 @@ function countTurns(messages: readonly ModelMessage[]): number {
   return messages.reduce((total, message) => total + (message.role === "user" ? 1 : 0), 0);
 }
 
+/** One message, rendered the way it will be read rather than as JSON. */
+function renderMessage(message: ModelMessage): string {
+  const { content } = message;
+  if (typeof content === "string") return `[${message.role}] ${content}`;
+  // Tool traffic: an assistant message carrying calls, or a tool message
+  // carrying results. Rendered as their JSON, because that is what they are.
+  const parts = (content as unknown[]).map((part) => {
+    const typed = part as { type?: string; text?: string };
+    return typed.type === "text" && typeof typed.text === "string"
+      ? typed.text
+      : formatJson(part);
+  });
+  return `[${message.role}] ${parts.join("\n")}`;
+}
+
+/**
+ * Exactly what is about to be sent, as one readable block.
+ *
+ * The instructions and the replayed conversation, in the order the model
+ * receives them. This is the thing that was previously impossible to see: the
+ * document summary is regenerated every turn and the history is trimmed here,
+ * so neither the prompt box nor the chat log shows what actually went.
+ */
+function renderRequest(instructions: string, messages: readonly ModelMessage[]): string {
+  return [
+    "=== instructions ===",
+    instructions,
+    "",
+    `=== messages (${messages.length}) ===`,
+    ...messages.map(renderMessage),
+  ].join("\n");
+}
+
+/**
+ * Drops a trailing `text` item that only repeats the answer.
+ *
+ * The closing sentence arrives as a text part like any other, so without this
+ * every turn ends with the same paragraph twice: once in the bubble and once at
+ * the bottom of its own trace. Only the last one, and only when it matches —
+ * prose the model wrote *before* a tool call is exactly what this feature is
+ * for, and must survive.
+ */
+export function dropClosingText(trace: readonly TraceItem[], answer: string): TraceItem[] {
+  const wanted = answer.trim();
+  if (wanted === "") return [...trace];
+  for (let i = trace.length - 1; i >= 0; i -= 1) {
+    if (trace[i].kind !== "text") continue;
+    return trace[i].text.trim() === wanted
+      ? [...trace.slice(0, i), ...trace.slice(i + 1)]
+      : [...trace];
+  }
+  return [...trace];
+}
+
 export async function runAgent(request: AgentRequest): Promise<AgentResult> {
   const steps: AgentStep[] = [];
   const { session } = request;
+  const recorder = new TraceRecorder(request.requestId, request.onTrace, request.now);
 
   const asked: ModelMessage = { role: "user", content: request.prompt };
   const history = trimToRecentTurns(request.history, MAX_REMEMBERED_TURNS - 1);
@@ -232,24 +314,42 @@ export async function runAgent(request: AgentRequest): Promise<AgentResult> {
     session.history,
     label,
     async (tx) => {
+      /*
+       * A tool's own phrasing of what it did, by call id.
+       *
+       * Held rather than written straight onto the trace row because the two
+       * arrive from different directions: this comes from inside `execute`,
+       * while the row was opened by the `tool-call` part and is closed by the
+       * `tool-result` part. The id is what ties them together — see the note on
+       * `ToolContext.onStep`.
+       */
+      const summaries = new Map<string, string>();
       const tools = buildTools({
         doc: session.doc,
         tx,
         selection: request.selection,
         allowedBlocks: request.allowedBlocks,
         onStep: (step) => {
-          steps.push(step);
-          request.onStep?.(step);
+          if (step.id !== undefined) summaries.set(step.id, step.summary);
+          steps.push({ tool: step.tool, summary: step.summary });
+          request.onStep?.({ tool: step.tool, summary: step.summary });
         },
       });
 
+      // Rebuilt every turn, so the state the model reasons from is the state
+      // the document is actually in — see the note at the top.
+      const instructions = `${SYSTEM_PROMPT}\n\n${describeDocument(session, request.selection)}`;
+      const messages = [...history, asked];
+      recorder.start({
+        kind: "request",
+        text: renderRequest(instructions, messages),
+      });
+
       try {
-        return await generateText({
+        const stream = streamText({
           model: request.modelOverride ?? resolveModel(request),
-          // Rebuilt every turn, so the state the model reasons from is the
-          // state the document is actually in — see the note at the top.
-          instructions: `${SYSTEM_PROMPT}\n\n${describeDocument(session, request.selection)}`,
-          messages: [...history, asked],
+          instructions,
+          messages,
           tools,
           // Without a stop condition the SDK returns after the first tool call
           // and never feeds the result back, so the model would place one block
@@ -257,7 +357,100 @@ export async function runAgent(request: AgentRequest): Promise<AgentResult> {
           stopWhen: stepCountIs(MAX_STEPS),
           temperature: 0.2,
           abortSignal: request.signal,
+          // `streamText`'s default is `console.error`, which for this app means
+          // every stopped run and every upstream hiccup prints a stack trace
+          // that nobody sees and nothing acts on. Errors are handled below,
+          // from the stream, where they can be told apart.
+          onError: () => {},
         });
+
+        /*
+         * Streamed rather than awaited whole, and that is the entire point of
+         * this path: `generateText` resolves once, at the end, so there was
+         * nothing to show for however long the model took. The tool summaries
+         * did arrive live — tools execute during the call — but the thinking
+         * and the prose either side of them did not exist until it was over.
+         *
+         * The parts carry their own ids, so a model that interleaves two
+         * reasoning blocks around a tool call keeps them apart. Ours are mapped
+         * onto the recorder's, which is what the renderer folds against.
+         */
+        const openItems = new Map<string, number>();
+        for await (const part of stream.fullStream) {
+          switch (part.type) {
+            case "reasoning-start":
+              openItems.set(part.id, recorder.start({ kind: "reasoning", text: "", running: true }));
+              break;
+            case "text-start":
+              openItems.set(part.id, recorder.start({ kind: "text", text: "", running: true }));
+              break;
+            case "reasoning-delta":
+            case "text-delta": {
+              const id = openItems.get(part.id);
+              if (id !== undefined) recorder.append(id, part.text);
+              break;
+            }
+            case "reasoning-end":
+            case "text-end": {
+              const id = openItems.get(part.id);
+              if (id !== undefined) recorder.finish(id);
+              openItems.delete(part.id);
+              break;
+            }
+            case "tool-call":
+              openItems.set(
+                part.toolCallId,
+                recorder.start({
+                  kind: "tool",
+                  name: part.toolName,
+                  // Filled in by `finish` from the summary the tool itself
+                  // reports, which is phrased for a reader; the input beside it
+                  // is the literal call.
+                  text: part.toolName,
+                  input: formatJson(part.input),
+                  running: true,
+                }),
+              );
+              break;
+            case "tool-result": {
+              const id = openItems.get(part.toolCallId);
+              if (id !== undefined) {
+                recorder.finish(id, { text: summaries.get(part.toolCallId) ?? part.toolName, output: formatJson(part.output) });
+              }
+              openItems.delete(part.toolCallId);
+              break;
+            }
+            case "tool-error": {
+              const id = openItems.get(part.toolCallId);
+              if (id !== undefined) {
+                recorder.finish(id, {
+                  error: part.error instanceof Error ? part.error.message : String(part.error),
+                });
+              }
+              openItems.delete(part.toolCallId);
+              break;
+            }
+            case "abort":
+              // The signal check below turns this into the right error; raising
+              // here only stops us waiting on promises that will never settle.
+              throw new AgentCancelledError();
+            case "error":
+              throw part.error;
+            default:
+              break;
+          }
+        }
+
+        // Anything the model left open — a provider that ends a stream without
+        // closing its last block — is closed here, or it would draw as still
+        // running for as long as the conversation exists.
+        for (const id of openItems.values()) recorder.finish(id);
+
+        return {
+          text: await stream.text,
+          responseMessages: await stream.responseMessages,
+          steps: await stream.steps,
+        };
       } catch (err) {
         // Asked first, and from the signal rather than from the error: an
         // aborted `generateText` reports itself in more than one shape
@@ -305,13 +498,23 @@ export async function runAgent(request: AgentRequest): Promise<AgentResult> {
     remembered: countTurns(messages),
     messages,
     summary,
+    trace: dropClosingText(recorder.snapshot(), result.text),
     undoLabel: summary.changed > 0 ? label : null,
     undoTransactionId: summary.changed > 0 ? (committed?.id ?? null) : null,
   };
 }
 
-/** Adds up the `changed` each mutating tool reported. */
-function countChanged(result: Awaited<ReturnType<typeof generateText>>): number {
+/**
+ * Adds up the `changed` each mutating tool reported.
+ *
+ * Structurally typed rather than named off the SDK: it wants the steps and
+ * nothing else, and `streamText` hands back its own result shape. Naming a
+ * concrete SDK type here would have made this the reason the loop could not
+ * change.
+ */
+function countChanged(result: {
+  steps: readonly { toolResults?: readonly unknown[] }[];
+}): number {
   let total = 0;
   for (const step of result.steps) {
     for (const toolResult of step.toolResults ?? []) {

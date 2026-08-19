@@ -94,6 +94,8 @@ export const IPC = {
   generateCancel: "bgpt:generate:cancel",
   /** main → renderer: one tool call the agent just made. */
   agentStep: "bgpt:agent:step",
+  /** main → renderer: what the turn in flight is doing, as it does it. */
+  agentTrace: "bgpt:agent:trace",
 
   artifactsList: "bgpt:artifacts:list",
 
@@ -251,6 +253,14 @@ export interface GenerateSuccess {
   /** Absolute path of the saved artifact, in the configured output folder. */
   path: string;
   name: string;
+  /**
+   * What the run did, in order — the request that was sent, the model writing
+   * the build script, and each phase of turning it into a file.
+   *
+   * Carried on the response as well as streamed, so a build asked for from the
+   * chat keeps its record on the entry rather than only having flickered past.
+   */
+  trace: TraceItem[];
   exportType: ExportType;
   /**
    * Absolute path a same-named file was moved to before this one was written,
@@ -520,6 +530,72 @@ export interface AgentStepEvent {
   summary: string;
 }
 
+/**
+ * What a turn did, in the order it did it.
+ *
+ * One flat shape with a `kind` rather than a discriminated union, deliberately:
+ * this is consumed by a Svelte template, and a union there means a chain of
+ * `{#if item.kind === ...}` blocks each narrowing to a different member. The
+ * fields that only apply to one kind are documented as such and are absent
+ * otherwise, which the template reads as "nothing to draw".
+ */
+export interface TraceItem {
+  /**
+   * Stable within one turn, and how a delta finds the item it extends.
+   *
+   * Assigned by main, which is the only place the order is known. The renderer
+   * folds events into a mirror and then throws it away when the finished trace
+   * arrives on the entry — the same arrangement the chat log itself uses.
+   */
+  id: number;
+  /**
+   * `request` — what was sent to the model, verbatim.
+   * `reasoning` — the model thinking out loud, for models that emit it.
+   * `text` — prose the model wrote between tool calls.
+   * `tool` — one tool call, with what it was given and what it returned.
+   * `note` — something the app did rather than the model, e.g. running the
+   *   generated script in the sandbox.
+   */
+  kind: "request" | "reasoning" | "text" | "tool" | "note";
+  /** The body: the prompt, the thinking, the prose, or a tool's summary line. */
+  text: string;
+  /** `tool` only: which one. */
+  name?: string;
+  /** `tool` only: the arguments it was called with, as formatted JSON. */
+  input?: string;
+  /** `tool` only: what it returned, as formatted JSON. */
+  output?: string;
+  /** `tool` only, and instead of `output`: what it threw. */
+  error?: string;
+  /** Set while it is still going, so the UI can show it working. */
+  running?: boolean;
+  /** How long it took, once it is over. */
+  ms?: number;
+  /**
+   * What was left out of this item, and why.
+   *
+   * Only ever set on the way to disk. A generation's request carries the whole
+   * block-id list — 933 ids, 24 kB — which is a constant of the app rather than
+   * anything about this turn, and storing a copy per turn across a hundred
+   * conversation files is hundreds of megabytes. It is shown in full while the
+   * turn is live; what is saved says exactly what is missing and where the same
+   * text lives.
+   */
+  elided?: string;
+}
+
+/**
+ * A change to the trace of the turn in flight.
+ *
+ * Two forms because reasoning arrives a few characters at a time: sending the
+ * whole item per token would be the same text again and again. `item` announces
+ * one, or replaces it with its finished form; `append` extends one already
+ * sent. Main batches the appends — see `services/trace.ts`.
+ */
+export type TraceEvent =
+  | { requestId: string; type: "item"; item: TraceItem }
+  | { requestId: string; type: "append"; id: number; text: string };
+
 export interface AgentRequestPayload {
   requestId: string;
   prompt: string;
@@ -554,6 +630,17 @@ export interface ChatEntry {
   text: string;
   /** Tool calls made while answering; agent turns only. */
   steps?: { tool: string; summary: string }[];
+  /**
+   * What the turn did, in order: the request, the thinking, the tool calls.
+   *
+   * Additive rather than a replacement for `steps`, and `CONVERSATION_FORMAT`
+   * stays at 1 for that reason. Bumping it would be tidier and would cost every
+   * existing conversation the model's memory — `coerceRecord` keeps entries and
+   * drops `messages` on a version it does not recognise — which is a steep
+   * price for a display field. A record written before this has no trace, and
+   * the panel falls back to `steps`.
+   */
+  trace?: TraceItem[];
   changed?: number;
   /** What was taken out and put in, by block type. */
   summary?: EditSummary;
@@ -817,4 +904,13 @@ export interface BgptApi {
 
   onProgress(listener: (event: ProgressEvent) => void): () => void;
   onAgentStep(listener: (event: AgentStepEvent) => void): () => void;
+  /**
+   * What the turn in flight is doing, as it does it.
+   *
+   * Separate from `onAgentStep` because they answer different questions: a step
+   * is one tool call the app made, a trace is everything the model did to get
+   * there. The step events stay because `ChatEntry.steps` is what old
+   * conversations hold.
+   */
+  onAgentTrace(listener: (event: TraceEvent) => void): () => void;
 }

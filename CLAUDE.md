@@ -190,6 +190,54 @@ neither `ipcMain.handle`d nor `send`ed. That is the mechanical half of the same
 mistake: declaring a verb, bridging it through preload, calling it from the
 renderer, and never registering it.
 
+**The loop streams, and that is why there is anything to watch.** Both paths
+call `streamText` — `agent.ts` iterating `fullStream`, `llm.ts` for the build
+script. `generateText` resolves once, at the end, so a model that thought for
+thirty seconds produced thirty seconds of nothing; the thinking and the prose
+either side of the tool calls did not *exist* until the call was over. Do not go
+back: the tool summaries were live only because tools execute during the call,
+and that is the one part this never depended on.
+
+Two consequences worth knowing. `streamText` does not throw — errors arrive as
+an `error` part in the stream, so the loop raises them itself and keeps the
+existing contract (`AgentCancelledError` asked of the signal first, everything
+else wrapped as `LlmError`). And its default `onError` is `console.error`, which
+would print a stack trace for every stopped run; both call sites pass a no-op
+because they handle errors where they can tell them apart.
+
+**A turn's trace is main's record, and the renderer only mirrors it.**
+`services/trace.ts` assigns the ids because it is the only place that knows what
+happened first; the finished array comes back on the `ChatEntry` and the
+renderer adopts it, exactly as it does the chat log. Appends are batched by a
+**character budget, not a timer** — reasoning arrives a few characters at a time
+and a message per token would be most of the cost of the feature — and a budget
+is deterministic, so the tests drive it with no clock and nothing is left
+scheduled when a run throws.
+
+The fold, `applyTraceEvent`, lives in `renderer/src/lib/trace.ts` because the
+renderer may not import out of `main/`. What keeps the two halves agreeing is
+not proximity but `tests/agent.ts`: it drives a real run, folds the events main
+emitted with the renderer's own function, and requires the result to equal
+main's `snapshot()`.
+
+A tool's readable summary is matched to its trace row **by `toolCallId`**, which
+is why `ToolContext.onStep` carries an id at all. Matching on the tool's name
+would do right up until a model issues two `fill_region`s in one step, which it
+does whenever it builds two walls.
+
+`dropClosingText` removes a trailing `text` item that only repeats the answer —
+the closing sentence arrives as a text part like any other, and left in, every
+turn ends with the same paragraph twice. Only the last one, and only when it
+matches: prose written *before* a tool call is the thing this feature is for.
+
+**The request is shown whole and stored abridged.** A generation's prompt is the
+`SYS_GEN` template plus the entire block-id list — 933 ids, 24 kB, identical
+every time because it is a constant of the app. Ten conversations per schematic
+across a hundred schematics is where storing a copy per turn ends up, so
+`abridgeTrace` caps it on the way to disk and says what it dropped. Live, it is
+verbatim, because "what did you actually send" is the question it exists to
+answer.
+
 **A build asked for in the chat reports itself in the chat.** Generation's only
 feedback was the progress bar in the Structure panel, which since the sidebar
 became tabs is a tab you are not looking at while you chat — so asking the chat

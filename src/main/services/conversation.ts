@@ -41,6 +41,7 @@ import { removeCheckpoints } from "./checkpoints.js";
 import { pathsMatch } from "./recent_documents.js";
 import { rememberedFromIndex } from "./conversation_core.js";
 import {
+  abridgeTrace,
   CONVERSATION_FORMAT,
   coerceRecord,
   mostRecent,
@@ -185,14 +186,22 @@ async function readRecord(subject: string): Promise<ConversationRecord | null> {
   }
 }
 
-/** The live conversation as it would be stored. */
+/**
+ * The live conversation as it would be stored.
+ *
+ * Traces are abridged on the way out, and only here: what the panel drew while
+ * the turn was running stays whole. See `abridgeTrace` for why a generation's
+ * request is the one thing that cannot be written down verbatim.
+ */
 function snapshot(): StoredConversation {
   return {
     id: current.id,
     title: titleFor(current.entries),
     createdAt: current.createdAt,
     updatedAt: current.updatedAt,
-    entries: [...current.entries],
+    entries: current.entries.map((entry) =>
+      entry.trace === undefined ? entry : { ...entry, trace: abridgeTrace(entry.trace) },
+    ),
     messages: current.messages,
     rememberedFrom: current.rememberedFrom,
   };

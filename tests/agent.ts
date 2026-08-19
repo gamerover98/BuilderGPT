@@ -9,7 +9,11 @@
  * breaks when a vendor changes a temperature default.
  */
 
-import type { LanguageModelV3GenerateResult } from "@ai-sdk/provider";
+import type {
+  LanguageModelV3GenerateResult,
+  LanguageModelV3StreamPart,
+  LanguageModelV3StreamResult,
+} from "@ai-sdk/provider";
 import { MockLanguageModelV3 } from "ai/test";
 
 import { AgentCancelledError, runAgent } from "../src/main/agent/agent.js";
@@ -17,6 +21,8 @@ import { LlmError } from "../src/main/services/llm.js";
 import { getBlock, setBlock, type SchematicDocument } from "../src/main/domain/document.js";
 import { canUndo, runTransaction, undo } from "../src/main/domain/history.js";
 import { newDocument, type DocumentSession } from "../src/main/services/session.js";
+import type { TraceEvent, TraceItem } from "../src/shared/ipc.js";
+import { applyTraceEvent } from "../src/renderer/src/lib/trace.js";
 
 let failures = 0;
 
@@ -81,7 +87,12 @@ function grid(doc: SchematicDocument): string {
  */
 type Turn =
   | { kind: "tool"; toolName: string; input: unknown }
-  | { kind: "text"; text: string }
+  /**
+   * `reasoning` is what a thinking model emits before its answer. Optional
+   * because most models emit none at all, which is the case the trace has to
+   * degrade into gracefully rather than the exception.
+   */
+  | { kind: "text"; text: string; reasoning?: string }
   | { kind: "throw"; message: string }
   /**
    * The user pressing Stop while the model is working: the signal trips and
@@ -119,12 +130,68 @@ const USAGE: LanguageModelV3GenerateResult["usage"] = {
   outputTokens: { total: 1, text: 1, reasoning: 0 },
 };
 
+/**
+ * The script, as a stream.
+ *
+ * `doStream` and not `doGenerate`, because the loop calls `streamText` now:
+ * the point of that change is that the model's thinking and prose arrive while
+ * it is still working rather than all at once at the end, and a mock that only
+ * answers `doGenerate` cannot exercise a single line of it.
+ *
+ * Text is emitted in several deltas on purpose. One delta per turn would pass
+ * every assertion here while leaving the recorder's batching -- the part that
+ * decides whether this costs one IPC message or four hundred -- never once
+ * exercised.
+ */
+function partsFor(
+  // Every kind but `abort`, which never reaches a stream: it throws before one
+  // is opened, because that is what a connection cut at the handshake does.
+  turn: Exclude<Turn, { kind: "abort" }>,
+  callIndex: number,
+): LanguageModelV3StreamPart[] {
+  if (turn.kind === "throw") {
+    return [{ type: "error", error: new Error(turn.message) }];
+  }
+  if (turn.kind === "text") {
+    const parts: LanguageModelV3StreamPart[] = [];
+    if (turn.reasoning !== undefined) {
+      parts.push({ type: "reasoning-start", id: "r0" });
+      for (const chunk of splitForStreaming(turn.reasoning)) {
+        parts.push({ type: "reasoning-delta", id: "r0", delta: chunk });
+      }
+      parts.push({ type: "reasoning-end", id: "r0" });
+    }
+    parts.push({ type: "text-start", id: "t0" });
+    for (const chunk of splitForStreaming(turn.text)) {
+      parts.push({ type: "text-delta", id: "t0", delta: chunk });
+    }
+    parts.push({ type: "text-end", id: "t0" });
+    parts.push({ type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage: USAGE });
+    return parts;
+  }
+  return [
+    {
+      type: "tool-call",
+      toolCallId: `call-${callIndex}`,
+      toolName: turn.toolName,
+      input: JSON.stringify(turn.input),
+    },
+    { type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage: USAGE },
+  ];
+}
+
+/** Cuts text into small pieces, the way a provider delivers it. */
+function splitForStreaming(text: string): string[] {
+  const size = 7;
+  const out: string[] = [];
+  for (let at = 0; at < text.length; at += size) out.push(text.slice(at, at + size));
+  return out.length > 0 ? out : [""];
+}
+
 function scriptedModel(turns: Turn[], seen?: Seen) {
   let index = 0;
   return new MockLanguageModelV3({
-    doGenerate: async (
-      options: { prompt: unknown },
-    ): Promise<LanguageModelV3GenerateResult> => {
+    doStream: async (options: { prompt: unknown }): Promise<LanguageModelV3StreamResult> => {
       if (seen) {
         const messages = options.prompt as { role: string; content: unknown }[];
         seen.prompts.push(messages.filter((m) => m.role !== "system"));
@@ -137,41 +204,33 @@ function scriptedModel(turns: Turn[], seen?: Seen) {
       }
       const turn = turns[Math.min(index, turns.length - 1)];
       index += 1;
+
+      // Thrown rather than streamed: the connection failing before the first
+      // byte is a different shape from a stream that carries an error part, and
+      // both have to end up as the same `LlmError`.
       if (turn.kind === "abort") {
         turn.controller.abort();
         const error = new Error(turn.message ?? "The operation was aborted");
         error.name = turn.name ?? "AbortError";
         throw error;
       }
-      if (turn.kind === "throw") {
-        throw new Error(turn.message);
-      }
-      if (turn.kind === "text") {
-        return {
-          finishReason: { unified: "stop" as const, raw: "stop" },
-          usage: USAGE,
-          content: [{ type: "text" as const, text: turn.text }],
-          warnings: [],
-        };
-      }
+
+      const parts = partsFor(turn, index);
       return {
-        finishReason: { unified: "tool-calls" as const, raw: "tool_calls" },
-        usage: USAGE,
-        content: [
-          {
-            type: "tool-call" as const,
-            toolCallId: `call-${index}`,
-            toolName: turn.toolName,
-            input: JSON.stringify(turn.input),
+        stream: new ReadableStream<LanguageModelV3StreamPart>({
+          start(controller) {
+            controller.enqueue({ type: "stream-start", warnings: [] });
+            for (const part of parts) controller.enqueue(part);
+            controller.close();
           },
-        ],
-        warnings: [],
+        }),
       };
     },
   });
 }
 
 const baseRequest = {
+  requestId: "test-request",
   /**
    * No prior turns, which is what all but the continuity tests want.
    *
@@ -1051,6 +1110,121 @@ console.log("\n--- mirroring from chat ---");
 
   equal("the block reflected", getBlock(session.doc, 5, 1, 0).namespacedName, "minecraft:oak_stairs");
   equal("...and so did its facing", getBlock(session.doc, 5, 1, 0).properties.facing, "west");
+}
+
+/** Long enough that the recorder must flush it more than once. */
+const THINKING =
+"The floor is cobblestone, so one replace does it." +
+  " I could walk the region block by block, but replace_blocks already scans it once " +
+  "and the schematic is only six across, so there is nothing to gain by being clever. W" +
+  "orth checking the palette first in case the floor is spelled with a state, though the " +
+  "summary above says plain cobblestone, so I will take it at its word and replace.";
+
+// --- what the turn did, in order --------------------------------------------
+//
+// The chat used to narrate a run as a list of one-line summaries, which says
+// what happened and nothing about why. This is the record behind the panel: the
+// request that was sent, the model thinking where it does that, and each tool
+// call with its arguments and its result.
+console.log("\n--- the trace ---");
+{
+  const session = seeded();
+  const events: TraceEvent[] = [];
+  const result = await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "replace the cobblestone with stone",
+    onTrace: (event) => events.push(event),
+    modelOverride: scriptedModel([
+      {
+        kind: "tool",
+        toolName: "replace_blocks",
+        input: { from: "minecraft:cobblestone", to: "minecraft:stone" },
+      },
+      { kind: "text", text: "Replaced 35 cobblestone with stone.", reasoning: THINKING },
+    ]),
+  });
+
+  const kinds = result.trace.map((item) => item.kind);
+  equal("the trace opens with the request", kinds[0], "request");
+  check("...and holds the tool call and the thinking", kinds.includes("tool") && kinds.includes("reasoning"), kinds.join(","));
+
+  /*
+   * The request is the thing that was previously impossible to see. The
+   * document summary is rebuilt every turn and the history is trimmed inside
+   * `runAgent`, so neither the prompt box nor the log showed what actually went.
+   */
+  const request = result.trace.find((item) => item.kind === "request")!;
+  check("the request carries the instructions", request.text.includes("You edit Minecraft schematics"));
+  check("...the live description of the schematic", request.text.includes("6x6x6"));
+  check("...and the user's own words", request.text.includes("replace the cobblestone with stone"));
+
+  const reasoning = result.trace.find((item) => item.kind === "reasoning")!;
+  equal("the thinking is reassembled from its deltas", reasoning.text, THINKING);
+
+  const call = result.trace.find((item) => item.kind === "tool")!;
+  equal("the tool call is named", call.name, "replace_blocks");
+  check("...with the arguments it was given", (call.input ?? "").includes("minecraft:cobblestone"), call.input);
+  check("...and what it returned", (call.output ?? "").includes("changed"), call.output);
+  check("...phrased for a reader", call.text.startsWith("replacing minecraft:cobblestone"), call.text);
+  check("...and not left looking like it is still running", call.running === false);
+
+  /*
+   * The closing sentence arrives as a text part like any other. Left in, every
+   * turn would end with the same paragraph twice -- once in the bubble and once
+   * at the foot of its own trace.
+   */
+  const echoed = result.trace.filter(
+    (item) => item.kind === "text" && item.text.trim() === result.text.trim(),
+  );
+  equal("the answer is not repeated inside its own trace", echoed.length, 0);
+
+  /*
+   * Streamed as well as returned. Both matter and they are not the same claim:
+   * the array is what the panel draws tomorrow, the events are what it draws
+   * while the model is still working, and the whole point of the change is that
+   * the second one exists at all.
+   */
+  check("the run was narrated as it went", events.length > 0, String(events.length));
+  const thinkingAppends = events.filter(
+    (event) => event.type === "append" && event.id === reasoning.id,
+  ).length;
+  check(
+    "...and one long block of thinking arrives in pieces, not at its end",
+    thinkingAppends > 1,
+    `${thinkingAppends} append(s)`,
+  );
+  equal(
+    "...and folding the events back gives main's own record",
+    events.reduce(applyTraceEvent, [] as TraceItem[]).filter((item) => item.kind !== "text"),
+    result.trace.filter((item) => item.kind !== "text"),
+  );
+}
+
+// --- a stopped run says nothing it did not do -------------------------------
+{
+  const session = seeded();
+  const controller = new AbortController();
+  const events: TraceEvent[] = [];
+  try {
+    await runAgent({
+      ...baseRequest,
+      session,
+      selection: null,
+      prompt: "fill it all with stone",
+      signal: controller.signal,
+      onTrace: (event) => events.push(event),
+      modelOverride: scriptedModel([{ kind: "abort", controller }]),
+    });
+    check("a stopped run throws", false);
+  } catch (err) {
+    check("a stopped run throws AgentCancelledError", err instanceof AgentCancelledError);
+  }
+  // The request went out, so it is honest to have said so; nothing after it
+  // did, and a trace claiming otherwise would outlive the run in the log.
+  const folded = events.reduce(applyTraceEvent, [] as TraceItem[]);
+  equal("...having narrated only the request", folded.map((item) => item.kind), ["request"]);
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

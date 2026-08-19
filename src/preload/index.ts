@@ -18,6 +18,7 @@ import {
   type ConversationList,
   type RestoreResponse,
   type AgentStepEvent,
+  type TraceEvent,
   type Artifact,
   type BgptApi,
   type DocumentMeshResponse,
@@ -142,6 +143,12 @@ const api: BgptApi = {
     const wrapped = (_event: unknown, payload: AgentStepEvent) => listener(payload);
     ipcRenderer.on(IPC.agentStep, wrapped);
     return () => ipcRenderer.removeListener(IPC.agentStep, wrapped);
+  },
+
+  onAgentTrace(listener) {
+    const wrapped = (_event: unknown, payload: TraceEvent) => listener(payload);
+    ipcRenderer.on(IPC.agentTrace, wrapped);
+    return () => ipcRenderer.removeListener(IPC.agentTrace, wrapped);
   },
 };
 

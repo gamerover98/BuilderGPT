@@ -12,7 +12,7 @@
 
 import { copyFile, rename, rm, writeFile } from "fs/promises";
 
-import type { DroppedBlock, ProgressEvent } from "../../shared/ipc.js";
+import type { DroppedBlock, ProgressEvent, TraceItem } from "../../shared/ipc.js";
 import type { ExportType, Provider } from "../../shared/settings.js";
 import {
   formatVersionForPrompt,
@@ -26,6 +26,7 @@ import {
 import { writeArtifact } from "./artifacts.js";
 import { callLlm } from "./llm.js";
 import { sanitizeName } from "./naming.js";
+import { TraceRecorder, type TraceSink } from "./trace.js";
 import { resolveOutputPath } from "./output.js";
 import { generatedDir, loadBlockIdListText, loadPrompts, resourcesDir } from "./resources.js";
 import { SpongeSchematicWriter, SpongeSchematicWriterFactory } from "./schematic.js";
@@ -59,6 +60,17 @@ export interface GenerateOptions {
    */
   outputDir?: string | null;
   onProgress?: (phase: ProgressEvent["phase"], fraction: number, message: string) => void;
+  /**
+   * Where the running commentary goes.
+   *
+   * The progress phases were the whole of this path's feedback, and they went
+   * to a bar in a panel the user is not looking at while they chat. This adds
+   * the parts that were never visible anywhere: the request that was sent,
+   * verbatim, and the build script as the model writes it.
+   */
+  onTrace?: TraceSink;
+  /** Which run this is, so its trace events can be told from another's. */
+  requestId?: string;
   signal?: AbortSignal;
 }
 
@@ -66,6 +78,8 @@ export interface GenerateOutcome {
   path: string;
   name: string;
   exportType: ExportType;
+  /** What the run did, in order, for the chat to show and to keep. */
+  trace: TraceItem[];
   /** Set when a file of the same name was moved aside to make room. */
   backedUpTo: string | null;
   /**
@@ -81,6 +95,9 @@ export interface GenerateOutcome {
 
 export async function generate(options: GenerateOptions): Promise<GenerateOutcome> {
   const report = options.onProgress ?? (() => {});
+  const recorder = new TraceRecorder(options.requestId ?? "", options.onTrace);
+  /** A phase, said in the trace as well as on the progress bar. */
+  const note = (text: string) => recorder.finish(recorder.start({ kind: "note", text }));
 
   const prompts = await loadPrompts();
   const blockIdList = await loadBlockIdListText();
@@ -96,6 +113,22 @@ export async function generate(options: GenerateOptions): Promise<GenerateOutcom
 
   report("prompting", 0.2, "Sending the build spec to the model");
 
+  /*
+   * Exactly what goes out, verbatim -- the substituted template, the block-id
+   * list and all. This is the one thing about a generation that was visible
+   * nowhere: the description in the box is a fragment of it, and the rest is
+   * assembled here from files the user never sees.
+   */
+  recorder.finish(
+    recorder.start({
+      kind: "request",
+      text: ["=== system ===", sysPrompt, "", "=== user ===", userPrompt].join("\n"),
+    }),
+  );
+
+  const script = recorder.start({ kind: "text", text: "", running: true });
+  let thinking: number | null = null;
+
   const response = await callLlm({
     provider: options.provider,
     model: options.model,
@@ -106,9 +139,19 @@ export async function generate(options: GenerateOptions): Promise<GenerateOutcom
     imagePath: options.imagePath,
     acceptsImages: options.acceptsImages,
     signal: options.signal,
+    onDelta: (text) => recorder.append(script, text),
+    onReasoning: (text) => {
+      // Opened lazily: most models emit no reasoning at all, and an empty
+      // block sitting above every build would read as one that failed.
+      if (thinking === null) thinking = recorder.start({ kind: "reasoning", text: "", running: true });
+      recorder.append(thinking, text);
+    },
   });
+  if (thinking !== null) recorder.finish(thinking);
+  recorder.finish(script);
 
   report("converting", 0.6, "Running the generated build script");
+  note("Running the build script in the sandbox");
 
   // Two different directories, deliberately. `core.ts` writes an intermediate
   // `temp.mcfunction` into whatever it is given; that is app scratch and stays
@@ -130,6 +173,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateOutcom
   }
 
   report("naming", 0.8, "Naming the structure");
+  note("Asking the model to name the structure");
 
   // component.py:134 -- second LLM call, name only, no image.
   const rawName = await callLlm({
@@ -189,6 +233,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateOutcom
     path: filePath,
     name,
     exportType: options.exportType,
+    trace: recorder.snapshot(),
     backedUpTo,
     droppedBlocks: result.rejections.map((rejection) => ({
       blockId: rejection.blockId,

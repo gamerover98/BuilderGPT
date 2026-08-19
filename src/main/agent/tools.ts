@@ -112,8 +112,15 @@ export interface ToolContext {
   /** The user's current selection, when they have one. */
   selection: Region | null;
   allowedBlocks: ReadonlySet<string>;
-  /** Called for each tool invocation, so the UI can narrate progress. */
-  onStep?: (step: { tool: string; summary: string }) => void;
+  /**
+   * Called for each tool invocation, so the UI can narrate progress.
+   *
+   * `id` is the SDK's `toolCallId`, which is what ties this readable line to
+   * the row the trace opened when the call was announced. Matching on the
+   * tool's *name* would do right up until a model issues two `fill_region`s
+   * in one step, which it does whenever it builds two walls.
+   */
+  onStep?: (step: { tool: string; summary: string; id?: string }) => void;
 }
 
 /**
@@ -164,7 +171,8 @@ function describeRegion(region: Region): string {
 }
 
 export function buildTools(context: ToolContext): Record<string, Tool> {
-  const step = (tool: string, summary: string) => context.onStep?.({ tool, summary });
+  const step = (tool: string, summary: string, id?: string) =>
+    context.onStep?.({ tool, summary, id });
 
   return {
     get_schematic_info: tool({
@@ -175,8 +183,8 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
         properties: {},
         additionalProperties: false,
       }),
-      execute: async () => {
-        step("get_schematic_info", "reading the schematic's dimensions");
+      execute: async (_args, call) => {
+        step("get_schematic_info", "reading the schematic's dimensions", call.toolCallId);
         const { doc, selection } = context;
         return {
           width: doc.width,
@@ -199,8 +207,8 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
         properties: {},
         additionalProperties: false,
       }),
-      execute: async () => {
-        step("get_palette", "listing the materials in use");
+      execute: async (_args, call) => {
+        step("get_palette", "listing the materials in use", call.toolCallId);
         const entries = [...paletteHistogram(context.doc).entries()]
           .filter(([block]) => !block.startsWith("minecraft:air"))
           .sort((a, b) => b[1] - a[1])
@@ -218,9 +226,9 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
         properties: regionSchema.properties,
         additionalProperties: false,
       }),
-      execute: async (args) => {
+      execute: async (args, call) => {
         const region = resolveRegion(context, args ?? {});
-        step("get_region", `reading ${describeRegion(region)}`);
+        step("get_region", `reading ${describeRegion(region)}`, call.toolCallId);
         if (regionVolume(region) > MAX_REPORTED_BLOCKS * 8) {
           throw new Error(
             `That region holds ${regionVolume(region)} cells, too many to list. ` +
@@ -258,14 +266,14 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
         required: ["block"],
         additionalProperties: false,
       }),
-      execute: async (args) => {
+      execute: async (args, call) => {
         const region = resolveRegion(context, args ?? {});
         const entry = toEntry(args.block);
         checkBlockAllowed(context, entry);
         if (regionVolume(region) > MAX_EDIT_VOLUME) {
           throw new Error(`That region covers ${regionVolume(region)} blocks, more than one edit may touch.`);
         }
-        step("fill_region", `filling ${describeRegion(region)} with ${entry.namespacedName}`);
+        step("fill_region", `filling ${describeRegion(region)} with ${entry.namespacedName}`, call.toolCallId);
         return { changed: context.tx.fill(region, entry), region };
       },
     }),
@@ -283,15 +291,14 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
         required: ["from", "to"],
         additionalProperties: false,
       }),
-      execute: async (args) => {
+      execute: async (args, call) => {
         const region = resolveRegion(context, args ?? {});
         const from = toEntry(args.from);
         const to = toEntry(args.to);
         checkBlockAllowed(context, to);
         step(
           "replace_blocks",
-          `replacing ${from.namespacedName} with ${to.namespacedName} in ${describeRegion(region)}`,
-        );
+          `replacing ${from.namespacedName} with ${to.namespacedName} in ${describeRegion(region)}`, call.toolCallId);
         const changed = context.tx.replace(region, from, to);
         return {
           changed,
@@ -319,10 +326,10 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
         required: ["x", "y", "z", "block"],
         additionalProperties: false,
       }),
-      execute: async (args) => {
+      execute: async (args, call) => {
         const entry = toEntry(args.block);
         checkBlockAllowed(context, entry);
-        step("set_block", `placing ${entry.namespacedName} at (${args.x},${args.y},${args.z})`);
+        step("set_block", `placing ${entry.namespacedName} at (${args.x},${args.y},${args.z})`, call.toolCallId);
         const changed = context.tx.setBlock(args.x, args.y, args.z, entry);
         return {
           changed: changed ? 1 : 0,
@@ -345,10 +352,10 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
         },
         additionalProperties: false,
       }),
-      execute: async (args) => {
+      execute: async (args, call) => {
         const region = resolveRegion(context, args ?? {});
         const transform = toTransform(args ?? {});
-        step("transform_region", `${describeTransform(transform).toLowerCase()} on ${describeRegion(region)}`);
+        step("transform_region", `${describeTransform(transform).toLowerCase()} on ${describeRegion(region)}`, call.toolCallId);
         // Errors are returned to the model rather than thrown past it — a
         // quarter turn refused for being oblong is something it can correct by
         // squaring the region or turning 180° instead.
@@ -372,8 +379,8 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
         required: ["code"],
         additionalProperties: false,
       }),
-      execute: async (args) => {
-        step("run_build_script", "running the build script");
+      execute: async (args, call) => {
+        step("run_build_script", "running the build script", call.toolCallId);
         // The same sandbox that has always run model-written code: QuickJS on
         // WASM, memory-limited, deadline-interrupted, with nothing bridged in
         // but the two placement callbacks. `tests/sandbox.ts` guards that

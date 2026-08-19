@@ -39,6 +39,8 @@ import {
   useConversationDirectory,
 } from "../src/main/services/conversation.js";
 import {
+  abridgeTrace,
+  MAX_STORED_TRACE_TEXT,
   mostRecent,
   storeFileName,
   titleFor,
@@ -511,19 +513,31 @@ try {
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
       captured = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          id: "chatcmpl-test",
-          object: "chat.completion",
-          created: 0,
-          model: "mimo-v2.5-free",
-          choices: [
-            { index: 0, message: { role: "assistant", content: "builder.setBlock(0,0,0)" }, finish_reason: "stop" },
-          ],
+      /*
+       * Server-sent events, because `callLlm` streams now -- it has to, or the
+       * generation panel could not show the build script being written. The
+       * answer is split across two deltas for the same reason the agent's mock
+       * splits its text: a single chunk would pass while proving nothing about
+       * reassembly.
+       */
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      });
+      const frame = (payload: unknown) => `data: ${JSON.stringify(payload)}\n\n`;
+      const head = { id: "chatcmpl-test", object: "chat.completion.chunk", created: 0, model: "mimo-v2.5-free" };
+      res.write(frame({ ...head, choices: [{ index: 0, delta: { role: "assistant", content: "builder." } }] }));
+      res.write(frame({ ...head, choices: [{ index: 0, delta: { content: "setBlock(0,0,0)" } }] }));
+      res.write(
+        frame({
+          ...head,
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }),
       );
+      res.write("data: [DONE]\n\n");
+      res.end();
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -1101,6 +1115,30 @@ console.log("\n--- conversation persistence ---");
   }
 
   resetConversation(null);
+}
+
+// --- what a trace costs on disk ---------------------------------------------
+//
+// A generation's request carries the whole block-id list: 933 ids, 24 kB, the
+// same 24 kB every time, because it is a constant of the app rather than
+// anything about that turn. Ten conversations per schematic across a hundred
+// schematics is where that arithmetic ends up, so it is shown in full while the
+// turn is live and written down abridged.
+console.log("\n--- what a trace costs on disk ---");
+{
+  const long = "x".repeat(MAX_STORED_TRACE_TEXT * 3);
+  const [abridged, short] = abridgeTrace([
+    { id: 1, kind: "request", text: long },
+    { id: 2, kind: "tool", name: "fill_region", text: "filling", output: "{}" },
+  ]);
+
+  check("a long item is cut to the cap", abridged.text.length === MAX_STORED_TRACE_TEXT, String(abridged.text.length));
+  // Said out loud, never trailing off: a request silently cut in half reads as
+  // a request that really was that short.
+  check("...and says what it dropped", (abridged.elided ?? "").includes("more characters"), abridged.elided);
+  equal("a short one is untouched", short.text, "filling");
+  equal("...keeping everything else about it", [short.name, short.output], ["fill_region", "{}"]);
+  check("the original is not modified", long.length === MAX_STORED_TRACE_TEXT * 3);
 }
 
 // --- every declared channel is actually served ------------------------------

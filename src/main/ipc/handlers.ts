@@ -285,7 +285,11 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     const settle = (response: GenerateResponse): GenerateResponse => {
       if (req.viaChat !== true) return response;
       if (response.ok) {
-        appendEntry({ role: "agent", text: `Built ${response.name}.${response.exportType}.` });
+        appendEntry({
+          role: "agent",
+          text: `Built ${response.name}.${response.exportType}.`,
+          trace: response.trace,
+        });
       } else {
         // Stopping is not a failure — the user did it on purpose — so it reads
         // as a note, exactly as it does on the agent path. An error bubble
@@ -359,6 +363,10 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         outputDir: settings.outputDir,
         onProgress: (phase, fraction, message) =>
           emitProgress(window, { requestId: req.requestId, phase, fraction, message }),
+        requestId: req.requestId,
+        onTrace: (event) => {
+          if (window && !window.isDestroyed()) window.webContents.send(IPC.agentTrace, event);
+        },
         signal: controller.signal,
       });
       return settle({ ok: true, ...outcome });
@@ -758,6 +766,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         if (checkpoint !== null) stampCheckpoint(checkpoint);
 
         const result = await runAgent({
+          requestId: req.requestId,
           session,
           provider: settings.provider,
           model: settings.model,
@@ -780,6 +789,11 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
               });
             }
           },
+          onTrace: (event) => {
+            if (window && !window.isDestroyed()) {
+              window.webContents.send(IPC.agentTrace, event);
+            }
+          },
         });
         // Only now is the user's turn actually in the model's memory --
         // `runAgent` returns past everything that throws, which is what keeps a
@@ -799,6 +813,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           steps: [...result.steps],
           changed: result.changed,
           summary,
+          trace: result.trace,
           undoLabel: result.undoLabel,
           undoTransactionId: result.undoTransactionId,
         });

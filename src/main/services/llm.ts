@@ -28,7 +28,7 @@ import { readFile } from "fs/promises";
 import path from "path";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { generateText, type ModelMessage } from "ai";
+import { streamText, type ModelMessage } from "ai";
 
 import { PROVIDER_DEFAULT_BASE_URL, type Provider } from "../../shared/settings.js";
 
@@ -58,6 +58,17 @@ export interface LlmRequest {
    */
   acceptsImages?: boolean;
   signal?: AbortSignal;
+  /**
+   * The answer as it is written, rather than only once it is finished.
+   *
+   * Generation is one long call with nothing to show for it -- the model writes
+   * a whole build script before a byte of it is usable -- so this is what turns
+   * "sending the build spec to the model" followed by a wait into something a
+   * person can watch. Optional: the callers that display nothing pass nothing.
+   */
+  onDelta?: (text: string) => void;
+  /** The same for a thinking model's reasoning, which most models do not emit. */
+  onReasoning?: (text: string) => void;
 }
 
 const IMAGE_MIME: Readonly<Record<string, string>> = {
@@ -170,14 +181,28 @@ export async function callLlm(req: LlmRequest): Promise<string> {
 
   let text: string;
   try {
-    const result = await generateText({
+    /*
+     * Streamed rather than awaited whole, and the difference is only visible to
+     * a caller that passes `onDelta`. `result.text` resolves to the same string
+     * it always did -- what changes is that the caller can show it arriving
+     * instead of showing nothing for however long the model takes.
+     */
+    const result = streamText({
       model: resolveModel(req),
       instructions: req.systemPrompt,
       messages,
       temperature: 0.2, // component.py:100
       abortSignal: req.signal,
+      // The SDK's default here is `console.error`. Errors are raised below
+      // instead, where the caller can tell a stop from a failure.
+      onError: () => {},
     });
-    text = result.text;
+    for await (const part of result.fullStream) {
+      if (part.type === "text-delta") req.onDelta?.(part.text);
+      else if (part.type === "reasoning-delta") req.onReasoning?.(part.text);
+      else if (part.type === "error") throw part.error;
+    }
+    text = await result.text;
   } catch (err) {
     throw new LlmError(err instanceof Error ? err.message : String(err));
   }

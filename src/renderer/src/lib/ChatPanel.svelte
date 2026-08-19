@@ -16,21 +16,29 @@
    * part of the answer.
    */
   import type {
-    AgentStepEvent,
     ChatEntry,
     ConversationSummary,
     RegionSpec,
+    TraceItem,
   } from "../../../shared/ipc.js";
   import type { KeyStorageStatus, Settings } from "../../../shared/settings.js";
   import ChatComposer from "./ChatComposer.svelte";
   import ConversationPicker from "./ConversationPicker.svelte";
   import Markdown from "./Markdown.svelte";
+  import TraceView from "./TraceView.svelte";
   import { t, tn } from "./i18n.svelte.js";
 
   interface Props {
     entries: ChatEntry[];
     /** Tool calls for the turn in flight, cleared when it lands. */
-    live: AgentStepEvent[];
+    /**
+     * What the turn in flight is doing, as main reports it.
+     *
+     * The old live view was a list of tool summaries, which meant a model that
+     * thought for thirty seconds before its first tool call showed a pulsing
+     * dot and nothing else. This carries the thinking and the request too.
+     */
+    live: TraceItem[];
     selection: RegionSpec | null;
     /** Exchanges the agent is carrying into the next question. */
     remembered: number;
@@ -211,7 +219,16 @@
         <div class="body">
           <span class="who">{who(entry.role)}</span>
 
-          {#if entry.steps && entry.steps.length > 0}
+          <!--
+            The trace when there is one, and the old summary list when there is
+            not. Conversations written before traces existed still hold `steps`,
+            and dropping them would blank the history of anyone who had been
+            using the app -- which is why `CONVERSATION_FORMAT` did not have to
+            change for this.
+          -->
+          {#if entry.trace && entry.trace.length > 0}
+            <TraceView items={entry.trace} />
+          {:else if entry.steps && entry.steps.length > 0}
             <button
               class="tools"
               aria-expanded={expanded[index] === true}
@@ -303,11 +320,7 @@
         <div class="avatar pulse" aria-hidden="true">&#x2726;</div>
         <div class="body">
           <span class="who">{t("chat.ai")}</span>
-          <ul class="steps live">
-            {#each live as step, index (index)}
-              <li>{step.summary}</li>
-            {/each}
-          </ul>
+          <TraceView items={live} live />
         </div>
       </article>
     {/if}

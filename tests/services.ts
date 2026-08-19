@@ -806,6 +806,20 @@ console.log("\n--- settings coercion ---");
     toolWindowY: 96,
     inspectorWindowX: 300,
     inspectorWindowY: 480,
+    // Nine entries, none of them the default, so a `coerceUi` that quietly
+    // substituted the default hotbar would not survive the comparison.
+    hotbar: [
+      "minecraft:granite",
+      "minecraft:andesite",
+      "minecraft:diorite",
+      "minecraft:birch_planks",
+      "minecraft:glass_pane",
+      "minecraft:red_sand",
+      "minecraft:mossy_cobblestone",
+      "minecraft:sea_lantern",
+      "minecraft:water",
+    ],
+    hotbarSlot: 4,
   } satisfies UiSettings;
 
   equal("every ui field survives a round-trip", coerceUi(ui), ui);

@@ -15,8 +15,10 @@
  */
 
 import {
+  DEFAULT_HOTBAR,
   DEFAULT_SETTINGS,
   DEFAULT_UI_SETTINGS,
+  HOTBAR_SLOTS,
   LANGUAGES,
   PROVIDERS,
   SIDEBAR_WIDTH,
@@ -64,7 +66,29 @@ export function coerceUi(raw: unknown): UiSettings {
     toolWindowY: coordinate(source.toolWindowY, DEFAULT_UI_SETTINGS.toolWindowY),
     inspectorWindowX: coordinate(source.inspectorWindowX, DEFAULT_UI_SETTINGS.inspectorWindowX),
     inspectorWindowY: coordinate(source.inspectorWindowY, DEFAULT_UI_SETTINGS.inspectorWindowY),
+    hotbar: hotbar(source.hotbar),
+    // Wrapped rather than clamped, so a stored index from a build with a
+    // different slot count lands somewhere reachable instead of always on 0.
+    hotbarSlot: ((Math.trunc(Number(source.hotbarSlot)) || 0) % HOTBAR_SLOTS + HOTBAR_SLOTS) % HOTBAR_SLOTS,
   };
+}
+
+/**
+ * Exactly `HOTBAR_SLOTS` block ids, whatever was on disk.
+ *
+ * Padded and truncated rather than rejected: a hotbar is a convenience, and
+ * losing all nine because one entry was edited badly is a worse trade than
+ * quietly restoring the default in that slot. The length itself is not
+ * negotiable — the template indexes by slot, and the keys 1-9 have to land.
+ */
+function hotbar(raw: unknown): string[] {
+  const source = Array.isArray(raw) ? raw : [];
+  return Array.from({ length: HOTBAR_SLOTS }, (_unused, index) => {
+    const value = source[index];
+    return typeof value === "string" && value.trim() !== ""
+      ? value.trim()
+      : DEFAULT_HOTBAR[index];
+  });
 }
 
 function coordinate(raw: unknown, fallback: number): number {

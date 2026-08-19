@@ -125,6 +125,11 @@ export const en = {
   "doc.create": "Create",
   "doc.chooseLocation": "Choose location…",
 
+  // The creative hotbar. Right-click a slot to put the picker's current
+  // block in it, which is why the hint names both gestures.
+  "hotbar.label": "Hotbar",
+  "hotbar.slotHint": "Press {key} to hold this, right-click to replace it",
+
   "selection.legend": "Selection",
   "selection.size": "{width}×{height}×{length}",
   "selection.hint":

@@ -29,6 +29,7 @@
   type Ray,
 } from "./build_grid.js";
 import { dragFace, plateScale, type Axis, type Side } from "./selection_drag.js";
+import { isTyping } from "./typing.js";
   import * as THREE from "three";
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
   import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
@@ -217,22 +218,6 @@ import { dragFace, plateScale, type Axis, type Side } from "./selection_drag.js"
    * enough that it reads as a hint about the cursor rather than as a floor.
    */
   const GRID_RADIUS = 4;
-
-  /**
-   * Is this event coming out of somewhere the user is entering text?
-   *
-   * Single-key shortcuts here listen on `window`, which sees every keypress in
-   * the app including the ones meant for a text field. Without this the
-   * viewport's shortcuts fire while the user types in the sidebar.
-   */
-  function isTyping(target: EventTarget | null): boolean {
-    const element = target as HTMLElement | null;
-    if (!element || typeof element.tagName !== "string") {
-      return false;
-    }
-    const tag = element.tagName.toLowerCase();
-    return tag === "input" || tag === "textarea" || tag === "select" || element.isContentEditable;
-  }
 
   /**
    * A palette token as a three.js colour.

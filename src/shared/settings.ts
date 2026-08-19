@@ -174,7 +174,39 @@ export interface UiSettings {
    */
   inspectorWindowX: number;
   inspectorWindowY: number;
+  /**
+   * The nine blocks on the creative hotbar, and which one is held.
+   *
+   * Persisted because a hotbar you have to refill every launch is not a hotbar.
+   * Always exactly `HOTBAR_SLOTS` long after `coerceUi` — a short array would
+   * leave the template indexing past the end, and a long one would draw slots
+   * no key can reach.
+   */
+  hotbar: string[];
+  hotbarSlot: number;
 }
+
+/** Nine, because that is how many keys there are between 1 and 9. */
+export const HOTBAR_SLOTS = 9;
+
+/**
+ * What a fresh hotbar holds.
+ *
+ * Blocks that exist in every version this app supports, so the default is
+ * usable whichever era the document targets — no point starting someone on
+ * deepslate if they opened a 1.8.8 schematic.
+ */
+export const DEFAULT_HOTBAR: readonly string[] = [
+  "minecraft:stone",
+  "minecraft:cobblestone",
+  "minecraft:oak_planks",
+  "minecraft:oak_log",
+  "minecraft:glass",
+  "minecraft:sandstone",
+  "minecraft:bricks",
+  "minecraft:glowstone",
+  "minecraft:air",
+];
 
 /**
  * The upper bound is also enforced against the live window width at drag time
@@ -194,6 +226,8 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   // is tall, and two panels down the same edge leave the middle clear.
   inspectorWindowX: 16,
   inspectorWindowY: 320,
+  hotbar: [...DEFAULT_HOTBAR],
+  hotbarSlot: 0,
 };
 
 export interface Settings {

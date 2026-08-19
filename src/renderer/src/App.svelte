@@ -28,6 +28,7 @@
   import { api, bridgeAvailable, forIpc, bridgeMissingMessage } from "./lib/bridge.svelte.js";
   import { applyTraceEvent } from "./lib/trace.js";
   import SchematicDialog from "./lib/SchematicDialog.svelte";
+  import Hotbar from "./lib/Hotbar.svelte";
   import { versionNameOf } from "../../shared/mc_versions.js";
   import { t, tn, setLocale } from "./lib/i18n.svelte.js";
   import {
@@ -168,6 +169,17 @@
    */
   let activeBlock = $state("minecraft:stone");
 
+  /**
+   * In creative, what you are holding is the hotbar slot -- not the picker.
+   *
+   * Derived rather than kept in step by an effect: two writers to one variable
+   * is how the picker and the hotbar end up disagreeing about what is in your
+   * hand, and only one of them would be the one that places a block.
+   */
+  const placingBlock = $derived(
+    cameraMode === "fly" ? (settings.ui.hotbar[settings.ui.hotbarSlot] ?? activeBlock) : activeBlock,
+  );
+
   /** The registry, for the block pickers to search — fetched once at startup. */
   let blockRegistry = $state<string[]>([]);
 
@@ -205,7 +217,7 @@
   ): Promise<void> {
     if (busy) return;
     const block =
-      action === "break" ? { namespacedName: "minecraft:air" } : parseBlock(activeBlock);
+      action === "break" ? { namespacedName: "minecraft:air" } : parseBlock(placingBlock);
     await runDocument(action === "break" ? t("task.breakingBlock") : t("task.placingBlock"), () =>
       api().applyEdit({ kind: "setBlock", x: at.x, y: at.y, z: at.z, block }),
     );
@@ -2194,6 +2206,18 @@
       wireframe={settings.preview.wireframe}
       ambientOcclusion={settings.preview.ambientOcclusion}
       theme={resolvedTheme}
+    />
+
+    <!--
+      Only in creative. In orbit mode the block to place is the picker's, and
+      two controls claiming to say what is in your hand is one too many.
+    -->
+    <Hotbar
+      slots={settings.ui.hotbar}
+      active={settings.ui.hotbarSlot}
+      visible={docState !== null && cameraMode === "fly"}
+      onselect={(slot) => void patchUi({ hotbarSlot: slot })}
+      onedit={(slot) => void patchUi({ hotbar: settings.ui.hotbar.map((id, at) => (at === slot ? activeBlock : id)) })}
     />
     {#if bounds}
       <!-- component.py:465-469's caption, same two-decimal formatting. -->

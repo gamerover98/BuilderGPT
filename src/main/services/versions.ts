@@ -16,10 +16,11 @@
  * inventory filters what it shows. What is left here is the *shape* `core.ts`
  * and generation want — a flat `name -> number` map — derived from it.
  *
- * That derivation drops the legacy rows, and deliberately. They carry no
- * `DataVersion` because they write MCEdit, which has no such tag; a map from
- * name to number has nowhere to put "none", and a caller iterating it to build
- * a Sponge file must not be offered a version Sponge cannot express. The full
+ * That derivation drops the legacy rows, and deliberately. Most of them *do*
+ * have a `DataVersion` -- 1.12.2 is 1343 -- but a caller iterating this table is
+ * building a Sponge file, and Sponge cannot express a pre-Flattening version at
+ * all. Filtering on the number rather than on the era would let generation
+ * stamp 1343 onto a schematic whose palette is flattened block names. The full
  * list, both eras, is `MC_VERSION_NAMES`.
  *
  * The old note here said "range starts at 1.13" as though that were a property
@@ -38,13 +39,19 @@ export interface McVersion {
 }
 
 /**
- * Every version that has a `DataVersion`, as a flat map.
+ * Every version generation can target, as a flat map.
+ *
+ * Filtered by **era**, not by whether a `DataVersion` exists. Those are not the
+ * same set and the difference is the whole point: 1.12.2 has a perfectly real
+ * DataVersion of 1343, and generation writing that number into a Sponge file
+ * would produce a schematic claiming to be pre-Flattening while its palette
+ * holds flattened block names. Only 1.8.x has no number at all.
  *
  * Built rather than written out, so there is one list of versions in the app
  * and not two that can disagree.
  */
 const TABLE: Readonly<Record<string, number>> = Object.fromEntries(
-  MC_VERSIONS.filter((entry) => entry.dataVersion !== null).map((entry) => [
+  MC_VERSIONS.filter((entry) => entry.era === "flat" && entry.dataVersion !== null).map((entry) => [
     entry.name,
     entry.dataVersion as number,
   ]),
@@ -71,7 +78,8 @@ export function dataVersionFor(name: string): number {
     const known = mcVersion(name);
     if (known) {
       throw new Error(
-        `${known.label} predates the Flattening and carries no DataVersion; it can only be written as MCEdit.`,
+        `${known.label} predates the Flattening, so it cannot be written as a Sponge schematic; ` +
+          `use MCEdit (.schematic) for it.`,
       );
     }
     throw new Error(`unknown Minecraft version: ${name}`);

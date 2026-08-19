@@ -547,11 +547,15 @@ console.log("\n--- eras ---");
   equal("nothing is refused there", refusalFor("sponge3", "JE_1_20_4"), null);
 
   /*
-   * DataVersion is a Sponge tag, and the legacy era does not write Sponge. So
-   * `null` there is the answer rather than a gap -- `writers.ts` omits the tag
-   * on null, which is exactly what an MCEdit file wants.
+   * A legacy version has a perfectly real DataVersion -- what it does not have
+   * is a container that can carry one, because Sponge is refused for it. That
+   * distinction is why the generator's table filters on era and not on whether
+   * the number exists: filtering on the number would let 1343 be stamped onto a
+   * schematic whose palette is flattened block names.
    */
-  equal("a legacy version carries no DataVersion", dataVersionOf("JE_1_12_2"), null);
+  equal("a legacy version still has a DataVersion", dataVersionOf("JE_1_12_2"), 1343);
+  // 1.8.x is the one era with no number at all: the tag began in 15w32a.
+  equal("...but 1.8.8 predates the tag entirely", dataVersionOf("JE_1_8_8"), null);
   equal("a flat one does", dataVersionOf("JE_1_20_4"), 3700);
   equal("...and the mapping goes back the other way", versionNameOf(3700), "JE_1_20_4");
   equal("a DataVersion nothing claims maps to nothing", versionNameOf(999999), null);
@@ -576,13 +580,16 @@ console.log("\n--- eras ---");
     MC_VERSION_NAMES.length > VERSION_NAMES.length,
     `${MC_VERSION_NAMES.length} vs ${VERSION_NAMES.length}`,
   );
-  // One list, derived: two hand-written tables would be two things to keep in
-  // step, and they would not stay in step.
-  check(
-    "every version with a DataVersion is in the generator's table",
-    MC_VERSION_NAMES.filter((name) => dataVersionOf(name) !== null).every((name) =>
-      VERSION_NAMES.includes(name),
-    ),
+  /*
+   * One list, derived: two hand-written tables would be two things to keep in
+   * step, and they would not stay in step. The generator's table is exactly the
+   * flat rows -- not "everything with a number", which is the mistake this
+   * check exists to catch, and did.
+   */
+  equal(
+    "the generator's table is exactly the flat era",
+    [...VERSION_NAMES].sort(),
+    MC_VERSION_NAMES.filter((name) => eraOf(name) === "flat").sort(),
   );
 }
 

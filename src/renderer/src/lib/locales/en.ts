@@ -160,6 +160,8 @@ export const en = {
   "chat.placeholder": "Replace the cobblestone with stone…",
   "chat.send": "Send",
   "chat.stop": "Stop",
+  "chat.copyCode": "Copy",
+  "chat.copied": "Copied",
   "chat.stopHint": "Stop this request; nothing will be changed",
   "chat.newChat": "New chat",
   "chat.newChatHint": "Forget what has been said so far and start over",

@@ -35,6 +35,7 @@
   import type { AgentStepEvent, RegionSpec } from "../../../shared/ipc.js";
   import type { KeyStorageStatus, Settings } from "../../../shared/settings.js";
   import ChatComposer from "./ChatComposer.svelte";
+  import Markdown from "./Markdown.svelte";
   import { t, tn } from "./i18n.svelte.js";
 
   interface Props {
@@ -182,7 +183,17 @@
             {/if}
           {/if}
 
-          <p class="text">{entry.text}</p>
+          <!--
+            Only the agent's turns are markdown. What the user typed is shown
+            back exactly as typed -- their asterisks and their
+            `minecraft:oak_log` survive -- and an error message is main's own
+            wording, which arrives already phrased and is not ours to reformat.
+          -->
+          {#if entry.role === "agent"}
+            <Markdown source={entry.text} />
+          {:else}
+            <p class="text">{entry.text}</p>
+          {/if}
 
           {#if entry.summary && entry.summary.changed > 0}
             <div class="receipt">

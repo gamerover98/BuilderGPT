@@ -160,8 +160,12 @@ It cannot be loaded in Electron at all: it links against `v8_inspector::*` and
 not assumed. QuickJS-on-WASM also happens to match the engine the original
 Python used.
 
-**The project has zero native dependencies.** No `electron-rebuild`, no
-`asarUnpack`, no per-platform build toolchain — one asar works everywhere. Any
+**The project has zero *native* dependencies** -- the qualifier now matters.
+The renderer bundles `marked` and `dompurify` (and `jsdom` for the tests), all
+pure JS and all devDependencies, because the renderer is bundled by vite exactly
+like `three` is; none of them reach the asar's `node_modules`. What the original
+claim was protecting is intact — no `electron-rebuild`, no
+`asarUnpack`, no per-platform build toolchain, one asar works everywhere. Any
 new dependency with a `.node` binding gives that up; weigh it accordingly.
 
 **`tests/sandbox.ts` guards the sandbox contract** — no ambient authority in the
@@ -257,6 +261,39 @@ never moves. The same gesture also has to suppress the click-to-select path on
 `pointerup`: a press that lands on a handle and does not move is still a press,
 and the 4px tolerance does not help, so it would collapse the selection the
 user was about to resize.
+
+**The chat's markdown goes `sanitize(parse(source))`, in that order, and only
+for `agent` turns.** `Markdown.svelte` is the only `{@html}` in the app, and
+everything reaching it comes through `toSafeHtml`. The policy — allowlisted tags
+and attributes, `http`/`https` links only, images rewritten to links because
+`img-src` would block them anyway — lives in `markdown_policy.ts`, apart from the
+machinery, because with a library instead of a hand-written parser the
+*configuration* is the whole defence. `user`, `error` and `note` turns stay
+literal: an error is main's own wording, and echoing someone's typing back with
+the asterisks eaten is a small betrayal in an app where people type
+`minecraft:oak_log` all day.
+
+Three specifics, each of which cost something to learn:
+
+- **Do not set `ALLOWED_URI_REGEXP`.** DOMPurify tests it against *every*
+  attribute value, not just the ones holding a URL, so `/^https?:\/\//` quietly
+  deleted `align="right"` from every GFM table cell. Its default expression
+  already refuses `javascript:` while letting scheme-less values through. The
+  http/https rule is enforced instead by `hardenLink` from
+  `afterSanitizeAttributes`, and that is sufficient because `href` is the only
+  URI-bearing attribute in `ALLOWED_ATTR`.
+- **`style` must stay out of `ALLOWED_ATTR`.** The CSP is
+  `style-src 'self' 'unsafe-inline'`, so unlike a script an injected inline
+  style really does apply, and can cover the window.
+- **`addHook` appends.** Registering the link hook per message stacks a fresh
+  copy every turn, so `markdown.ts` keeps a `WeakSet` of purifiers it has
+  already hooked.
+
+`tests/ui.ts` runs the real DOMPurify against `tests/markdown_cases.ts` through
+**jsdom, a devDependency** — checking the config object would only prove the
+allowlist is the one that was intended, not that it holds. The `mailto:`/`tel:`
+cases are load-bearing: DOMPurify's own default permits both, so without them
+`hardenLink` could be deleted and nothing would fail.
 
 **A popover is positioned against the window, not against its control.**
 Everything from `.controls` down is `overflow: hidden`, and the controls that

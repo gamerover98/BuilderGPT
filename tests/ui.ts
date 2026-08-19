@@ -28,6 +28,12 @@ import {
   plateScale,
   type Ray,
 } from "../src/renderer/src/lib/selection_drag.js";
+import createDOMPurify from "dompurify";
+import { JSDOM } from "jsdom";
+
+import { toSafeHtml } from "../src/renderer/src/lib/markdown.js";
+import { isSafeHref } from "../src/renderer/src/lib/markdown_policy.js";
+import { HOSTILE_CASES } from "./markdown_cases.js";
 import { missingKeys, translate, translatePlural } from "../src/renderer/src/lib/i18n_core.js";
 import { openedAge } from "../src/renderer/src/lib/recent_age.js";
 import { en } from "../src/renderer/src/lib/locales/en.js";
@@ -37,11 +43,20 @@ const RENDERER = path.join(here, "..", "src", "renderer", "src");
 
 let failures = 0;
 
-function check(label: string, condition: boolean): void {
+/**
+ * `detail` is printed only on failure, and only when there is something to say.
+ *
+ * It exists because this file is *not* typechecked -- `tsconfig.node.json`
+ * covers `src/**` and not `tests/**` -- so an extra argument passed to a
+ * two-parameter function is silently dropped rather than refused. Which is
+ * exactly what had been happening here.
+ */
+function check(label: string, condition: boolean, detail?: string): void {
   if (condition) {
     console.log(`  PASS: ${label}`);
   } else {
     console.log(`  FAIL: ${label}`);
+    if (detail !== undefined && detail !== "") console.log(`         ${detail}`);
     failures += 1;
   }
 }
@@ -261,6 +276,123 @@ console.log("\n--- floating panel bounds ---");
     x: 10,
     y: 11,
   });
+}
+
+// --- the chat's markdown, and what it must not let through -----------------
+console.log("\n--- markdown rendering ---");
+{
+  /*
+   * The real sanitiser, against a real DOM. Checking the configuration object
+   * would only prove I wrote the allowlist I meant to write -- not that the
+   * allowlist holds. jsdom is a devDependency for exactly this: it never
+   * reaches the bundle, and without it this whole block would be a table
+   * inspecting itself.
+   */
+  const window = new JSDOM("").window;
+  const purify = createDOMPurify(window as unknown as Window & typeof globalThis);
+  const render = (source: string): string => toSafeHtml(source, purify);
+
+  // The thing the user actually reported.
+  {
+    const html = render("| Block | Count |\n|:------|------:|\n| stone | 12 |");
+    check("a pipe table becomes a table", html.includes("<table"), html);
+    check("...with a header row", html.includes("<th"), html);
+    check("...and the alignment survives", html.includes('align="right"'), html);
+  }
+
+  equal(
+    "a fenced block keeps its text verbatim",
+    render("```\na | b\n```").includes("a | b"),
+    true,
+  );
+  check("...inside a pre", render("```js\nlet x = 1;\n```").includes("<pre"));
+  check("a nested list nests", render("- a\n  - b").split("<ul").length - 1 === 2);
+  check("a heading is a heading", render("## Title").includes("<h2"));
+  check("bold is bold", render("**yes**").includes("<strong>"));
+
+  /*
+   * Block ids are full of underscores, and this app says `minecraft:oak_log`
+   * more than it says anything else. GFM only opens emphasis at a word
+   * boundary, so this holds -- but it is the single most likely thing to break
+   * on a parser change, and it would break quietly, as missing text.
+   */
+  {
+    const html = render("place minecraft:oak_log and quartz_block_top here");
+    check("intra-word underscores are not emphasis", !html.includes("<em>"), html);
+    check("...and the id survives whole", html.includes("minecraft:oak_log"), html);
+  }
+
+  // A link that is fine gets sent to the system browser, not followed in-app.
+  {
+    const html = render("[docs](https://example.com/x)");
+    check("a good link keeps its href", html.includes('href="https://example.com/x"'), html);
+    check("...opens outside the app", html.includes('target="_blank"'), html);
+    check("...and cannot reach back through window.opener", html.includes("noopener"), html);
+  }
+
+  // The hook is added per purifier, not per message: DOMPurify *appends*
+  // hooks, so re-registering would stack a duplicate on every single turn.
+  {
+    const before = render("[a](https://example.com)");
+    for (let i = 0; i < 5; i += 1) render("[a](https://example.com)");
+    equal("rendering repeatedly does not change the output", render("[a](https://example.com)"), before);
+    equal(
+      "...and the rel is written once",
+      (render("[a](https://example.com)").match(/noopener/g) ?? []).length,
+      1,
+    );
+  }
+
+  // An image cannot load under this CSP, so it becomes something readable
+  // rather than a broken icon or -- worse -- nothing at all.
+  {
+    const html = render("![a diagram](https://example.com/x.png)");
+    check("an image becomes a link", html.includes("<a "), html);
+    check("...and keeps its alt text", html.includes("a diagram"), html);
+    check("...with no img tag left", !html.includes("<img"), html);
+  }
+
+  // The list itself.
+  for (const hostile of HOSTILE_CASES) {
+    const html = render(hostile.source).toLowerCase();
+    const leaked = hostile.mustNotContain.filter((needle) => html.includes(needle.toLowerCase()));
+    check(`${hostile.name} is neutralised`, leaked.length === 0, `leaked ${JSON.stringify(leaked)} in ${html}`);
+
+    const lost = (hostile.mustContain ?? []).filter(
+      (needle) => !html.includes(needle.toLowerCase()),
+    );
+    if ((hostile.mustContain ?? []).length > 0) {
+      check(`...without losing the text`, lost.length === 0, `lost ${JSON.stringify(lost)} in ${html}`);
+    }
+  }
+}
+
+// --- which hrefs may survive ----------------------------------------------
+console.log("\n--- link schemes ---");
+{
+  check("https is fine", isSafeHref("https://example.com"));
+  check("http is fine", isSafeHref("http://example.com"));
+  check("...case does not matter", isSafeHref("HTTPS://EXAMPLE.COM"));
+
+  check("javascript is not", !isSafeHref("javascript:alert(1)"));
+  check("data is not", !isSafeHref("data:text/html,<script>alert(1)</script>"));
+  check("a bare mailto is not", !isSafeHref("mailto:someone@example.com"));
+  check("a relative path is not", !isSafeHref("/etc/passwd"));
+  check("an empty href is not", !isSafeHref(""));
+
+  /*
+   * The reason this function strips before it tests. A browser ignores ASCII
+   * control characters and whitespace while parsing a URL, so every one of
+   * these navigates -- and every one of them fails a naive `startsWith`.
+   */
+  check("a scheme split by a tab is still javascript", !isSafeHref("java\tscript:alert(1)"));
+  check("...by a newline too", !isSafeHref("java\nscript:alert(1)"));
+  check("...and leading whitespace does not launder it", !isSafeHref("  javascript:alert(1)"));
+  check("...nor a leading NUL", !isSafeHref(" javascript:alert(1)"));
+
+  // The other half of that: stripping must not eat the good ones.
+  check("a real URL survives the stripping", isSafeHref(" https://example.com "));
+  check("...including its own path and query", isSafeHref("https://example.com/a b?c=d"));
 }
 
 // --- putting a popover somewhere it can be seen ---------------------------

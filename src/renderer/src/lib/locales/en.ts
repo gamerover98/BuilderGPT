@@ -30,6 +30,7 @@ export const en = {
   "common.reset": "Reset",
   "common.save": "Save",
   "common.close": "Close",
+  "common.cancel": "Cancel",
 
   "settings.title": "Settings",
   "settings.openShortcut": "Settings (Ctrl+,)",
@@ -82,6 +83,7 @@ export const en = {
 
   "doc.legend": "Schematic",
   "doc.empty": "Nothing open. Open a .schem or .schematic file to edit it.",
+  "doc.new": "New…",
   "doc.open": "Open…",
   "doc.save": "Save",
   "doc.saveAs": "Save as…",
@@ -102,6 +104,26 @@ export const en = {
   "doc.materials": "Materials",
   "doc.useAsBlock": "Make {block} the current block",
   "doc.moreMaterials": "…and {count} more",
+
+  // The New / Save As dialog. `doc.version` comes before `doc.format` on
+  // screen for the reason the component explains: the version decides which
+  // containers exist, not the other way round.
+  "doc.newTitle": "New schematic",
+  "doc.saveAsTitle": "Save as",
+  "doc.size": "Size",
+  "doc.width": "Width (x)",
+  "doc.height": "Height (y)",
+  "doc.length": "Length (z)",
+  "doc.volume": "{count} blocks",
+  "doc.savingSize": "Saving {size} as it stands. Empty space around the build is trimmed on the way out.",
+  "doc.version": "Minecraft",
+  "doc.format": "Container",
+  "doc.legacyEra": "legacy",
+  "doc.legacyNote":
+    "Before 1.13 blocks were numeric ids rather than names, so MCEdit is the only container that fits.",
+  "doc.willBeNamed": "Suggested name: {name}",
+  "doc.create": "Create",
+  "doc.chooseLocation": "Choose location…",
 
   "selection.legend": "Selection",
   "selection.size": "{width}×{height}×{length}",
@@ -306,6 +328,8 @@ export const en = {
   "group.view": "View",
   "group.ai": "AI",
 
+  "command.new": "New schematic…",
+  "command.new.keywords": "create blank empty start",
   "command.open": "Open schematic…",
   "command.open.keywords": "load import schem",
   "command.openRecent": "Open {name}",
@@ -366,6 +390,7 @@ export const en = {
   "task.openingPicker": "Opening the file chooser",
   "task.opening": "Opening the schematic",
   "task.saving": "Saving the schematic",
+  "task.creating": "Creating the schematic",
   "task.choosingSaveLocation": "Choosing where to save",
   "task.generating": "Generating the structure",
   "task.recovering": "Recovering unsaved work",
@@ -380,6 +405,7 @@ export const en = {
   "status.nothingMatched": "No blocks matched, so nothing changed.",
   "status.restored.one": "Went back 1 edit. The conversation before it was kept.",
   "status.restored.other": "Went back {count} edits. The conversation before it was kept.",
+  "status.created": "New schematic created.",
   "status.saved": "Saved {name}",
   "status.cropped": "Trimmed to fit the build: {from} → {to}",
   "status.degraded":

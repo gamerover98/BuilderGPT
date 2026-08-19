@@ -193,6 +193,7 @@ export function documentState(session: DocumentSession): DocumentState {
     filePath: doc.filePath,
     fileName: doc.filePath === null ? null : path.basename(doc.filePath),
     format: doc.format,
+    dataVersion: doc.dataVersion,
     size: [doc.width, doc.height, doc.length],
     offset: [...doc.offset] as [number, number, number],
     blockCount: countBlocks(doc),
@@ -508,6 +509,14 @@ export interface SaveOptions {
   /** Omitted means "save over the file it came from". */
   filePath?: string | null;
   format?: SchematicFormat;
+  /**
+   * The Minecraft version to stamp, as a `DataVersion`.
+   *
+   * Omitted keeps what the document carries; `null` writes no tag at all, which
+   * is what a pre-Flattening container wants and is a different instruction
+   * from "leave it alone".
+   */
+  dataVersion?: number | null;
   legacyBlocksPath?: string | null;
 }
 
@@ -523,6 +532,14 @@ export async function saveSession(
   options: SaveOptions = {},
 ): Promise<WriteResult & { filePath: string; cropped: CropSummary | null }> {
   const format = options.format ?? session.doc.format;
+  /*
+   * `undefined` keeps what the document carries; `null` is a real choice and
+   * means "write no version tag", which is what a pre-Flattening container
+   * wants. Conflating the two would make it impossible to ask for either.
+   */
+  if (options.dataVersion !== undefined) {
+    session.doc.dataVersion = options.dataVersion;
+  }
   let target = options.filePath ?? session.doc.filePath;
   if (!target) {
     throw new NoSaveTargetError();
@@ -545,6 +562,10 @@ export async function saveSession(
   const cropped = cropToContent(session.doc);
   const result = await saveDocument(cropped?.doc ?? session.doc, target, {
     format,
+    // Named rather than left to the copy: `cropToContent` builds a new document
+    // and the version has to survive the trip, which is the sort of thing that
+    // works until someone adds a field to the crop and forgets this one.
+    dataVersion: session.doc.dataVersion,
     legacyBlocksPath: options.legacyBlocksPath ?? null,
   });
 

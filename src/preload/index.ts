@@ -73,7 +73,7 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docOpen, filePath) as Promise<DocumentStateResponse>,
   listRecentDocuments: () =>
     ipcRenderer.invoke(IPC.docRecentList) as Promise<RecentDocument[]>,
-  newDocument: (size) => ipcRenderer.invoke(IPC.docNew, size) as Promise<DocumentStateResponse>,
+  newDocument: (req) => ipcRenderer.invoke(IPC.docNew, req) as Promise<DocumentStateResponse>,
   closeDocument: () => ipcRenderer.invoke(IPC.docClose) as Promise<void>,
   getDocumentState: () => ipcRenderer.invoke(IPC.docState) as Promise<DocumentStateResponse>,
   getDocumentMesh: (settings) =>

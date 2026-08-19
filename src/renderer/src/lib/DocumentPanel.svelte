@@ -16,6 +16,7 @@
    */
   import type { DocumentState, RecentDocument } from "../../../shared/ipc.js";
   import { SCHEMATIC_FORMAT_LABEL, type SchematicFormat } from "../../../shared/schematic.js";
+  import { mcVersion, versionNameOf } from "../../../shared/mc_versions.js";
   import { t } from "./i18n.svelte.js";
   import { ageLabel } from "./age_label.js";
 
@@ -32,7 +33,8 @@
      * clicking a material.
      */
     onblockchange: (block: string) => void;
-    onopen: () => void;
+    onnew: () => void;
+  onopen: () => void;
     onsave: (format?: SchematicFormat) => void;
     onsaveas: () => void;
     onundo: () => void;
@@ -45,6 +47,7 @@
     recent,
     onopenrecent,
     onblockchange,
+    onnew,
     onopen,
     onsave,
     onsaveas,
@@ -83,6 +86,17 @@
    * differently.
    */
   const openedLabel = ageLabel;
+
+  /**
+   * The Minecraft version the file will be stamped with, if it carries one.
+   *
+   * Nothing rather than a guess when the tag is absent or unrecognised: an
+   * MCEdit file legitimately has none, and inventing a plausible version for it
+   * would be worse than saying nothing.
+   */
+  const versionLabel = $derived(
+    doc === null ? null : (mcVersion(versionNameOf(doc.dataVersion) ?? "")?.label ?? null),
+  );
 </script>
 
 <fieldset>
@@ -91,7 +105,8 @@
   {#if doc === null}
     <p class="hint">{t("doc.empty")}</p>
     <div class="buttons">
-      <button class="primary" onclick={onopen} disabled={busy}>{t("doc.open")}</button>
+      <button class="primary" onclick={onnew} disabled={busy}>{t("doc.new")}</button>
+      <button onclick={onopen} disabled={busy}>{t("doc.open")}</button>
     </div>
     {#if reopenable.length > 0}
       <div class="field">
@@ -118,7 +133,10 @@
       <strong title={doc.filePath ?? t("doc.notSaved")}>
         {doc.fileName ?? t("doc.untitled")}{doc.dirty ? " •" : ""}
       </strong>
-      <span class="hint">{SCHEMATIC_FORMAT_LABEL[doc.format]}</span>
+      <span class="hint">
+        {SCHEMATIC_FORMAT_LABEL[doc.format]}
+        {#if versionLabel}· {versionLabel}{/if}
+      </span>
     </div>
     <p class="hint">
       {t(doc.dirty ? "doc.summaryDirty" : "doc.summary", {
@@ -130,6 +148,7 @@
     </p>
 
     <div class="buttons">
+      <button onclick={onnew} disabled={busy}>{t("doc.new")}</button>
       <button onclick={onopen} disabled={busy}>{t("doc.open")}</button>
       <button onclick={() => onsave()} disabled={busy || !doc.dirty}>{t("doc.save")}</button>
       <button onclick={onsaveas} disabled={busy}>{t("doc.saveAs")}</button>

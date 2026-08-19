@@ -207,11 +207,32 @@ export function openCodeModelRequiresKey(model: OpenCodeModelInfo | undefined): 
 export interface PickFileRequest {
   /**
    * The first three mirror the `st.file_uploader` call sites in component.py.
-   * `directory` is new -- it opens a folder chooser rather than a file one --
-   * and rides this channel instead of a new one because the response shape is
-   * identical and the preload signature does not have to change.
+   * `directory` opens a folder chooser rather than a file one, and
+   * `save-schematic` is the only one that goes to `showSaveDialog` — every
+   * other kind is asking which existing thing to open.
+   *
+   * They all ride one channel because the response shape is identical. That was
+   * true of `directory` and it stays true here: a path or nothing.
    */
-  kind: "image" | "resource-pack" | "schem" | "directory";
+  kind: "image" | "resource-pack" | "schem" | "directory" | "save-schematic";
+  /**
+   * `save-schematic` only: where the dialog opens, and what it suggests.
+   *
+   * Save As on an open file should offer that file's own folder and name, not
+   * whatever the OS last remembered — the alternative is a Save As that
+   * defaults to somewhere the user has never been.
+   */
+  defaultPath?: string | null;
+  /**
+   * `save-schematic` only: which container, so the filter and the suggested
+   * extension match what is about to be written.
+   *
+   * Needed because the format cannot be recovered from the path: `.schem` is
+   * both Sponge v2 and v3, and Electron's save dialog reports the chosen path
+   * but not which filter produced it. So the format is decided *before* the
+   * dialog opens, and this makes the dialog agree with it.
+   */
+  format?: SchematicFormat;
 }
 
 export interface PickFileResponse {
@@ -403,6 +424,16 @@ export interface DocumentState {
    * shows, and the id is what anything holding a reference compares against.
    */
   undoTransactionId: number | null;
+  /**
+   * The Minecraft `DataVersion` this document will be written with, or `null`
+   * when it carries none.
+   *
+   * On the state rather than left in main because the UI has to show it: until
+   * now the version in Settings steered generation only, so a document edited by
+   * hand went to disk with whatever tag it happened to arrive with, and nothing
+   * anywhere said which.
+   */
+  dataVersion: number | null;
   /** Monotonic; the renderer uses it to tell whether its mesh is stale. */
   revision: number;
 }
@@ -496,10 +527,44 @@ export interface EditSuccess {
   state: DocumentState;
 }
 
+/** What a brand-new schematic should be. */
+export interface NewDocumentRequest {
+  width: number;
+  height: number;
+  length: number;
+  /**
+   * The container it will be saved as, and the version tag it will carry.
+   *
+   * Chosen up front rather than at save time because the two are not
+   * independent: an MCEdit file cannot hold a flattened palette, so the format
+   * decides which versions are even offered. Deciding at save time would let
+   * someone build for 1.8.8 and then discover the container they picked cannot
+   * represent it.
+   */
+  format: SchematicFormat;
+  /**
+   * The Minecraft version to build for, by name (`JE_1_20_4`).
+   *
+   * By name and not as a `DataVersion` integer, because the name is what the
+   * era rule is written against and main is the one that has to *enforce* it —
+   * a number cannot be checked against a container, since `null` is both "no
+   * tag" and "pre-Flattening" and only one of those refuses Sponge.
+   */
+  version: string;
+}
+
 export interface SaveRequest {
   /** Omitted means "over the file it came from"; required for Save As. */
   filePath?: string | null;
   format?: SchematicFormat;
+  /**
+   * The Minecraft version to stamp on the file, by name (`JE_1_20_4`).
+   *
+   * Omitted keeps whatever the document already carries, which is what a plain
+   * Save wants. Named rather than sent as a `DataVersion` so that main can
+   * refuse a container the version cannot live in — see `NewDocumentRequest`.
+   */
+  version?: string;
 }
 
 export interface SaveSuccess {
@@ -821,7 +886,7 @@ export interface BgptApi {
    * of `Settings`, so saving settings cannot overwrite it with a stale copy.
    */
   listRecentDocuments(): Promise<RecentDocument[]>;
-  newDocument(size: { width: number; height: number; length: number }): Promise<DocumentStateResponse>;
+  newDocument(req: NewDocumentRequest): Promise<DocumentStateResponse>;
   closeDocument(): Promise<void>;
   getDocumentState(): Promise<DocumentStateResponse>;
   getDocumentMesh(settings: PreviewSettings): Promise<DocumentMeshResponse>;

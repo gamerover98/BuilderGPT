@@ -10,6 +10,14 @@
 
 export type SchematicFormat = "sponge2" | "sponge3" | "mcedit";
 
+/**
+ * Every container the app can write, best first.
+ *
+ * Ordered rather than a set: a format picker that has to sort its own options
+ * is a picker whose order can drift from this file's.
+ */
+export const SCHEMATIC_FORMATS: readonly SchematicFormat[] = ["sponge3", "sponge2", "mcedit"];
+
 /** How each container is described to a human. */
 export const SCHEMATIC_FORMAT_LABEL: Readonly<Record<SchematicFormat, string>> = {
   sponge2: "Sponge v2 (.schem)",

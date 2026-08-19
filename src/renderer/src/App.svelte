@@ -27,6 +27,8 @@
   import Viewer, { type CameraMode, type PickedBlock } from "./lib/Viewer.svelte";
   import { api, bridgeAvailable, forIpc, bridgeMissingMessage } from "./lib/bridge.svelte.js";
   import { applyTraceEvent } from "./lib/trace.js";
+  import SchematicDialog from "./lib/SchematicDialog.svelte";
+  import { versionNameOf } from "../../shared/mc_versions.js";
   import { t, tn, setLocale } from "./lib/i18n.svelte.js";
   import {
     openCodeModelRequiresKey,
@@ -73,6 +75,14 @@
   let sidebarCollapsed = $state(DEFAULT_UI_SETTINGS.sidebarCollapsed);
   let keyStatus = $state<KeyStorageStatus | null>(null);
   let versions = $state<string[]>([]);
+
+  /**
+   * Which of New / Save As is asking, or nothing.
+   *
+   * One dialog for both, because they ask the same three questions. The mode
+   * only decides whether the size is a field or a fact -- see the component.
+   */
+  let schematicDialog = $state<"new" | "save-as" | null>(null);
   let artifacts = $state<Artifact[]>([]);
   /** What an empty `settings.outputDir` resolves to, shown as the placeholder. */
   let defaultOutputDir = $state("");
@@ -657,6 +667,14 @@
    * buttons out.
    */
   const commands = $derived<Command[]>([
+    {
+      id: "new",
+      title: t("command.new"),
+      group: t("group.file"),
+      keywords: t("command.new.keywords"),
+      enabled: !busy,
+      run: () => (schematicDialog = "new"),
+    },
     {
       id: "open",
       title: t("command.open"),
@@ -1433,10 +1451,24 @@
     }
   }
 
-  async function saveDocument(format?: SchematicFormat, filePath?: string): Promise<void> {
+  async function saveDocument(
+    format?: SchematicFormat,
+    filePath?: string,
+    /*
+     * Omitted means "leave whatever the document carries", which is what a plain
+     * Save wants; naming a version stamps it, and main refuses the pairs that
+     * cannot work. Sending one unconditionally would rewrite the version of
+     * every file the app saved over.
+     */
+    version?: string,
+  ): Promise<void> {
     busy = true;
     try {
-      const response = await api().saveDocument({ filePath: filePath ?? null, format });
+      const response = await api().saveDocument({
+        filePath: filePath ?? null,
+        format,
+        ...(version === undefined ? {} : { version }),
+      });
       if (!response.ok) {
         status = { tone: "error", text: response.message };
         return;
@@ -1469,17 +1501,86 @@
     }
   }
 
-  async function saveDocumentAs(): Promise<void> {
+  /**
+   * Creates a schematic, or saves one under a new name.
+   *
+   * Both arrive here from the same dialog, and the split is at the end rather
+   * than the start: everything up to "what should it be" is one question.
+   */
+  async function confirmSchematicDialog(choice: {
+    width: number;
+    height: number;
+    length: number;
+    format: SchematicFormat;
+    version: string;
+  }): Promise<void> {
+    const mode = schematicDialog;
+    schematicDialog = null;
+    if (mode === null) return;
+
+    if (mode === "new") {
+      busy = true;
+      try {
+        const response = await api().newDocument({
+          width: choice.width,
+          height: choice.height,
+          length: choice.length,
+          format: choice.format,
+          version: choice.version,
+        });
+        if (!response.ok) {
+          status = { tone: "error", text: response.message };
+          return;
+        }
+        docState = response.state;
+        chat = [];
+        liveTrace = [];
+        selection = null;
+        anchor = null;
+        inspection = null;
+        await refreshDocument();
+        await refreshConversations();
+        status = { tone: "ok", text: t("status.created") };
+      } catch (err) {
+        failed(err, t("task.creating"));
+      } finally {
+        busy = false;
+      }
+      return;
+    }
+
+    /*
+     * The OS dialog comes *after* the format is settled, and cannot be asked to
+     * settle it: `.schem` is both Sponge v2 and v3, and Electron reports the
+     * path the user chose but not which filter produced it.
+     */
     let picked: Awaited<ReturnType<ReturnType<typeof api>["pickFile"]>>;
     try {
-      picked = await api().pickFile({ kind: "directory" });
+      picked = await api().pickFile({
+        kind: "save-schematic",
+        format: choice.format,
+        defaultPath: suggestedSavePath(choice.format),
+      });
     } catch (err) {
       failed(err, t("task.choosingSaveLocation"));
       return;
     }
-    if (!picked.path || !docState) return;
-    const name = docState.fileName ?? "untitled.schem";
-    await saveDocument(docState.format, `${picked.path}/${name}`);
+    if (!picked.path) return;
+    await saveDocument(choice.format, picked.path, choice.version);
+  }
+
+  /** Where Save As opens: this file's own folder and name, or a plain default. */
+  function suggestedSavePath(format: SchematicFormat): string {
+    const extension = format === "mcedit" ? "schematic" : "schem";
+    const current = docState?.filePath;
+    if (current === null || current === undefined) return `untitled.${extension}`;
+    const cut = current.length - (current.split(/[\\/]/).pop() ?? "").length;
+    const stem = (current.split(/[\\/]/).pop() ?? "").replace(/\.[^.]*$/, "");
+    return `${current.slice(0, cut)}${stem}.${extension}`;
+  }
+
+  function saveDocumentAs(): void {
+    schematicDialog = "save-as";
   }
 
   /**
@@ -1636,6 +1737,21 @@
 
 <CommandPalette open={paletteOpen} {commands} onclose={() => (paletteOpen = false)} />
 
+<SchematicDialog
+  open={schematicDialog !== null}
+  mode={schematicDialog ?? "new"}
+  initial={{
+    width: docState?.size[0] ?? 16,
+    height: docState?.size[1] ?? 16,
+    length: docState?.size[2] ?? 16,
+    format: docState?.format ?? "sponge3",
+    version: versionNameOf(docState?.dataVersion ?? null) ?? settings.version,
+  }}
+  suggestedName={(docState?.fileName ?? "untitled").replace(/\.[^.]*$/, "")}
+  onclose={() => (schematicDialog = null)}
+  onconfirm={(choice) => void confirmSchematicDialog(choice)}
+/>
+
 <SettingsModal
   open={settingsOpen}
   {settings}
@@ -1751,6 +1867,7 @@
           recent={recentDocuments}
           onopenrecent={openDocumentAt}
           onblockchange={(next) => (activeBlock = next)}
+          onnew={() => (schematicDialog = "new")}
           onopen={openDocument}
           onsave={(format) => saveDocument(format)}
           onsaveas={saveDocumentAs}

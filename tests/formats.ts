@@ -38,6 +38,16 @@ import {
   UnrepresentableBlocksError,
 } from "../src/main/services/writers.js";
 import { dataVersionFor } from "../src/main/services/versions.js";
+import { dataVersionFor as _unusedDataVersionFor, VERSION_NAMES } from "../src/main/services/versions.js";
+import {
+  dataVersionOf,
+  eraOf,
+  formatsFor,
+  formatSupportsVersion,
+  MC_VERSION_NAMES,
+  refusalFor,
+  versionNameOf,
+} from "../src/shared/mc_versions.js";
 
 let failures = 0;
 
@@ -507,6 +517,73 @@ try {
 
 } finally {
   await rm(workDir, { recursive: true, force: true });
+}
+
+// --- two eras, and which containers exist in each ---------------------------
+//
+// Sponge's palette is flattened `namespace:id[state]` strings, and those did
+// not exist before the Flattening. Offering Sponge for 1.12.2 would write a
+// file whose palette names blocks that version has never heard of -- a file
+// that saves without complaint and cannot be read, which is the failure this
+// rule exists to make impossible.
+console.log("\n--- eras ---");
+{
+  equal("1.13 is where the flat era starts", eraOf("JE_1_13"), "flat");
+  equal("...and 1.12.2 is the last legacy one", eraOf("JE_1_12_2"), "legacy");
+  equal("the oldest supported version is legacy", eraOf("JE_1_8_8"), "legacy");
+
+  equal("a legacy version can only be MCEdit", formatsFor("JE_1_12_2"), ["mcedit"]);
+  check("...so Sponge is refused for it", !formatSupportsVersion("sponge3", "JE_1_12_2"));
+  check(
+    "...by name, saying why rather than just no",
+    (refusalFor("sponge3", "JE_1_12_2") ?? "").includes("1.13"),
+    refusalFor("sponge3", "JE_1_12_2") ?? "",
+  );
+
+  // MCEdit works in both eras -- lossily above 1.13, which the writers already
+  // report through `degraded`, and natively below it.
+  check("MCEdit is offered in both", formatSupportsVersion("mcedit", "JE_1_12_2") && formatSupportsVersion("mcedit", "JE_1_20_4"));
+  equal("a flat version gets all three", formatsFor("JE_1_20_4"), ["sponge3", "sponge2", "mcedit"]);
+  equal("nothing is refused there", refusalFor("sponge3", "JE_1_20_4"), null);
+
+  /*
+   * DataVersion is a Sponge tag, and the legacy era does not write Sponge. So
+   * `null` there is the answer rather than a gap -- `writers.ts` omits the tag
+   * on null, which is exactly what an MCEdit file wants.
+   */
+  equal("a legacy version carries no DataVersion", dataVersionOf("JE_1_12_2"), null);
+  equal("a flat one does", dataVersionOf("JE_1_20_4"), 3700);
+  equal("...and the mapping goes back the other way", versionNameOf(3700), "JE_1_20_4");
+  equal("a DataVersion nothing claims maps to nothing", versionNameOf(999999), null);
+
+  /*
+   * A settings file written by a newer build names a version this one has never
+   * heard of. Refusing every container for it would leave the user unable to
+   * save at all, and the guess costs nothing when it is wrong because MCEdit is
+   * offered either way.
+   */
+  equal("an unknown version is assumed flat", eraOf("JE_2_99"), "flat");
+
+  // The generator's table is the flat rows only, because generation writes
+  // Sponge. The editor's picker is the full list and filters by container.
+  check(
+    "generation is offered only versions Sponge can express",
+    VERSION_NAMES.every((name) => eraOf(name) === "flat"),
+    VERSION_NAMES.filter((name) => eraOf(name) !== "flat").join(", "),
+  );
+  check(
+    "...and the full list is longer than it",
+    MC_VERSION_NAMES.length > VERSION_NAMES.length,
+    `${MC_VERSION_NAMES.length} vs ${VERSION_NAMES.length}`,
+  );
+  // One list, derived: two hand-written tables would be two things to keep in
+  // step, and they would not stay in step.
+  check(
+    "every version with a DataVersion is in the generator's table",
+    MC_VERSION_NAMES.filter((name) => dataVersionOf(name) !== null).every((name) =>
+      VERSION_NAMES.includes(name),
+    ),
+  );
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

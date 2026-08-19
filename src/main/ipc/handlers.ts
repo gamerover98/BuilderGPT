@@ -34,6 +34,7 @@ import {
   type PickFileResponse,
   type PreviewRequest,
   type PreviewResponse,
+  type NewDocumentRequest,
   type ProgressEvent,
   type TraceItem,
   type RecentDocument,
@@ -46,6 +47,8 @@ import {
   type SetNbtRequest,
   type TransformRequest,
 } from "../../shared/ipc.js";
+import { SCHEMATIC_FORMAT_LABEL, schematicExtension } from "../../shared/schematic.js";
+import { dataVersionOf, refusalFor } from "../../shared/mc_versions.js";
 import {
   providerRequiresApiKey,
   type KeyStorageStatus,
@@ -226,6 +229,44 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
 
   ipcMain.handle(IPC.pickFile, async (_event, req: PickFileRequest): Promise<PickFileResponse> => {
     const window = getWindow();
+
+    /*
+     * Saving is the one kind that asks where a file should *go*, so it is the
+     * one kind that goes to `showSaveDialog`. There was no call to it anywhere
+     * in the app, which is why Save As made you choose a *folder* and then
+     * reused the name and format the document already had — not a missing
+     * feature so much as a missing dialog, with everything else downstream of
+     * that.
+     */
+    if (req.kind === "save-schematic") {
+      const format = req.format ?? "sponge3";
+      const extension = schematicExtension(format);
+      const options: Electron.SaveDialogOptions = {
+        title: `Save as ${SCHEMATIC_FORMAT_LABEL[format]}`,
+        defaultPath: req.defaultPath ?? undefined,
+        filters: [{ name: SCHEMATIC_FORMAT_LABEL[format], extensions: [extension] }],
+        properties: ["createDirectory", "showOverwriteConfirmation"],
+      };
+      const saved = window
+        ? await dialog.showSaveDialog(window, options)
+        : await dialog.showSaveDialog(options);
+      if (saved.canceled || !saved.filePath) {
+        return { path: null, name: null };
+      }
+      /*
+       * The extension is forced rather than trusted. The dialog appends one only
+       * on some platforms and only when the user typed none, and a `.schem`
+       * holding MCEdit bytes is a file nothing will open — `saveSession` already
+       * corrects this for the same reason, and doing it here means the path the
+       * user is shown is the path that gets written.
+       */
+      const wanted = `.${extension}`;
+      const target = saved.filePath.toLowerCase().endsWith(wanted)
+        ? saved.filePath
+        : saved.filePath + wanted;
+      return { path: target, name: target.split(/[\\/]/).pop() ?? target };
+    }
+
     const wantsDirectory = req.kind === "directory";
     const filters = wantsDirectory ? undefined : FILE_FILTERS[req.kind];
     if (!wantsDirectory && !filters) {
@@ -472,12 +513,22 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
 
   ipcMain.handle(
     IPC.docNew,
-    async (
-      _event,
-      size: { width: number; height: number; length: number },
-    ): Promise<DocumentStateResponse> => {
+    async (_event, req: NewDocumentRequest): Promise<DocumentStateResponse> => {
       try {
-        const state = documentState(newDocument(size));
+        // Mirrored by the dialog and enforced here. A renderer that filtered
+        // correctly today is not the same thing as a rule, and this is the only
+        // side that writes files.
+        const refusal = refusalFor(req.format, req.version);
+        if (refusal !== null) {
+          return { ok: false, kind: "invalid-input", message: refusal };
+        }
+        const state = documentState(
+          newDocument(
+            { width: req.width, height: req.height, length: req.length },
+            req.format,
+            dataVersionOf(req.version),
+          ),
+        );
         await adoptSubject(null);
         return { ok: true, state };
       } catch (err) {
@@ -630,9 +681,19 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   ipcMain.handle(IPC.docSave, async (_event, request: SaveRequest): Promise<SaveResponse> => {
     try {
       const session = requireSession();
+      if (request.version !== undefined) {
+        const refusal = refusalFor(request.format ?? session.doc.format, request.version);
+        if (refusal !== null) {
+          return { ok: false, kind: "invalid-input", message: refusal };
+        }
+      }
       const result = await saveSession(session, {
         filePath: request.filePath ?? null,
         format: request.format,
+        // Only when asked. Omitting it means "keep what the document carries",
+        // which is what a plain Save wants; passing `null` unconditionally would
+        // strip the version tag off every file the app touched.
+        ...(request.version === undefined ? {} : { dataVersion: dataVersionOf(request.version) }),
         legacyBlocksPath: legacyBlocksPath(),
       });
       /*

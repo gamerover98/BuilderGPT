@@ -1,0 +1,189 @@
+/**
+ * Which Minecraft versions this app can write, and what each one implies.
+ *
+ * In `shared/` rather than in main because three places need the same answer
+ * and only one of them is main: the format picker offers containers, the
+ * writers refuse the ones that cannot work, and the block inventory filters
+ * what it shows. Same reason `openCodeModelRequiresKey` lives beside it — one
+ * rule, mirrored by the UI and *enforced* by main.
+ *
+ * ## Two eras, and the boundary is the Flattening
+ *
+ * | era      | versions      | blocks               | containers          |
+ * |----------|---------------|----------------------|---------------------|
+ * | `legacy` | 1.8.8 – 1.12.2| numeric `ID:DATA`    | MCEdit only         |
+ * | `flat`   | 1.13 onward   | `namespace:id[state]`| Sponge v2/v3, MCEdit|
+ *
+ * **Sponge does not exist for the legacy era.** Its palette is a map of
+ * flattened `namespace:id[state]` strings, and those strings did not exist
+ * before 1.13. Offering it would write a file whose palette names blocks the
+ * target game has never heard of — the classic error that looks like it worked.
+ *
+ * The internal representation stays flattened in both eras. Translation lives
+ * at the edges and always has: `legacy_blocks.json` on the way in,
+ * `writers.ts`'s `Materials: "Alpha"` branch on the way out. There is no second
+ * document model here, and that is what makes supporting 1.8.8 sustainable
+ * rather than a rewrite.
+ *
+ * ## On DataVersion, and why the legacy rows carry none
+ *
+ * `DataVersion` is a tag inside a Sponge schematic. It did not exist as a
+ * concept until the 1.9 snapshots, and the legacy era writes MCEdit, which has
+ * no such tag. So a legacy entry has `dataVersion: null` and that is the
+ * *correct* value rather than a gap: `writers.ts` already omits the tag on
+ * `null`. No number is being guessed here, which matters — a wrong DataVersion
+ * produces a file that looks right and misbehaves in game.
+ *
+ * Versions newer than the last row below are not missing by accident. Their
+ * numbers have to be looked up and corroborated rather than remembered, which
+ * is what `.claude/skills/mc-versions` is for.
+ */
+
+import type { SchematicFormat } from "./schematic.js";
+
+export type McEra = "legacy" | "flat";
+
+export interface McVersionInfo {
+  /** `mcschematic.Version` enum member name, e.g. `JE_1_20_4`. */
+  readonly name: string;
+  /** How a human says it. */
+  readonly label: string;
+  readonly era: McEra;
+  /**
+   * Minecraft's own `DataVersion`, or `null` when the version predates the tag
+   * or is only ever written to a container that does not carry one.
+   */
+  readonly dataVersion: number | null;
+}
+
+/**
+ * Newest first, which is the order the dropdown wants and the order
+ * `mcschematic.Version` yields.
+ *
+ * The flattened rows and their numbers are the table this app has always
+ * carried; the legacy rows are new and deliberately carry no number.
+ */
+export const MC_VERSIONS: readonly McVersionInfo[] = [
+  { name: "JE_1_21_4", label: "1.21.4", era: "flat", dataVersion: 4189 },
+  { name: "JE_1_21_3", label: "1.21.3", era: "flat", dataVersion: 4082 },
+  { name: "JE_1_21_1", label: "1.21.1", era: "flat", dataVersion: 3955 },
+  { name: "JE_1_21", label: "1.21", era: "flat", dataVersion: 3953 },
+  { name: "JE_1_20_6", label: "1.20.6", era: "flat", dataVersion: 3839 },
+  { name: "JE_1_20_4", label: "1.20.4", era: "flat", dataVersion: 3700 },
+  { name: "JE_1_20_2", label: "1.20.2", era: "flat", dataVersion: 3578 },
+  { name: "JE_1_20_1", label: "1.20.1", era: "flat", dataVersion: 3465 },
+  { name: "JE_1_20", label: "1.20", era: "flat", dataVersion: 3463 },
+  { name: "JE_1_19_4", label: "1.19.4", era: "flat", dataVersion: 3337 },
+  { name: "JE_1_19_3", label: "1.19.3", era: "flat", dataVersion: 3218 },
+  { name: "JE_1_19_2", label: "1.19.2", era: "flat", dataVersion: 3120 },
+  { name: "JE_1_19", label: "1.19", era: "flat", dataVersion: 3105 },
+  { name: "JE_1_18_2", label: "1.18.2", era: "flat", dataVersion: 2975 },
+  { name: "JE_1_18_1", label: "1.18.1", era: "flat", dataVersion: 2865 },
+  { name: "JE_1_18", label: "1.18", era: "flat", dataVersion: 2860 },
+  { name: "JE_1_17_1", label: "1.17.1", era: "flat", dataVersion: 2730 },
+  { name: "JE_1_17", label: "1.17", era: "flat", dataVersion: 2724 },
+  { name: "JE_1_16_5", label: "1.16.5", era: "flat", dataVersion: 2586 },
+  { name: "JE_1_16_4", label: "1.16.4", era: "flat", dataVersion: 2584 },
+  { name: "JE_1_16_2", label: "1.16.2", era: "flat", dataVersion: 2578 },
+  { name: "JE_1_16_1", label: "1.16.1", era: "flat", dataVersion: 2567 },
+  { name: "JE_1_16", label: "1.16", era: "flat", dataVersion: 2566 },
+  { name: "JE_1_15_2", label: "1.15.2", era: "flat", dataVersion: 2230 },
+  { name: "JE_1_15", label: "1.15", era: "flat", dataVersion: 2225 },
+  { name: "JE_1_14_4", label: "1.14.4", era: "flat", dataVersion: 1976 },
+  { name: "JE_1_14", label: "1.14", era: "flat", dataVersion: 1952 },
+  { name: "JE_1_13_2", label: "1.13.2", era: "flat", dataVersion: 1631 },
+  { name: "JE_1_13", label: "1.13", era: "flat", dataVersion: 1519 },
+
+  // Before the Flattening. These write MCEdit, which carries no DataVersion, so
+  // `null` here is the answer rather than a placeholder.
+  { name: "JE_1_12_2", label: "1.12.2", era: "legacy", dataVersion: null },
+  { name: "JE_1_12_1", label: "1.12.1", era: "legacy", dataVersion: null },
+  { name: "JE_1_12", label: "1.12", era: "legacy", dataVersion: null },
+  { name: "JE_1_11_2", label: "1.11.2", era: "legacy", dataVersion: null },
+  { name: "JE_1_11", label: "1.11", era: "legacy", dataVersion: null },
+  { name: "JE_1_10_2", label: "1.10.2", era: "legacy", dataVersion: null },
+  { name: "JE_1_10", label: "1.10", era: "legacy", dataVersion: null },
+  { name: "JE_1_9_4", label: "1.9.4", era: "legacy", dataVersion: null },
+  { name: "JE_1_9", label: "1.9", era: "legacy", dataVersion: null },
+  { name: "JE_1_8_9", label: "1.8.9", era: "legacy", dataVersion: null },
+  { name: "JE_1_8_8", label: "1.8.8", era: "legacy", dataVersion: null },
+];
+
+const BY_NAME = new Map(MC_VERSIONS.map((entry) => [entry.name, entry]));
+
+export function mcVersion(name: string): McVersionInfo | undefined {
+  return BY_NAME.get(name);
+}
+
+/**
+ * Which era a version belongs to.
+ *
+ * Unknown names are treated as `flat`, which is the permissive answer and the
+ * right one: a settings file written by a newer build names a version this one
+ * has never heard of, and refusing every container for it would leave the user
+ * unable to save at all. The `flat` guess costs nothing when it is wrong,
+ * because MCEdit is offered in both eras.
+ */
+export function eraOf(name: string): McEra {
+  return BY_NAME.get(name)?.era ?? "flat";
+}
+
+/**
+ * Which containers a version can actually be written to, best first.
+ *
+ * The whole point of this module. MCEdit is in both lists because it works in
+ * both eras — lossily above 1.13, which `writers.ts` already reports through
+ * `degraded`, and natively below it.
+ */
+export function formatsFor(name: string): readonly SchematicFormat[] {
+  return eraOf(name) === "legacy" ? ["mcedit"] : ["sponge3", "sponge2", "mcedit"];
+}
+
+/** Whether a container can carry a version at all. */
+export function formatSupportsVersion(format: SchematicFormat, name: string): boolean {
+  return formatsFor(name).includes(format);
+}
+
+/**
+ * Why a container was refused, phrased for the person who picked it.
+ *
+ * A sentence rather than a boolean because the reason is the useful part: "not
+ * available" invites the user to look for a setting that would enable it, and
+ * there is none — the format genuinely cannot represent that version.
+ */
+export function refusalFor(format: SchematicFormat, name: string): string | null {
+  if (formatSupportsVersion(format, name)) return null;
+  const label = mcVersion(name)?.label ?? name;
+  return (
+    `Sponge schematics store blocks as flattened names like minecraft:oak_stairs[facing=north], ` +
+    `which did not exist before 1.13. ${label} is older than that, so it can only be written as ` +
+    `MCEdit (.schematic).`
+  );
+}
+
+/** Every version name, newest first — what the dropdown shows. */
+export const MC_VERSION_NAMES: readonly string[] = MC_VERSIONS.map((entry) => entry.name);
+
+/** Versions that can be written to a given container, newest first. */
+export function versionsFor(format: SchematicFormat): readonly string[] {
+  return MC_VERSIONS.filter((entry) => formatSupportsVersion(format, entry.name)).map(
+    (entry) => entry.name,
+  );
+}
+
+/** The `DataVersion` tag a version wants, or `null` for none. */
+export function dataVersionOf(name: string): number | null {
+  return BY_NAME.get(name)?.dataVersion ?? null;
+}
+
+/**
+ * The version a `DataVersion` came from, or `null`.
+ *
+ * Only ever used to preselect a dropdown, so a document with no tag or an
+ * unrecognised one gets `null` and the caller falls back to a default rather
+ * than to a wrong-but-plausible row.
+ */
+export function versionNameOf(dataVersion: number | null): string | null {
+  if (dataVersion === null) return null;
+  return MC_VERSIONS.find((entry) => entry.dataVersion === dataVersion)?.name ?? null;
+}

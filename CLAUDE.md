@@ -238,6 +238,20 @@ across a hundred schematics is where storing a copy per turn ends up, so
 verbatim, because "what did you actually send" is the question it exists to
 answer.
 
+**A failure carries the trace out with it.** `attachTrace`/`traceOf` in
+`core.ts`, and `generate` re-throws through them. The obvious arrangement — the
+trace on the success value — is exactly backwards: a run that worked leaves a
+file to look at, and one that failed leaves a sentence. The live trace is
+cleared when the run settles, so without this the model's answer scrolls past
+and then vanishes behind an error that cannot say what happened.
+
+For the same reason `textToSchem`'s `{kind:"none"}` carries a `reason`. Its two
+paths want opposite things from the reader — "the script threw" is fixed by
+asking again, "there was no `<code>` block" is not fixed by rewording anything —
+and one message for both told them neither. `conversionFailureMessage` lives in
+`core.ts` rather than beside the error class because `services/generate.ts`
+reaches Electron through `artifacts.ts` and the suites cannot load it at all.
+
 **A build asked for in the chat reports itself in the chat.** Generation's only
 feedback was the progress bar in the Structure panel, which since the sidebar
 became tabs is a tab you are not looking at while you chat — so asking the chat

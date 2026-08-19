@@ -32,6 +32,14 @@ export const IPC = {
 
   /** Every block the app can place — the same set the agent is judged against. */
   blocksList: "bgpt:blocks:list",
+  /**
+   * Geometry for a handful of blocks, so the inventory can draw them.
+   *
+   * A handful and not all of them: the grid is virtualised and asks for what is
+   * on screen. Nine hundred blocks' worth of triangles in one message would be
+   * most of a second of structured clone for a panel showing sixty.
+   */
+  blockIcons: "bgpt:blocks:icons",
 
   generate: "bgpt:generate",
   preview: "bgpt:preview",
@@ -203,6 +211,32 @@ export interface OpenCodeModelInfo {
 export function openCodeModelRequiresKey(model: OpenCodeModelInfo | undefined): boolean {
   return model?.pricing === "paid";
 }
+
+export interface BlockIconsRequest {
+  blocks: string[];
+  /**
+   * The atlas version the renderer already holds, if any.
+   *
+   * The same arrangement `MeshPayload` uses: the atlas is megabytes of pixels
+   * and is identical for every block, so it crosses once and every later
+   * request says "I have version N" and gets geometry alone.
+   */
+  atlasVersion?: number | null;
+}
+
+export interface BlockIcon {
+  block: string;
+  /** `null` when the block meshed to nothing — air, or a shape not drawn. */
+  geometry: ChunkGeometry | null;
+}
+
+export interface BlockIconsSuccess {
+  icons: BlockIcon[];
+  atlas: MeshAtlas | null;
+  atlasVersion: number;
+}
+
+export type BlockIconsResponse = Result<BlockIconsSuccess>;
 
 export interface PickFileRequest {
   /**
@@ -892,6 +926,8 @@ export interface BgptApi {
   revealPath(path: string): Promise<void>;
   getDefaultOutputDir(): Promise<string>;
   listBlocks(): Promise<string[]>;
+  /** Geometry for the blocks the inventory is about to draw. */
+  getBlockIcons(req: BlockIconsRequest): Promise<BlockIconsResponse>;
 
   generate(req: GenerateRequest): Promise<GenerateResponse>;
   preview(req: PreviewRequest): Promise<PreviewResponse>;

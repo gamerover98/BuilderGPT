@@ -127,6 +127,10 @@ export const en = {
 
   // The creative hotbar. Right-click a slot to put the picker's current
   // block in it, which is why the hint names both gestures.
+  "inventory.title": "Blocks",
+  "inventory.search": "Search blocks",
+  "inventory.count": "{count} blocks",
+
   "hotbar.label": "Hotbar",
   "hotbar.slotHint": "Press {key} to hold this, right-click to replace it",
 

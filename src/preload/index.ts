@@ -20,6 +20,7 @@ import {
   type AgentStepEvent,
   type TraceEvent,
   type Artifact,
+  type BlockIconsResponse,
   type BgptApi,
   type DocumentMeshResponse,
   type DocumentStateResponse,
@@ -63,6 +64,7 @@ const api: BgptApi = {
   revealPath: (target: string) => ipcRenderer.invoke(IPC.revealPath, target) as Promise<void>,
   getDefaultOutputDir: () => ipcRenderer.invoke(IPC.defaultOutputDir) as Promise<string>,
   listBlocks: () => ipcRenderer.invoke(IPC.blocksList) as Promise<string[]>,
+  getBlockIcons: (req) => ipcRenderer.invoke(IPC.blockIcons, req) as Promise<BlockIconsResponse>,
 
   generate: (req: GenerateRequest) => ipcRenderer.invoke(IPC.generate, req) as Promise<GenerateResponse>,
   preview: (req: PreviewRequest) => ipcRenderer.invoke(IPC.preview, req) as Promise<PreviewResponse>,

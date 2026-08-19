@@ -536,6 +536,54 @@ models are free; the rest bill per token. `openCodeModelRequiresKey` in
 renderer only mirrors it. Missing metadata fails *open* — a models.dev outage
 must not make free models unusable.
 
+**There are two eras, and the boundary is the Flattening.** `shared/mc_versions.ts`
+is the rule: ≤1.12.2 is `legacy` — numeric `ID:DATA`, **MCEdit only** — and 1.13
+onward is `flat` and can be Sponge. Sponge's palette is flattened
+`namespace:id[state]` strings, which did not exist before 1.13, so offering it
+for 1.12.2 writes a file whose palette names blocks that version never had: it
+saves without complaint and cannot be read. The rule sits in `shared/` because
+the format picker, the writers and the inventory all need the same answer and
+only one of them is main — same reason as `openCodeModelRequiresKey`. The
+dialogs mirror it; `ipc/handlers.ts` enforces it.
+
+`SaveRequest` carries the version **by name**, not as a `DataVersion`, precisely
+so it can be enforced: `null` is both "no tag" and "pre-Flattening" and only one
+of those refuses Sponge. And `services/versions.ts`'s table filters on the
+**era**, not on "has a number" — 1.12.2 has DataVersion 1343, and generation
+stamping that onto a Sponge file would claim pre-Flattening for a flattened
+palette. Only 1.8.x has no number at all; the tag began in snapshot 15w32a.
+
+**The version numbers are looked up, not remembered.** `resources/mc_versions.json`
+holds them with provenance, `scripts/gen-mc-versions.mjs` writes the rows between
+two markers in `shared/mc_versions.ts`, and `.claude/skills/mc-versions` is how
+they are refreshed. Two independent sources that agree or the number does not
+ship — and minecraft.wiki plus its Fandom mirror is *one* source. A wrong
+DataVersion produces a file that opens fine and misbehaves in game, which is
+discovered a long way from here.
+
+**`showSaveDialog` exists now, and the format is chosen before it opens.**
+`.schem` is both Sponge v2 and v3 and Electron reports the chosen path but not
+which filter produced it, so the container cannot be recovered from the file
+name. `pickFile`'s `save-schematic` kind also forces the extension rather than
+trusting the dialog to append one — that happens on some platforms and only when
+the user typed none.
+
+**The build grid is what an empty schematic can be started from.** With zero
+blocks there is nothing to raycast, so no gesture had a target at all. The
+arithmetic is `renderer/src/lib/build_grid.ts` — `floor` not `round`, a graze
+near the horizon refused rather than answered, and below the origin *blocked*
+rather than grown, because growing that way moves the content instead. Dragging
+on it must take the left button for the same reason a selection-face drag does.
+
+**Block icons are meshed by the same pipeline as the viewport.**
+`services/block_icons.ts` runs a 1×1×1 document through `buildDocumentPreview`,
+so an icon cannot disagree with what appears when the block is placed. It has to
+be main's job: `pipeline/block_shapes.ts` is what knows a stairs block is not a
+cube, and the renderer may not import out of `main/`. The inventory keeps them
+as `data:` URLs because the CSP allows `data:` and forbids `blob:`, and uses one
+`WebGLRenderer` — a context per tile hits the browser's limit at about sixteen
+and then silently loses the oldest.
+
 **Block geometry is hand-described in `pipeline/block_shapes.ts`, not loaded.**
 The Python original only ever produced full cubes — its model-driven path was
 dead code (DEV-008) — so stairs, fences and slabs all rendered as solid blocks.

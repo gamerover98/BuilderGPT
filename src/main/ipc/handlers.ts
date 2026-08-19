@@ -34,6 +34,8 @@ import {
   type PickFileResponse,
   type PreviewRequest,
   type PreviewResponse,
+  type BlockIconsRequest,
+  type BlockIconsResponse,
   type NewDocumentRequest,
   type ProgressEvent,
   type TraceItem,
@@ -113,6 +115,7 @@ import {
   useCheckpointDirectory,
 } from "../services/checkpoints.js";
 import { loadAllowedBlocks, traceOf } from "../core.js";
+import { buildBlockIcons } from "../services/block_icons.js";
 import { listArtifacts } from "../services/artifacts.js";
 import { SchematicFormatError } from "../pipeline/loader.js";
 import { classifyGenerateError, generate } from "../services/generate.js";
@@ -179,6 +182,16 @@ const inFlightAgentRuns = new Map<string, AbortController>();
  * button, and that is a renderer concern.
  */
 const inFlightGenerations = new Map<string, AbortController>();
+
+/**
+ * How many block icons one request may ask for.
+ *
+ * The inventory grid is virtualised and asks for what is on screen, which is
+ * around sixty. This is the guard against a bug there asking for the whole
+ * block list, which would mesh nine hundred documents while the window sat
+ * still and looked frozen.
+ */
+const MAX_ICONS_PER_REQUEST = 128;
 
 function emitProgress(window: BrowserWindow | null, event: ProgressEvent): void {
   if (window && !window.isDestroyed()) {
@@ -311,6 +324,31 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   ipcMain.handle(
     IPC.blocksList,
     async (): Promise<string[]> => [...(await loadAllowedBlocks(resourcesDir()))].sort(),
+  );
+
+  ipcMain.handle(
+    IPC.blockIcons,
+    async (_event, req: BlockIconsRequest): Promise<BlockIconsResponse> => {
+      try {
+        const settings = await getSettings();
+        const result = await buildBlockIcons(
+          // Capped here rather than trusted: the renderer asks for what is on
+          // screen, and a bug there asking for all 933 would mesh 933
+          // documents while the window sat still.
+          req.blocks.slice(0, MAX_ICONS_PER_REQUEST),
+          {
+            resourcePackPath: null,
+            fallbackResourcePackPath: await defaultResourcePackPath(),
+            biomeColor: settings.preview.biomeColor,
+            waterColor: settings.preview.waterColor,
+          },
+          req.atlasVersion ?? null,
+        );
+        return { ok: true, ...result };
+      } catch (err) {
+        return failure(err);
+      }
+    },
   );
 
   ipcMain.handle(IPC.artifactsList, async (): Promise<Artifact[]> => await listArtifacts());

@@ -21,6 +21,12 @@ import { fileURLToPath } from "url";
 
 import { clampToBounds, isWithinBounds, placePopover } from "../src/renderer/src/lib/floating.js";
 import {
+  blockLabel,
+  gridWindow,
+  inventoryBlocks,
+  OVERSCAN_ROWS,
+} from "../src/renderer/src/lib/inventory.js";
+import {
   cellFade,
   cellUnderRay,
   isInsideBox,
@@ -721,6 +727,63 @@ console.log("\n--- build grid ---");
   equal("a region inside the box just fits", placementNeeds(regionBetween({ x: 1, y: 0, z: 1 }, { x: 2, y: 0, z: 2 }), size), "fits");
   equal("...past the far side asks to grow", placementNeeds(regionBetween({ x: 1, y: 0, z: 1 }, { x: 20, y: 0, z: 2 }), size), "grows");
   equal("...and below the origin is refused", placementNeeds(regionBetween({ x: -1, y: 0, z: 1 }, { x: 2, y: 0, z: 2 }), size), "blocked");
+}
+
+// --- the creative inventory ------------------------------------------------
+//
+// Nine hundred blocks is nine hundred one-block meshes if drawn naively, and
+// the panel shows about sixty. So the grid is virtualised, which means the
+// visible slice has to be computed from a scroll offset -- and a scroll offset
+// is not something this harness can produce, so the arithmetic lives apart from
+// the component and only the scrolling stays unobservable.
+console.log("\n--- creative inventory ---");
+{
+  const base = { count: 100, columns: 10, rowHeight: 50, viewportHeight: 200 };
+
+  const top = gridWindow({ ...base, scrollTop: 0 });
+  equal("at the top it starts at the first row", top.firstRow, 0);
+  equal("...and knows how many rows there are", top.totalRows, 10);
+  /*
+   * Four rows fit; the overscan adds two below. Drawing exactly what fits shows
+   * empty tiles for as long as an icon takes to build, which for a mesh made in
+   * main is long enough to see.
+   */
+  equal("...drawing the visible rows plus overscan", top.lastRow, 4 + OVERSCAN_ROWS);
+
+  const middle = gridWindow({ ...base, scrollTop: 250 });
+  equal("scrolled down, it starts an overscan above the fold", middle.firstRow, 5 - OVERSCAN_ROWS);
+  equal("...and the index follows the row", middle.firstIndex, (5 - OVERSCAN_ROWS) * 10);
+
+  /*
+   * Both ends clamp. A scroll offset can be negative during an elastic
+   * overscroll and can exceed the content while the list is being refiltered
+   * under the scroller -- neither is a state the grid should answer with a
+   * negative row or an index past the end.
+   */
+  const above = gridWindow({ ...base, scrollTop: -400 });
+  equal("an overscroll upwards still starts at zero", above.firstRow, 0);
+  const past = gridWindow({ ...base, scrollTop: 99999 });
+  check("...and one past the end never exceeds the row count", past.lastRow <= past.totalRows, String(past.lastRow));
+  check("...nor the item count", past.lastIndex <= base.count, String(past.lastIndex));
+
+  // A partly-filled last row must not ask for tiles that do not exist.
+  const ragged = gridWindow({ count: 93, columns: 10, rowHeight: 50, viewportHeight: 1000, scrollTop: 0 });
+  equal("a ragged last row stops at the real count", ragged.lastIndex, 93);
+  equal("...but still gets a row of its own", ragged.totalRows, 10);
+
+  // Zero columns is a layout that has not measured itself yet, not a division
+  // by zero.
+  const unmeasured = gridWindow({ count: 10, columns: 0, rowHeight: 0, viewportHeight: 0, scrollTop: 0 });
+  check("an unmeasured grid answers something sane", Number.isFinite(unmeasured.totalRows) && unmeasured.totalRows > 0);
+
+  equal("an empty query shows everything", inventoryBlocks(["a", "b"], "  "), ["a", "b"]);
+  check(
+    "a query filters",
+    inventoryBlocks(["minecraft:stone", "minecraft:oak_planks"], "oak").length === 1,
+  );
+
+  equal("a label loses its namespace and its underscores", blockLabel("minecraft:oak_planks"), "oak planks");
+  equal("...and its block states", blockLabel("minecraft:oak_stairs[facing=north]"), "oak stairs");
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

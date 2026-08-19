@@ -29,6 +29,8 @@
   import { applyTraceEvent } from "./lib/trace.js";
   import SchematicDialog from "./lib/SchematicDialog.svelte";
   import Hotbar from "./lib/Hotbar.svelte";
+  import CreativeInventory from "./lib/CreativeInventory.svelte";
+  import { isTyping } from "./lib/typing.js";
   import { versionNameOf } from "../../shared/mc_versions.js";
   import { t, tn, setLocale } from "./lib/i18n.svelte.js";
   import {
@@ -85,6 +87,8 @@
    * only decides whether the size is a field or a fact -- see the component.
    */
   let schematicDialog = $state<"new" | "save-as" | null>(null);
+  /** The creative inventory, on `E`. */
+  let inventoryOpen = $state(false);
 
   /**
    * What the open file is for, as main last recorded beside it.
@@ -599,6 +603,29 @@
   });
 
   function onWindowKey(event: KeyboardEvent): void {
+    /*
+     * `E` opens the inventory, unmodified, the way the game binds it.
+     *
+     * Before the modifier gate below, which every other shortcut here is behind
+     * -- and behind `isTyping`, because a window listener sees the `e` in
+     * "stone" typed into the chat. That guard is the whole reason single-key
+     * shortcuts are safe to add at all.
+     */
+    if (
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "e" &&
+      !isTyping(event.target) &&
+      docState !== null &&
+      !settingsOpen &&
+      !paletteOpen &&
+      schematicDialog === null
+    ) {
+      event.preventDefault();
+      inventoryOpen = !inventoryOpen;
+      return;
+    }
     if (!(event.ctrlKey || event.metaKey)) {
       return;
     }
@@ -1788,6 +1815,27 @@
 </script>
 
 <CommandPalette open={paletteOpen} {commands} onclose={() => (paletteOpen = false)} />
+
+<CreativeInventory
+  open={inventoryOpen}
+  blocks={blockRegistry}
+  version={project?.version ?? versionNameOf(docState?.dataVersion ?? null) ?? settings.version}
+  onclose={() => (inventoryOpen = false)}
+  onpick={(block) => {
+    /*
+     * Into the hotbar in creative, into the picker otherwise. The inventory is
+     * how you fill a slot, and in orbit mode there is no slot to fill -- so it
+     * writes to whichever control is the one saying what gets placed.
+     */
+    if (cameraMode === "fly") {
+      void patchUi({
+        hotbar: settings.ui.hotbar.map((id, at) => (at === settings.ui.hotbarSlot ? block : id)),
+      });
+    } else {
+      activeBlock = block;
+    }
+  }}
+/>
 
 <SchematicDialog
   open={schematicDialog !== null}

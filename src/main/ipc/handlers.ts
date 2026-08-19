@@ -88,6 +88,8 @@ import { AgentCancelledError, runAgent } from "../agent/agent.js";
 import {
   adoptSubject,
   appendEntry,
+  projectNotes,
+  rememberProject,
   checkpointAt,
   forkAt,
   stampCheckpoint,
@@ -497,7 +499,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
        */
       await adoptSubject(filePath);
       forgetCheckpointMemo();
-      return { ok: true, state: documentState(session) };
+      return { ok: true, state: documentState(session), project: await projectNotes(filePath) };
     } catch (err) {
       // Moved, deleted, or no longer readable: take it off the list rather than
       // leave an entry whose only behaviour is to produce this same error.
@@ -703,6 +705,17 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
        * document to where the document went.
        */
       await adoptSubject(result.filePath);
+      /*
+       * What this file is for, remembered beside the talking about it.
+       *
+       * Written after the save rather than before, so a save that failed does
+       * not leave a note claiming a format the file is not in. Merged, never
+       * replaced -- see `rememberProject`.
+       */
+      await rememberProject(result.filePath, {
+        format: result.format,
+        ...(request.version === undefined ? {} : { version: request.version }),
+      });
       return {
         ok: true,
         filePath: result.filePath,

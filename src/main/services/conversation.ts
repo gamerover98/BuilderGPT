@@ -41,6 +41,7 @@ import { removeCheckpoints } from "./checkpoints.js";
 import { pathsMatch } from "./recent_documents.js";
 import { rememberedFromIndex } from "./conversation_core.js";
 import {
+  type ProjectNotes,
   abridgeTrace,
   CONVERSATION_FORMAT,
   coerceRecord,
@@ -214,6 +215,44 @@ function snapshot(): StoredConversation {
  * has no path to key on, and that is not a failure — it is the state every new
  * schematic starts in. `adoptSubject` picks it up on the first save.
  */
+/**
+ * What this schematic is for, as last recorded.
+ *
+ * Read straight off disk rather than kept in memory: it is asked for when a
+ * document opens and when a dialog opens, both of which are rare, and a cached
+ * copy is one more thing that can be stale.
+ */
+export async function projectNotes(subject: string): Promise<ProjectNotes | null> {
+  return (await readRecord(subject))?.project ?? null;
+}
+
+/**
+ * Records what a schematic is for, merging with whatever was already there.
+ *
+ * Merged and not replaced: Save As knows the format and the version, and
+ * nothing about the description. A write that replaced the record would have
+ * saving a file quietly delete the note the user had written about it.
+ */
+export async function rememberProject(subject: string, notes: ProjectNotes): Promise<void> {
+  const file = fileFor(subject);
+  if (file === null) return;
+  const existing = await readRecord(subject);
+  const record: ConversationRecord = {
+    version: CONVERSATION_FORMAT,
+    filePath: subject,
+    conversations: existing?.conversations ?? [],
+    project: { ...existing?.project, ...notes },
+  };
+  try {
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify(record), "utf8");
+  } catch {
+    // Same as the conversation itself: a note that could not be written is a
+    // dialog that opens on defaults next time, not a failure worth stopping a
+    // save for.
+  }
+}
+
 export async function saveConversation(): Promise<void> {
   if (current.subject === null || current.entries.length === 0) return;
   const file = fileFor(current.subject);
@@ -238,6 +277,10 @@ export async function saveConversation(): Promise<void> {
     version: CONVERSATION_FORMAT,
     filePath: current.subject,
     conversations: kept,
+    // Carried through rather than rewritten: the notes belong to the file and
+    // this call is about the talking. Dropping them here would erase the chosen
+    // version every time somebody sent a message.
+    ...(existing?.project ? { project: existing.project } : {}),
   };
 
   try {

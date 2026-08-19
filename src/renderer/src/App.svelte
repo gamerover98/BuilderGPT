@@ -37,6 +37,7 @@
     type Artifact,
     type BlockInspection,
     type ChatEntry,
+    type ProjectNotes,
     type ChatState,
     type ConversationSummary,
     type DocumentState,
@@ -84,6 +85,16 @@
    * only decides whether the size is a field or a fact -- see the component.
    */
   let schematicDialog = $state<"new" | "save-as" | null>(null);
+
+  /**
+   * What the open file is for, as main last recorded beside it.
+   *
+   * Preferred over the document's own `DataVersion` when the dialog opens,
+   * because the tag cannot answer for every file: an MCEdit schematic carries
+   * none at all, so without this a legacy build asked which Minecraft it was
+   * every single time and got no help from the answer it gave last time.
+   */
+  let project = $state<ProjectNotes | null>(null);
   let artifacts = $state<Artifact[]>([]);
   /** What an empty `settings.outputDir` resolves to, shown as the placeholder. */
   let defaultOutputDir = $state("");
@@ -1224,6 +1235,9 @@
         return;
       }
       docState = response.state;
+      // Whatever this file was last saved as, so the dialogs open on it rather
+      // than on a default the user has already overruled once.
+      project = response.project ?? null;
       selection = null;
       anchor = null;
       inspection = null;
@@ -1570,6 +1584,7 @@
           return;
         }
         docState = response.state;
+        project = { format: choice.format, version: choice.version };
         chat = [];
         liveTrace = [];
         selection = null;
@@ -1781,8 +1796,9 @@
     width: docState?.size[0] ?? 16,
     height: docState?.size[1] ?? 16,
     length: docState?.size[2] ?? 16,
-    format: docState?.format ?? "sponge3",
-    version: versionNameOf(docState?.dataVersion ?? null) ?? settings.version,
+    format: project?.format ?? docState?.format ?? "sponge3",
+    version:
+      project?.version ?? versionNameOf(docState?.dataVersion ?? null) ?? settings.version,
   }}
   suggestedName={(docState?.fileName ?? "untitled").replace(/\.[^.]*$/, "")}
   onclose={() => (schematicDialog = null)}

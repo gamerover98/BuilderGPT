@@ -843,7 +843,26 @@ export interface RecoveryOffer {
 
 export type RecoveryPeekResponse = Result<{ recovery: RecoveryOffer | null }>;
 
-export type DocumentStateResponse = Result<{ state: DocumentState | null }>;
+/**
+ * What this schematic is for, as the app last recorded it.
+ *
+ * There is no project file and deliberately will not be one: this rides in the
+ * per-path sidecar the conversations already use, so the `.schem` stays the
+ * only thing the user sees and moves. Every field is optional and a missing
+ * sidecar is not an error — the file opens either way, you just answer the
+ * dialogs yourself. That is the property a `.saproj` would not have.
+ */
+export interface ProjectNotes {
+  version?: string;
+  format?: SchematicFormat;
+  description?: string;
+}
+
+export type DocumentStateResponse = Result<{
+  state: DocumentState | null;
+  /** Present when a document was just opened and had notes recorded. */
+  project?: ProjectNotes | null;
+}>;
 export type DocumentMeshResponse = Result<DocumentMesh>;
 export type EditResponse = Result<EditSuccess>;
 export type InspectResponse = Result<BlockInspection>;

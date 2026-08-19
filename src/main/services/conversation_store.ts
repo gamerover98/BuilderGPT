@@ -24,6 +24,7 @@
  */
 
 import type { ChatEntry, TraceItem } from "../../shared/ipc.js";
+import type { SchematicFormat } from "../../shared/schematic.js";
 
 /** Bumped when the stored shape changes in a way older readers cannot take. */
 export const CONVERSATION_FORMAT = 1;
@@ -51,11 +52,56 @@ export interface StoredConversation {
   rememberedFrom: number;
 }
 
+/**
+ * What this schematic is *for*, remembered alongside the talking about it.
+ *
+ * There is no project file and there is deliberately not going to be one. The
+ * `.schem` stays the only thing the user sees and moves, and this rides in the
+ * sidecar that already exists per path — so a schematic sent to somebody else
+ * opens with sensible defaults rather than with none, and nothing has to be
+ * kept in step with anything.
+ *
+ * Every field is optional and a missing sidecar is not an error. That is the
+ * property that makes this better than a `.saproj`: lose it and the file still
+ * opens, you just answer the New/Save As dialog yourself.
+ */
+export interface ProjectNotes {
+  /** The Minecraft version last chosen for this file, by name. */
+  version?: string;
+  /** The container last written, so Save As opens on it. */
+  format?: SchematicFormat;
+  /** What the user says this build is. Not shown yet; recorded for the panel. */
+  description?: string;
+}
+
 export interface ConversationRecord {
   version: number;
   /** The schematic these are about, as it was when they were written. */
   filePath: string;
   conversations: StoredConversation[];
+  /**
+   * The per-file settings, when any have been recorded.
+   *
+   * Beside the conversations rather than in them: it belongs to the *file*, and
+   * a copy per conversation would give one schematic several answers to "which
+   * Minecraft is this for".
+   */
+  project?: ProjectNotes;
+}
+
+/** Reads project notes defensively; anything unrecognised simply is not there. */
+export function coerceProject(raw: unknown): ProjectNotes | undefined {
+  if (raw === null || typeof raw !== "object") return undefined;
+  const source = raw as Partial<ProjectNotes>;
+  const notes: ProjectNotes = {};
+  if (typeof source.version === "string" && source.version !== "") notes.version = source.version;
+  if (source.format === "sponge2" || source.format === "sponge3" || source.format === "mcedit") {
+    notes.format = source.format;
+  }
+  if (typeof source.description === "string" && source.description !== "") {
+    notes.description = source.description;
+  }
+  return Object.keys(notes).length === 0 ? undefined : notes;
 }
 
 /**
@@ -191,8 +237,11 @@ export function coerceRecord(raw: unknown, filePath: string): ConversationRecord
     });
   }
 
-  if (conversations.length === 0) return null;
-  return { version: CONVERSATION_FORMAT, filePath, conversations };
+  const project = coerceProject((record as { project?: unknown }).project);
+  // A record with notes but no conversations is still worth keeping: someone
+  // may have set a version and never opened the chat.
+  if (conversations.length === 0 && project === undefined) return null;
+  return { version: CONVERSATION_FORMAT, filePath, conversations, ...(project ? { project } : {}) };
 }
 
 function finiteOr(value: unknown, fallback: number): number {

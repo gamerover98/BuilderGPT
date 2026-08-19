@@ -40,6 +40,8 @@ import {
 } from "../src/main/services/conversation.js";
 import {
   abridgeTrace,
+  coerceProject,
+  coerceRecord,
   MAX_STORED_TRACE_TEXT,
   mostRecent,
   storeFileName,
@@ -1129,6 +1131,45 @@ console.log("\n--- conversation persistence ---");
   }
 
   resetConversation(null);
+}
+
+// --- what a schematic is for ------------------------------------------------
+//
+// No project file, deliberately: this rides in the per-path sidecar the
+// conversations already use, so the .schem stays the only thing the user sees
+// and moves. Losing the sidecar loses the convenience and nothing else, which
+// is the property a .saproj would not have.
+console.log("\n--- project notes ---");
+{
+  equal(
+    "a full set is kept",
+    coerceProject({ version: "JE_1_12_2", format: "mcedit", description: "a windmill" }),
+    { version: "JE_1_12_2", format: "mcedit", description: "a windmill" },
+  );
+  // Field by field, never spread: a sidecar edited by hand, or written by a
+  // build that stored something else there, must not put a nonsense format into
+  // a dialog that then writes a file in it.
+  equal("a bogus format is dropped rather than trusted", coerceProject({ format: "zip" }), undefined);
+  equal("...and so is a blank version", coerceProject({ version: "" }), undefined);
+  equal("nothing at all is nothing", coerceProject(null), undefined);
+  equal("a partial set keeps what it has", coerceProject({ format: "sponge2", extra: 1 }), {
+    format: "sponge2",
+  });
+
+  /*
+   * A record with notes and no conversations survives. Someone can set a
+   * version on a file and never open the chat, and reading that back as "no
+   * record" would throw the setting away on the next save.
+   */
+  const notesOnly = coerceRecord(
+    { version: 1, filePath: "C:/a.schem", conversations: [], project: { format: "mcedit" } },
+    "C:/a.schem",
+  );
+  check("a record with only notes is still a record", notesOnly !== null);
+  equal("...and the notes came through", notesOnly?.project, { format: "mcedit" });
+
+  const nothing = coerceRecord({ version: 1, filePath: "C:/a.schem", conversations: [] }, "C:/a.schem");
+  equal("...but an empty record with no notes is nothing", nothing, null);
 }
 
 // --- what a trace costs on disk ---------------------------------------------

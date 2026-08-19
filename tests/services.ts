@@ -23,6 +23,8 @@ import { fileURLToPath } from "url";
 
 import { loadStructure } from "../src/main/pipeline/loader.js";
 import { openCodeModelRequiresKey } from "../src/shared/ipc.js";
+import { rememberedFromIndex } from "../src/main/services/conversation_core.js";
+import type { ChatEntry } from "../src/shared/ipc.js";
 import { callLlm, LlmError, resolveBaseUrl } from "../src/main/services/llm.js";
 import { describeFor, sanitizeName } from "../src/main/services/naming.js";
 import {
@@ -812,6 +814,61 @@ console.log("\n--- settings coercion ---");
   );
 
   equal("an empty file is the defaults", coerceSettings({}), DEFAULT_SETTINGS);
+}
+
+// --- where the agent's memory begins ---------------------------------------
+console.log("\n--- chat memory boundary ---");
+{
+  const user = (text: string, remembered = true): ChatEntry => ({
+    role: "user",
+    text,
+    remembered,
+  });
+  const agent = (text: string): ChatEntry => ({ role: "agent", text });
+
+  const log: ChatEntry[] = [
+    user("one"),
+    agent("1"),
+    user("two"),
+    agent("2"),
+    user("three"),
+    agent("3"),
+  ];
+
+  equal("a window wider than the log starts at the top", rememberedFromIndex(log, 9), 0);
+  equal("...and so does one exactly as wide", rememberedFromIndex(log, 3), 0);
+  equal("the last two turns start at the second user entry", rememberedFromIndex(log, 2), 2);
+  equal("...and one turn, at the last", rememberedFromIndex(log, 1), 4);
+
+  /*
+   * The case this function exists for, and the reason it is not "count back N
+   * user entries" in the renderer.
+   *
+   * The middle turn failed: its entry is in the log, and `agent.ts` updates the
+   * conversation only after everything that can throw, so it never entered the
+   * model's memory. Counting user entries would put the boundary one turn too
+   * early and claim the agent remembers something it does not.
+   */
+  const withFailure: ChatEntry[] = [
+    user("one"),
+    agent("1"),
+    user("two", false),
+    { role: "error", text: "LLM API Error: 503" },
+    user("three"),
+    agent("3"),
+  ];
+  equal("a failed turn is skipped, not counted", rememberedFromIndex(withFailure, 2), 0);
+  equal("...and the last landed turn is still found", rememberedFromIndex(withFailure, 1), 4);
+  check(
+    "counting user entries instead would land on the failed one",
+    rememberedFromIndex(withFailure, 2) !== 2,
+  );
+
+  // "New chat" leaves the log on screen for a moment with nothing remembered,
+  // and a restored conversation whose model half could not be read is the same
+  // shape. Both must put the divider above everything, not below.
+  equal("nothing remembered puts the line at the top of nothing", rememberedFromIndex(log, 0), 6);
+  equal("an empty log has no boundary", rememberedFromIndex([], 4), 0);
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

@@ -1,20 +1,3 @@
-<script lang="ts" module>
-  import type { EditSummary } from "../../../shared/ipc.js";
-
-  export interface ChatEntry {
-    /** `note` is something that happened but did not go wrong — a stopped run. */
-    role: "user" | "agent" | "error" | "note";
-    text: string;
-    /** Tool calls made while answering; agent turns only. */
-    steps?: { tool: string; summary: string }[];
-    changed?: number;
-    /** What was taken out and put in, by block type. */
-    summary?: EditSummary;
-    /** The undo entry this turn created, for matching against the live one. */
-    undoLabel?: string | null;
-  }
-</script>
-
 <script lang="ts">
   /**
    * The conversation, and the whole height of the panel.
@@ -32,7 +15,7 @@
    * only evidence of progress, and afterwards they are the least interesting
    * part of the answer.
    */
-  import type { AgentStepEvent, RegionSpec } from "../../../shared/ipc.js";
+  import type { AgentStepEvent, ChatEntry, RegionSpec } from "../../../shared/ipc.js";
   import type { KeyStorageStatus, Settings } from "../../../shared/settings.js";
   import ChatComposer from "./ChatComposer.svelte";
   import Markdown from "./Markdown.svelte";
@@ -45,6 +28,15 @@
     selection: RegionSpec | null;
     /** Exchanges the agent is carrying into the next question. */
     remembered: number;
+    /**
+     * Index into `entries` where the agent's memory begins.
+     *
+     * Computed by main, not here. "The last N user turns" is the obvious rule
+     * and it is wrong: a run that failed leaves its entry in the log without
+     * ever entering the model's memory, so counting from this side drifts by
+     * one for every error above it. `0` means everything is remembered.
+     */
+    rememberedFrom: number;
     /**
      * Whether a schematic is open.
      *
@@ -78,6 +70,7 @@
     live,
     selection,
     remembered,
+    rememberedFrom,
     hasDocument,
     busy,
     settings,
@@ -160,6 +153,16 @@
     {/if}
 
     {#each entries as entry, index (index)}
+      {#if index === rememberedFrom && rememberedFrom > 0}
+        <!--
+          Everything above this line is readable and not remembered. Without it
+          the agent looks as though it has forgotten something plainly visible
+          three messages up -- which it has, and which nothing said.
+        -->
+        <div class="boundary" role="separator">
+          <span>{t("chat.memoryStarts")}</span>
+        </div>
+      {/if}
       <article class={`turn ${entry.role}`}>
         <div class="avatar" aria-hidden="true">{entry.role === "user" ? "●" : "✦"}</div>
         <div class="body">
@@ -334,6 +337,22 @@
 
   .example:hover {
     color: var(--text);
+  }
+
+  .boundary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0 10px;
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+
+  .boundary::before,
+  .boundary::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--border);
   }
 
   .turn {

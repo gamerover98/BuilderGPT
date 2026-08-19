@@ -20,7 +20,9 @@ import {
   type DocumentStateResponse,
   type EditRequest,
   type EditResponse,
+  type ChatState,
   type Failure,
+  type FailureKind,
   type GenerateRequest,
   type GenerateResponse,
   type InspectResponse,
@@ -78,6 +80,13 @@ import {
 import { NbtEditError } from "../domain/nbt_edit.js";
 import { UnrepresentableBlocksError } from "../services/writers.js";
 import { AgentCancelledError, runAgent } from "../agent/agent.js";
+import {
+  adoptSubject,
+  appendEntry,
+  conversationState,
+  resetConversation,
+  noteTurnRemembered,
+} from "../services/conversation.js";
 import { clearAutosave, readAutosave, restoreAutosave, startAutosave } from "../services/autosave.js";
 import { loadAllowedBlocks } from "../core.js";
 import { listArtifacts } from "../services/artifacts.js";
@@ -230,10 +239,32 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     const window = getWindow();
     const settings = await getSettings();
 
+    /*
+     * Records the outcome in the chat log, when the request came from the chat.
+     *
+     * Wrapped around each return rather than written at each one: there are
+     * five ways out of this handler and every one of them is something the user
+     * asked for and should be able to see.
+     */
+    const settle = (response: GenerateResponse): GenerateResponse => {
+      if (req.viaChat !== true) return response;
+      appendEntry(
+        response.ok
+          ? { role: "agent", text: `Built ${response.name}.${response.exportType}.` }
+          : { role: "error", text: response.message },
+      );
+      return response;
+    };
+
     if (req.description.trim() === "") {
+      // Nothing was said, so nothing goes in the log -- not even from the chat.
       // component.py:417's `st.warning("Please provide a description...")`.
       return { ok: false, kind: "invalid-input", message: "Please describe the structure you want to build." };
     }
+
+    // The question goes in before anything that can refuse it, exactly as in
+    // `askAgent`, so a refusal is shown under the thing it refused.
+    if (req.viaChat === true) appendEntry({ role: "user", text: req.description });
 
     const apiKey = await getApiKey(settings.provider);
 
@@ -247,21 +278,21 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       const catalogue = await fetchOpenCodeModels({ snapshotPath: openCodeSnapshotPath() });
       const model = catalogue?.find((entry) => entry.id === settings.model);
       if (apiKey.trim() === "" && openCodeModelRequiresKey(model)) {
-        return {
+        return settle({
           ok: false,
           kind: "no-api-key",
           message:
             `${model?.name ?? settings.model} is a paid OpenCode model. Add an API key, ` +
             `or pick one of the free models in the LLM provider panel.`,
-        };
+        });
       }
       acceptsImages = model?.imageInput !== "no";
     } else if (apiKey.trim() === "" && providerRequiresApiKey(settings.provider)) {
-      return {
+      return settle({
         ok: false,
         kind: "no-api-key",
         message: `Add an API key for ${settings.provider} in Settings.`,
-      };
+      });
     }
 
     try {
@@ -279,9 +310,9 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         onProgress: (phase, fraction, message) =>
           emitProgress(window, { requestId: req.requestId, phase, fraction, message }),
       });
-      return { ok: true, ...outcome };
+      return settle({ ok: true, ...outcome });
     } catch (err) {
-      return { ok: false, ...classifyGenerateError(err) };
+      return settle({ ok: false, ...classifyGenerateError(err) });
     }
   });
 
@@ -331,6 +362,13 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       // Only once it really opened. Recording the attempt would fill the list
       // with paths that fail every time they are clicked.
       await rememberRecentDocument(filePath);
+      /*
+       * Not an unconditional reset. A chat that built this file with nothing
+       * open is *about* it, and this is the moment it gets opened -- clearing
+       * here is what used to erase the question and leave only the answer.
+       * Opening some other file is still a change of subject and still clears.
+       */
+      adoptSubject(filePath);
       return { ok: true, state: documentState(session) };
     } catch (err) {
       // Moved, deleted, or no longer readable: take it off the list rather than
@@ -352,7 +390,9 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       size: { width: number; height: number; length: number },
     ): Promise<DocumentStateResponse> => {
       try {
-        return { ok: true, state: documentState(newDocument(size)) };
+        const state = documentState(newDocument(size));
+        adoptSubject(null);
+        return { ok: true, state };
       } catch (err) {
         return failure(err);
       }
@@ -558,14 +598,41 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       const settings = await getSettings();
 
       if (req.prompt.trim() === "") {
-        return { ok: false, kind: "invalid-input", message: "Say what you want changed." };
+        // Nothing was said, so nothing goes in the log.
+        return {
+          ok: false,
+          kind: "invalid-input",
+          message: "Say what you want changed.",
+          chat: conversationState(),
+        };
       }
+
+      /*
+       * The user's turn goes in before anything that can refuse it, because it
+       * happened: they typed it and pressed send. Every failure below therefore
+       * shows the question above the answer, which is what makes "add an API
+       * key" legible rather than a message floating on its own.
+       *
+       * It is *not* marked remembered here. That only becomes true once
+       * `runAgent` returns, and the gap between the two is exactly what keeps
+       * the memory divider honest when a run fails.
+       */
+      appendEntry({ role: "user", text: req.prompt });
+
+      /** Puts main's own wording in the log and hands the log back with it. */
+      const refuse = (kind: FailureKind, message: string): AgentResponse => ({
+        ok: false,
+        kind,
+        message,
+        chat: appendEntry({ role: "error", text: message }),
+      });
 
       let session;
       try {
         session = requireSession();
       } catch (err) {
-        return failure(err);
+        const failed = failure(err);
+        return refuse(failed.kind, failed.message);
       }
 
       // The same key gate as generation, for the same reason: a paid model with
@@ -575,18 +642,13 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         const catalogue = await fetchOpenCodeModels({ snapshotPath: openCodeSnapshotPath() });
         const model = catalogue?.find((entry) => entry.id === settings.model);
         if (apiKey.trim() === "" && openCodeModelRequiresKey(model)) {
-          return {
-            ok: false,
-            kind: "no-api-key",
-            message: `${model?.name ?? settings.model} is a paid OpenCode model. Add an API key, or pick a free one.`,
-          };
+          return refuse(
+            "no-api-key",
+            `${model?.name ?? settings.model} is a paid OpenCode model. Add an API key, or pick a free one.`,
+          );
         }
       } else if (apiKey.trim() === "" && providerRequiresApiKey(settings.provider)) {
-        return {
-          ok: false,
-          kind: "no-api-key",
-          message: `Add an API key for ${settings.provider} in Settings.`,
-        };
+        return refuse("no-api-key", `Add an API key for ${settings.provider} in Settings.`);
       }
 
       // Registered before the run so a Stop arriving while the model is still
@@ -614,6 +676,25 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
             }
           },
         });
+        // Only now is the user's turn actually in the model's memory --
+        // `runAgent` updates the conversation past everything that throws.
+        noteTurnRemembered(result.remembered);
+        const summary = {
+          removed: [...result.summary.removed],
+          added: [...result.summary.added],
+          changed: result.summary.changed,
+        };
+        const chat = appendEntry({
+          role: "agent",
+          // A model can answer with tool calls and no closing text, and an empty
+          // bubble reads as a failure. Main's own wording, like every other
+          // message it produces, and so not translated.
+          text: result.text.trim() === "" ? "Done." : result.text,
+          steps: [...result.steps],
+          changed: result.changed,
+          summary,
+          undoLabel: result.undoLabel,
+        });
         return {
           ok: true,
           text: result.text,
@@ -621,18 +702,23 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           steps: [...result.steps],
           state: documentState(session),
           remembered: result.remembered,
-          summary: {
-            removed: [...result.summary.removed],
-            added: [...result.summary.added],
-            changed: result.summary.changed,
-          },
+          summary,
           undoLabel: result.undoLabel,
+          chat,
         };
       } catch (err) {
         if (err instanceof AgentCancelledError) {
           // The document rolled back with the transaction, so there is nothing
-          // to clean up here — only something to say.
-          return { ok: false, kind: "cancelled", message: "Stopped. Nothing was changed." };
+          // to clean up here — only something to say. The user's turn stays in
+          // the log without being marked remembered, which is the truth: it
+          // never reached the model's memory.
+          const stopped = "Stopped. Nothing was changed.";
+          return {
+            ok: false,
+            kind: "cancelled",
+            message: stopped,
+            chat: appendEntry({ role: "note", text: stopped }),
+          };
         }
         const message = err instanceof Error ? err.message : String(err);
         // `runAgent` wraps everything as an LlmError, so the prefix is the
@@ -641,6 +727,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           ok: false,
           kind: message.startsWith("LLM API Error") ? "llm-error" : "io-error",
           message,
+          chat: appendEntry({ role: "error", text: message }),
         };
       } finally {
         inFlightAgentRuns.delete(req.requestId);
@@ -660,9 +747,12 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     return true;
   });
 
+  ipcMain.handle(IPC.chatState, async (): Promise<ChatState> => conversationState());
+
   ipcMain.handle(IPC.docAgentReset, async (): Promise<void> => {
-    // Nothing open is not a failure: the renderer clears its own log either
-    // way, and there is no conversation to disagree with it.
+    // Nothing open is not a failure -- the log is main's either way, and with
+    // no session there is simply no model-side half to clear.
+    resetConversation();
     const session = currentSession();
     if (session) {
       clearConversation(session);

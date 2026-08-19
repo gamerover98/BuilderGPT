@@ -14,7 +14,7 @@
   import { onMount } from "svelte";
 
   import ArtifactList from "./lib/ArtifactList.svelte";
-  import ChatPanel, { type ChatEntry } from "./lib/ChatPanel.svelte";
+  import ChatPanel from "./lib/ChatPanel.svelte";
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
   import DocumentPanel from "./lib/DocumentPanel.svelte";
   import InspectorPanel from "./lib/InspectorPanel.svelte";
@@ -32,6 +32,8 @@
     type AgentStepEvent,
     type Artifact,
     type BlockInspection,
+    type ChatEntry,
+    type ChatState,
     type DocumentState,
     type EditResponse,
     type OpenCodeModelInfo,
@@ -197,7 +199,16 @@
     );
   }
 
+  /**
+   * A mirror of main's log, not the log itself.
+   *
+   * Assigned wholesale from whatever main last returned. The one entry written
+   * locally is the failure of the IPC call itself: if the bridge is gone, main
+   * never saw the turn, and it must not look as though it had.
+   */
   let chat = $state<ChatEntry[]>([]);
+  /** Index into `chat` where the agent's memory begins; 0 draws no divider. */
+  let rememberedFrom = $state(0);
   /** Tool calls for the turn in flight, so the panel narrates rather than hangs. */
   let liveSteps = $state<AgentStepEvent[]>([]);
   /**
@@ -235,6 +246,7 @@
     chat = [];
     liveSteps = [];
     remembered = 0;
+    rememberedFrom = 0;
     if (bridgeAvailable) {
       await api().resetAgentConversation();
     }
@@ -845,16 +857,26 @@
    * any blocks it had to drop), so this adds only what the conversation needs:
    * a line saying the build happened, or the reason it did not.
    */
+  /**
+   * A prompt with nothing open builds something, and that is a turn.
+   *
+   * Both entries are written by main, inside the `generate` handler, which is
+   * why nothing is appended here. That is not tidiness: generating *opens* what
+   * it made, and opening used to clear the renderer's log -- so the question
+   * vanished and only the answer survived. Main's log is adopted by the new
+   * document rather than cleared, and this reads it back afterwards.
+   */
   async function buildFromChat(prompt: string): Promise<void> {
     chat = [...chat, { role: "user", text: prompt }];
     liveSteps = [];
-    const failure = await generateFrom(prompt);
-    chat = [
-      ...chat,
-      failure === null
-        ? { role: "agent", text: t("chat.built"), changed: docState?.blockCount }
-        : { role: "error", text: failure },
-    ];
+    await generateFrom(prompt, true);
+    if (bridgeAvailable) adoptChat(await api().getChatState());
+  }
+
+  /** Takes main's copy of the log as the truth. */
+  function adoptChat(state: ChatState): void {
+    chat = state.entries;
+    rememberedFrom = state.rememberedFrom;
   }
 
   async function saveKey(provider: Provider, apiKey: string): Promise<void> {
@@ -1039,12 +1061,15 @@
       inspection = null;
       inspectedAt = null;
       status = null;
-      // A conversation is about a schematic. Opening another one makes every
-      // "it" in the log refer to something that is no longer on screen, and
-      // main has already dropped its side with the old session.
-      chat = [];
+      /*
+       * A conversation is about a schematic, but *which* one is main's call now
+       * -- `adoptSubject` clears the log when another file is opened and keeps
+       * it when the conversation is the reason this file exists. Clearing here
+       * unconditionally is what erased the prompt that built it.
+       */
       liveSteps = [];
       remembered = 0;
+      if (bridgeAvailable) adoptChat(await api().getChatState());
       // A newly opened document is the one case where framing the camera is
       // what the user wants: they have not aimed it at anything yet.
       framingEpoch += 1;
@@ -1359,6 +1384,8 @@
       await buildFromChat(prompt);
       return;
     }
+    // Optimistic, because a request takes seconds and the message has to
+    // appear now. Main appends its own copy and the response replaces this.
     chat = [...chat, { role: "user", text: prompt }];
     liveSteps = [];
     busy = true;
@@ -1372,29 +1399,11 @@
         prompt,
         selection: selection ? forIpc(selection) : null,
       });
-      if (!response.ok) {
-        // Stopping is something the user did, not something that went wrong,
-        // so it reads as an ordinary note rather than a failure.
-        chat = [
-          ...chat,
-          { role: response.kind === "cancelled" ? "note" : "error", text: response.message },
-        ];
-        return;
-      }
+      // Both branches carry the log, because a stopped or failed run is a
+      // turn too and main has already written it.
+      adoptChat(response.chat);
+      if (!response.ok) return;
       docState = response.state;
-      chat = [
-        ...chat,
-        {
-          role: "agent",
-          // A model can answer with tool calls and no closing text; saying
-          // nothing at all would read as a failure.
-          text: response.text.trim() === "" ? t("chat.done") : response.text,
-          steps: response.steps,
-          changed: response.changed,
-          summary: response.summary,
-          undoLabel: response.undoLabel,
-        },
-      ];
       remembered = response.remembered;
       await refreshDocument();
     } catch (err) {
@@ -1421,7 +1430,7 @@
    * opened; only the way they report it differs, so that is the only part left
    * to them.
    */
-  async function generateFrom(prompt: string): Promise<string | null> {
+  async function generateFrom(prompt: string, viaChat = false): Promise<string | null> {
     busy = true;
     status = null;
     try {
@@ -1433,6 +1442,7 @@
           version: settings.version,
           exportType: settings.exportType,
           imagePath,
+          viaChat,
         });
       } catch (err) {
         failed(err, t("task.generating"));
@@ -1581,6 +1591,7 @@
           live={liveSteps}
           {selection}
           {remembered}
+          {rememberedFrom}
           hasDocument={docState !== null}
           {busy}
           {settings}

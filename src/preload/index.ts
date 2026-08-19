@@ -14,6 +14,7 @@ import {
   IPC,
   type AgentRequestPayload,
   type AgentResponse,
+  type ChatState,
   type AgentStepEvent,
   type Artifact,
   type BgptApi,
@@ -114,6 +115,7 @@ const api: BgptApi = {
   askAgent: (request: AgentRequestPayload) =>
     ipcRenderer.invoke(IPC.docAgent, request) as Promise<AgentResponse>,
   resetAgentConversation: () => ipcRenderer.invoke(IPC.docAgentReset) as Promise<void>,
+  getChatState: () => ipcRenderer.invoke(IPC.chatState) as Promise<ChatState>,
   cancelAgent: (requestId: string) =>
     ipcRenderer.invoke(IPC.docAgentCancel, requestId) as Promise<boolean>,
 

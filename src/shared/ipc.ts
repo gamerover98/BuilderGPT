@@ -70,6 +70,8 @@ export const IPC = {
   docAgent: "bgpt:doc:agent",
   /** Forget the conversation so far, keeping the document open. */
   docAgentReset: "bgpt:doc:agent:reset",
+  /** Read the chat log. Main owns it, so this is how the renderer re-syncs. */
+  chatState: "bgpt:chat:state",
   /** Stop the request in flight. */
   docAgentCancel: "bgpt:doc:agent:cancel",
   /** main → renderer: one tool call the agent just made. */
@@ -207,6 +209,15 @@ export interface GenerateRequest {
   exportType: ExportType;
   /** Path from `pickFile`, not bytes -- ARCHITECTURE.md §4 change 5. */
   imagePath: string | null;
+  /**
+   * Whether this came from the chat rather than the Structure panel.
+   *
+   * The same operation reached from two places, and only one of them is a
+   * conversation: asking the chat to build something with nothing open is a
+   * turn and belongs in the log, while pressing Generate is not. Main needs to
+   * be told which, because it is the one writing the log.
+   */
+  viaChat?: boolean;
 }
 
 /** One block type the build script asked for and the allowlist refused. */
@@ -504,6 +515,46 @@ export interface EditSummary {
   changed: number;
 }
 
+/**
+ * One turn in the chat log, as the renderer draws it.
+ *
+ * It crosses the boundary because main owns the log: it appends every turn,
+ * including the failures and the stopped runs, and hands the whole thing back.
+ * The renderer used to build these itself, which meant the visible log and the
+ * model's memory of it had two authors and could disagree.
+ */
+export interface ChatEntry {
+  /** `note` is something that happened but did not go wrong -- a stopped run. */
+  role: "user" | "agent" | "error" | "note";
+  text: string;
+  /** Tool calls made while answering; agent turns only. */
+  steps?: { tool: string; summary: string }[];
+  changed?: number;
+  /** What was taken out and put in, by block type. */
+  summary?: EditSummary;
+  /** The undo entry this turn created, for matching against the live one. */
+  undoLabel?: string | null;
+  /**
+   * Set on a user turn once it has actually reached the model.
+   *
+   * A run that fails leaves its entry in the log and never enters the agent's
+   * memory, so this is what keeps `rememberedFrom` from drifting by one for
+   * every error above it.
+   */
+  remembered?: boolean;
+}
+
+/** The log and where the agent's memory into it begins. */
+export interface ChatState {
+  entries: ChatEntry[];
+  /**
+   * Index into `entries` of the oldest turn the agent still carries.
+   *
+   * `0` means the whole log is remembered, and the renderer draws no divider.
+   */
+  rememberedFrom: number;
+}
+
 export interface AgentSuccess {
   /** The model's closing explanation. */
   text: string;
@@ -525,7 +576,17 @@ export interface AgentSuccess {
   remembered: number;
 }
 
-export type AgentResponse = Result<AgentSuccess>;
+/**
+ * Carries the log on both branches, on purpose.
+ *
+ * A failed run is a turn too -- it puts a `note` or an `error` in the log --
+ * so a failure that could not carry the log back would leave the renderer
+ * having to write that entry itself, which is the split this change exists to
+ * close.
+ */
+export type AgentResponse =
+  | ({ ok: true } & AgentSuccess & { chat: ChatState })
+  | (Failure & { chat: ChatState });
 
 /**
  * A schematic opened before, and when.
@@ -636,6 +697,14 @@ export interface BgptApi {
   askAgent(request: AgentRequestPayload): Promise<AgentResponse>;
   /** Forget the conversation so far. Resolves even when nothing is open. */
   resetAgentConversation(): Promise<void>;
+  /**
+   * The chat log as main holds it.
+   *
+   * `askAgent` returns it with every reply, so this is for the paths that
+   * change the log without going through the agent -- building from the chat,
+   * and opening a document, which may adopt the conversation or clear it.
+   */
+  getChatState(): Promise<ChatState>;
   /**
    * Stop the request with this id. Resolves `true` if one was in flight.
    *

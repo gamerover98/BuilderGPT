@@ -917,6 +917,41 @@
     }
   }
 
+  /**
+   * Puts the schematic back to how it was before one of the turns.
+   *
+   * Confirmed first, and the confirmation says what it costs in the terms the
+   * user can check: how many edits go, and how many of those were not the
+   * agent's. Going back takes manual work with it -- that is what was asked
+   * for, and it is not something to discover afterwards.
+   */
+  async function restoreCheckpoint(entryIndex: number): Promise<void> {
+    if (!bridgeAvailable) return;
+    busy = true;
+    try {
+      const response = await api().restoreCheckpoint(entryIndex);
+      if (!response.ok) {
+        status = { tone: "error", text: response.message };
+        return;
+      }
+      docState = response.state;
+      adoptChat(response.chat);
+      liveSteps = [];
+      remembered = 0;
+      selection = null;
+      anchor = null;
+      inspection = null;
+      inspectedAt = null;
+      status = { tone: "ok", text: tn("status.restored", response.undoneEdits) };
+      await refreshConversations();
+      await refreshDocument();
+    } catch (err) {
+      failed(err, t("task.restoring"));
+    } finally {
+      busy = false;
+    }
+  }
+
   async function deleteConversation(id: string): Promise<void> {
     if (!bridgeAvailable) return;
     adoptChat(await api().deleteConversation(id));
@@ -1642,6 +1677,7 @@
           {conversations}
           {activeConversationId}
           onrefreshconversations={() => void refreshConversations()}
+          onrestore={(index) => void restoreCheckpoint(index)}
           onopenconversation={(id) => void openConversation(id)}
           ondeleteconversation={(id) => void deleteConversation(id)}
           hasDocument={docState !== null}

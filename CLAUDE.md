@@ -113,6 +113,42 @@ The trim belongs to `saveSession`, not to the writers. **Autosave calls the
 writers directly and must keep the full working box** — a crash snapshot that
 came back trimmed would silently discard the room the user had made to build in.
 
+**A conversation belongs to a schematic, and the rule is written out.** It used
+to hang off `DocumentSession`, which made it die with the document for free —
+and that was the whole appeal until it had to be *kept*. `services/conversation.ts`
+owns the visible log and the model's messages as **one record**, so persisting
+them is one write; a crash between two would leave a log describing edits the
+agent has no memory of. `runAgent` therefore takes `history` and returns
+`messages` rather than reaching through the session, which also makes the memory
+a value the tests can see instead of something inferred from what the model was
+sent.
+
+The subject rule has one case that looks like a bug and is not: opening a file
+the conversation has **no subject** for is an *adoption*, not a reset. That is
+the chat that built something with nothing open — the generator writes the file
+and then opens it, and clearing there erased the question and left only the
+answer. Opening a *different* file still saves and swaps.
+
+`rememberedFrom` is computed in main, and must be. "The last N user turns" is
+the obvious rule and it is wrong: a run that fails leaves its entry in the log
+and never enters the model's memory, so counting from the renderer drifts by one
+for every error above it.
+
+**A checkpoint is not cropped, and is keyed on `doc.revision`.** `saveSession`
+trims to content; a snapshot must not, for the same reason autosave must not —
+coming back would hand the user the build without the room they made to build
+in. Keying on the revision is what makes a failed turn free: a rolled-back run
+leaves it unchanged and the next snapshot reuses the file. **Restoring cannot be
+undone** — `adoptDocument` starts a fresh history — so restoring first snapshots
+the state it is leaving and hangs it on a note in the conversation it archives.
+That is what makes it a fork rather than a one-way door.
+
+**`Transaction` has an `id`, and "Undo this" matches on it.** The label is
+derived from the prompt, so asking twice for the same thing produced two turns
+the chat could not tell apart, and it would offer to undo whichever was on top.
+Ids are never reused, so one held elsewhere can only go stale, never come to
+name a different transaction.
+
 **`doc.revision` is a cache key, not a dirty flag.** It is monotonic and is
 bumped by every mutation *including an undo*, which is what makes it safe for
 "is my mesh still current". It cannot answer "have you undone back to what is on

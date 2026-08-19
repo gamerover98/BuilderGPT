@@ -142,6 +142,17 @@ export function conversationsDir(): string {
   return path.join(app.getPath("userData"), "conversations");
 }
 
+/**
+ * Where the per-turn snapshots live.
+ *
+ * A directory of its own rather than mixed in with the conversation records:
+ * these are schematics, they are much the larger of the two, and being able to
+ * delete the lot without touching the transcripts is worth the extra folder.
+ */
+export function checkpointsDir(): string {
+  return path.join(app.getPath("userData"), "checkpoints");
+}
+
 /** `generated/` (component.py:137-138), relocated to a writable location. */
 export function generatedDir(): string {
   return path.join(app.getPath("userData"), "generated");

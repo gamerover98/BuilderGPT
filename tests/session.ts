@@ -43,6 +43,15 @@ import {
 } from "../src/main/services/session.js";
 import { clearBakerCache } from "../src/main/services/preview.js";
 import { loadStructure } from "../src/main/pipeline/loader.js";
+import {
+  checkpointExists,
+  forgetCheckpointMemo,
+  readCheckpoint,
+  removeCheckpoints,
+  takeCheckpoint,
+  useCheckpointDirectory,
+} from "../src/main/services/checkpoints.js";
+import { isDirty } from "../src/main/domain/history.js";
 import { countBlocks, documentFromLoaded } from "../src/main/domain/document.js";
 import { UnrepresentableBlocksError } from "../src/main/services/writers.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
@@ -873,6 +882,80 @@ console.log("\n--- crop on save ---");
   // A second save with nothing left to trim says so rather than inventing a box.
   const empty = await saveSession(session, { filePath: target, format: "sponge3" });
   equal("an all-air document reports no trim", empty.cropped, null);
+
+  closeDocument();
+}
+
+// --- going back to how it was ---------------------------------------------
+console.log("\n--- checkpoints ---");
+{
+  const dir = path.join(workDir, "checkpoints");
+  useCheckpointDirectory(dir);
+  forgetCheckpointMemo();
+
+  const stone = { namespacedName: "minecraft:stone", properties: {} };
+  const session = newDocument({ width: 24, height: 24, length: 24 });
+
+  // A build in a deliberately roomy volume, which is the case the crop rule
+  // exists for and the case a checkpoint must *not* apply it to.
+  applyEdit(session, {
+    kind: "fill",
+    region: { minX: 2, minY: 0, minZ: 2, maxX: 5, maxY: 1, maxZ: 5 },
+    block: stone,
+  });
+
+  const before = await takeCheckpoint(session, [{ role: "user", content: "the first turn" }]);
+  check("a checkpoint was written", before !== null, String(before));
+
+  /*
+   * Keyed on `doc.revision`, so an unchanged document reuses the file rather
+   * than writing an identical one. This is what makes a failed turn free: a run
+   * that rolls back leaves the revision where it started.
+   */
+  equal(
+    "an unchanged document reuses its snapshot",
+    await takeCheckpoint(session, []),
+    before,
+  );
+
+  // Now change it, and go back.
+  applyEdit(session, {
+    kind: "fill",
+    region: { minX: 10, minY: 0, minZ: 10, maxX: 20, maxY: 5, maxZ: 20 },
+    block: stone,
+  });
+  const grown = documentState(session).blockCount;
+  check("the second edit landed", grown > 4 * 2 * 4, String(grown));
+  check("...and produced a new snapshot", (await takeCheckpoint(session, [])) !== before);
+
+  const restored = await readCheckpoint(before!, null);
+  check("the snapshot reads back", restored !== null);
+  equal(
+    "the working box is intact, not cropped to the build",
+    [restored!.session.doc.width, restored!.session.doc.height, restored!.session.doc.length],
+    [24, 24, 24],
+  );
+  equal("...with the blocks that were there", countBlocks(restored!.session.doc), 4 * 2 * 4);
+  equal(
+    "...and the model's memory of that moment",
+    JSON.stringify(restored!.messages).includes("the first turn"),
+    true,
+  );
+
+  /*
+   * The restored document differs from what is on disk and no sequence of undos
+   * can prove otherwise -- the same arrangement the crash-recovery path uses.
+   * A restore that came back looking "saved" would let the user close the app
+   * and lose the thing they had just gone back to.
+   */
+  check("a restored document is not clean", isDirty(restored!.session.history));
+
+  equal("a snapshot that never existed reads as nothing", await readCheckpoint("k-nope", null), null);
+  check("...and reports itself missing", !(await checkpointExists("k-nope")));
+  check("a real one reports itself present", await checkpointExists(before!));
+
+  await removeCheckpoints([before!]);
+  check("...and is gone once removed", !(await checkpointExists(before!)));
 
   closeDocument();
 }

@@ -164,6 +164,7 @@ export const en = {
   "chat.historyHint": "Conversations about this schematic",
   "chat.noHistory": "No other conversations yet",
   "chat.deleteChat": "Delete this conversation",
+  "chat.restore": "Go back to this version",
   "chat.copyCode": "Copy",
   "chat.copied": "Copied",
   "chat.stopHint": "Stop this request; nothing will be changed",
@@ -332,6 +333,7 @@ export const en = {
   "command.stopAgent": "Stop the AI",
   "command.stopAgent.keywords": "cancel abort",
 
+  "task.restoring": "Going back",
   "task.undoing": "Undoing",
   "task.redoing": "Redoing",
   "task.placingBlock": "Placing a block",
@@ -362,6 +364,8 @@ export const en = {
   "status.copied": "Copied {count} blocks.",
   "status.cut": "Cut {count} blocks.",
   "status.nothingMatched": "No blocks matched, so nothing changed.",
+  "status.restored.one": "Went back 1 edit. The conversation before it was kept.",
+  "status.restored.other": "Went back {count} edits. The conversation before it was kept.",
   "status.saved": "Saved {name}",
   "status.cropped": "Trimmed to fit the build: {from} → {to}",
   "status.degraded":

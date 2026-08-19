@@ -22,6 +22,7 @@ import {
   type EditResponse,
   type ChatState,
   type ConversationList,
+  type RestoreResponse,
   type Failure,
   type FailureKind,
   type GenerateRequest,
@@ -83,6 +84,9 @@ import { AgentCancelledError, runAgent } from "../agent/agent.js";
 import {
   adoptSubject,
   appendEntry,
+  checkpointAt,
+  forkAt,
+  stampCheckpoint,
   conversationMessages,
   conversationState,
   deleteConversation,
@@ -95,6 +99,13 @@ import {
   useConversationDirectory,
 } from "../services/conversation.js";
 import { clearAutosave, readAutosave, restoreAutosave, startAutosave } from "../services/autosave.js";
+import {
+  checkpointExists,
+  forgetCheckpointMemo,
+  readCheckpoint,
+  takeCheckpoint,
+  useCheckpointDirectory,
+} from "../services/checkpoints.js";
 import { loadAllowedBlocks } from "../core.js";
 import { listArtifacts } from "../services/artifacts.js";
 import { SchematicFormatError } from "../pipeline/loader.js";
@@ -109,6 +120,7 @@ import {
 import { assertWritableDirectory } from "../services/output.js";
 import {
   autosaveDir,
+  checkpointsDir,
   conversationsDir,
   defaultResourcePackPath,
   generatedDir,
@@ -172,6 +184,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   // or the suites cannot reach it -- the same split `recent_documents.ts` was
   // made for.
   useConversationDirectory(conversationsDir());
+  useCheckpointDirectory(checkpointsDir());
 
   ipcMain.handle(IPC.settingsGet, async (): Promise<Settings> => await getSettings());
 
@@ -382,6 +395,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
        * Opening some other file is still a change of subject and still clears.
        */
       await adoptSubject(filePath);
+      forgetCheckpointMemo();
       return { ok: true, state: documentState(session) };
     } catch (err) {
       // Moved, deleted, or no longer readable: take it off the list rather than
@@ -677,6 +691,18 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         return refuse("no-api-key", `Add an API key for ${settings.provider} in Settings.`);
       }
 
+      /*
+       * The state as it stands, before this turn changes anything -- which is
+       * what "go back to before I asked this" means. Taken with the messages
+       * the model is about to be given, so going back restores its memory too
+       * rather than leaving a conversation it has no record of.
+       *
+       * A turn that fails costs nothing here: `takeCheckpoint` keys on
+       * `doc.revision`, and a rolled-back run leaves that where it started.
+       */
+      const checkpoint = await takeCheckpoint(session, conversationMessages());
+      if (checkpoint !== null) stampCheckpoint(checkpoint);
+
       // Registered before the run so a Stop arriving while the model is still
       // being resolved still finds something to abort.
       const controller = new AbortController();
@@ -798,6 +824,62 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   ipcMain.handle(
     IPC.chatDelete,
     async (_event, id: string): Promise<ChatState> => await deleteConversation(id),
+  );
+
+  ipcMain.handle(
+    IPC.chatRestore,
+    async (_event, entryIndex: number): Promise<RestoreResponse> => {
+      const id = checkpointAt(entryIndex);
+      if (id === null) {
+        return { ok: false, kind: "invalid-input", message: "That turn has no saved snapshot." };
+      }
+      if (!(await checkpointExists(id))) {
+        return {
+          ok: false,
+          kind: "io-error",
+          message: "That snapshot is no longer on disk. Older ones are cleared as room is needed.",
+        };
+      }
+
+      let session;
+      try {
+        session = requireSession();
+      } catch (err) {
+        return failure(err);
+      }
+
+      /*
+       * The way back, taken before anything moves. Restoring cannot be undone
+       * -- `adoptDocument` starts a fresh history -- so the only route forward
+       * again is a snapshot of where we are now, carried on the note left in
+       * the conversation being archived. That makes this a fork, not a door
+       * that locks behind you.
+       */
+      const undoneEdits = session.history.undoStack.length;
+      const back = await takeCheckpoint(session, conversationMessages());
+
+      const restored = await readCheckpoint(id, session.doc.filePath);
+      if (restored === null) {
+        return { ok: false, kind: "io-error", message: "That snapshot could not be read." };
+      }
+
+      adoptDocument(restored.session.doc, restored.session.history);
+      // The memo describes a document that is no longer the open one.
+      forgetCheckpointMemo();
+
+      const chat = await forkAt(
+        entryIndex,
+        {
+          role: "note",
+          text: "Went back to an earlier version. This conversation was kept.",
+          ...(back === null ? {} : { checkpoint: back }),
+        },
+        restored.messages,
+      );
+      await saveConversation();
+
+      return { ok: true, state: documentState(requireSession()), chat, undoneEdits };
+    },
   );
 
   ipcMain.handle(IPC.docAgentReset, async (): Promise<void> => {

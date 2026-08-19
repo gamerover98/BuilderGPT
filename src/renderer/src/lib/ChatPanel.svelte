@@ -72,6 +72,8 @@
     /** Starts another conversation; the current one stays in the list. */
     onforget: () => void;
     onrefreshconversations: () => void;
+    /** Put the schematic back to how it was before the turn at this index. */
+    onrestore: (entryIndex: number) => void;
     onopenconversation: (id: string) => void;
     ondeleteconversation: (id: string) => void;
     onstop: () => void;
@@ -99,6 +101,7 @@
     onask,
     onforget,
     onrefreshconversations,
+    onrestore,
     onopenconversation,
     ondeleteconversation,
     onstop,
@@ -229,6 +232,19 @@
             <Markdown source={entry.text} />
           {:else}
             <p class="text">{entry.text}</p>
+          {/if}
+
+          <!--
+            Wherever a snapshot is attached, whatever kind of entry carries it:
+            a user turn carries the state before it was asked, and the note left
+            by an earlier restore carries the state that restore stepped away
+            from. One rule rather than two, and the second is what makes going
+            back reversible.
+          -->
+          {#if entry.checkpoint}
+            <button class="restore" disabled={busy} onclick={() => onrestore(index)}>
+              {t("chat.restore")}
+            </button>
           {/if}
 
           {#if entry.summary && entry.summary.changed > 0}
@@ -375,6 +391,30 @@
 
   .example:hover {
     color: var(--text);
+  }
+
+  .restore {
+    justify-self: start;
+    margin-top: 4px;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: none;
+    color: var(--text-dim);
+    font-size: 11px;
+    /* Quiet until wanted: this is the one control in the log that throws work
+       away, and it should not read as the obvious next thing to press. */
+    opacity: 0;
+  }
+
+  .turn:hover .restore,
+  .restore:focus-visible {
+    opacity: 1;
+  }
+
+  .restore:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--accent);
   }
 
   .boundary {

@@ -80,6 +80,8 @@ export const IPC = {
   chatNew: "bgpt:chat:new",
   /** Throw one away for good. */
   chatDelete: "bgpt:chat:delete",
+  /** Put the schematic back to how it was before one of the turns. */
+  chatRestore: "bgpt:chat:restore",
   /** Stop the request in flight. */
   docAgentCancel: "bgpt:doc:agent:cancel",
   /** main → renderer: one tool call the agent just made. */
@@ -565,6 +567,14 @@ export interface ChatEntry {
    * every error above it.
    */
   remembered?: boolean;
+  /**
+   * The snapshot of the schematic taken just before this turn.
+   *
+   * Present on user turns, and on the note left behind when a restore happens.
+   * The chat offers "return to this version" wherever it is set and the file is
+   * still there — one rule, whichever kind of entry carries it.
+   */
+  checkpoint?: string;
 }
 
 /** One conversation, as the picker lists it. */
@@ -627,6 +637,16 @@ export interface AgentSuccess {
  * having to write that entry itself, which is the split this change exists to
  * close.
  */
+/** What a restore produced: the document, and the conversation it forked. */
+export interface RestoreSuccess {
+  state: DocumentState;
+  chat: ChatState;
+  /** Edits undone by going back, for the UI to report what it just did. */
+  undoneEdits: number;
+}
+
+export type RestoreResponse = Result<RestoreSuccess>;
+
 export type AgentResponse =
   | ({ ok: true } & AgentSuccess & { chat: ChatState })
   | (Failure & { chat: ChatState });
@@ -762,6 +782,14 @@ export interface BgptApi {
   newConversation(): Promise<ChatState>;
   /** Delete one for good. Deleting the active one starts a new empty one. */
   deleteConversation(id: string): Promise<ChatState>;
+  /**
+   * Put the schematic back to how it was before the turn at `entryIndex`.
+   *
+   * Forks rather than rewinds: the conversation as it stands is archived whole
+   * and stays in the picker, and what continues is a copy truncated to that
+   * point. Nothing the user wrote is destroyed.
+   */
+  restoreCheckpoint(entryIndex: number): Promise<RestoreResponse>;
   /**
    * Stop the request with this id. Resolves `true` if one was in flight.
    *

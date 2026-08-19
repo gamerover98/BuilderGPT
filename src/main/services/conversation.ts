@@ -37,6 +37,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from "fs/promises";
 import path from "path";
 
 import type { ChatEntry, ChatState, ConversationList } from "../../shared/ipc.js";
+import { removeCheckpoints } from "./checkpoints.js";
 import { pathsMatch } from "./recent_documents.js";
 import { rememberedFromIndex } from "./conversation_core.js";
 import {
@@ -107,6 +108,32 @@ export function appendEntry(entry: ChatEntry): ChatState {
   current.updatedAt = Date.now();
   recompute();
   return conversationState();
+}
+
+/**
+ * Attaches a snapshot to the turn the user has just started.
+ *
+ * Separate from `appendEntry` because the two happen at different moments and
+ * on purpose: the message goes in before anything that can refuse the request,
+ * so a refusal is shown under the thing it refused, while the snapshot needs a
+ * session and can only be taken once one has been resolved.
+ */
+export function stampCheckpoint(id: string): void {
+  for (let index = current.entries.length - 1; index >= 0; index -= 1) {
+    if (current.entries[index].role === "user") {
+      current.entries[index] = { ...current.entries[index], checkpoint: id };
+      return;
+    }
+  }
+}
+
+/** Every snapshot a set of entries refers to. */
+function checkpointsIn(entries: readonly ChatEntry[]): string[] {
+  const ids: string[] = [];
+  for (const entry of entries) {
+    if (typeof entry.checkpoint === "string") ids.push(entry.checkpoint);
+  }
+  return ids;
 }
 
 /**
@@ -185,10 +212,23 @@ export async function saveConversation(): Promise<void> {
 
   const existing = await readRecord(current.subject);
   const others = (existing?.conversations ?? []).filter((one) => one.id !== current.id);
+  const kept = pruneConversations([snapshot(), ...others]);
+
+  /*
+   * Snapshots are schematics, and the ones belonging to a conversation that has
+   * just fallen off the end of the list would otherwise sit in the directory
+   * forever with nothing left pointing at them.
+   */
+  const keptIds = new Set(kept.map((one) => one.id));
+  const dropped = others.filter((one) => !keptIds.has(one.id));
+  if (dropped.length > 0) {
+    await removeCheckpoints(dropped.flatMap((one) => checkpointsIn(one.entries)));
+  }
+
   const record: ConversationRecord = {
     version: CONVERSATION_FORMAT,
     filePath: current.subject,
-    conversations: pruneConversations([snapshot(), ...others]),
+    conversations: kept,
   };
 
   try {
@@ -303,6 +343,9 @@ export async function deleteConversation(id: string): Promise<ChatState> {
     const record = await readRecord(current.subject);
     const file = fileFor(current.subject);
     if (record && file) {
+      const going = record.conversations.filter((one) => one.id === id);
+      await removeCheckpoints(going.flatMap((one) => checkpointsIn(one.entries)));
+
       const kept = record.conversations.filter((one) => one.id !== id);
       try {
         if (kept.length === 0) {
@@ -322,6 +365,42 @@ export async function deleteConversation(id: string): Promise<ChatState> {
 
   if (id === current.id) current = fresh(current.subject);
   return conversationState();
+}
+
+/**
+ * Forks the conversation at `index`, keeping the whole of it.
+ *
+ * Called by the restore handler once the document has been put back. The order
+ * matters and is the point of the design: the conversation as it stands — plus
+ * a note carrying a snapshot of the state being left behind — is archived
+ * whole, and what continues is a *copy* truncated to `index`.
+ *
+ * Truncation is not tidiness. `agent.ts` refuses to record a rolled-back turn
+ * for the same reason: a transcript that describes edits which no longer exist
+ * has the next turn building on something that never happened. Archiving is
+ * what stops that being a deletion.
+ */
+export async function forkAt(index: number, note: ChatEntry, messages: unknown[]): Promise<ChatState> {
+  const kept = current.entries.slice(0, Math.max(0, index));
+
+  current.entries.push(note);
+  current.updatedAt = Date.now();
+  await saveConversation();
+
+  const subject = current.subject;
+  current = fresh(subject);
+  current.entries = kept;
+  current.messages = messages;
+  // From the flags rather than from a stored count: the restored messages are
+  // the ones that stood at this point, and the entries say which turns landed.
+  current.turns = kept.filter((entry) => entry.role === "user" && entry.remembered === true).length;
+  recompute();
+  return conversationState();
+}
+
+/** The snapshot attached to an entry, or `null` if that turn has none. */
+export function checkpointAt(index: number): string | null {
+  return current.entries[index]?.checkpoint ?? null;
 }
 
 /**

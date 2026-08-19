@@ -212,6 +212,31 @@
   }
 
   /**
+   * A drag across the build grid, meaning "select this footprint".
+   *
+   * The grid is the answer to an empty schematic having nothing to raycast: no
+   * geometry meant no target, so neither a selection nor a placement could be
+   * started at all. This is one block tall at the base, which is what a
+   * footprint is -- drag the top face upwards afterwards to give it height.
+   */
+  function onGridSelect(region: RegionSpec): void {
+    selection = region;
+    anchor = null;
+  }
+
+  /**
+   * A click on the build grid, meaning "put a block here".
+   *
+   * A press that never moved, rather than a one-cell selection: with nothing
+   * built yet "click the floor" plainly means place, and requiring a one-cell
+   * drag first would be a rule with nothing behind it.
+   */
+  async function onGridPlace(at: { x: number; y: number; z: number }): Promise<void> {
+    if (busy || cameraMode !== "orbit") return;
+    await onBuild("place", at);
+  }
+
+  /**
    * A mirror of main's log, not the log itself.
    *
    * Assigned wholesale from whatever main last returned. The one entry written
@@ -2159,6 +2184,9 @@
       framingKey={framingEpoch}
       onbuild={docState ? onBuild : undefined}
       onselectionchange={docState ? onSelectionDragged : undefined}
+      documentSize={docState?.size ?? null}
+      ongridselect={docState ? onGridSelect : undefined}
+      ongridplace={docState ? (at) => void onGridPlace(at) : undefined}
       maxDpr={settings.preview.maxDpr}
       renderScale={settings.preview.renderScale}
       maxDrawDistance={settings.preview.maxDrawDistance}

@@ -21,6 +21,15 @@ import { fileURLToPath } from "url";
 
 import { clampToBounds, isWithinBounds, placePopover } from "../src/renderer/src/lib/floating.js";
 import {
+  cellFade,
+  cellUnderRay,
+  isInsideBox,
+  placementNeeds,
+  regionBetween,
+  visibleCells,
+  MAX_GRID_REACH,
+} from "../src/renderer/src/lib/build_grid.js";
+import {
   dragFace,
   dragPlaneNormal,
   faceCentre,
@@ -613,6 +622,105 @@ console.log("\n--- recent document age ---");
   // leaves a stamp in the future. "Just now" is the honest reading of a moment
   // that has not happened yet; a negative count would not be.
   equal("a future timestamp reads as just now", openedAge(NOW + DAY, NOW), { kind: "justNow" });
+}
+
+// --- the build grid --------------------------------------------------------
+//
+// With zero blocks there is nothing to raycast, so neither a selection nor a
+// placement had a target and an empty schematic was untouchable. The grid is
+// the target. The raycast itself runs from the rendering steps and cannot be
+// observed in this project's browser harness, so the decision lives here and
+// only the trigger stays unobservable -- the same split `selection_drag.ts`
+// was written for.
+console.log("\n--- build grid ---");
+{
+  const size = { width: 8, height: 8, length: 8 };
+  const down = (x: number, z: number) => ({
+    origin: { x, y: 10, z },
+    direction: { x: 0, y: -1, z: 0 },
+  });
+
+  equal("a ray straight down lands on the cell under it", cellUnderRay(down(3.4, 5.7), size), {
+    x: 3,
+    y: 0,
+    z: 5,
+  });
+  /*
+   * `floor`, not `round`. Rounding snaps to the nearest corner, which is half a
+   * block out in both axes everywhere -- and passes any test that only ever
+   * points at the middle of a cell.
+   */
+  equal("...and at 3.9 it is still that cell, not the next", cellUnderRay(down(3.9, 0.1), size), {
+    x: 3,
+    y: 0,
+    z: 0,
+  });
+  equal("a negative coordinate floors away from zero", cellUnderRay(down(-0.2, -0.2), size), {
+    x: -1,
+    y: 0,
+    z: -1,
+  });
+
+  check("a ray parallel to the plane hits nothing", cellUnderRay({ origin: { x: 0, y: 5, z: 0 }, direction: { x: 1, y: 0, z: 0 } }, size) === null);
+  check("a ray pointing away from the plane hits nothing", cellUnderRay({ origin: { x: 0, y: 5, z: 0 }, direction: { x: 0, y: 1, z: 0 } }, size) === null);
+
+  /*
+   * A ray grazing the plane near the horizon lands thousands of blocks out.
+   * Turning that into a fill would ask for a resize nobody wanted, so it reads
+   * as "not over the grid" instead.
+   */
+  check(
+    "a graze near the horizon is refused rather than answered",
+    cellUnderRay(down(MAX_GRID_REACH + 40, 0), size) === null,
+  );
+  check(
+    "...but just inside the reach still answers",
+    cellUnderRay(down(size.width - 1 + MAX_GRID_REACH - 1, 0), size) !== null,
+  );
+
+  check("a cell in the box is inside it", isInsideBox({ x: 0, y: 0, z: 0 }, size));
+  check("...and the far corner is too", isInsideBox({ x: 7, y: 7, z: 7 }, size));
+  check("...but one past it is not", !isInsideBox({ x: 8, y: 0, z: 0 }, size));
+  check("...and neither is a negative one", !isInsideBox({ x: -1, y: 0, z: 0 }, size));
+
+  // A click is a drag that ended where it started, and needs no special case.
+  equal("a drag between two cells is the box they span", regionBetween({ x: 5, y: 0, z: 1 }, { x: 2, y: 0, z: 6 }), {
+    minX: 2,
+    minY: 0,
+    minZ: 1,
+    maxX: 5,
+    maxY: 0,
+    maxZ: 6,
+  });
+  equal("a drag that went nowhere is one cell", regionBetween({ x: 2, y: 0, z: 2 }, { x: 2, y: 0, z: 2 }), {
+    minX: 2,
+    minY: 0,
+    minZ: 2,
+    maxX: 2,
+    maxY: 0,
+    maxZ: 2,
+  });
+
+  equal("nothing is drawn when the pointer is off the grid", visibleCells(null, 3), []);
+  equal("a radius of 2 draws a 5x5", visibleCells({ x: 0, y: 0, z: 0 }, 2).length, 25);
+  equal("the centre is fully lit", cellFade({ x: 4, y: 0, z: 4 }, { x: 4, y: 0, z: 4 }, 3), 1);
+  check("...and the far corner has faded out", cellFade({ x: 7, y: 0, z: 7 }, { x: 4, y: 0, z: 4 }, 3) === 0);
+  check(
+    "the falloff is radial, so the square corner is dimmer than the square edge",
+    cellFade({ x: 6, y: 0, z: 6 }, { x: 4, y: 0, z: 4 }, 3) <
+      cellFade({ x: 6, y: 0, z: 4 }, { x: 4, y: 0, z: 4 }, 3),
+  );
+
+  /*
+   * Reaching past the far side is a fill's business: `domain/grow.ts` extends
+   * the document in the same transaction, so growing and filling are one undo
+   * step. Reaching below the origin is not the same operation -- the grid has
+   * no negative coordinates, so growing that way moves the content instead, and
+   * a stray drag must not trigger it.
+   */
+  equal("a region inside the box just fits", placementNeeds(regionBetween({ x: 1, y: 0, z: 1 }, { x: 2, y: 0, z: 2 }), size), "fits");
+  equal("...past the far side asks to grow", placementNeeds(regionBetween({ x: 1, y: 0, z: 1 }, { x: 20, y: 0, z: 2 }), size), "grows");
+  equal("...and below the origin is refused", placementNeeds(regionBetween({ x: -1, y: 0, z: 1 }, { x: 2, y: 0, z: 2 }), size), "blocked");
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

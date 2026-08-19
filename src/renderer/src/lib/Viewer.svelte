@@ -20,7 +20,15 @@
   import type { MeshAtlas, MeshPayload } from "../../../shared/ipc.js";
   import type { ResolvedTheme } from "../../../shared/settings.js";
   import { t } from "./i18n.svelte.js";
-  import { dragFace, plateScale, type Axis, type Side } from "./selection_drag.js";
+  import {
+  cellFade,
+  cellUnderRay,
+  regionBetween,
+  visibleCells,
+  type GridCell,
+  type Ray,
+} from "./build_grid.js";
+import { dragFace, plateScale, type Axis, type Side } from "./selection_drag.js";
   import * as THREE from "three";
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
   import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
@@ -127,6 +135,23 @@
     /** A face was dragged; the region is already snapped and clamped. */
     onselectionchange?: (region: Region) => void;
     /**
+     * The document's size, so the build grid knows where the box ends.
+     *
+     * `null` when nothing is open, which is also when there is nothing to build
+     * on and the grid stays hidden.
+     */
+    documentSize?: [number, number, number] | null;
+    /**
+     * A drag across the build grid, as a region one block tall at the base.
+     *
+     * The grid exists because an empty schematic had no geometry to raycast, so
+     * neither a selection nor a placement had anything to aim at. This is the
+     * selection half; `onbuild` already carries the placement half.
+     */
+    ongridselect?: (region: Region) => void;
+    /** A click on the build grid in creative mode, meaning "put a block here". */
+    ongridplace?: (at: { x: number; y: number; z: number }) => void;
+    /**
      * The palette in force, already resolved against the OS preference.
      *
      * The viewer never reads this value -- the colours come from the same CSS
@@ -155,6 +180,9 @@
     framingKey = 0,
     theme = "dark",
     onselectionchange,
+    documentSize = null,
+    ongridselect,
+    ongridplace,
   }: Props = $props();
 
   /**
@@ -181,6 +209,14 @@
   let highlight: THREE.LineSegments | undefined;
   let lastHighlightAt = 0;
   const HIGHLIGHT_INTERVAL_MS = 50;
+
+  /**
+   * How far the build grid reaches from the pointer, in cells.
+   *
+   * Four is a nine-by-nine patch: enough to judge where a drag is going, small
+   * enough that it reads as a hint about the cursor rather than as a floor.
+   */
+  const GRID_RADIUS = 4;
 
   /**
    * Is this event coming out of somewhere the user is entering text?
@@ -296,6 +332,19 @@
   let flying = $state(false);
 
   const raycaster = new THREE.Raycaster();
+
+  /**
+   * The build grid: cells drawn around the pointer, at the document's base.
+   *
+   * Rebuilt rather than recoloured when it moves, like `GridHelper` above and
+   * for the same reason — the fade is baked into a vertex-colour attribute, so
+   * there is nothing to update in place.
+   */
+  let cellGrid: THREE.LineSegments | undefined;
+  let gridCell = $state<GridCell | null>(null);
+  /** Where a grid drag began, or null when no drag is in progress. */
+  let gridAnchor: GridCell | null = null;
+  let lastGridAt = 0;
 
   /**
    * Keys held down, by `event.code` — physical position, not the character
@@ -599,6 +648,118 @@
     if (next !== null) onselectionchange(next);
   }
 
+  /** The ray under the pointer, in the shape `build_grid.ts` takes. */
+  function rayThrough(clientX: number, clientY: number): Ray | null {
+    if (!camera || !container) return null;
+    const rect = container.getBoundingClientRect();
+    raycaster.setFromCamera(
+      new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1,
+      ),
+      camera,
+    );
+    return {
+      origin: { x: raycaster.ray.origin.x, y: raycaster.ray.origin.y, z: raycaster.ray.origin.z },
+      direction: {
+        x: raycaster.ray.direction.x,
+        y: raycaster.ray.direction.y,
+        z: raycaster.ray.direction.z,
+      },
+    };
+  }
+
+  /** The grid cell under the pointer right now, or null. */
+  function gridCellAt(clientX: number, clientY: number): GridCell | null {
+    if (!documentSize) return null;
+    const ray = rayThrough(clientX, clientY);
+    if (ray === null) return null;
+    return cellUnderRay(ray, {
+      width: documentSize[0],
+      height: documentSize[1],
+      length: documentSize[2],
+    });
+  }
+
+  /**
+   * Follows the pointer across the grid, throttled like the other raycasts.
+   *
+   * Shares `HIGHLIGHT_INTERVAL_MS` deliberately: this is one more target in the
+   * loop that already exists, not a second loop. A grid that updated every frame
+   * while the block highlight updated twenty times a second would be two
+   * different answers to "where is the pointer" drawn on top of each other.
+   */
+  function updateBuildGrid(now: number): void {
+    if (cameraMode !== "orbit" || pointerAt === null || !documentSize) {
+      if (gridCell !== null) gridCell = null;
+      return;
+    }
+    if (now - lastGridAt < HIGHLIGHT_INTERVAL_MS) return;
+    lastGridAt = now;
+
+    const cell = gridCellAt(pointerAt.x, pointerAt.y);
+    const same =
+      cell === gridCell ||
+      (cell !== null && gridCell !== null && cell.x === gridCell.x && cell.z === gridCell.z);
+    if (!same) gridCell = cell;
+  }
+
+  /**
+   * Draws the cells around the pointer, faded outwards.
+   *
+   * Only near the cursor, which is the difference between a usable aid and a
+   * permanent lattice in front of the model — and the reason this is not simply
+   * the existing `GridHelper` made bigger.
+   */
+  function updateBuildGridMesh(): void {
+    if (!scene) return;
+    if (cellGrid) {
+      scene.remove(cellGrid);
+      cellGrid.geometry.dispose();
+      (cellGrid.material as THREE.Material).dispose();
+      cellGrid = undefined;
+    }
+    if (gridCell === null || cameraMode !== "orbit") return;
+
+    const centre = gridCell;
+    const base = themeColor("--selection", 0x6ea8fe);
+    const positions: number[] = [];
+    const colours: number[] = [];
+
+    for (const cell of visibleCells(centre, GRID_RADIUS)) {
+      const fade = cellFade(cell, centre, GRID_RADIUS);
+      if (fade <= 0) continue;
+      // Two of the four edges per cell: the neighbours draw the others, so the
+      // shared ones are not drawn twice with two different fades.
+      const y = 0.002; // a hair above the plane, or it z-fights with the floor
+      const corners: [number, number, number, number][] = [
+        [cell.x, cell.z, cell.x + 1, cell.z],
+        [cell.x, cell.z, cell.x, cell.z + 1],
+      ];
+      for (const [x1, z1, x2, z2] of corners) {
+        positions.push(x1, y, z1, x2, y, z2);
+        for (let i = 0; i < 2; i += 1) colours.push(base.r * fade, base.g * fade, base.b * fade);
+      }
+    }
+    if (positions.length === 0) return;
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colours, 3));
+    cellGrid = new THREE.LineSegments(
+      geometry,
+      new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9 }),
+    );
+    cellGrid.renderOrder = 998;
+    scene.add(cellGrid);
+  }
+
+  $effect(() => {
+    void gridCell;
+    void cameraMode;
+    updateBuildGridMesh();
+  });
+
   /** Refreshes the hovered face, throttled like the crosshair highlight. */
   function updateHover(now: number): void {
     if (dragged !== null) return;
@@ -764,6 +925,7 @@
         }
         updateCrosshairHighlight(performance.now());
         updateHover(performance.now());
+        updateBuildGrid(performance.now());
         if (renderer && scene && camera) {
           renderer.render(scene, camera);
         }
@@ -813,7 +975,29 @@
          */
         if (event.button !== 0 || cameraMode !== "orbit") return;
         const face = faceAt(event.clientX, event.clientY);
-        if (face === null) return;
+        if (face === null) {
+          /*
+           * Nothing solid under the pointer, but the grid is there.
+           *
+           * Taking the left button is not optional: it is mapped to
+           * `THREE.MOUSE.PAN`, so a drag left to OrbitControls pans the camera
+           * and the region never forms. Same reasoning as the face handles
+           * above, same remedy.
+           */
+          const cell = gridCellAt(event.clientX, event.clientY);
+          if (cell === null || pickBlockAt(event.clientX, event.clientY) !== null) return;
+          gridAnchor = cell;
+          gridCell = cell;
+          draggedThisGesture = true;
+          if (controls) controls.enabled = false;
+          try {
+            renderer?.domElement.setPointerCapture(event.pointerId);
+          } catch {
+            // Best effort; the drag still tracks while the pointer is in bounds.
+          }
+          event.preventDefault();
+          return;
+        }
         dragged = face;
         hovered = face;
         draggedThisGesture = true;
@@ -828,7 +1012,20 @@
 
       const onPointerMove = (event: PointerEvent) => {
         pointerAt = { x: event.clientX, y: event.clientY };
-        if (dragged !== null) dragTo(event.clientX, event.clientY);
+        if (dragged !== null) {
+          dragTo(event.clientX, event.clientY);
+          return;
+        }
+        // Not throttled, unlike the hover: a drag is the user actively saying
+        // where the box goes, and a region that lagged fifty milliseconds
+        // behind the pointer feels broken in a way a highlight does not.
+        if (gridAnchor !== null) {
+          const cell = gridCellAt(event.clientX, event.clientY);
+          if (cell !== null) {
+            gridCell = cell;
+            ongridselect?.(regionBetween(gridAnchor, cell));
+          }
+        }
       };
 
       const onPointerLeave = () => {
@@ -837,6 +1034,31 @@
       const onPointerUp = (event: PointerEvent) => {
         const start = downAt;
         downAt = null;
+
+        if (gridAnchor !== null) {
+          const anchor = gridAnchor;
+          gridAnchor = null;
+          if (controls) controls.enabled = true;
+          try {
+            renderer?.domElement.releasePointerCapture(event.pointerId);
+          } catch {
+            // Nothing captured; nothing to release.
+          }
+          /*
+           * A press that never moved is a placement, not a selection of one
+           * cell: with nothing built yet, "click the floor" means "put a block
+           * here", and asking the user to drag one cell first would be a rule
+           * with no reason behind it.
+           */
+          const moved =
+            start !== null &&
+            Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4;
+          if (!moved) {
+            ongridplace?.({ x: anchor.x, y: anchor.y, z: anchor.z });
+          }
+          draggedThisGesture = false;
+          return;
+        }
 
         if (dragged !== null) {
           dragged = null;

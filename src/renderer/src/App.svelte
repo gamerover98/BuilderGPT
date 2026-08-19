@@ -444,6 +444,8 @@
       sidebarCollapsed = settings.ui.sidebarCollapsed;
       toolWindowX = settings.ui.toolWindowX;
       toolWindowY = settings.ui.toolWindowY;
+      inspectorWindowX = settings.ui.inspectorWindowX;
+      inspectorWindowY = settings.ui.inspectorWindowY;
       keyStatus = await api().getKeyStatus();
       versions = await api().listVersions();
       artifacts = await api().listArtifacts();
@@ -544,6 +546,17 @@
   /** Mirrored locally so a drag repaints at pointer speed, like the sidebar. */
   let toolWindowX = $state(DEFAULT_UI_SETTINGS.toolWindowX);
   let toolWindowY = $state(DEFAULT_UI_SETTINGS.toolWindowY);
+
+  /**
+   * The inspector, which used to be the sidebar's third tab.
+   *
+   * Same arrangement as the tools: closing it means "not now", and clicking a
+   * block brings it back. That is what stops a closed panel from being one the
+   * user has lost; it is reachable from Ctrl+K as well.
+   */
+  let inspectorOpen = $state(true);
+  let inspectorWindowX = $state(DEFAULT_UI_SETTINGS.inspectorWindowX);
+  let inspectorWindowY = $state(DEFAULT_UI_SETTINGS.inspectorWindowY);
 
   /**
    * Fetches OpenCode's model list when the provider calls for it.
@@ -738,6 +751,16 @@
       keywords: t("command.showTools.keywords"),
       enabled: docState !== null,
       run: () => (toolsOpen = !toolsOpen),
+    },
+    {
+      id: "toggle-inspector",
+      title: inspectorOpen ? t("command.hideInspector") : t("command.showInspector"),
+      group: t("group.view"),
+      keywords: t("command.showInspector.keywords"),
+      // Nothing to show until a block has been asked about, and offering to
+      // reveal an empty panel is how a command reads as broken.
+      enabled: inspection !== null,
+      run: () => (inspectorOpen = !inspectorOpen),
     },
     {
       id: "settings",
@@ -1044,6 +1067,9 @@
     try {
       const response = await api().inspectBlock(x, y, z);
       inspection = response.ok ? response : null;
+      // Asking what a block is is the gesture that wants the inspector, exactly
+      // as selecting something is the gesture that wants the tools.
+      if (inspection !== null) inspectorOpen = true;
     } catch {
       // A failed inspection is not worth a banner — the panel simply stays
       // empty, and the click still moved the selection, which is the part the
@@ -1541,11 +1567,7 @@
       >
     </header>
 
-    <SidebarTabs
-      active={sidebarTab}
-      hasInspection={inspection !== null}
-      onselect={(tab) => (sidebarTab = tab)}
-    />
+    <SidebarTabs active={sidebarTab} onselect={(tab) => (sidebarTab = tab)} />
 
     <!--
       The chat is the one tab that manages its own scrolling, so it must not be
@@ -1572,14 +1594,6 @@
           onundo={() => runDocument(t("task.undoing"), () => api().undo())}
           onsettingschange={patchSettings}
           onopensettings={() => (settingsOpen = true)}
-        />
-      {:else if sidebarTab === "inspector"}
-        <InspectorPanel
-          {inspection}
-          at={inspectedAt}
-          {busy}
-          onchangeproperty={changeBlockProperty}
-          onchangenbt={changeNbtValue}
         />
       {:else}
         <DocumentPanel
@@ -1837,6 +1851,33 @@
             anchor = null;
           }}
           onselectall={selectAll}
+        />
+      </ToolWindow>
+    {/if}
+
+    {#if docState && inspectorOpen && inspection !== null}
+      <ToolWindow
+        title={t("inspector.title")}
+        x={inspectorWindowX}
+        y={inspectorWindowY}
+        closeLabel={t("common.close")}
+        onmove={(x, y) => {
+          inspectorWindowX = x;
+          inspectorWindowY = y;
+        }}
+        oncommit={(x, y) => {
+          inspectorWindowX = x;
+          inspectorWindowY = y;
+          void patchUi({ inspectorWindowX: x, inspectorWindowY: y });
+        }}
+        onclose={() => (inspectorOpen = false)}
+      >
+        <InspectorPanel
+          {inspection}
+          at={inspectedAt}
+          {busy}
+          onchangeproperty={changeBlockProperty}
+          onchangenbt={changeNbtValue}
         />
       </ToolWindow>
     {/if}

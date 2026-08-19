@@ -136,7 +136,7 @@ export const en = {
   "selection.replaceHint": "Replace within the selection",
 
   "inspector.empty": "Click a block in the viewport to see what it is.",
-  "inspector.legend": "Block",
+  "inspector.title": "Inspector",
   "inspector.at": "at ({x}, {y}, {z})",
   "inspector.blockStates": "Block states",
   "inspector.blockStatesHint":
@@ -282,7 +282,6 @@ export const en = {
   "tabs.label": "Sidebar panels",
   "tabs.chat": "Chat",
   "tabs.schematic": "Schematic",
-  "tabs.inspector": "Inspector",
 
   "group.file": "File",
   "group.recent": "Recent",
@@ -318,6 +317,9 @@ export const en = {
   "command.cameraFly.keywords": "wasd walk fly first person",
   "command.showTools": "Show the selection tools",
   "command.showTools.keywords": "panel palette fill replace floating window",
+  "command.hideInspector": "Hide the inspector",
+  "command.showInspector": "Show the inspector",
+  "command.showInspector.keywords": "inspector block state nbt properties floating window",
   "command.hideTools": "Hide the selection tools",
   "command.hideGrid": "Hide the grid",
   "command.showGrid": "Show the grid",

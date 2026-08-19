@@ -94,9 +94,13 @@
   -->
   <p class="hint empty">{t("inspector.empty")}</p>
 {:else}
-  <fieldset>
-    <legend>{t("inspector.legend")}</legend>
-
+  <!--
+    No `<fieldset>` and no legend: this lives inside a `ToolWindow`, whose title
+    bar already says what it is. It carried both while it was the sidebar's
+    third tab, and keeping them here would draw a second border and a second
+    heading inside the first.
+  -->
+  <div class="panel">
     <p class="id">{inspection.block}</p>
     <p class="hint">{t("inspector.at", { x: at.x, y: at.y, z: at.z })}</p>
 
@@ -166,10 +170,16 @@
         {/if}
       </div>
     {/if}
-  </fieldset>
+  </div>
 {/if}
 
 <style>
+  .panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
   .empty {
     padding: 20px 2px;
   }

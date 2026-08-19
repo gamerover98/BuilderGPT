@@ -1,35 +1,36 @@
 <script lang="ts" module>
-  export type SidebarTab = "chat" | "schematic" | "inspector";
+  export type SidebarTab = "chat" | "schematic";
 </script>
 
 <script lang="ts">
   /**
-   * Which of the three panels the sidebar is showing.
+   * Which of the two panels the sidebar is showing.
    *
    * The column used to stack all of them and scroll. That was survivable at
    * three fieldsets and stopped being so at six: the chat -- the thing you use
    * most -- sat in the middle with its input drifting off-screen, and finding
    * anything meant scrolling past everything else.
    *
-   * The badge on Inspector exists because that panel is empty until you click a
-   * block, and a tab that is blank half the time looks broken. A dot when it
-   * has something to show is the cheapest way to say "there is something here".
+   * There were three tabs, and the third was Inspector. It has moved out to a
+   * floating window over the canvas, because it is not the same *kind* of thing
+   * as the other two: Chat is a place you stay and Schematic is a drawer you
+   * visit, while the inspector only ever reflects the block you just clicked.
+   * The badge it needed here is the tell -- a tab that has to announce "there is
+   * something here now" is blank the rest of the time, and being mutually
+   * exclusive with the chat meant looking at a block cost you the conversation.
    */
   import { t } from "./i18n.svelte.js";
 
   interface Props {
     active: SidebarTab;
-    /** True when the inspector has a block to show. */
-    hasInspection: boolean;
     onselect: (tab: SidebarTab) => void;
   }
 
-  const { active, hasInspection, onselect }: Props = $props();
+  const { active, onselect }: Props = $props();
 
   const TABS: readonly { id: SidebarTab; key: string }[] = [
     { id: "chat", key: "tabs.chat" },
     { id: "schematic", key: "tabs.schematic" },
-    { id: "inspector", key: "tabs.inspector" },
   ];
 </script>
 
@@ -42,9 +43,6 @@
       onclick={() => onselect(tab.id)}
     >
       {t(tab.key)}
-      {#if tab.id === "inspector" && hasInspection && active !== "inspector"}
-        <span class="dot" aria-hidden="true"></span>
-      {/if}
     </button>
   {/each}
 </div>
@@ -83,13 +81,4 @@
     border-color: var(--accent);
   }
 
-  .dot {
-    display: inline-block;
-    width: 5px;
-    height: 5px;
-    margin-left: 5px;
-    border-radius: 50%;
-    background: var(--accent);
-    vertical-align: middle;
-  }
 </style>

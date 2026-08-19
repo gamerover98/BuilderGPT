@@ -72,6 +72,14 @@ export const IPC = {
   docAgentReset: "bgpt:doc:agent:reset",
   /** Read the chat log. Main owns it, so this is how the renderer re-syncs. */
   chatState: "bgpt:chat:state",
+  /** Every conversation about the open schematic. */
+  chatList: "bgpt:chat:list",
+  /** Switch to one of them. */
+  chatOpen: "bgpt:chat:open",
+  /** Start another, keeping the current one. */
+  chatNew: "bgpt:chat:new",
+  /** Throw one away for good. */
+  chatDelete: "bgpt:chat:delete",
   /** Stop the request in flight. */
   docAgentCancel: "bgpt:doc:agent:cancel",
   /** main → renderer: one tool call the agent just made. */
@@ -544,6 +552,24 @@ export interface ChatEntry {
   remembered?: boolean;
 }
 
+/** One conversation, as the picker lists it. */
+export interface ConversationSummary {
+  id: string;
+  /** The first thing the user said, cut to something that fits a row. */
+  title: string;
+  /** Epoch milliseconds; `0` when nothing was ever recorded. */
+  updatedAt: number;
+  /** Turns in it, so an empty one can say so rather than look broken. */
+  entryCount: number;
+}
+
+/** Every conversation about the open schematic, newest first. */
+export interface ConversationList {
+  conversations: ConversationSummary[];
+  /** Which of them is on screen. */
+  activeId: string;
+}
+
 /** The log and where the agent's memory into it begins. */
 export interface ChatState {
   entries: ChatEntry[];
@@ -705,6 +731,20 @@ export interface BgptApi {
    * and opening a document, which may adopt the conversation or clear it.
    */
   getChatState(): Promise<ChatState>;
+  /** Every conversation about the open schematic, newest first. */
+  listConversations(): Promise<ConversationList>;
+  /** Switch to one, saving the current first. Unknown ids resolve unchanged. */
+  openConversation(id: string): Promise<ChatState>;
+  /**
+   * Start a new one.
+   *
+   * The current one is *kept*, not discarded — it stays in the list and can be
+   * returned to. That is the difference between this and what the button used
+   * to do.
+   */
+  newConversation(): Promise<ChatState>;
+  /** Delete one for good. Deleting the active one starts a new empty one. */
+  deleteConversation(id: string): Promise<ChatState>;
   /**
    * Stop the request with this id. Resolves `true` if one was in flight.
    *

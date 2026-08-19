@@ -17,7 +17,7 @@
   import type { DocumentState, RecentDocument } from "../../../shared/ipc.js";
   import { SCHEMATIC_FORMAT_LABEL, type SchematicFormat } from "../../../shared/schematic.js";
   import { t } from "./i18n.svelte.js";
-  import { openedAge } from "./recent_age.js";
+  import { ageLabel } from "./age_label.js";
 
   interface Props {
     doc: DocumentState | null;
@@ -77,26 +77,12 @@
    * Empty for `openedAt === 0`, which is what an entry written before this list
    * carried timestamps has. Showing "1 Jan 1970" there would be inventing a
    * fact; showing nothing says plainly that none was recorded.
+   *
+   * The wording moved to `age_label.ts` when the conversation picker needed the
+   * same thing: two of these in one window is two chances to phrase it
+   * differently.
    */
-  function openedLabel(openedAt: number): string {
-    const age = openedAge(openedAt, Date.now());
-    switch (age.kind) {
-      case "none":
-        return "";
-      case "justNow":
-        return t("doc.openedJustNow");
-      case "minutes":
-        return t("doc.openedMinutes", { count: age.count });
-      case "hours":
-        return t("doc.openedHours", { count: age.count });
-      case "days":
-        return t("doc.openedDays", { count: age.count });
-      default:
-        // `toLocaleDateString` follows the OS rather than our locale, which is
-        // the right authority for how a date is written.
-        return new Date(openedAt).toLocaleDateString();
-    }
-  }
+  const openedLabel = ageLabel;
 </script>
 
 <fieldset>

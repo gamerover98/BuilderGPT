@@ -34,6 +34,7 @@
     type BlockInspection,
     type ChatEntry,
     type ChatState,
+    type ConversationSummary,
     type DocumentState,
     type EditResponse,
     type OpenCodeModelInfo,
@@ -209,6 +210,16 @@
   let chat = $state<ChatEntry[]>([]);
   /** Index into `chat` where the agent's memory begins; 0 draws no divider. */
   let rememberedFrom = $state(0);
+
+  /**
+   * The other conversations about this schematic, for the picker.
+   *
+   * Fetched when the picker opens rather than kept in step: main retitles and
+   * reorders them as turns land, and a copy held here would go stale in ways
+   * nothing would notice.
+   */
+  let conversations = $state<ConversationSummary[]>([]);
+  let activeConversationId = $state("");
   /** Tool calls for the turn in flight, so the panel narrates rather than hangs. */
   let liveSteps = $state<AgentStepEvent[]>([]);
   /**
@@ -242,6 +253,13 @@
    * changes, and a log left on screen after that would show the user exchanges
    * the agent can no longer refer to.
    */
+  /**
+   * Starts another conversation about the same schematic.
+   *
+   * The one on screen is kept, not thrown away -- it stays in the picker's list
+   * and can be returned to. The name is what it always was because the button
+   * is what it always was; what changed is that "new" stopped meaning "gone".
+   */
   async function forgetConversation(): Promise<void> {
     chat = [];
     liveSteps = [];
@@ -249,6 +267,7 @@
     rememberedFrom = 0;
     if (bridgeAvailable) {
       await api().resetAgentConversation();
+      await refreshConversations();
     }
   }
 
@@ -879,6 +898,31 @@
     rememberedFrom = state.rememberedFrom;
   }
 
+  async function refreshConversations(): Promise<void> {
+    if (!bridgeAvailable) return;
+    const list = await api().listConversations();
+    conversations = list.conversations;
+    activeConversationId = list.activeId;
+  }
+
+  async function openConversation(id: string): Promise<void> {
+    if (!bridgeAvailable) return;
+    busy = true;
+    try {
+      adoptChat(await api().openConversation(id));
+      liveSteps = [];
+      await refreshConversations();
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function deleteConversation(id: string): Promise<void> {
+    if (!bridgeAvailable) return;
+    adoptChat(await api().deleteConversation(id));
+    await refreshConversations();
+  }
+
   async function saveKey(provider: Provider, apiKey: string): Promise<void> {
     keyStatus = await api().setKey({ provider, apiKey });
   }
@@ -1069,7 +1113,10 @@
        */
       liveSteps = [];
       remembered = 0;
-      if (bridgeAvailable) adoptChat(await api().getChatState());
+      if (bridgeAvailable) {
+        adoptChat(await api().getChatState());
+        await refreshConversations();
+      }
       // A newly opened document is the one case where framing the camera is
       // what the user wants: they have not aimed it at anything yet.
       framingEpoch += 1;
@@ -1592,6 +1639,11 @@
           {selection}
           {remembered}
           {rememberedFrom}
+          {conversations}
+          {activeConversationId}
+          onrefreshconversations={() => void refreshConversations()}
+          onopenconversation={(id) => void openConversation(id)}
+          ondeleteconversation={(id) => void deleteConversation(id)}
           hasDocument={docState !== null}
           {busy}
           {settings}

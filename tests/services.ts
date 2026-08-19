@@ -29,7 +29,11 @@ import {
   appendEntry,
   conversationMessages,
   conversationState,
+  deleteConversation,
+  listConversations,
+  newConversation,
   noteTurn,
+  openConversation,
   resetConversation,
   saveConversation,
   useConversationDirectory,
@@ -1038,6 +1042,63 @@ console.log("\n--- conversation persistence ---");
     ])?.id,
     "b",
   );
+
+  /*
+   * Several conversations about one schematic, which is what the picker lists.
+   *
+   * The property that matters: "new chat" *keeps* the old one. It used to
+   * delete it, and the difference is the whole feature.
+   */
+  {
+    const many = path.join(workDir, "many.schem");
+    resetConversation(null);
+    await adoptSubject(many);
+
+    appendEntry({ role: "user", text: "the first conversation" });
+    await newConversation();
+    equal("a new conversation starts empty", conversationState().entries.length, 0);
+
+    appendEntry({ role: "user", text: "the second conversation" });
+    const list = await listConversations();
+    equal("both are listed", list.conversations.length, 2);
+    check(
+      "the one on screen is marked active",
+      list.conversations.some((one) => one.id === list.activeId),
+    );
+    equal(
+      "...and they are titled by what was said",
+      [...list.conversations].map((one) => one.title).sort(),
+      ["the first conversation", "the second conversation"],
+    );
+
+    // Going back to the earlier one, and finding it intact.
+    const earlier = list.conversations.find((one) => one.title === "the first conversation");
+    const back = await openConversation(earlier?.id ?? "");
+    equal("switching back brings its log", back.entries.map((e) => e.text), [
+      "the first conversation",
+    ]);
+
+    // And the one we left is still there, not lost by the switch.
+    const after = await listConversations();
+    equal("...and the one we left is still listed", after.conversations.length, 2);
+
+    // An id that is not there changes nothing. The renderer's list can be a
+    // moment out of date and a stale click should be a no-op, not an error.
+    const unchanged = await openConversation("no-such-id");
+    equal("an unknown id is a no-op", unchanged.entries.length, 1);
+
+    // Deleting one that is not on screen leaves the current one alone.
+    const other = after.conversations.find((one) => one.title === "the second conversation");
+    const kept = await deleteConversation(other?.id ?? "");
+    equal("deleting another leaves this one", kept.entries.length, 1);
+    equal("...and it is gone from the list", (await listConversations()).conversations.length, 1);
+
+    // Deleting the one on screen leaves an empty one rather than guessing which
+    // of the others to jump to.
+    const current = await listConversations();
+    const emptied = await deleteConversation(current.activeId);
+    equal("deleting the active one empties the panel", emptied.entries.length, 0);
+  }
 
   resetConversation(null);
 }

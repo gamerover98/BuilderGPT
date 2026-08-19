@@ -21,6 +21,7 @@ import {
   type EditRequest,
   type EditResponse,
   type ChatState,
+  type ConversationList,
   type Failure,
   type FailureKind,
   type GenerateRequest,
@@ -84,7 +85,11 @@ import {
   appendEntry,
   conversationMessages,
   conversationState,
+  deleteConversation,
+  listConversations,
+  newConversation,
   noteTurn,
+  openConversation,
   resetConversation,
   saveConversation,
   useConversationDirectory,
@@ -779,14 +784,26 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
 
   ipcMain.handle(IPC.chatState, async (): Promise<ChatState> => conversationState());
 
+  ipcMain.handle(IPC.chatList, async (): Promise<ConversationList> => await listConversations());
+
+  ipcMain.handle(
+    IPC.chatOpen,
+    async (_event, id: string): Promise<ChatState> => await openConversation(id),
+  );
+
+  ipcMain.handle(IPC.chatNew, async (): Promise<ChatState> => await newConversation());
+
+  ipcMain.handle(
+    IPC.chatDelete,
+    async (_event, id: string): Promise<ChatState> => await deleteConversation(id),
+  );
+
   ipcMain.handle(IPC.docAgentReset, async (): Promise<void> => {
     /*
-     * Saved before it is thrown away. "New chat" means the next question starts
-     * fresh, not "delete what I said" -- and the saved copy is what Part 4 of
-     * this work turns into something you can go back to.
+     * Kept, not discarded. "New chat" means the next question starts fresh; the
+     * one before it stays in the list and can be returned to from the picker.
      */
-    await saveConversation();
-    resetConversation();
+    await newConversation();
   });
 
   ipcMain.handle(IPC.preview, async (_event, req: PreviewRequest): Promise<PreviewResponse> => {

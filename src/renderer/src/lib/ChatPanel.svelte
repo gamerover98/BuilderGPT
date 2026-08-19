@@ -15,9 +15,15 @@
    * only evidence of progress, and afterwards they are the least interesting
    * part of the answer.
    */
-  import type { AgentStepEvent, ChatEntry, RegionSpec } from "../../../shared/ipc.js";
+  import type {
+    AgentStepEvent,
+    ChatEntry,
+    ConversationSummary,
+    RegionSpec,
+  } from "../../../shared/ipc.js";
   import type { KeyStorageStatus, Settings } from "../../../shared/settings.js";
   import ChatComposer from "./ChatComposer.svelte";
+  import ConversationPicker from "./ConversationPicker.svelte";
   import Markdown from "./Markdown.svelte";
   import { t, tn } from "./i18n.svelte.js";
 
@@ -57,8 +63,15 @@
      * button would revert the wrong thing.
      */
     undoLabel: string | null;
+    /** Every conversation about this schematic, newest first. */
+    conversations: ConversationSummary[];
+    activeConversationId: string;
     onask: (prompt: string) => void;
+    /** Starts another conversation; the current one stays in the list. */
     onforget: () => void;
+    onrefreshconversations: () => void;
+    onopenconversation: (id: string) => void;
+    ondeleteconversation: (id: string) => void;
     onstop: () => void;
     onundo: () => void;
     onsettingschange: (patch: Partial<Settings>) => void;
@@ -78,8 +91,13 @@
     draft,
     ondraftchange,
     undoLabel,
+    conversations,
+    activeConversationId,
     onask,
     onforget,
+    onrefreshconversations,
+    onopenconversation,
+    ondeleteconversation,
     onstop,
     onundo,
     onsettingschange,
@@ -129,8 +147,20 @@
 </script>
 
 <section class="chat">
+<!--
+    The header names the conversation you are in rather than the panel you are
+    looking at: "Chat" was true and told you nothing, and with several
+    conversations per schematic the useful fact is which one this is.
+  -->
   <header>
-    <span class="title">{t("chat.legend")}</span>
+    <ConversationPicker
+      {conversations}
+      activeId={activeConversationId}
+      {busy}
+      onrefresh={onrefreshconversations}
+      onopen={onopenconversation}
+      ondelete={ondeleteconversation}
+    />
     <button
       class="icon"
       onclick={onforget}

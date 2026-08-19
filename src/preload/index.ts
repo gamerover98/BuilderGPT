@@ -15,6 +15,7 @@ import {
   type AgentRequestPayload,
   type AgentResponse,
   type ChatState,
+  type ConversationList,
   type AgentStepEvent,
   type Artifact,
   type BgptApi,
@@ -116,6 +117,11 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docAgent, request) as Promise<AgentResponse>,
   resetAgentConversation: () => ipcRenderer.invoke(IPC.docAgentReset) as Promise<void>,
   getChatState: () => ipcRenderer.invoke(IPC.chatState) as Promise<ChatState>,
+  listConversations: () => ipcRenderer.invoke(IPC.chatList) as Promise<ConversationList>,
+  openConversation: (id: string) => ipcRenderer.invoke(IPC.chatOpen, id) as Promise<ChatState>,
+  newConversation: () => ipcRenderer.invoke(IPC.chatNew) as Promise<ChatState>,
+  deleteConversation: (id: string) =>
+    ipcRenderer.invoke(IPC.chatDelete, id) as Promise<ChatState>,
   cancelAgent: (requestId: string) =>
     ipcRenderer.invoke(IPC.docAgentCancel, requestId) as Promise<boolean>,
 

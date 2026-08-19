@@ -36,7 +36,7 @@
 import { mkdir, readFile, readdir, rm, writeFile } from "fs/promises";
 import path from "path";
 
-import type { ChatEntry, ChatState } from "../../shared/ipc.js";
+import type { ChatEntry, ChatState, ConversationList } from "../../shared/ipc.js";
 import { pathsMatch } from "./recent_documents.js";
 import { rememberedFromIndex } from "./conversation_core.js";
 import {
@@ -63,6 +63,8 @@ interface Live {
   rememberedFrom: number;
   /** Exchanges the agent last reported carrying. */
   turns: number;
+  /** Touched on every append, so the live one sorts against the stored ones. */
+  updatedAt: number;
 }
 
 /** Windows and macOS reach the same file through paths differing in case. */
@@ -80,6 +82,7 @@ function fresh(subject: string | null): Live {
     messages: [],
     rememberedFrom: 0,
     turns: 0,
+    updatedAt: Date.now(),
   };
 }
 
@@ -101,6 +104,7 @@ export function conversationMessages(): unknown[] {
 /** Adds a turn to the log and returns the log as it now stands. */
 export function appendEntry(entry: ChatEntry): ChatState {
   current.entries.push(entry);
+  current.updatedAt = Date.now();
   recompute();
   return conversationState();
 }
@@ -121,6 +125,7 @@ export function noteTurn(messages: unknown[], turns: number): void {
   }
   current.messages = messages;
   current.turns = turns;
+  current.updatedAt = Date.now();
   recompute();
 }
 
@@ -159,7 +164,7 @@ function snapshot(): StoredConversation {
     id: current.id,
     title: titleFor(current.entries),
     createdAt: current.createdAt,
-    updatedAt: Date.now(),
+    updatedAt: current.updatedAt,
     entries: [...current.entries],
     messages: current.messages,
     rememberedFrom: current.rememberedFrom,
@@ -209,6 +214,7 @@ async function loadFor(subject: string): Promise<void> {
     id: stored.id,
     subject,
     createdAt: stored.createdAt,
+    updatedAt: stored.updatedAt,
     entries: [...stored.entries],
     messages: stored.messages,
     rememberedFrom: stored.rememberedFrom,
@@ -216,6 +222,106 @@ async function loadFor(subject: string): Promise<void> {
     // with the record, and the count that produced it did not.
     turns: stored.entries.filter((entry) => entry.role === "user" && entry.remembered).length,
   };
+}
+
+/**
+ * Every conversation about the current subject, newest first.
+ *
+ * The live one is folded in rather than read back off disk, because it may
+ * never have been written: a conversation with no subject has nowhere to be
+ * stored, and one that has just started has nothing worth storing yet.
+ */
+export async function listConversations(): Promise<ConversationList> {
+  const stored =
+    current.subject === null ? [] : ((await readRecord(current.subject))?.conversations ?? []);
+
+  const summaries = stored
+    .filter((one) => one.id !== current.id)
+    .map((one) => ({
+      id: one.id,
+      title: one.title,
+      updatedAt: one.updatedAt,
+      entryCount: one.entries.length,
+    }));
+
+  summaries.push({
+    id: current.id,
+    title: titleFor(current.entries),
+    updatedAt: current.updatedAt,
+    entryCount: current.entries.length,
+  });
+
+  summaries.sort((a, b) => b.updatedAt - a.updatedAt);
+  return { conversations: summaries, activeId: current.id };
+}
+
+/**
+ * Switches to one of the stored conversations.
+ *
+ * An id that is not there resolves without changing anything. That is not
+ * defensiveness for its own sake: the list the renderer is holding can be a
+ * moment out of date, and a stale click should be a no-op rather than an error
+ * banner over a chat.
+ */
+export async function openConversation(id: string): Promise<ChatState> {
+  if (id === current.id || current.subject === null) return conversationState();
+
+  const record = await readRecord(current.subject);
+  const stored = record?.conversations.find((one) => one.id === id);
+  if (!stored) return conversationState();
+
+  await saveConversation();
+  current = {
+    id: stored.id,
+    subject: current.subject,
+    createdAt: stored.createdAt,
+    updatedAt: stored.updatedAt,
+    entries: [...stored.entries],
+    messages: stored.messages,
+    rememberedFrom: stored.rememberedFrom,
+    turns: stored.entries.filter((entry) => entry.role === "user" && entry.remembered).length,
+  };
+  return conversationState();
+}
+
+/** Starts another conversation about the same document, keeping this one. */
+export async function newConversation(): Promise<ChatState> {
+  await saveConversation();
+  current = fresh(current.subject);
+  return conversationState();
+}
+
+/**
+ * Removes one for good.
+ *
+ * Deleting the one on screen leaves an empty conversation about the same
+ * document rather than jumping to another: which one it jumped to would be a
+ * guess, and the user has the list right there to choose from.
+ */
+export async function deleteConversation(id: string): Promise<ChatState> {
+  if (current.subject !== null) {
+    const record = await readRecord(current.subject);
+    const file = fileFor(current.subject);
+    if (record && file) {
+      const kept = record.conversations.filter((one) => one.id !== id);
+      try {
+        if (kept.length === 0) {
+          await rm(file, { force: true });
+        } else {
+          await writeFile(
+            file,
+            JSON.stringify({ ...record, conversations: kept }),
+            "utf8",
+          );
+        }
+      } catch {
+        // The list is redrawn from what is actually there either way.
+      }
+    }
+  }
+
+  if (id === current.id) current = fresh(current.subject);
+  return conversationState();
 }
 
 /**

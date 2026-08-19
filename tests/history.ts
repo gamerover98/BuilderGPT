@@ -25,6 +25,7 @@ import {
   createHistory,
   isDirty,
   markHistorySaved,
+  nextUndoId,
   nextUndoLabel,
   redo,
   runTransaction,
@@ -418,6 +419,50 @@ console.log("\n--- block entities ---");
     JSON.stringify(getBlockEntity(doc, 0, 0, 0)?.nbt),
     JSON.stringify(chest.nbt),
   );
+}
+
+// --- naming a transaction ---------------------------------------------------
+console.log("\n--- transactions have identities ---");
+{
+  const doc = createDocument({ width: 4, height: 4, length: 4, format: "sponge3" });
+  const history = createHistory();
+  // The entry itself: `tx.setBlock` interns for you, and handing it an index
+  // is the mistake this file has made before.
+  const stone: PaletteEntry = { namespacedName: "minecraft:stone", properties: {} };
+
+  /*
+   * The case the id exists for. Labels are derived from what was asked, so two
+   * turns asking the same thing carry the same string -- and the chat matched
+   * on that string to decide whether its "Undo this" was still the top of the
+   * stack. It could offer to undo the wrong turn, and the user could not tell.
+   */
+  runTransaction(doc, history, "Fill with minecraft:stone", (tx) =>
+    tx.setBlock(0, 0, 0, stone),
+  );
+  const first = nextUndoId(history);
+
+  runTransaction(doc, history, "Fill with minecraft:stone", (tx) =>
+    tx.setBlock(1, 0, 0, stone),
+  );
+  const second = nextUndoId(history);
+
+  equal("the two turns share a label", nextUndoLabel(history), "Fill with minecraft:stone");
+  check("...and are told apart by id anyway", first !== second, `${first} vs ${second}`);
+
+  // Undoing the second leaves the first on top -- and a caller still holding
+  // the second's id can now see that it is stale.
+  undo(doc, history);
+  equal("the id follows the stack down", nextUndoId(history), first);
+
+  // Ids are never reused, so a stale one can only fail to match; it can never
+  // silently name a different transaction.
+  runTransaction(doc, history, "Fill with minecraft:stone", (tx) =>
+    tx.setBlock(2, 0, 0, stone),
+  );
+  const third = nextUndoId(history);
+  check("a new transaction takes a fresh id", third !== first && third !== second, `${third}`);
+
+  equal("an empty stack has no id", nextUndoId(createHistory()), null);
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

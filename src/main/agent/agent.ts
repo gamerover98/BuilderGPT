@@ -130,6 +130,8 @@ export interface AgentResult {
    * offers "Undo this" only while this still matches the top of the stack.
    */
   undoLabel: string | null;
+  /** Which transaction that was, for the chat to match against the live one. */
+  undoTransactionId: number | null;
 }
 
 const SYSTEM_PROMPT = [
@@ -304,6 +306,7 @@ export async function runAgent(request: AgentRequest): Promise<AgentResult> {
     messages,
     summary,
     undoLabel: summary.changed > 0 ? label : null,
+    undoTransactionId: summary.changed > 0 ? (committed?.id ?? null) : null,
   };
 }
 

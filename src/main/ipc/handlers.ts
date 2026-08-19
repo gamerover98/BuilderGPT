@@ -725,6 +725,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           changed: result.changed,
           summary,
           undoLabel: result.undoLabel,
+          undoTransactionId: result.undoTransactionId,
         });
         // Both halves are one record, so this is one write. Not awaited: the
         // answer is ready and the user should have it now, and a conversation
@@ -739,6 +740,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           remembered: result.remembered,
           summary,
           undoLabel: result.undoLabel,
+          undoTransactionId: result.undoTransactionId,
           chat,
         };
       } catch (err) {

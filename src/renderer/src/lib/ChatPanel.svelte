@@ -63,6 +63,8 @@
      * button would revert the wrong thing.
      */
     undoLabel: string | null;
+    /** Its id, which is what the match is actually made on. */
+    undoTransactionId: number | null;
     /** Every conversation about this schematic, newest first. */
     conversations: ConversationSummary[];
     activeConversationId: string;
@@ -91,6 +93,7 @@
     draft,
     ondraftchange,
     undoLabel,
+    undoTransactionId,
     conversations,
     activeConversationId,
     onask,
@@ -253,7 +256,12 @@
                 </p>
               {/if}
             </div>
-            {#if entry.undoLabel && entry.undoLabel === undoLabel}
+            <!--
+              By id, not by label. The label comes from the prompt, so asking
+              for "make it taller" twice produced two turns this could not tell
+              apart, and the button offered to undo whichever was on top.
+            -->
+            {#if entry.undoTransactionId != null && entry.undoTransactionId === undoTransactionId}
               <div class="buttons">
                 <button onclick={onundo} disabled={busy}>{t("chat.undoThis")}</button>
               </div>

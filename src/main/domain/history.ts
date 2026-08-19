@@ -91,6 +91,15 @@ export type Command =
     };
 
 export interface Transaction {
+  /**
+   * Unique within a history, and monotonic.
+   *
+   * Exists because callers need to name a particular transaction across a
+   * process boundary, and the label cannot: it is derived from what the user
+   * asked for, so two turns saying the same thing produce the same string. The
+   * chat's "Undo this" matched on that string and could revert the wrong turn.
+   */
+  readonly id: number;
   readonly label: string;
   readonly commands: readonly Command[];
 }
@@ -102,10 +111,12 @@ export interface History {
   savedDepth: number;
   /** Oldest transactions are discarded past this; 0 means unlimited. */
   limit: number;
+  /** Next transaction id. Never reused, including after a drop off the end. */
+  nextId: number;
 }
 
 export function createHistory(limit = 200): History {
-  return { undoStack: [], redoStack: [], savedDepth: 0, limit };
+  return { undoStack: [], redoStack: [], savedDepth: 0, limit, nextId: 1 };
 }
 
 /** True when the document differs from what is on disk. */
@@ -139,6 +150,16 @@ export function nextUndoLabel(history: History): string | null {
 
 export function nextRedoLabel(history: History): string | null {
   return history.redoStack[history.redoStack.length - 1]?.label ?? null;
+}
+
+/**
+ * The id of the transaction an undo would revert, or `null` for an empty stack.
+ *
+ * The label's counterpart, and the one to compare against: a caller holding an
+ * id knows whether the thing it is offering to undo is still the thing on top.
+ */
+export function nextUndoId(history: History): number | null {
+  return history.undoStack[history.undoStack.length - 1]?.id ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -441,7 +462,7 @@ export function runTransaction<T>(
     return result;
   }
 
-  pushTransaction(history, { label, commands: recorder.commands });
+  pushTransaction(history, { id: history.nextId, label, commands: recorder.commands });
   return result;
 }
 
@@ -479,13 +500,16 @@ export async function runTransactionAsync<T>(
   if (recorder.commands.length === 0) {
     return result;
   }
-  pushTransaction(history, { label, commands: recorder.commands });
+  pushTransaction(history, { id: history.nextId, label, commands: recorder.commands });
   return result;
 }
 
 /** Shared by both transaction runners: push, clear redo, honour the limit. */
 function pushTransaction(history: History, transaction: Transaction): void {
   history.undoStack.push(transaction);
+  // Bumped whatever happens to the stack below. Ids are never reused, so an id
+  // held by something outside this module can only ever be stale, never wrong.
+  history.nextId = transaction.id + 1;
   // A new edit makes the redo branch unreachable, as everywhere else.
   history.redoStack.length = 0;
 

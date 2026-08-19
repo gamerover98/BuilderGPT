@@ -376,6 +376,13 @@ export interface DocumentState {
   /** What the undo/redo menu items should say, or `null` when unavailable. */
   undoLabel: string | null;
   redoLabel: string | null;
+  /**
+   * The id of the transaction an undo would revert.
+   *
+   * Beside the label rather than instead of it: the label is what the tooltip
+   * shows, and the id is what anything holding a reference compares against.
+   */
+  undoTransactionId: number | null;
   /** Monotonic; the renderer uses it to tell whether its mesh is stale. */
   revision: number;
 }
@@ -540,8 +547,16 @@ export interface ChatEntry {
   changed?: number;
   /** What was taken out and put in, by block type. */
   summary?: EditSummary;
-  /** The undo entry this turn created, for matching against the live one. */
+  /** The undo entry this turn created; shown on the "Undo this" button. */
   undoLabel?: string | null;
+  /**
+   * Which transaction that was.
+   *
+   * Matched by id and not by `undoLabel`, because the label is derived from
+   * the prompt: two turns asking for the same thing produced the same string,
+   * and the button would offer to undo whichever of them was on top.
+   */
+  undoTransactionId?: number | null;
   /**
    * Set on a user turn once it has actually reached the model.
    *
@@ -590,10 +605,12 @@ export interface AgentSuccess {
   summary: EditSummary;
   /**
    * The undo entry this run created, or `null` if it changed nothing. The chat
-   * offers "Undo this" only while it still matches `state.undoLabel` — once
+   * offers "Undo this" only while it is still on top of the stack — once
    * anything else has been done, undoing would revert that instead.
    */
   undoLabel: string | null;
+  /** The same transaction, named in a way two identical prompts cannot share. */
+  undoTransactionId: number | null;
   /**
    * Exchanges the agent is carrying, this one included. The transcript itself
    * stays in main — this is the one thing the UI needs from it, to say whether

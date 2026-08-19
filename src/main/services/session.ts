@@ -41,6 +41,7 @@ import {
   isDirty,
   markHistorySaved,
   nextRedoLabel,
+  nextUndoId,
   nextUndoLabel,
   redo,
   runTransaction,
@@ -200,6 +201,7 @@ export function documentState(session: DocumentSession): DocumentState {
     canUndo: canUndo(history),
     canRedo: canRedo(history),
     undoLabel: nextUndoLabel(history),
+    undoTransactionId: nextUndoId(history),
     redoLabel: nextRedoLabel(history),
     revision: doc.revision,
   };

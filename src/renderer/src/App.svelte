@@ -1651,6 +1651,7 @@
           draft={chatDraft}
           ondraftchange={(next) => (chatDraft = next)}
           undoLabel={docState?.undoLabel ?? null}
+          undoTransactionId={docState?.undoTransactionId ?? null}
           onask={askAgent}
           onforget={forgetConversation}
           onstop={stopAgent}

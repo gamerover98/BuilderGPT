@@ -171,8 +171,22 @@ const SYSTEM_PROMPT = [
   "  get_palette shows exactly how each block in this schematic is spelled.",
   "- When the user has a selection, tools default to it. Do not restate its coordinates unless you",
   "  mean somewhere else.",
-  "- For anything structural, write one build script rather than hundreds of set_block calls.",
+  // The old wording was "rather than hundreds of set_block calls", which a
+  // model reading it takes as an argument about *cost*: if it is reaching for
+  // replace_blocks it concludes the rule does not apply to it. A sloping roof
+  // is not hundreds of set_blocks, it is a shape, and shapes are what the
+  // script is for.
+  "- A shape is a build script. Anything whose blocks depend on where they are — a roof, an arch,",
+  "  a spiral, anything sloping or tapering — is run_build_script, because it is the only tool that",
+  "  can vary a block by coordinate. fill_region and replace_blocks cannot make a shape: they apply",
+  "  one block to a box, so reaching for them here gives a solid box of that block instead.",
   "- Coordinates start at 0 and y is up. Everything is inclusive of both ends.",
+  // The clamp used to be silent, so a fill above the ceiling landed *at* the
+  // ceiling and reported a healthy count. It says so now, and this is the way
+  // out that the tools list alone did not make obvious.
+  "- The schematic is a fixed box and every region is trimmed to it. If what the user wants does not",
+  "  fit — a roof on a build that already reaches the top — call resize_document first. Nothing moves",
+  "  when you do: the room is added at the far side.",
   "- Finish by telling the user what you changed, in one or two sentences. Be specific about",
   "  counts and materials. If a tool reported that nothing matched, say so rather than claiming",
   "  success.",
@@ -193,14 +207,38 @@ function describeDocument(session: DocumentSession, selection: Region | null): s
 
   const lines = [
     `Schematic: ${doc.width}x${doc.height}x${doc.length} (x, y up, z), ${countBlocks(doc)} non-air blocks.`,
+    `Valid coordinates: x 0-${doc.width - 1}, y 0-${doc.height - 1}, z 0-${doc.length - 1}. There is nothing above` +
+      ` y=${doc.height - 1} until you resize.`,
     top === "" ? "It is empty." : `Most common blocks:\n${top}`,
   ];
   if (selection) {
     const region = normalizeRegion(doc, selection);
+    /*
+     * Its *size*, not only its corners.
+     *
+     * Two corners is the same information and it is not the same message: a
+     * model handed "(0,7,0) to (15,7,9)" spends its reasoning working out that
+     * this is one block tall, and sometimes gets it wrong. Saying "16 wide x 1
+     * tall x 10 long" costs nine words and removes the question -- and naming
+     * the case where the selection is a single plane removes the follow-up,
+     * because "build a roof in here" has no answer inside a plane.
+     */
+    const size = [
+      region.maxX - region.minX + 1,
+      region.maxY - region.minY + 1,
+      region.maxZ - region.minZ + 1,
+    ] as const;
     lines.push(
       `The user has selected (${region.minX},${region.minY},${region.minZ}) to ` +
-        `(${region.maxX},${region.maxY},${region.maxZ}). Tools act on this by default.`,
+        `(${region.maxX},${region.maxY},${region.maxZ}): ${size[0]} wide x ${size[1]} tall x ${size[2]} long, ` +
+        `${(size[0] * size[1] * size[2]).toLocaleString()} cells. Tools act on this by default.`,
     );
+    if (size[1] === 1) {
+      lines.push(
+        `That selection is a single flat layer at y=${region.minY}, so nothing with height fits inside it. ` +
+          `Build above it, and resize first if y=${region.minY} is already the top.`,
+      );
+    }
   } else {
     lines.push("The user has selected nothing; tools act on the whole schematic by default.");
   }

@@ -1227,5 +1227,163 @@ console.log("\n--- the trace ---");
   equal("...having narrated only the request", folded.map((item) => item.kind), ["request"]);
 }
 
+// --- an edit says where it actually landed ---------------------------------
+//
+// Both of these used to be silent, and silence here reads as success. A real
+// session: a 16x8x10 build filled to the ceiling, the top layer selected, and
+// "add a sloping roof". There was nowhere to put a roof, nothing said so, and
+// the model settled for rewriting the whole structure in place -- 868 blocks,
+// reported as `changed: 868` and nothing else.
+console.log("\n--- an edit says where it landed ---");
+{
+  const session = seeded();
+  const result = await runAgent({
+    ...baseRequest,
+    session,
+    // The top layer of a 6x6x6, exactly the shape that has no room above it.
+    selection: { minX: 0, minY: 5, minZ: 0, maxX: 5, maxY: 5, maxZ: 5 },
+    prompt: "put a roof on it",
+    modelOverride: scriptedModel([
+      // Reaching above the ceiling, which the box cannot hold.
+      {
+        kind: "tool",
+        toolName: "fill_region",
+        input: { minX: 0, minY: 5, minZ: 0, maxX: 5, maxY: 9, maxZ: 5, block: "minecraft:stone" },
+      },
+      { kind: "text", text: "Done." },
+    ]),
+  });
+
+  const filled = result.trace.find((item) => item.name === "fill_region")!;
+  check(
+    "a region reaching outside the box says it was trimmed",
+    (filled.output ?? "").includes("reaches outside the schematic"),
+    filled.output,
+  );
+  check(
+    "...and names the size it was trimmed to",
+    (filled.output ?? "").includes("6x6x6"),
+    filled.output,
+  );
+  check(
+    "...and points at the way out",
+    (filled.output ?? "").includes("resize_document"),
+    filled.output,
+  );
+}
+
+{
+  const session = seeded();
+  const result = await runAgent({
+    ...baseRequest,
+    session,
+    // One layer selected; the model names the whole document anyway.
+    selection: { minX: 0, minY: 5, minZ: 0, maxX: 5, maxY: 5, maxZ: 5 },
+    prompt: "swap the cobblestone",
+    modelOverride: scriptedModel([
+      {
+        kind: "tool",
+        toolName: "replace_blocks",
+        input: {
+          minX: 0,
+          minY: 0,
+          minZ: 0,
+          maxX: 5,
+          maxY: 5,
+          maxZ: 5,
+          from: "minecraft:cobblestone",
+          to: "minecraft:stone",
+        },
+      },
+      { kind: "text", text: "Done." },
+    ]),
+  });
+
+  const replaced = result.trace.find((item) => item.name === "replace_blocks")!;
+  /*
+   * Allowed, and said out loud. "Replace all the cobblestone everywhere" is a
+   * real request, so refusing would be wrong -- but an edit that quietly went
+   * 180 cells past the selection is how a whole structure gets rewritten while
+   * the answer says nothing about it.
+   */
+  check(
+    "leaving the selection is reported",
+    (replaced.output ?? "").includes("outside the user's selection"),
+    replaced.output,
+  );
+  check(
+    "...with the count that makes it obvious",
+    (replaced.output ?? "").includes("180"),
+    replaced.output,
+  );
+}
+
+// --- the agent can ask for room -------------------------------------------
+//
+// Every other tool is trimmed to the current box, so before this there was no
+// sequence of calls that could add a storey. The model was right to say it
+// could not, and had no way to say what it needed.
+console.log("\n--- making room ---");
+{
+  const session = seeded();
+  await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "make it taller and put a slab on top",
+    modelOverride: scriptedModel([
+      { kind: "tool", toolName: "resize_document", input: { height: 9 } },
+      {
+        kind: "tool",
+        toolName: "fill_region",
+        input: { minX: 0, minY: 8, minZ: 0, maxX: 5, maxY: 8, maxZ: 5, block: "minecraft:stone" },
+      },
+      { kind: "text", text: "Raised it and capped it." },
+    ]),
+  });
+
+  equal("the schematic grew", [session.doc.width, session.doc.height, session.doc.length], [6, 9, 6]);
+  // The whole point of growing at the far side: a block the model was told
+  // about before the resize is still where it was told it was.
+  equal(
+    "...without moving what was already there",
+    getBlock(session.doc, 3, 0, 3).namespacedName,
+    "minecraft:oak_planks",
+  );
+  check("...and the new storey could be built on", getBlock(session.doc, 2, 8, 2).namespacedName === "minecraft:stone");
+  check("the whole thing is still one undo", canUndo(session.history));
+  undo(session.doc, session.history);
+  equal(
+    "...which puts the size back too",
+    [session.doc.width, session.doc.height, session.doc.length],
+    [6, 6, 6],
+  );
+  equal("...and the blocks with it", getBlock(session.doc, 3, 0, 3).namespacedName, "minecraft:oak_planks");
+}
+
+{
+  const session = seeded();
+  const result = await runAgent({
+    ...baseRequest,
+    session,
+    selection: null,
+    prompt: "trim it down",
+    modelOverride: scriptedModel([
+      { kind: "tool", toolName: "resize_document", input: { height: 2 } },
+      { kind: "text", text: "Could not." },
+    ]),
+  });
+
+  /*
+   * Refused, and the refusal is the model's to read rather than an exception:
+   * saving already trims the file to its content, so the empty room a user left
+   * themselves is deliberate and is not the agent's to reclaim.
+   */
+  const shrink = result.trace.find((item) => item.name === "resize_document")!;
+  check("shrinking is refused", shrink.error !== undefined, shrink.error ?? shrink.output);
+  check("...by name", (shrink.error ?? "").includes("shrink"), shrink.error);
+  equal("...and nothing changed", session.doc.height, 6);
+}
+
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exitCode = failures === 0 ? 0 : 1;

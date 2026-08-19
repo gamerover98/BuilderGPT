@@ -190,6 +190,44 @@ neither `ipcMain.handle`d nor `send`ed. That is the mechanical half of the same
 mistake: declaring a verb, bridging it through preload, calling it from the
 renderer, and never registering it.
 
+**The agent's only way to change the schematic's size is `resize_document`.**
+Growth-on-fill (`growthToInclude`) belongs to `applyEdit`, which is the UI's
+path; every agent tool goes through `normalizeRegion` and is trimmed to the
+current box. That asymmetry is deliberate — a fill with one bad coordinate
+should not silently resize the document — but for a long time it left the agent
+with *no* way to make room, so "put a roof on this" against a build that already
+reached the ceiling had no correct answer and the model settled for rewriting
+what was there.
+
+The tool grows and never shrinks, at the far side and never with a shift. Both
+restrictions are load-bearing rather than timid: saving already trims to content,
+so the empty room a user left is theirs to keep; and growing at the far side
+means every coordinate the model has already been told — the selection, a
+`get_region` result — is still valid afterwards. Room *below* the origin moves
+all the content up, and the model would be reasoning from coordinates that
+changed under it.
+
+**`resolveRegion` reports what it had to do.** Clamping and leaving the selection
+were both silent, and both produce a result that reads as success: a fill above
+the ceiling landed *at* the ceiling with a healthy `changed` count, and an
+explicit region reaching 708 cells past the selection rewrote a whole structure
+while the answer said `changed: 868` and nothing else. Leaving the selection
+stays *allowed* — "replace all the cobblestone everywhere" is a real request —
+it is only no longer quiet.
+
+**"A shape is a build script" is phrased that way on purpose.** The rule used to
+read "rather than hundreds of set_block calls", which a model takes as an
+argument about cost: reaching for `replace_blocks` it concludes the rule is not
+about it. A sloping roof is not hundreds of set_blocks, it is a shape, and
+`fill_region`/`replace_blocks` apply one block to a box — so they answer "make a
+roof" with a solid box of roof.
+
+**The selection is described by its size, not only its corners.** Same
+information, different message: handed `(0,7,0) to (15,7,9)` a model spends its
+reasoning deciding whether that is one block tall. A single-layer selection is
+called out by name, because "build something with height in here" has no answer
+inside a plane and the follow-up question is otherwise inevitable.
+
 **The loop streams, and that is why there is anything to watch.** Both paths
 call `streamText` — `agent.ts` iterating `fullStream`, `llm.ts` for the build
 script. `generateText` resolves once, at the end, so a model that thought for

@@ -49,7 +49,8 @@ import {
 import { executeJsBuild } from "../core.js";
 import { parsePaletteEntry } from "../pipeline/loader_formats.js";
 import { paletteEntryCacheKey, type PaletteEntry } from "../pipeline/types.js";
-import { MAX_EDIT_VOLUME } from "../services/session.js";
+import { MAX_DOCUMENT_VOLUME, MAX_EDIT_VOLUME } from "../services/session.js";
+import { orderRegion } from "../domain/grow.js";
 
 /**
  * The model names a turn or a reflection with two optional fields rather than a
@@ -130,7 +131,41 @@ export interface ToolContext {
  * cobblestone with stone" work without the model having to restate
  * coordinates it was already told. With neither, the whole document.
  */
-function resolveRegion(context: ToolContext, args: Partial<RegionArgs>): Region {
+/**
+ * The region a tool acted on, and what had to happen to get there.
+ *
+ * The two notes exist because both used to be silent, and both produced a
+ * result that looked like success:
+ *
+ * - **Clamping.** `normalizeRegion` trims a region to the document, so a fill
+ *   asked for above the ceiling quietly became a fill *at* the ceiling and
+ *   reported a cheerful `changed` count. The model has no way to notice that
+ *   the thing it built is not where it put it.
+ * - **Leaving the selection.** A tool given explicit coordinates may name
+ *   anything, which is deliberate -- "replace all the cobblestone everywhere"
+ *   is a real request. But an edit that quietly reached 708 cells outside the
+ *   selection it was told to default to is how a whole structure gets rewritten
+ *   while the summary says `changed: 868` and nothing else.
+ */
+interface ResolvedRegion {
+  region: Region;
+  /** Set when the region asked for reached outside the document. */
+  clamped?: string;
+  /** Set when the region acted on cells the user had not selected. */
+  outsideSelection?: string;
+}
+
+function overlapVolume(a: Region, b: Region): number {
+  const span = (aMin: number, aMax: number, bMin: number, bMax: number) =>
+    Math.max(0, Math.min(aMax, bMax) - Math.max(aMin, bMin) + 1);
+  return (
+    span(a.minX, a.maxX, b.minX, b.maxX) *
+    span(a.minY, a.maxY, b.minY, b.maxY) *
+    span(a.minZ, a.maxZ, b.minZ, b.maxZ)
+  );
+}
+
+function resolveRegion(context: ToolContext, args: Partial<RegionArgs>): ResolvedRegion {
   const { doc, selection } = context;
   const hasExplicit =
     typeof args.minX === "number" &&
@@ -139,20 +174,49 @@ function resolveRegion(context: ToolContext, args: Partial<RegionArgs>): Region 
     typeof args.maxX === "number" &&
     typeof args.maxY === "number" &&
     typeof args.maxZ === "number";
-  if (hasExplicit) {
-    return normalizeRegion(doc, args as RegionArgs);
+
+  if (!hasExplicit) {
+    // Omitting the region means "the selection", which is what makes "replace
+    // the cobblestone with stone" work without restating coordinates. With
+    // neither, the whole document.
+    const whole = {
+      minX: 0,
+      minY: 0,
+      minZ: 0,
+      maxX: doc.width - 1,
+      maxY: doc.height - 1,
+      maxZ: doc.length - 1,
+    };
+    return { region: normalizeRegion(doc, selection ?? whole) };
+  }
+
+  const asked = orderRegion(args as RegionArgs);
+  const region = normalizeRegion(doc, asked);
+
+  const resolved: ResolvedRegion = { region };
+  if (
+    asked.minX < 0 ||
+    asked.minY < 0 ||
+    asked.minZ < 0 ||
+    asked.maxX > doc.width - 1 ||
+    asked.maxY > doc.height - 1 ||
+    asked.maxZ > doc.length - 1
+  ) {
+    resolved.clamped =
+      `The region you gave reaches outside the schematic, which is ${doc.width}x${doc.height}x${doc.length} ` +
+      `(x 0-${doc.width - 1}, y 0-${doc.height - 1}, z 0-${doc.length - 1}). It was trimmed to ` +
+      `${describeRegion(region)}. Use resize_document first if you need the room.`;
   }
   if (selection) {
-    return normalizeRegion(doc, selection);
+    const inSelection = overlapVolume(region, normalizeRegion(doc, selection));
+    const outside = regionVolume(region) - inSelection;
+    if (outside > 0) {
+      resolved.outsideSelection =
+        `${outside.toLocaleString()} of the ${regionVolume(region).toLocaleString()} cells this touched are ` +
+        `outside the user's selection. Say so in your answer, or narrow the region.`;
+    }
   }
-  return normalizeRegion(doc, {
-    minX: 0,
-    minY: 0,
-    minZ: 0,
-    maxX: doc.width - 1,
-    maxY: doc.height - 1,
-    maxZ: doc.length - 1,
-  });
+  return resolved;
 }
 
 function checkBlockAllowed(context: ToolContext, entry: PaletteEntry): void {
@@ -227,7 +291,7 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
         additionalProperties: false,
       }),
       execute: async (args, call) => {
-        const region = resolveRegion(context, args ?? {});
+        const { region, clamped } = resolveRegion(context, args ?? {});
         step("get_region", `reading ${describeRegion(region)}`, call.toolCallId);
         if (regionVolume(region) > MAX_REPORTED_BLOCKS * 8) {
           throw new Error(
@@ -253,7 +317,7 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
             }
           }
         }
-        return { region, blocks, truncated: false };
+        return { region, blocks, truncated: false, clamped };
       },
     }),
 
@@ -267,14 +331,14 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
         additionalProperties: false,
       }),
       execute: async (args, call) => {
-        const region = resolveRegion(context, args ?? {});
+        const { region, ...notes } = resolveRegion(context, args ?? {});
         const entry = toEntry(args.block);
         checkBlockAllowed(context, entry);
         if (regionVolume(region) > MAX_EDIT_VOLUME) {
           throw new Error(`That region covers ${regionVolume(region)} blocks, more than one edit may touch.`);
         }
         step("fill_region", `filling ${describeRegion(region)} with ${entry.namespacedName}`, call.toolCallId);
-        return { changed: context.tx.fill(region, entry), region };
+        return { changed: context.tx.fill(region, entry), region, ...notes };
       },
     }),
 
@@ -292,7 +356,7 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
         additionalProperties: false,
       }),
       execute: async (args, call) => {
-        const region = resolveRegion(context, args ?? {});
+        const { region, ...notes } = resolveRegion(context, args ?? {});
         const from = toEntry(args.from);
         const to = toEntry(args.to);
         checkBlockAllowed(context, to);
@@ -303,6 +367,7 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
         return {
           changed,
           region,
+          ...notes,
           // A zero here is the single most common way an edit "does nothing":
           // the state string did not match. Say so rather than reporting success.
           note:
@@ -353,20 +418,96 @@ export function buildTools(context: ToolContext): Record<string, Tool> {
         additionalProperties: false,
       }),
       execute: async (args, call) => {
-        const region = resolveRegion(context, args ?? {});
+        const { region, ...notes } = resolveRegion(context, args ?? {});
         const transform = toTransform(args ?? {});
         step("transform_region", `${describeTransform(transform).toLowerCase()} on ${describeRegion(region)}`, call.toolCallId);
         // Errors are returned to the model rather than thrown past it — a
         // quarter turn refused for being oblong is something it can correct by
         // squaring the region or turning 180° instead.
         try {
-          return { changed: applyRegionTransform(context.doc, context.tx, region, transform), region };
+          return {
+            changed: applyRegionTransform(context.doc, context.tx, region, transform),
+            region,
+            ...notes,
+          };
         } catch (err) {
           if (err instanceof NotSquareError) {
             throw new Error(err.message);
           }
           throw err;
         }
+      },
+    }),
+
+    resize_document: tool({
+      description:
+        "Make the schematic bigger. The new room is empty space added at the +x/+y/+z sides, so every existing block and coordinate stays exactly where it is. Use this when what the user asked for does not fit — a roof on a build that already reaches the top needs somewhere to go, and every other tool is trimmed to the current box.",
+      inputSchema: jsonSchema<{ width?: number; height?: number; length?: number }>({
+        type: "object",
+        properties: {
+          width: { type: "number" },
+          height: { type: "number" },
+          length: { type: "number" },
+        },
+        additionalProperties: false,
+      }),
+      execute: async (args, call) => {
+        const { doc } = context;
+        const next = {
+          width: Math.trunc(args?.width ?? doc.width),
+          height: Math.trunc(args?.height ?? doc.height),
+          length: Math.trunc(args?.length ?? doc.length),
+        };
+
+        /*
+         * Growth only, and only at the far side. Two reasons, and neither is
+         * timidity:
+         *
+         * A shrink destroys blocks. The command records them so undo works, but
+         * "make it smaller" is not a thing anyone asks an editing agent for --
+         * saving already trims to content (`domain/crop.ts`), so the room the
+         * user left themselves is deliberate and is not the model's to reclaim.
+         *
+         * Growing at the far side means no shift, and no shift means every
+         * coordinate the model has already been told -- the selection, the
+         * palette histogram, whatever it read with get_region -- is still valid
+         * afterwards. Room *below* the origin would move all the content up, and
+         * the model would be reasoning from coordinates that had silently
+         * changed under it.
+         */
+        const shrinking = (["width", "height", "length"] as const).filter(
+          (axis) => next[axis] < doc[axis],
+        );
+        if (shrinking.length > 0) {
+          throw new Error(
+            `This tool only makes the schematic bigger, and you asked to shrink ${shrinking.join(" and ")}. ` +
+              `Saving already trims the file to its content, so the empty room is the user's to keep.`,
+          );
+        }
+        if (next.width === doc.width && next.height === doc.height && next.length === doc.length) {
+          throw new Error("That is the size it already is. Say what you need the extra room for.");
+        }
+
+        // The cap that stops the process dying rather than a design limit: the
+        // voxels are an Int32Array.
+        const volume = next.width * next.height * next.length;
+        if (volume > MAX_DOCUMENT_VOLUME) {
+          throw new Error(
+            `${next.width}x${next.height}x${next.length} is ${volume.toLocaleString()} blocks, past the ` +
+              `${MAX_DOCUMENT_VOLUME.toLocaleString()} one schematic may hold. Ask for less.`,
+          );
+        }
+
+        const was = `${doc.width}x${doc.height}x${doc.length}`;
+        step("resize_document", `making room: ${was} to ${next.width}x${next.height}x${next.length}`, call.toolCallId);
+        context.tx.resize(next);
+        return {
+          was,
+          now: `${next.width}x${next.height}x${next.length}`,
+          note:
+            "The new space is empty and sits at the far side, so nothing moved. " +
+            "The user's selection still names the same blocks it did before.",
+        };
       },
     }),
 

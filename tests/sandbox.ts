@@ -22,9 +22,14 @@ import { fileURLToPath } from "node:url";
 import {
   executeJsBuild,
   loadAllowedBlocks,
+  textToSchem,
+  attachTrace,
+  conversionFailureMessage,
+  traceOf,
   GeneratedCodeError,
   SandboxViolationError,
 } from "../src/main/core.js";
+import { SpongeSchematicWriterFactory } from "../src/main/services/schematic.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -250,6 +255,99 @@ console.log("\n--- bridge argument isolation ---");
     thrown instanceof Error ? thrown.message : undefined,
   );
   check("the placement still resolves", placements.length === 1);
+}
+
+// --- a failure carries what the run had done ------------------------------
+//
+// The trace used to ride only on success, which is exactly backwards: a run
+// that worked left a file to look at, and one that failed left a sentence. The
+// answer the model gave is the only thing that explains why nothing could be
+// built from it, and it went out with the exception.
+console.log("\n--- a failure carries its trace ---");
+{
+  const trace = [{ id: 1, kind: "request", text: "what went out" }];
+
+  // Through an actual throw, because that is the journey it has to survive:
+  // the property has to still be there after the stack has unwound to a catch
+  // several frames up.
+  let caught: unknown;
+  try {
+    throw attachTrace(new Error("nothing could be built"), trace);
+  } catch (err) {
+    caught = err;
+  }
+  check("the error still says what it says", (caught as Error).message === "nothing could be built");
+  check("...and carries the run with it", JSON.stringify(traceOf(caught)) === JSON.stringify(trace), JSON.stringify(traceOf(caught)));
+
+  // An error nobody attached anything to, and a thrown non-Error. Neither is a
+  // failure of this mechanism, and inventing an empty trace for either would
+  // put an empty panel under a message that has no run behind it.
+  check("an untouched error carries nothing", traceOf(new Error("plain")) === undefined);
+  check("...and neither does a thrown string", traceOf("not an error") === undefined);
+
+  // Copied out, not aliased: the recorder goes on owning its array, and a
+  // reader that mutated what it was handed would edit the record.
+  const roundTripped = traceOf(caught) as { id: number }[];
+  roundTripped.push({ id: 99 });
+  check("the caller cannot grow the stored trace", traceOf(caught)!.length === 1);
+}
+
+// --- turning an answer into a schematic, and failing legibly ---------------
+//
+// `textToSchem` is where a generation actually succeeds or fails, and it had no
+// test at all. Both of its failures produced one sentence -- "the model's output
+// could not be converted" -- which is true and unactionable: the two want
+// opposite things from the reader, and neither is addressed by rewording the
+// build spec.
+console.log("\n--- converting the model's answer ---");
+{
+  const deps = {
+    schematicWriterFactory: new SpongeSchematicWriterFactory(),
+    allowedBlocks: await loadAllowedBlocks(REPO_ROOT),
+    generatedDir: path.join(REPO_ROOT, "node_modules", ".cache", "bgpt-test"),
+  };
+
+  const good = await textToSchem(
+    "<code>function buildCreation(x, y, z) { safeSetBlock(x, y, z, 'stone'); }</code>",
+    "schem",
+    deps,
+  );
+  check("a well-formed answer builds", good.kind === "schematic", good.kind);
+
+  /*
+   * The model wrote code and the code is wrong. Asking again usually fixes it,
+   * which is only obvious if the message says the script threw and names why.
+   */
+  const broken = await textToSchem("<code>this is not javascript(((</code>", "schem", deps);
+  check("a script that will not run says so", broken.kind === "none" && broken.reason === "script-failed", broken.kind);
+  check(
+    "...and names what went wrong",
+    broken.kind === "none" && broken.detail.length > 0,
+    broken.kind === "none" ? broken.detail : "",
+  );
+  check(
+    "...which the error repeats rather than swallowing",
+    broken.kind === "none" && conversionFailureMessage(broken).includes(broken.detail),
+    broken.kind === "none" ? conversionFailureMessage(broken) : "",
+  );
+
+  /*
+   * No `<code>` block at all -- the model answered in prose, or in a markdown
+   * fence, or ran out of tokens before closing the tag. Nothing about the build
+   * spec is wrong and rewriting it will not help, so the message has to say
+   * that this is about the *format* of the answer.
+   */
+  const prose = await textToSchem(
+    "Here is a lovely tower!\n\n```javascript\nfunction buildCreation(){}\n```",
+    "schem",
+    deps,
+  );
+  check("an answer with no <code> block says so", prose.kind === "none" && prose.reason === "no-script", prose.kind);
+  check(
+    "...and the error points at the answer rather than the request",
+    prose.kind === "none" && conversionFailureMessage(prose).includes("<code>"),
+    prose.kind === "none" ? conversionFailureMessage(prose) : "",
+  );
 }
 
 console.log(

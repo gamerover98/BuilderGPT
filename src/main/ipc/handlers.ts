@@ -35,6 +35,7 @@ import {
   type PreviewRequest,
   type PreviewResponse,
   type ProgressEvent,
+  type TraceItem,
   type RecentDocument,
   type RecoveryPeekResponse,
   type SaveRequest,
@@ -106,7 +107,7 @@ import {
   takeCheckpoint,
   useCheckpointDirectory,
 } from "../services/checkpoints.js";
-import { loadAllowedBlocks } from "../core.js";
+import { loadAllowedBlocks, traceOf } from "../core.js";
 import { listArtifacts } from "../services/artifacts.js";
 import { SchematicFormatError } from "../pipeline/loader.js";
 import { classifyGenerateError, generate } from "../services/generate.js";
@@ -282,7 +283,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
      * five ways out of this handler and every one of them is something the user
      * asked for and should be able to see.
      */
-    const settle = (response: GenerateResponse): GenerateResponse => {
+    const settle = (response: GenerateResponse, trace?: TraceItem[]): GenerateResponse => {
       if (req.viaChat !== true) return response;
       if (response.ok) {
         appendEntry({
@@ -294,9 +295,14 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         // Stopping is not a failure — the user did it on purpose — so it reads
         // as a note, exactly as it does on the agent path. An error bubble
         // would make pressing Stop look like something went wrong.
+        //
+        // The trace goes on either way, and on a failure it is the whole point:
+        // "the model's output could not be converted" is only actionable next
+        // to the output it could not convert.
         appendEntry({
           role: response.kind === "cancelled" ? "note" : "error",
           text: response.message,
+          trace,
         });
       }
       return response;
@@ -376,9 +382,12 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       // depending on which of the two LLM requests it was in, but the signal is
       // unambiguous.
       if (controller.signal.aborted) {
-        return settle({ ok: false, kind: "cancelled", message: "Stopped. Nothing was built." });
+        return settle(
+          { ok: false, kind: "cancelled", message: "Stopped. Nothing was built." },
+          traceOf<TraceItem>(err),
+        );
       }
-      return settle({ ok: false, ...classifyGenerateError(err) });
+      return settle({ ok: false, ...classifyGenerateError(err) }, traceOf<TraceItem>(err));
     } finally {
       inFlightGenerations.delete(req.requestId);
     }

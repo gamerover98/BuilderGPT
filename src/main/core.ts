@@ -775,7 +775,81 @@ export type ExportType = "schem" | "mcfunction";
 export type TextToSchemResult =
   | { readonly kind: "schematic"; readonly schematic: SchematicWriter; readonly rejections: readonly BuildRejection[] }
   | { readonly kind: "mcfunctionPath"; readonly path: string; readonly rejections: readonly BuildRejection[] }
-  | { readonly kind: "none" };
+  /**
+   * Nothing could be built from the answer.
+   *
+   * `reason` was added because the two ways to get here need opposite things
+   * from the user and the message could not tell them apart. "The script threw"
+   * means the model wrote code and the code is wrong — the detail names the
+   * error, and asking again usually fixes it. "There was no script" means the
+   * answer never contained a `<code>` block at all, which is a formatting
+   * failure and rewording the request will not help.
+   */
+  | {
+      readonly kind: "none";
+      readonly reason: "script-failed" | "no-script";
+      readonly detail: string;
+    };
+
+/**
+ * An error that knows what the run had done when it hit.
+ *
+ * The trace is `unknown[]` here, not the IPC type: this module sits below
+ * `shared/ipc.ts` in the dependency order and has no business naming it, and it
+ * never looks inside. `traceOf` takes the element type from the caller, which
+ * is the one place that does know.
+ */
+export interface TracedError extends Error {
+  trace?: readonly unknown[];
+}
+
+/**
+ * Hangs a run's trace on the error it is failing with.
+ *
+ * The trace used to ride only on success, which is exactly backwards: a run
+ * that worked left a file to look at, and one that failed left a sentence. The
+ * answer the model actually gave -- the only thing that explains why nothing
+ * could be built from it -- went out with the exception.
+ *
+ * A property on the error rather than a wrapper type, so `classifyGenerateError`
+ * still sees the error it was written against. Non-Errors pass through
+ * untouched: a thrown string cannot carry anything, and inventing an Error to
+ * hold the trace would lose whatever was actually thrown.
+ */
+export function attachTrace<E>(err: E, trace: readonly unknown[]): E {
+  if (err instanceof Error) (err as TracedError).trace = trace;
+  return err;
+}
+
+/**
+ * The trace an error carried, if it carried one.
+ *
+ * The one cast is here rather than at each call site, which is the point: the
+ * caller names the element type it stored and gets it back, and nothing else in
+ * the app has to write `as` around this.
+ */
+export function traceOf<T>(err: unknown): T[] | undefined {
+  const carried = err instanceof Error ? (err as TracedError).trace : undefined;
+  return carried === undefined ? undefined : ([...carried] as T[]);
+}
+
+/**
+ * How to say that nothing could be built, in terms the reader can act on.
+ *
+ * Lives here rather than beside the error class it feeds because this is where
+ * the outcome is decided, and because `services/generate.ts` reaches Electron
+ * through `artifacts.ts` and so cannot be loaded by the suites at all -- the
+ * same split `recent_documents.ts` and `settings_coerce.ts` were made for.
+ */
+export function conversionFailureMessage(outcome: {
+  reason: "script-failed" | "no-script";
+  detail: string;
+}): string {
+  return outcome.reason === "script-failed"
+    ? `The build script the model wrote could not run: ${outcome.detail}`
+    : "The model's answer contained no <code> block, so there was no build script " +
+        "to run. Open the turn's trace to see what it wrote instead.";
+}
 
 /**
  * Ported from `text_to_schem` (core.py:203-278).
@@ -837,7 +911,11 @@ export async function textToSchem(
       // out a different top-level text_to_schem behavior for it) logs and
       // returns None/{kind:"none"}. Do not fall back to JSON parsing.
       log(`text_to_schem(JS): failed with error: ${String(e)}`);
-      return { kind: "none" };
+      return {
+        kind: "none",
+        reason: "script-failed",
+        detail: e instanceof Error ? e.message : String(e),
+      };
     }
   }
 
@@ -901,7 +979,16 @@ export async function textToSchem(
     }
   } catch (e) {
     log(`text_to_schem(JSON): failed to parse JSON: ${String(e)}`);
-    return { kind: "none" };
+    // Reported as "no script" rather than as a JSON parse error, because that
+    // is what it means from where the user sits: the legacy JSON branch is only
+    // reached when the answer had no `<code>` block, and the model was asked
+    // for a `<code>` block. Naming JSON here would send someone looking for a
+    // format the prompt never mentions.
+    return {
+      kind: "none",
+      reason: "no-script",
+      detail: e instanceof Error ? e.message : String(e),
+    };
   }
 }
 

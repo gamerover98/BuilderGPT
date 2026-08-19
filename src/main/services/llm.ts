@@ -203,6 +203,25 @@ export async function callLlm(req: LlmRequest): Promise<string> {
       else if (part.type === "error") throw part.error;
     }
     text = await result.text;
+
+    /*
+     * A run that hit the output-token ceiling comes back looking successful and
+     * is cut off mid-sentence -- which downstream becomes "the model's output
+     * could not be converted", because half a build script has an opening
+     * `<code>` and no closing one. That is a true statement about an answer
+     * that was never finished, and it sends the reader rewriting a prompt that
+     * was not the problem.
+     *
+     * Worth naming now rather than before, because a thinking model spends the
+     * same budget on reasoning it never shows in `text`: an answer can run out
+     * of room having written almost nothing.
+     */
+    if ((await result.finishReason) === "length") {
+      throw new Error(
+        "the model ran out of output tokens and its answer was cut off. " +
+          "Ask for something smaller, or pick a model with more room.",
+      );
+    }
   } catch (err) {
     throw new LlmError(err instanceof Error ? err.message : String(err));
   }

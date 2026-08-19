@@ -52,6 +52,12 @@
      */
     hasDocument: boolean;
     busy: boolean;
+    /**
+     * Whether there is a run to stop. Passed straight down: the composer is
+     * where it decides between Send and Stop, and `busy` is a different
+     * question -- see the note on the prop there.
+     */
+    running: boolean;
     settings: Settings;
     keyStatus: KeyStorageStatus | null;
     /** Held by `App.svelte` so a tab switch cannot throw it away. */
@@ -90,6 +96,7 @@
     rememberedFrom,
     hasDocument,
     busy,
+    running,
     settings,
     keyStatus,
     draft,
@@ -310,6 +317,7 @@
     <ChatComposer
       {selection}
       {busy}
+      {running}
       {hasDocument}
       {settings}
       {keyStatus}

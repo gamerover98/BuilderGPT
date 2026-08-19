@@ -229,21 +229,42 @@
    */
   let remembered = $state(0);
 
-  /** The agent request in flight, if any — what Stop cancels. */
-  let agentRequestId = $state<string | null>(null);
+  /**
+   * The run Stop cancels, if any.
+   *
+   * Carries its kind because a message typed with nothing open goes to the
+   * generator instead of the agent, and the two are stopped through different
+   * channels. It used to hold only the agent's id, so a chat that was building
+   * showed the Stop button — `busy` was true — with nothing behind it.
+   *
+   * This is also what decides whether the button is shown at all. `busy` is not
+   * that question: switching conversations and restoring a checkpoint both set
+   * it, and neither is something to stop.
+   */
+  let inFlight = $state<{ id: string; kind: "agent" | "build" } | null>(null);
 
   /**
-   * Asks main to stop the run.
+   * The generation in flight, if any — which progress events belong to it.
+   *
+   * Separate from `inFlight` because it is set for a build from either place,
+   * while only a build from the chat is stoppable there. `progress` events
+   * arrive for previews too, so an id is the only way to tell them apart.
+   */
+  let buildRequestId = $state<string | null>(null);
+
+  /**
+   * Asks main to stop whichever run is going.
    *
    * Deliberately does not touch `chat` or `busy`: the request is still in
-   * flight and will settle through `askAgent` as a `cancelled` failure, which
-   * is the one place that should report what happened. Ending the turn from
-   * here as well would write the outcome twice.
+   * flight and will settle as a `cancelled` failure, which is the one place
+   * that should report what happened. Ending the turn from here as well would
+   * write the outcome twice.
    */
   async function stopAgent(): Promise<void> {
-    const id = agentRequestId;
-    if (id === null) return;
-    await api().cancelAgent(id);
+    const run = inFlight;
+    if (run === null) return;
+    if (run.kind === "agent") await api().cancelAgent(run.id);
+    else await api().cancelGenerate(run.id);
   }
 
   /**
@@ -494,6 +515,18 @@
 
     const unsubscribe = api().onProgress((event) => {
       progress = event.phase === "done" ? null : event;
+      /*
+       * A build asked for from the chat says so in the chat.
+       *
+       * The progress bar it used to report through lives in the Structure
+       * panel, which since the sidebar became tabs is a tab you are not looking
+       * at while you chat -- so asking the chat to build something showed the
+       * message and then nothing at all, for as long as the model took. Same
+       * events, put where the person who asked is looking.
+       */
+      if (inFlight?.kind === "build" && event.requestId === buildRequestId && event.phase !== "done") {
+        liveSteps = [...liveSteps, { requestId: event.requestId, tool: event.phase, summary: event.message }];
+      }
     });
     const unsubscribeSteps = api().onAgentStep((event) => {
       liveSteps = [...liveSteps, event];
@@ -823,7 +856,7 @@
       title: t("command.stopAgent"),
       group: t("group.ai"),
       keywords: t("command.stopAgent.keywords"),
-      enabled: agentRequestId !== null,
+      enabled: inFlight !== null,
       run: () => void stopAgent(),
     },
   ]);
@@ -1474,7 +1507,7 @@
     const id = requestId();
     // Held so Stop can name the run. Cleared in `finally`, which is what makes
     // the button disappear the instant the request settles, however it settled.
-    agentRequestId = id;
+    inFlight = { id, kind: "agent" };
     try {
       const response = await api().askAgent({
         requestId: id,
@@ -1494,7 +1527,7 @@
         { role: "error", text: err instanceof Error ? err.message : String(err) },
       ];
     } finally {
-      agentRequestId = null;
+      inFlight = null;
       liveSteps = [];
       busy = false;
     }
@@ -1515,11 +1548,17 @@
   async function generateFrom(prompt: string, viaChat = false): Promise<string | null> {
     busy = true;
     status = null;
+    const id = requestId();
+    // Only a build the chat asked for is stoppable from the chat, because the
+    // Structure panel has no Stop button to press. The id is held either way so
+    // the progress subscription can tell this build's phases from a preview's.
+    if (viaChat) inFlight = { id, kind: "build" };
+    buildRequestId = id;
     try {
       let response: Awaited<ReturnType<ReturnType<typeof api>["generate"]>>;
       try {
         response = await api().generate({
-          requestId: requestId(),
+          requestId: id,
           description: prompt,
           version: settings.version,
           exportType: settings.exportType,
@@ -1531,14 +1570,19 @@
         return err instanceof Error ? err.message : String(err);
       }
       if (!response.ok) {
-        status = {
-          tone:
-            response.kind === "sandbox-violation" || response.kind === "sandbox-unavailable"
-              ? "error"
-              : "warn",
-          text: response.message,
-          detail: response.detail,
-        };
+        // Stopping is not a failure and gets no banner: the user asked for it,
+        // and the chat already carries main's note saying so. Same treatment
+        // the agent's own cancellation gets.
+        if (response.kind !== "cancelled") {
+          status = {
+            tone:
+              response.kind === "sandbox-violation" || response.kind === "sandbox-unavailable"
+                ? "error"
+                : "warn",
+            text: response.message,
+            detail: response.detail,
+          };
+        }
         return response.message;
       }
       // Two independent things worth saying about a successful save, either of
@@ -1580,6 +1624,9 @@
       }
       return null;
     } finally {
+      if (inFlight?.id === id) inFlight = null;
+      buildRequestId = null;
+      liveSteps = [];
       busy = false;
       progress = null;
     }
@@ -1682,6 +1729,7 @@
           ondeleteconversation={(id) => void deleteConversation(id)}
           hasDocument={docState !== null}
           {busy}
+          running={inFlight !== null}
           {settings}
           {keyStatus}
           draft={chatDraft}

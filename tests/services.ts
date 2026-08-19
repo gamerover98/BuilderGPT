@@ -14,7 +14,7 @@
  * differently-ordered schematic, the already-trusted reader disagrees.
  */
 
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { createServer } from "http";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
@@ -22,7 +22,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import { loadStructure } from "../src/main/pipeline/loader.js";
-import { openCodeModelRequiresKey } from "../src/shared/ipc.js";
+import { IPC, openCodeModelRequiresKey } from "../src/shared/ipc.js";
 import { rememberedFromIndex } from "../src/main/services/conversation_core.js";
 import {
   adoptSubject,
@@ -1101,6 +1101,39 @@ console.log("\n--- conversation persistence ---");
   }
 
   resetConversation(null);
+}
+
+// --- every declared channel is actually served ------------------------------
+//
+// `shared/ipc.ts` is a list of verbs and `handlers.ts` is where they are
+// answered, and nothing but care connects the two: a channel can be declared,
+// exposed through the preload bridge and called from the renderer while never
+// being registered -- at which point the button that calls it looks inert, or
+// `invoke` rejects naming a channel the reader has just been looking at.
+//
+// That is not hypothetical. `generateCancel` is here because the chat's Stop
+// button was shown for a generation and did nothing: `generate` had accepted an
+// `AbortSignal` since it was written and was never handed one, and there was no
+// channel to ask for it. This walks the source rather than the module, because
+// `handlers.ts` imports Electron and cannot be loaded here.
+console.log("\n--- ipc channels ---");
+{
+  const handlers = readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "main", "ipc", "handlers.ts"),
+    "utf8",
+  );
+
+  // Two ways a channel is legitimately served: answered as a request, or sent
+  // as an event. A mention in a comment or a name in a type does not count,
+  // which is the whole point of matching the call and not the identifier.
+  // The whitespace is loose because a handler with a long signature is split
+  // across lines by the formatter, and a check that only recognised the
+  // one-line form would report perfectly good channels as unserved.
+  const served = (name: string): boolean =>
+    new RegExp(`(?:ipcMain\\.handle|\\.send)\\(\\s*IPC\\.${name}\\s*,`).test(handlers);
+
+  const unserved = Object.keys(IPC).filter((name) => !served(name));
+  equal("every channel in IPC is handled or sent by main", unserved.join(", "), "");
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

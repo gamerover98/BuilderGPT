@@ -21,6 +21,15 @@
   interface Props {
     selection: RegionSpec | null;
     busy: boolean;
+    /**
+     * Whether there is a run that `onstop` can actually stop.
+     *
+     * Not the same question as `busy`, and that difference is the whole point:
+     * switching conversations, restoring a checkpoint and refreshing the
+     * document all set `busy`, and none of them is stoppable. Deciding the
+     * button from `busy` put a Stop on screen that did nothing at all.
+     */
+    running: boolean;
     /** Whether a schematic is open; decides what a message means, not whether one can be sent. */
     hasDocument: boolean;
     settings: Settings;
@@ -44,6 +53,7 @@
   const {
     selection,
     busy,
+    running,
     hasDocument,
     settings,
     keyStatus,
@@ -131,7 +141,7 @@
 
   <div class="actions">
     <ModelPicker {settings} {keyStatus} onchange={onsettingschange} {onopensettings} />
-    {#if busy}
+    {#if running}
       <!--
         Never disabled. A Stop that is greyed out while the thing it stops is
         running is the one state this button must not have.
@@ -143,7 +153,7 @@
       <button
         class="send primary"
         onclick={submit}
-        disabled={draft.trim() === ""}
+        disabled={busy || draft.trim() === ""}
         aria-label={t("chat.send")}
         title={t("chat.send")}
       >

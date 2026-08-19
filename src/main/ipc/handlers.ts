@@ -164,6 +164,16 @@ const FILE_FILTERS: Readonly<
  */
 const inFlightAgentRuns = new Map<string, AbortController>();
 
+/**
+ * The same, for generation.
+ *
+ * Two maps rather than one, because the two runs are started by two different
+ * handlers and cancelled through two different channels; sharing a map would
+ * let a stale id from one abort the other. From the chat they are the same
+ * button, and that is a renderer concern.
+ */
+const inFlightGenerations = new Map<string, AbortController>();
+
 function emitProgress(window: BrowserWindow | null, event: ProgressEvent): void {
   if (window && !window.isDestroyed()) {
     window.webContents.send(IPC.progress, event);
@@ -274,11 +284,17 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
      */
     const settle = (response: GenerateResponse): GenerateResponse => {
       if (req.viaChat !== true) return response;
-      appendEntry(
-        response.ok
-          ? { role: "agent", text: `Built ${response.name}.${response.exportType}.` }
-          : { role: "error", text: response.message },
-      );
+      if (response.ok) {
+        appendEntry({ role: "agent", text: `Built ${response.name}.${response.exportType}.` });
+      } else {
+        // Stopping is not a failure — the user did it on purpose — so it reads
+        // as a note, exactly as it does on the agent path. An error bubble
+        // would make pressing Stop look like something went wrong.
+        appendEntry({
+          role: response.kind === "cancelled" ? "note" : "error",
+          text: response.message,
+        });
+      }
       return response;
     };
 
@@ -321,6 +337,14 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       });
     }
 
+    /*
+     * Registered before the run, for the same reason the agent's is: a Stop
+     * arriving while the model is still being resolved has to find something
+     * to abort. `generate` has taken a signal since it was written and was
+     * never given one, so the chat's Stop button was shown and did nothing.
+     */
+    const controller = new AbortController();
+    inFlightGenerations.set(req.requestId, controller);
     try {
       const outcome = await generate({
         provider: settings.provider,
@@ -335,11 +359,30 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         outputDir: settings.outputDir,
         onProgress: (phase, fraction, message) =>
           emitProgress(window, { requestId: req.requestId, phase, fraction, message }),
+        signal: controller.signal,
       });
       return settle({ ok: true, ...outcome });
     } catch (err) {
+      // Asked of the signal rather than of the error, the same way `agent.ts`
+      // does it: an aborted call reports itself in more than one shape
+      // depending on which of the two LLM requests it was in, but the signal is
+      // unambiguous.
+      if (controller.signal.aborted) {
+        return settle({ ok: false, kind: "cancelled", message: "Stopped. Nothing was built." });
+      }
       return settle({ ok: false, ...classifyGenerateError(err) });
+    } finally {
+      inFlightGenerations.delete(req.requestId);
     }
+  });
+
+  ipcMain.handle(IPC.generateCancel, async (_event, requestId: string): Promise<boolean> => {
+    const controller = inFlightGenerations.get(requestId);
+    // Same contract as the agent's: not finding one is not an error, because
+    // the button and the run settling race by nature.
+    if (!controller) return false;
+    controller.abort();
+    return true;
   });
 
   // --- the open document ---------------------------------------------------
@@ -691,23 +734,29 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         return refuse("no-api-key", `Add an API key for ${settings.provider} in Settings.`);
       }
 
-      /*
-       * The state as it stands, before this turn changes anything -- which is
-       * what "go back to before I asked this" means. Taken with the messages
-       * the model is about to be given, so going back restores its memory too
-       * rather than leaving a conversation it has no record of.
-       *
-       * A turn that fails costs nothing here: `takeCheckpoint` keys on
-       * `doc.revision`, and a rolled-back run leaves that where it started.
-       */
-      const checkpoint = await takeCheckpoint(session, conversationMessages());
-      if (checkpoint !== null) stampCheckpoint(checkpoint);
-
       // Registered before the run so a Stop arriving while the model is still
       // being resolved still finds something to abort.
       const controller = new AbortController();
       inFlightAgentRuns.set(req.requestId, controller);
       try {
+        /*
+         * The state as it stands, before this turn changes anything -- which is
+         * what "go back to before I asked this" means. Taken with the messages
+         * the model is about to be given, so going back restores its memory too
+         * rather than leaving a conversation it has no record of.
+         *
+         * A turn that fails costs nothing here: `takeCheckpoint` keys on
+         * `doc.revision`, and a rolled-back run leaves that where it started.
+         *
+         * Inside the controller's window, not above it: this writes a whole
+         * schematic to disk, and while it ran there was nothing registered for
+         * `cancelAgent` to find -- so Stop, pressed during it, silently did
+         * nothing. A Stop landing here now aborts the signal before `runAgent`
+         * ever uses it, which it already handles.
+         */
+        const checkpoint = await takeCheckpoint(session, conversationMessages());
+        if (checkpoint !== null) stampCheckpoint(checkpoint);
+
         const result = await runAgent({
           session,
           provider: settings.provider,

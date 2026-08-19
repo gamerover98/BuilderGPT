@@ -46,10 +46,11 @@ let failures = 0;
 /**
  * `detail` is printed only on failure, and only when there is something to say.
  *
- * It exists because this file is *not* typechecked -- `tsconfig.node.json`
+ * It exists because this file used not to be typechecked -- `tsconfig.node.json`
  * covers `src/**` and not `tests/**` -- so an extra argument passed to a
- * two-parameter function is silently dropped rather than refused. Which is
- * exactly what had been happening here.
+ * two-parameter function was silently dropped rather than refused, which is
+ * exactly what had been happening here. `tsconfig.tests.json` closed that; the
+ * parameter stays because the call sites want it.
  */
 function check(label: string, condition: boolean, detail?: string): void {
   if (condition) {

@@ -165,6 +165,38 @@ blocks it destroyed, or undoing it could not bring them back.
 which for an async body is nothing, so the rollback silently never runs and a
 failed request leaves the document half-edited.
 
+**Stop is shown from `inFlight`, never from `busy`.** They are different
+questions and only one of them is "is there something to abort": switching
+conversation, restoring a checkpoint and refreshing the document all set `busy`,
+and none of them can be stopped. Deciding the button from `busy` is how it came
+to be on screen doing nothing.
+
+The chat has *two* stoppable runs, which is the part that is easy to miss. A
+message typed with nothing open goes to the **generator**, not the agent — the
+chat builds the schematic the rest of the conversation then edits — so
+`inFlight` carries a kind and `stopAgent` dispatches on it. `generate` has taken
+an `AbortSignal` since it was written; for a long time nothing passed it one and
+there was no channel to ask.
+
+Registration order is load-bearing on both paths: the controller goes into the
+map **before** anything awaited, `takeCheckpoint` included. That call writes a
+whole schematic, and above the registration it is a window in which `cancelAgent`
+finds nothing — Stop pressed during it does nothing at all, silently. A Stop that
+lands inside the window aborts the signal before `runAgent` uses it, which
+`agent.ts` already handles by asking the signal rather than the error.
+
+`tests/services.ts` walks `handlers.ts` and fails on any channel in `IPC` that is
+neither `ipcMain.handle`d nor `send`ed. That is the mechanical half of the same
+mistake: declaring a verb, bridging it through preload, calling it from the
+renderer, and never registering it.
+
+**A build asked for in the chat reports itself in the chat.** Generation's only
+feedback was the progress bar in the Structure panel, which since the sidebar
+became tabs is a tab you are not looking at while you chat — so asking the chat
+to build something showed the message and then nothing, for as long as the model
+took. The same `onProgress` events are pushed into the chat's live steps, matched
+by request id because previews emit progress too.
+
 **MCEdit output is lossy, and says which way.** A block with no legacy
 equivalent fails the save by name; a block whose exact state the format cannot
 carry is written as the base block and reported through `degraded`. Both

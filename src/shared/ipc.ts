@@ -84,6 +84,14 @@ export const IPC = {
   chatRestore: "bgpt:chat:restore",
   /** Stop the request in flight. */
   docAgentCancel: "bgpt:doc:agent:cancel",
+  /**
+   * Stop a generation in flight.
+   *
+   * Its own channel rather than a shared "cancel", because the two runs are
+   * cancelled by id out of two different maps and one verb per channel is the
+   * rule here. Both reach the user as the same Stop button.
+   */
+  generateCancel: "bgpt:generate:cancel",
   /** main → renderer: one tool call the agent just made. */
   agentStep: "bgpt:agent:step",
 
@@ -797,6 +805,15 @@ export interface BgptApi {
    * failure — this only asks it to stop.
    */
   cancelAgent(requestId: string): Promise<boolean>;
+  /**
+   * Stop the generation with this id. Resolves `true` if one was in flight.
+   *
+   * Generation reached from the chat is a turn like any other and gets the same
+   * Stop button, so it needs the same way out. Without this the button was
+   * shown — `busy` was true — and did nothing at all, which is the one state it
+   * must never have.
+   */
+  cancelGenerate(requestId: string): Promise<boolean>;
 
   onProgress(listener: (event: ProgressEvent) => void): () => void;
   onAgentStep(listener: (event: AgentStepEvent) => void): () => void;

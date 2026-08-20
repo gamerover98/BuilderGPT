@@ -241,8 +241,43 @@ import VersionList from "./lib/VersionList.svelte";
    * So the slot is the value. Everything that chooses a block — the inventory,
    * the field in the selection tools, the middle button — writes the slot.
    */
-  const activeBlock = $derived(settings.ui.hotbar[settings.ui.hotbarSlot] ?? "minecraft:stone");
+  /**
+   * Mirrored locally, like the sidebar's width and the tool windows' positions.
+   *
+   * Persisting is a round trip through main and a write to disk, and the block
+   * field emits on every keystroke — so writing straight through meant sixteen
+   * saves to type `minecraft:stone`, with the field's own value liable to jump
+   * backwards as an earlier response landed after a later one. The mirror is
+   * what is on screen; the write follows behind.
+   */
+  let hotbar = $state<string[]>([...DEFAULT_UI_SETTINGS.hotbar]);
+  let hotbarSlot = $state(DEFAULT_UI_SETTINGS.hotbarSlot);
+
+  const activeBlock = $derived(hotbar[hotbarSlot] ?? "minecraft:stone");
   const placingBlock = $derived(activeBlock);
+
+  /** The pending persist, so a burst of keystrokes costs one write. */
+  let hotbarWrite: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * How long a burst is allowed to be. Long enough that typing a block name is
+   * one write, short enough to be on disk before anyone could close the window.
+   */
+  const HOTBAR_WRITE_DELAY = 400;
+
+  function persistHotbar(): void {
+    if (hotbarWrite !== null) clearTimeout(hotbarWrite);
+    hotbarWrite = setTimeout(() => {
+      hotbarWrite = null;
+      void patchUi({ hotbar: [...hotbar], hotbarSlot });
+    }, HOTBAR_WRITE_DELAY);
+  }
+
+  /** Reaches for a different slot. */
+  function holdSlot(slot: number): void {
+    hotbarSlot = slot;
+    persistHotbar();
+  }
 
   /**
    * Who the block list is answering for.
@@ -334,9 +369,8 @@ import VersionList from "./lib/VersionList.svelte";
 
   /** Puts a block in the hand, which is to say into the active slot. */
   function holdBlock(block: string): void {
-    void patchUi({
-      hotbar: settings.ui.hotbar.map((id, at) => (at === settings.ui.hotbarSlot ? block : id)),
-    });
+    hotbar = hotbar.map((id, at) => (at === hotbarSlot ? block : id));
+    persistHotbar();
   }
 
   /**
@@ -865,6 +899,8 @@ import VersionList from "./lib/VersionList.svelte";
       inspectorWindowX = settings.ui.inspectorWindowX;
       inspectorWindowY = settings.ui.inspectorWindowY;
       sidebarTab = settings.ui.sidebarTab;
+      hotbar = [...settings.ui.hotbar];
+      hotbarSlot = settings.ui.hotbarSlot;
       keyStatus = await api().getKeyStatus();
       versions = await api().listVersions();
       artifacts = await api().listArtifacts();
@@ -2814,13 +2850,16 @@ import VersionList from "./lib/VersionList.svelte";
       "what am I holding" and it is on screen wherever you are.
     -->
     <Hotbar
-      slots={settings.ui.hotbar}
-      active={settings.ui.hotbarSlot}
+      slots={hotbar}
+      active={hotbarSlot}
       visible={docState !== null}
       ownsWheel={cameraMode === "fly" && !inventoryOpen}
       onopeninventory={() => browseBlocks("hand")}
-      onselect={(slot) => void patchUi({ hotbarSlot: slot })}
-      onedit={(slot) => void patchUi({ hotbar: settings.ui.hotbar.map((id, at) => (at === slot ? activeBlock : id)) })}
+      onselect={holdSlot}
+      onedit={(slot) => {
+        hotbar = hotbar.map((id, at) => (at === slot ? activeBlock : id));
+        persistHotbar();
+      }}
     />
     {#if bounds}
       <!-- component.py:465-469's caption, same two-decimal formatting. -->

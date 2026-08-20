@@ -715,6 +715,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           resourcePackPath: null,
           fallbackResourcePackPath: await defaultResourcePackPath(),
           biomeColor: settings.biomeColor,
+          showMarkers: settings.showMarkers,
           waterColor: settings.waterColor,
         });
         const sun = sunAnglesRadians(settings);
@@ -1275,6 +1276,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         fallbackResourcePackPath: await defaultResourcePackPath(),
         legacyBlocksPath: legacyBlocksPath(),
         biomeColor: req.settings.biomeColor,
+        showMarkers: req.settings.showMarkers,
         waterColor: req.settings.waterColor,
       });
       const sun = sunAnglesRadians(req.settings);

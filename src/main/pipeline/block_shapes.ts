@@ -582,15 +582,55 @@ function lantern(entry: PaletteEntry): BlockShape {
   });
 }
 
+/**
+ * A piston head: the plate you see, and the rod holding it out.
+ *
+ * Vanilla's own model, in the same 0..16 units — a 4-deep plate at the far
+ * face and a 4x4 rod running back through the block. Facing is ignored: the
+ * property exists, but `moving_piston` is a transient the schematic happens to
+ * have caught, and a rod pointing the wrong way is a far smaller lie than a
+ * hole where a block should be.
+ */
+function pistonHead(): BlockShape {
+  return boxes(
+    // The plate.
+    { box: [0, 0, 0, 16, 4, 16] },
+    // The rod, back through the middle.
+    { box: [6, 4, 6, 10, 16, 10] },
+  );
+}
+
 /** Exact block names, taking precedence over the suffix table. */
 const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>> = {
-  // Invisible by design in Minecraft. `barrier` in particular is used as a
-  // build boundary and can be most of a schematic's block count -- drawn as a
-  // solid cube it hides the entire structure inside it.
-  barrier: () => INVISIBLE,
+  /*
+   * Markers: invisible in the world, drawn in the editor.
+   *
+   * A barrier is invisible to a *player* and is exactly what someone building a
+   * schematic needs to see — it is placed on purpose, to keep players out of
+   * somewhere, and a shell of them is a decision that has to be reviewable.
+   * Drawing nothing meant a build could be full of them and look empty.
+   *
+   * They are cubes with a see-through texture (`isSeeThrough` below keeps them
+   * from culling their neighbours), so a wall of barriers reads as a wall
+   * without hiding what is behind it. `preview.showMarkers` turns them back
+   * into air for anyone who wants the player's view.
+   *
+   * `light` stays invisible: it has no in-game appearance to reproduce and no
+   * structural meaning to review.
+   */
+  barrier: () => CUBE,
+  structure_void: () => CUBE,
   light: () => INVISIBLE,
-  structure_void: () => INVISIBLE,
-  moving_piston: () => INVISIBLE,
+
+  /*
+   * The block the game puts where a pushed block is on its way to.
+   *
+   * It is rendered in vanilla -- it is what you see mid-push -- so drawing
+   * nothing left a hole in any schematic captured with a piston firing. The
+   * head: a plate across the face and a rod back into the block behind it,
+   * which is what `piston_head` is.
+   */
+  moving_piston: pistonHead,
 
   // `SUFFIX_SHAPES` keys `"_torch"`, which catches `wall_torch`, `soul_torch`
   // and `redstone_torch` but not the bare name -- so the commonest torch in the
@@ -759,6 +799,13 @@ function isSeeThrough(entry: PaletteEntry): boolean {
     name === "frosted_ice" ||
     name === "slime_block" ||
     name === "honey_block" ||
+    /*
+     * The markers. They are drawn as cubes so they can be seen, and they must
+     * not cull: a barrier hides nothing in the game, so a barrier that deleted
+     * the face of the wall behind it would be worse than not drawing it at all.
+     */
+    name === "barrier" ||
+    name === "structure_void" ||
     name.endsWith("_ice")
   );
 }

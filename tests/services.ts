@@ -68,7 +68,7 @@ import {
   clearPreviewCache,
   sunAnglesRadians,
 } from "../src/main/services/preview.js";
-import { documentFromLoaded, setBlock } from "../src/main/domain/document.js";
+import { createDocument, documentFromLoaded, setBlock } from "../src/main/domain/document.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/services/versions.js";
 import { coerceSettings, coerceUi } from "../src/main/services/settings_coerce.js";
@@ -384,6 +384,48 @@ try {
       "and they are real geometry, not empty",
       firstPass.icons.every((icon) => icon.geometry !== null && icon.geometry.indices.length > 0),
     );
+
+    /*
+     * Barriers, and the setting that decides whether they are drawn.
+     *
+     * They are invisible to a player and placed on purpose -- a barrier keeps
+     * people out of somewhere -- so the builder is the one person who needs to
+     * see them, and the default is deliberately not the game's own view.
+     * Turning it off has to reach the *mesher*, not the viewer: a drawn barrier
+     * has to stop culling its neighbours, which is a meshing decision.
+     */
+    console.log("\n--- markers ---");
+    {
+      const markers = createDocument({ width: 2, height: 1, length: 1, format: "sponge3" });
+      setBlock(markers, 0, 0, 0, { namespacedName: "minecraft:stone", properties: {} });
+      setBlock(markers, 1, 0, 0, { namespacedName: "minecraft:barrier", properties: {} });
+
+      const shown = await buildDocumentPreview(markers, {
+        resourcePackPath: null,
+        fallbackResourcePackPath: bundledPack,
+        showMarkers: true,
+      });
+      const hidden = await buildDocumentPreview(markers, {
+        resourcePackPath: null,
+        fallbackResourcePackPath: bundledPack,
+        showMarkers: false,
+      });
+
+      const triangles = (mesh: { chunks: { indices: Uint32Array }[] }): number =>
+        mesh.chunks.reduce((total, chunk) => total + chunk.indices.length, 0);
+
+      check("a barrier is drawn when markers are shown", triangles(shown.mesh) > 0);
+      check(
+        "hiding them leaves less geometry, not the same",
+        triangles(hidden.mesh) < triangles(shown.mesh),
+        `${triangles(hidden.mesh)} vs ${triangles(shown.mesh)}`,
+      );
+      check(
+        "...and the stone beside it survives either way",
+        triangles(hidden.mesh) > 0,
+        "hiding markers took the whole document with it",
+      );
+    }
 
     // The baker cache is the point of the exercise. Reading the bundled pack is
     // ~17 MB of zip and dominates a cold build; a warm rebuild must not do it

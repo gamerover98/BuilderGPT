@@ -38,6 +38,7 @@ import {
   paletteEntryCacheKey,
   paletteEntryIsAir,
   type MeshBuffers,
+  type PaletteEntry,
   type StructureData,
 } from "../pipeline/types.js";
 import { toStructureData, type SchematicDocument } from "../domain/document.js";
@@ -173,6 +174,7 @@ function cacheKey(
   fallbackResourcePackPath: string | null,
   biomeColor: string,
   waterColor: string,
+  showMarkers: boolean,
 ): string {
   const hash = createHash("sha256");
   hash.update(schemBytes);
@@ -181,6 +183,11 @@ function cacheKey(
   hash.update(biomeColor);
   hash.update(SEPARATOR);
   hash.update(waterColor);
+  hash.update(SEPARATOR);
+  // Same class of input as the tints: it changes the mesh and nothing else in
+  // this key would notice, so a preview cached with markers shown would be
+  // handed back to a caller that asked for them hidden.
+  hash.update(showMarkers ? "markers" : "no-markers");
   hash.update(SEPARATOR);
   // The pack paths, not their bytes: the bundled pack is 17 MB and hashing it
   // on every preview would cost more than the mesh build this cache exists to
@@ -283,6 +290,8 @@ export function clearBakerCache(): void {
 }
 
 export interface BuildPreviewOptions {
+  /** Whether barriers and structure voids are drawn. Default true. */
+  showMarkers?: boolean;
   schemPath: string;
   resourcePackPath: string | null;
   /**
@@ -380,12 +389,14 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
 
   const biomeColor = options.biomeColor ?? DEFAULT_BIOME_COLOR;
   const waterColor = options.waterColor ?? DEFAULT_WATER_COLOR;
+  const showMarkers = options.showMarkers !== false;
   const key = cacheKey(
     schemBytes,
     options.resourcePackPath,
     fallbackResourcePackPath,
     biomeColor,
     waterColor,
+    showMarkers,
   );
   const hit = cache.get(key);
   if (hit) {
@@ -403,7 +414,9 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
   // (RULEBOOK.md DEV-014's note / translate.ts's TODO(port)). `undefined` is
   // its documented identity behavior, which is also what Python's
   // `normalize_palette` did whenever PyMCTranslate wasn't installed.
-  const normalized = normalizePalette(structure, undefined);
+  const normalized = showMarkers
+    ? normalizePalette(structure, undefined)
+    : hideMarkers(normalizePalette(structure, undefined));
 
   const cached = await cachedBaker(
     options.resourcePackPath,
@@ -451,6 +464,38 @@ export interface DocumentPreviewOptions {
   fallbackResourcePackPath?: string | null;
   biomeColor?: string;
   waterColor?: string;
+  /**
+   * Whether barriers and structure voids are drawn. Default true.
+   *
+   * See `hideMarkers`. Off is the player's view of the build; on is the
+   * builder's, and the builder is who this app is for — which is why the
+   * default is the one the game does not give you.
+   */
+  showMarkers?: boolean;
+}
+
+/**
+ * The structure as it would look to a player: markers turned back into air.
+ *
+ * Done here rather than in the baker, and that is the load-bearing part. A
+ * baker keyed on this flag would be a second baker, a second texture set and a
+ * second atlas -- and the block icons, which always draw markers because you
+ * have to see what you are picking, would be meshed against the wrong one. The
+ * palette is a handful of entries; rewriting the matching ones costs nothing
+ * and leaves exactly one atlas in the process.
+ */
+function hideMarkers(structure: StructureData): StructureData {
+  const air: PaletteEntry = { namespacedName: "minecraft:air", properties: {} };
+  let touched = false;
+  const palette = structure.palette.map((entry) => {
+    const name = entry.namespacedName.replace("minecraft:", "");
+    if (name !== "barrier" && name !== "structure_void") return entry;
+    touched = true;
+    return air;
+  });
+  // The arrays are shared with the document on purpose; only rebuild when
+  // there was actually a marker to hide.
+  return touched ? { ...structure, palette } : structure;
 }
 
 export interface DocumentPreviewResult extends PreviewResult {
@@ -485,7 +530,8 @@ export async function buildDocumentPreview(
     options.biomeColor ?? DEFAULT_BIOME_COLOR,
     options.waterColor ?? DEFAULT_WATER_COLOR,
   );
-  const structure = toStructureData(doc);
+  const structure =
+    options.showMarkers === false ? hideMarkers(toStructureData(doc)) : toStructureData(doc);
 
   /*
    * The atlas has to exist before the chunks are meshed, because their UVs

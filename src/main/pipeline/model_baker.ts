@@ -88,6 +88,23 @@ interface SpecialFaceRule {
 }
 
 const SPECIAL_FACE_RULES: Record<string, SpecialFaceRule> = {
+  /*
+   * The markers, and the only two rules here that point at `item/`.
+   *
+   * Neither block has a block texture, because neither is drawn in the world —
+   * what the game has is the icon it shows you in your hand, and that icon is
+   * exactly what identifies it here. `normalizeTextureKey` already honours an
+   * `item/` prefix, so this needs nothing else.
+   */
+  barrier: { top: ["item/barrier"], side: ["item/barrier"], bottom: ["item/barrier"] },
+  structure_void: {
+    top: ["item/structure_void"],
+    side: ["item/structure_void"],
+    bottom: ["item/structure_void"],
+  },
+  // The extended arm, which is what `moving_piston` is a picture of.
+  moving_piston: { top: ["piston_top"], side: ["piston_side"], bottom: ["piston_side"] },
+
   // Dirt-like blocks with distinct top/bottom.
   grass_block: { top: ["grass_block_top"], side: ["grass_block_side"], bottom: ["dirt"] },
   podzol: { top: ["podzol_top"], side: ["podzol_side"], bottom: ["dirt"] },

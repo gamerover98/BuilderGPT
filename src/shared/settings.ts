@@ -84,6 +84,20 @@ export interface PreviewSettings {
   waterColor: string;
   /** Blocks per second in the Creative flight camera. */
   flySpeed: number;
+  /**
+   * Whether barriers and structure voids are drawn.
+   *
+   * They are invisible to a player and placed on purpose — a barrier keeps
+   * people out of somewhere, and a shell of them is a decision somebody has to
+   * be able to review. So the default is on, which is deliberately *not* the
+   * game's own view: this app is for the builder, and the builder is the one
+   * person who needs to see them. Turn it off to see the build as a player
+   * would.
+   *
+   * Like the two tints, this one is consumed by the mesher rather than the
+   * viewer, so changing it rebuilds the mesh.
+   */
+  showMarkers: boolean;
 }
 
 /** component.py:319-328 slider/checkbox defaults, verbatim. */
@@ -99,6 +113,7 @@ export const DEFAULT_PREVIEW_SETTINGS: PreviewSettings = {
   biomeColor: DEFAULT_BIOME_COLOR,
   waterColor: DEFAULT_WATER_COLOR,
   flySpeed: 12,
+  showMarkers: true,
 };
 
 /** Slider bounds from component.py:319-328, reused by the renderer's inputs. */

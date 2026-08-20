@@ -93,14 +93,68 @@ console.log("--- texture orientation ---");
 }
 
 // --- invisible blocks -------------------------------------------------------
-//
-// barrier is 65% of the block count in a typical village schematic. Drawn as a
-// solid cube it encloses and hides the entire structure.
 console.log("\n--- invisible blocks ---");
-for (const name of ["barrier", "light", "structure_void"]) {
+{
+  /*
+   * `light` really is invisible: it has no in-game appearance to reproduce and
+   * no structural meaning to review.
+   */
+  const baked = await baker.bakeBlockstate(block("light"));
+  equal("light bakes no geometry", allVertices(baked).length, 0);
+  check("light does not occlude its neighbours", !occludesNeighbours(block("light")));
+}
+
+// --- markers ----------------------------------------------------------------
+//
+// barrier and structure_void are invisible to a *player* and are exactly what
+// the person building a schematic needs to see: a barrier is placed on purpose,
+// to keep people out of somewhere, and a shell of them is a decision that has to
+// be reviewable. They used to bake nothing, which meant a build could be full of
+// them and look empty.
+//
+// The pair of properties below is what makes drawing them safe. Cull, and a
+// barrier would delete the face of the wall behind it -- worse than not drawing
+// it at all, because the wall is real and the barrier is not.
+console.log("\n--- markers ---");
+for (const name of ["barrier", "structure_void"]) {
   const baked = await baker.bakeBlockstate(block(name));
-  equal(`${name} bakes no geometry`, allVertices(baked).length, 0);
-  check(`${name} does not occlude its neighbours`, !occludesNeighbours(block(name)));
+  check(`${name} is drawn`, allVertices(baked).length > 0, "it bakes nothing");
+  check(
+    `${name} still does not occlude its neighbours`,
+    !occludesNeighbours(block(name)),
+  );
+  /*
+   * And it is the *item* icon, because neither block has a block texture --
+   * what the game has is the picture it shows you in your hand, which is the
+   * thing that identifies it.
+   */
+  const keys = [...Object.values(baked.faces), ...baked.extraFaces].map((f) => f.textureKey);
+  check(
+    `${name} is drawn with its own icon`,
+    keys.length > 0 && keys.every((key) => key === `minecraft:item/${name}`),
+    keys.join(", "),
+  );
+}
+
+{
+  /*
+   * The block the game puts where a pushed block is on its way to. It is
+   * rendered in vanilla -- it is what you see mid-push -- so drawing nothing
+   * left a hole in any schematic captured with a piston firing.
+   */
+  const baked = await baker.bakeBlockstate(block("moving_piston"));
+  const vertices = allVertices(baked);
+  check("moving_piston is drawn", vertices.length > 0, "it bakes nothing");
+  check(
+    "...and is not a full cube, because a piston head is a plate and a rod",
+    !baked.isFullCube,
+  );
+  const ys = vertices.map((v) => v[1]);
+  check(
+    "...reaching from the face it pushes to the block behind it",
+    Math.min(...ys) === 0 && Math.max(...ys) === 1,
+    `${Math.min(...ys)}..${Math.max(...ys)}`,
+  );
 }
 
 // --- shapes -----------------------------------------------------------------

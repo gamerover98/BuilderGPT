@@ -294,6 +294,8 @@ export const en = {
     "A pack ships with the app and is used by default. Choosing your own takes priority, with " +
     "the bundled one filling in any textures it does not provide. Affects the preview only, " +
     "never the generated file.",
+  "preview.showMarkers": "Show barriers and structure voids",
+  "preview.showMarkersHint": "They are invisible in game, and usually placed on purpose. Turn this off to see the build the way a player would.",
   "preview.biomeColors": "Biome colours",
   "preview.foliage": "Grass, leaves, vines",
   "preview.water": "Water",

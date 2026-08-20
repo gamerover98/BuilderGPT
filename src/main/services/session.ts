@@ -484,6 +484,9 @@ export async function documentMesh(
     options.resourcePackPath ?? options.fallbackResourcePackPath ?? "",
     options.biomeColor ?? "",
     options.waterColor ?? "",
+    // Same reasoning as the tints: it changes the mesh and changes no block, so
+    // the revision alone would hand back a stale one.
+    options.showMarkers === false ? "hide" : "show",
   ].join("|");
 
   if (session.mesh && session.mesh.key === key) {

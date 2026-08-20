@@ -297,6 +297,21 @@
             <p class="hint">{t("preview.resourcePackHint")}</p>
           </div>
 
+          <!--
+            Not a viewer toggle: main turns them back into air, because a
+            barrier that is drawn has to stop culling its neighbours and that
+            is a meshing decision. Changing it rebuilds.
+          -->
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={preview.showMarkers}
+              onchange={(event) => onpreviewchange({ showMarkers: event.currentTarget.checked })}
+            />
+            {t("preview.showMarkers")}
+          </label>
+          <p class="hint">{t("preview.showMarkersHint")}</p>
+
           <div class="field">
             <label for="biome-color">{t("preview.biomeColors")}</label>
             <div class="pick-row">

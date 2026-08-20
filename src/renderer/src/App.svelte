@@ -1435,7 +1435,12 @@ import VersionList from "./lib/VersionList.svelte";
     // Every other preview setting is applied by the viewer on the GLB it
     // already has. The two tints are baked into the texture atlas, so they are
     // the ones that need the mesh rebuilt.
-    const rebuilds = patch.biomeColor !== undefined || patch.waterColor !== undefined;
+    const rebuilds =
+      patch.biomeColor !== undefined ||
+      patch.waterColor !== undefined ||
+      // The markers are turned back into air by the mesher, not hidden by the
+      // viewer, so this one rebuilds too — see `hideMarkers`.
+      patch.showMarkers !== undefined;
     if (!rebuilds || busy) return;
     // Whichever of the two is showing. Before this the tints only ever reached
     // the file-preview path, so changing one with a document open did nothing

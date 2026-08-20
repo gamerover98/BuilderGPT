@@ -774,6 +774,49 @@ snapshots the state being left before adopting the old one. `snapshots_core.ts`
 returns the ids evicted past the cap rather than deleting them, because a caller
 that forgets leaves orphans and that is something a test can see.
 
+**Barrier and structure void are drawn, and that is not a mistake.** They are
+invisible to a *player* and placed on purpose — a barrier keeps people out of
+somewhere, and a shell of them is a decision somebody has to be able to review.
+Drawing nothing meant a build could be full of them and look empty. So the
+default is deliberately *not* the game's own view, and `preview.showMarkers`
+turns them back into air for anyone who wants it. `light` stays invisible: it
+has no in-game appearance to reproduce and nothing structural to review.
+
+Two things make drawing them safe, and both are load-bearing. They are in
+`isSeeThrough`, so they never cull — a barrier that deleted the face of the wall
+behind it would be worse than not drawing it, because the wall is real and the
+barrier is not. And their texture is `item/barrier` / `item/structure_void`:
+neither has a block texture, because neither is drawn in the world, and what the
+game has is the icon it shows you in your hand.
+
+**Hiding them is done to the *structure*, not to the baker.** A baker keyed on
+the flag would be a second baker, a second texture set and a second atlas — and
+the block icons, which always draw markers because you have to see what you are
+picking, would be meshed against the wrong one. `hideMarkers` rewrites the
+matching palette entries to air, which costs nothing and leaves exactly one
+atlas in the process. Like the two tints it changes the mesh without changing a
+block, so it is part of both preview cache keys.
+
+`moving_piston` is drawn too, as a plate and a rod: it is rendered in vanilla —
+it is what you see mid-push — so drawing nothing left a hole in any schematic
+captured with a piston firing.
+
+**A long loop in main must yield with `setImmediate`, not with `await`.**
+`await` queues a microtask, and microtasks run *before* I/O, so a loop of
+awaited work starves the event loop exactly as a synchronous one would. That is
+what froze the window while the block warm-up ran: every IPC call sat behind it,
+including the one opening the document that triggered it. `setImmediate` runs in
+the check phase, after I/O, and is the yield that actually hands the process
+back.
+
+**Startup is a phase, with named steps.** The block warm-up is seconds, and
+starting it lazily meant starting it the moment a schematic opened. It runs up
+front now and the window is not usable until it is done, which is the honest
+arrangement — it was already unusable for those seconds, it just did not say so.
+A step that throws does not stop the rest: up with less beats not up, and
+whatever failed will fail again where it is asked for, with a message about
+what it was.
+
 **Block geometry is hand-described in `pipeline/block_shapes.ts`, not loaded.**
 The Python original only ever produced full cubes — its model-driven path was
 dead code (DEV-008) — so stairs, fences and slabs all rendered as solid blocks.

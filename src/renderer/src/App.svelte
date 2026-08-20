@@ -16,11 +16,11 @@
   import ArtifactList from "./lib/ArtifactList.svelte";
   import ChatPanel from "./lib/ChatPanel.svelte";
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
-  import DocumentPanel from "./lib/DocumentPanel.svelte";
+  import DocumentBar from "./lib/DocumentBar.svelte";
   import InspectorPanel from "./lib/InspectorPanel.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
   import SelectionTools from "./lib/SelectionTools.svelte";
-  import SidebarTabs, { type SidebarTab } from "./lib/SidebarTabs.svelte";
+  import SidebarTabs from "./lib/SidebarTabs.svelte";
   import ToolWindow from "./lib/ToolWindow.svelte";
   import { findOpenCodeModel, loadOpenCodeModels } from "./lib/models.svelte.js";
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
@@ -58,6 +58,7 @@ import StartScreen from "./lib/StartScreen.svelte";
   import {
     DEFAULT_SETTINGS,
     DEFAULT_UI_SETTINGS,
+  type SidebarTab,
     providerRequiresApiKey,
     type ExportType,
     type KeyStorageStatus,
@@ -571,6 +572,7 @@ import StartScreen from "./lib/StartScreen.svelte";
       toolWindowY = settings.ui.toolWindowY;
       inspectorWindowX = settings.ui.inspectorWindowX;
       inspectorWindowY = settings.ui.inspectorWindowY;
+      sidebarTab = settings.ui.sidebarTab;
       keyStatus = await api().getKeyStatus();
       versions = await api().listVersions();
       artifacts = await api().listArtifacts();
@@ -728,7 +730,7 @@ import StartScreen from "./lib/StartScreen.svelte";
 
   let paletteOpen = $state(false);
   let settingsOpen = $state(false);
-  let sidebarTab = $state<SidebarTab>("chat");
+  let sidebarTab = $state<SidebarTab>(DEFAULT_UI_SETTINGS.sidebarTab);
   /**
    * The half-written chat message.
    *
@@ -2054,7 +2056,12 @@ import StartScreen from "./lib/StartScreen.svelte";
     belongs to the canvas -- and moving it gives the canvas that corner back.
   -->
   <header class="navbar">
-    <h1>{t("app.title")}</h1>
+    <DocumentBar
+      doc={docState}
+      {busy}
+      onundo={() => runDocument(t("task.undoing"), () => api().undo())}
+      onredo={() => runDocument(t("task.redoing"), () => api().redo())}
+    />
 
     <div class="camera-modes" role="group" aria-label={t("viewport.cameraMode")}>
       <button
@@ -2091,7 +2098,15 @@ import StartScreen from "./lib/StartScreen.svelte";
       >
     </header>
 
-    <SidebarTabs active={sidebarTab} onselect={(tab) => (sidebarTab = tab)} />
+    <SidebarTabs
+      active={sidebarTab}
+      onselect={(tab) => {
+        sidebarTab = tab;
+        // Mirrored locally first, then persisted: the click must repaint at
+        // once, and the write is a round trip through main.
+        void patchUi({ sidebarTab: tab });
+      }}
+    />
 
     <!--
       The chat is the one tab that manages its own scrolling, so it must not be
@@ -2129,20 +2144,13 @@ import StartScreen from "./lib/StartScreen.svelte";
           onopensettings={() => (settingsOpen = true)}
         />
       {:else}
-        <DocumentPanel
-          doc={docState}
-          {busy}
-          recent={recentDocuments}
-          onopenrecent={openDocumentAt}
-          onblockchange={(next) => (activeBlock = next)}
-          onnew={() => void startNewDocument()}
-          onopen={openDocument}
-          onsave={(format) => saveDocument(format)}
-          onsaveas={saveDocumentAs}
-          onundo={() => runDocument(t("task.undoing"), () => api().undo())}
-          onredo={() => runDocument(t("task.redoing"), () => api().redo())}
-        />
-
+        <!--
+          Two things that are one thing: describe a build and get a file, then
+          the files that came out. The document's own facts left for the
+          application bar, and its verbs for the File menu and the start
+          screen -- which is what lets this tab finally be named after what it
+          does.
+        -->
         <fieldset>
       <legend>{t("structure.legend")}</legend>
 
@@ -2389,6 +2397,7 @@ import StartScreen from "./lib/StartScreen.svelte";
           blocks={blockRegistry}
           block={activeBlock}
           onblockchange={(next) => (activeBlock = next)}
+          palette={docState?.palette ?? []}
           {clipboard}
           onfill={fillSelection}
           onreplace={replaceInSelection}
@@ -2572,14 +2581,6 @@ import StartScreen from "./lib/StartScreen.svelte";
     display: flex;
     justify-content: flex-end;
     margin-bottom: 12px;
-  }
-
-  h1 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    white-space: nowrap;
   }
 
   .preview {

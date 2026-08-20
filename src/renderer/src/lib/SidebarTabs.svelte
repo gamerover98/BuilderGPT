@@ -1,6 +1,3 @@
-<script lang="ts" module>
-  export type SidebarTab = "chat" | "schematic";
-</script>
 
 <script lang="ts">
   /**
@@ -11,6 +8,14 @@
    * most -- sat in the middle with its input drifting off-screen, and finding
    * anything meant scrolling past everything else.
    *
+   * The second was called Schematic, which was the honest name for a drawer
+   * holding three unrelated things: the file verbs, the generator form, and the
+   * list of files it had produced. The file verbs have a menu and a start
+   * screen now, so what is left is one thing and is named after it.
+   *
+   * The type itself lives in `shared/settings.ts`, not here, because the choice
+   * is persisted and `coerceUi` in main has to validate it.
+   *
    * There were three tabs, and the third was Inspector. It has moved out to a
    * floating window over the canvas, because it is not the same *kind* of thing
    * as the other two: Chat is a place you stay and Schematic is a drawer you
@@ -19,6 +24,7 @@
    * something here now" is blank the rest of the time, and being mutually
    * exclusive with the chat meant looking at a block cost you the conversation.
    */
+  import type { SidebarTab } from "../../../shared/settings.js";
   import { t } from "./i18n.svelte.js";
 
   interface Props {
@@ -30,7 +36,7 @@
 
   const TABS: readonly { id: SidebarTab; key: string }[] = [
     { id: "chat", key: "tabs.chat" },
-    { id: "schematic", key: "tabs.schematic" },
+    { id: "generate", key: "tabs.generate" },
   ];
 </script>
 

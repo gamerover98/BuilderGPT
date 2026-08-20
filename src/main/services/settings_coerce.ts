@@ -21,6 +21,7 @@ import {
   HOTBAR_SLOTS,
   LANGUAGES,
   PROVIDERS,
+  SIDEBAR_TABS,
   SIDEBAR_WIDTH,
   THEMES,
   type Language,
@@ -70,6 +71,15 @@ export function coerceUi(raw: unknown): UiSettings {
     // Wrapped rather than clamped, so a stored index from a build with a
     // different slot count lands somewhere reachable instead of always on 0.
     hotbarSlot: ((Math.trunc(Number(source.hotbarSlot)) || 0) % HOTBAR_SLOTS + HOTBAR_SLOTS) % HOTBAR_SLOTS,
+    // Whitelisted like everything else here. A file written before the tab was
+    // renamed holds "schematic", which is not one of the two and correctly
+    // falls back rather than leaving the sidebar showing nothing.
+    // Whitelisted like everything else here. A file written before the tab was
+    // renamed holds "schematic", which is not one of the two and correctly
+    // falls back rather than leaving the sidebar showing nothing.
+    sidebarTab: (SIDEBAR_TABS as readonly string[]).includes(String(source.sidebarTab))
+      ? (source.sidebarTab as UiSettings["sidebarTab"])
+      : DEFAULT_UI_SETTINGS.sidebarTab,
   };
 }
 

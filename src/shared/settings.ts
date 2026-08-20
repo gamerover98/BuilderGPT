@@ -184,7 +184,32 @@ export interface UiSettings {
    */
   hotbar: string[];
   hotbarSlot: number;
+  /**
+   * Which sidebar panel was showing when the window last closed.
+   *
+   * It was a plain `$state("chat")` in `App.svelte`, so every launch landed on
+   * the chat -- and everything about files lived one click away, behind a tab
+   * whose name did not say it held them. That is most of why the recents
+   * looked missing when they had been wired end to end for weeks.
+   */
+  sidebarTab: SidebarTab;
 }
+
+/**
+ * The sidebar's two panels.
+ *
+ * In `shared/` rather than beside the component, because `coerceUi` in main
+ * has to validate it and main may not import out of the renderer -- the same
+ * reason `openCodeModelRequiresKey` and the version era rule live here.
+ *
+ * `generate` was called `schematic`, which was the honest name for a drawer
+ * holding three unrelated things: the file verbs, the generator form, and the
+ * list of generated files. The first of those has a menu and a start screen
+ * now, so what is left is one thing and can be named after it.
+ */
+export type SidebarTab = "chat" | "generate";
+
+export const SIDEBAR_TABS: readonly SidebarTab[] = ["chat", "generate"];
 
 /** Nine, because that is how many keys there are between 1 and 9. */
 export const HOTBAR_SLOTS = 9;
@@ -228,6 +253,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   inspectorWindowY: 320,
   hotbar: [...DEFAULT_HOTBAR],
   hotbarSlot: 0,
+  sidebarTab: "chat",
 };
 
 export interface Settings {

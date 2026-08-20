@@ -959,6 +959,9 @@ console.log("\n--- settings coercion ---");
       "minecraft:water",
     ],
     hotbarSlot: 4,
+    // Not the default, so a `coerceUi` that dropped it would be caught by the
+    // round-trip rather than only by the compiler.
+    sidebarTab: "generate",
   } satisfies UiSettings;
 
   equal("every ui field survives a round-trip", coerceUi(ui), ui);
@@ -980,6 +983,13 @@ console.log("\n--- settings coercion ---");
   const fallback = coerceUi({ theme: "neon", language: "xx", sidebarWidth: "wide" });
   equal("an unknown theme falls back", fallback.theme, DEFAULT_UI_SETTINGS.theme);
   equal("an unknown language falls back", fallback.language, DEFAULT_UI_SETTINGS.language);
+  // "schematic" is what a settings file written before the tab was renamed
+  // holds, and it must land on a tab that exists rather than on nothing.
+  equal(
+    "the old tab name falls back",
+    coerceUi({ sidebarTab: "schematic" }).sidebarTab,
+    DEFAULT_UI_SETTINGS.sidebarTab,
+  );
   equal(
     "a non-numeric width falls back",
     fallback.sidebarWidth,

@@ -12,7 +12,7 @@
    * anything tracked here. The renderer holds no schematic; there is one copy
    * of the truth and it is in the main process.
    */
-  import type { ClipboardInfo, RegionSpec, TransformRequest } from "../../../shared/ipc.js";
+  import type { ClipboardInfo, PaletteCount, RegionSpec, TransformRequest } from "../../../shared/ipc.js";
   import BlockPicker from "./BlockPicker.svelte";
   import { t } from "./i18n.svelte.js";
 
@@ -28,6 +28,15 @@
      */
     block: string;
     onblockchange: (block: string) => void;
+    /**
+     * What the open document is actually made of, most common first.
+     *
+     * It used to sit in the sidebar's document panel, which is where it was
+     * least useful: clicking a material means "use this one", and the field it
+     * fills is here. It is also only ever meaningful while a document is open,
+     * which is exactly when this window exists.
+     */
+    palette: readonly PaletteCount[];
     clipboard: ClipboardInfo | null;
     onfill: (block: string) => void;
     onreplace: (from: string, to: string) => void;
@@ -45,6 +54,7 @@
     blocks,
     block,
     onblockchange,
+    palette,
     clipboard,
     onfill,
     onreplace,
@@ -55,6 +65,14 @@
     onclearselection,
     onselectall,
   }: Props = $props();
+
+  /** As many as fit without the window becoming a list with tools attached. */
+  const MAX_MATERIALS = 8;
+
+  /** A palette key is `name[a=b,c=d]`; the base name is enough to type back. */
+  function baseName(entry: string): string {
+    return entry.split("[")[0];
+  }
 
   let fromBlock = $state("");
 
@@ -91,6 +109,29 @@
     </p>
   {:else}
     <p class="hint">{t("selection.hint")}</p>
+  {/if}
+
+  {#if palette.length > 0}
+    <div class="group">
+      <label for="tool-materials">{t("doc.materials")}</label>
+      <ul id="tool-materials" class="palette">
+        {#each palette.slice(0, MAX_MATERIALS) as entry (entry.block)}
+          <li>
+            <button
+              class="link"
+              onclick={() => onblockchange(baseName(entry.block))}
+              title={t("doc.useAsBlock", { block: entry.block })}
+            >
+              {entry.block}
+            </button>
+            <span class="count">{entry.count.toLocaleString()}</span>
+          </li>
+        {/each}
+      </ul>
+      {#if palette.length > MAX_MATERIALS}
+        <p class="hint">{t("doc.moreMaterials", { count: palette.length - MAX_MATERIALS })}</p>
+      {/if}
+    </div>
   {/if}
 
   <div class="group">
@@ -257,5 +298,49 @@
 
   .tools :global(.hint) {
     margin: 0;
+  }
+
+  /*
+   * Scrolls inside itself rather than growing the window. Eight rows is what
+   * fits beside the tools; a palette of forty would otherwise push Fill and
+   * Replace off the bottom of a floating panel that has nowhere to grow.
+   */
+  .palette {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 132px;
+    overflow-y: auto;
+    font-size: 11px;
+  }
+
+  .palette li {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 1px 0;
+  }
+
+  .palette .count {
+    flex: none;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  button.link {
+    overflow: hidden;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  button.link:hover {
+    text-decoration: underline;
   }
 </style>

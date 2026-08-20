@@ -30,6 +30,7 @@ import {
   type InspectResponse,
   openCodeModelRequiresKey,
   type OpenCodeModelInfo,
+  type ConfirmDiscardRequest,
   type PickFileRequest,
   type PickFileResponse,
   type PreviewRequest,
@@ -148,6 +149,7 @@ import {
   setApiKey,
   setSettings,
 } from "../services/settings-store.js";
+import { discardPrompt } from "../services/discard_prompt.js";
 import { VERSION_NAMES } from "../services/versions.js";
 
 /** File-picking kinds only; `directory` takes the folder branch instead. */
@@ -241,6 +243,38 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   ipcMain.handle(IPC.opencodeModels, async (): Promise<OpenCodeModelInfo[] | null> => {
     return await fetchOpenCodeModels({ snapshotPath: openCodeSnapshotPath() });
   });
+
+  /*
+   * Asked before anything that would drop unsaved work on the floor.
+   *
+   * `newDocument` reassigns the open session without looking at what was there,
+   * and so does opening another file -- which was survivable only because
+   * nobody had noticed. The check has to be in front of the call, not inside
+   * it: by the time `session.ts` has the request the renderer has already
+   * committed to the new document.
+   */
+  ipcMain.handle(
+    IPC.confirmDiscard,
+    async (_event, req: ConfirmDiscardRequest): Promise<boolean> => {
+      const window = getWindow();
+      const prompt = discardPrompt(req.intent, req.fileName);
+      const options: Electron.MessageBoxOptions = {
+        type: "warning",
+        // Confirm first, cancel second, and `cancelId` named rather than
+        // inferred: Escape and the window's close button both have to land on
+        // "keep my work", whatever the platform decides the order should be.
+        buttons: [prompt.confirmLabel, prompt.cancelLabel],
+        defaultId: 1,
+        cancelId: 1,
+        message: prompt.message,
+        detail: prompt.detail,
+      };
+      const answer = window
+        ? await dialog.showMessageBox(window, options)
+        : await dialog.showMessageBox(options);
+      return answer.response === 0;
+    },
+  );
 
   ipcMain.handle(IPC.pickFile, async (_event, req: PickFileRequest): Promise<PickFileResponse> => {
     const window = getWindow();

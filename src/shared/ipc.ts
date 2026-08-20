@@ -26,6 +26,14 @@ export const IPC = {
   opencodeModels: "bgpt:opencode:models",
 
   pickFile: "bgpt:dialog:pickFile",
+  /**
+   * "You have unsaved work. Throw it away?" — asked with a native message box.
+   *
+   * In main rather than as a component because main already imports `dialog`,
+   * and because the same question has to be asked from `mainWindow.on("close")`
+   * where there is no renderer left to ask with.
+   */
+  confirmDiscard: "bgpt:dialog:confirmDiscard",
   revealPath: "bgpt:shell:reveal",
   /** The app's own `generated/` folder — what an empty `outputDir` resolves to. */
   defaultOutputDir: "bgpt:output:defaultDir",
@@ -275,6 +283,21 @@ export interface PickFileResponse {
   name: string | null;
   /** Set when a choice was rejected -- e.g. a folder that cannot be written to. */
   error?: string;
+}
+
+/**
+ * What is about to happen to the unsaved work, so the box can say it.
+ *
+ * A verb rather than a finished sentence: main phrases it, the way it phrases
+ * every other `Failure.message`, and the renderer does not have to keep three
+ * near-identical strings in step with a dialog it cannot see.
+ */
+export type DiscardIntent = "new" | "open" | "close";
+
+export interface ConfirmDiscardRequest {
+  intent: DiscardIntent;
+  /** The document's name, or `null` when it has never been saved. */
+  fileName: string | null;
 }
 
 export interface GenerateRequest {
@@ -923,6 +946,8 @@ export interface BgptApi {
   listOpenCodeModels(): Promise<OpenCodeModelInfo[] | null>;
 
   pickFile(req: PickFileRequest): Promise<PickFileResponse>;
+  /** `true` to go ahead and lose the unsaved changes. */
+  confirmDiscard(req: ConfirmDiscardRequest): Promise<boolean>;
   revealPath(path: string): Promise<void>;
   getDefaultOutputDir(): Promise<string>;
   listBlocks(): Promise<string[]>;

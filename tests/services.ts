@@ -72,6 +72,7 @@ import { documentFromLoaded, setBlock } from "../src/main/domain/document.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/services/versions.js";
 import { coerceSettings, coerceUi } from "../src/main/services/settings_coerce.js";
+import { discardPrompt } from "../src/main/services/discard_prompt.js";
 import {
   extentVolume,
   growthToInclude,
@@ -720,6 +721,37 @@ console.log("\n--- recent documents ---");
     coerceRecents([{ filePath: A, openedAt: -5 }])[0].openedAt,
     0,
   );
+}
+
+// --- the "you have unsaved work" box ---------------------------------------
+//
+// Wording, and only wording -- the dialog itself belongs to Electron. What is
+// worth pinning is that the destructive button never becomes a bare "OK":
+// "Discard changes?" answered with OK/Cancel is a coin flip, and half the
+// flips lose work.
+console.log("\n--- discard prompt ---");
+{
+  const named = discardPrompt("new", "castle.schem");
+  check("the headline names the file", named.message.includes("castle.schem"), named.message);
+  check("...and says what is at stake", named.message.includes("unsaved"), named.message);
+
+  const unnamed = discardPrompt("close", null);
+  equal("a document with no file is Untitled", unnamed.message, "Untitled has unsaved changes.");
+
+  // Each intent names its own verb, so the button says what pressing it does.
+  equal("new says what it will do", discardPrompt("new", "a").confirmLabel, "Discard and create");
+  equal("open says what it will do", discardPrompt("open", "a").confirmLabel, "Discard and open");
+  equal("close says what it will do", discardPrompt("close", "a").confirmLabel, "Discard and close");
+
+  for (const intent of ["new", "open", "close"] as const) {
+    const prompt = discardPrompt(intent, "a.schem");
+    check(
+      `${intent}: the button is never a bare OK`,
+      prompt.confirmLabel.toLowerCase() !== "ok" && prompt.confirmLabel !== prompt.cancelLabel,
+      prompt.confirmLabel,
+    );
+    check(`${intent}: it says the loss is permanent`, prompt.detail.includes("cannot be undone"), prompt.detail);
+  }
 }
 
 // --- growing the document to reach a region outside it ---------------------

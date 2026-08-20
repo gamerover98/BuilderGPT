@@ -659,16 +659,30 @@
     if (docState === null || busy) {
       return;
     }
-    if (key === "z" && !event.shiftKey) {
+    /*
+     * Undo and redo belong to whatever has the caret.
+     *
+     * Without this, Ctrl+Z with the cursor in the chat box undid a *block edit*
+     * instead of the half-typed sentence -- and the sentence was still there,
+     * so nothing looked like it had happened until you went back to the
+     * viewport. `isTyping` was already guarding `E` for the same reason: a
+     * window listener sees the "e" in "stone".
+     *
+     * Save is deliberately not guarded. Ctrl+S while typing means save the
+     * document; no text field in this app claims that key.
+     */
+    const editingText = isTyping(event.target);
+    if (key === "z" && !event.shiftKey && !editingText) {
       event.preventDefault();
       void runDocument(t("task.undoing"), () => api().undo());
-    } else if (key === "y" || (key === "z" && event.shiftKey)) {
+    } else if ((key === "y" || (key === "z" && event.shiftKey)) && !editingText) {
       event.preventDefault();
       void runDocument(t("task.redoing"), () => api().redo());
     } else if (key === "s") {
       event.preventDefault();
-      // Nowhere to save to yet means Save As, which is what every editor does.
-      void (docState.filePath === null ? saveDocumentAs() : saveDocument());
+      // `saveDocument` falls through to Save As on its own when there is
+      // nowhere to save to yet -- see the note there.
+      void saveDocument();
     }
   }
 
@@ -748,7 +762,7 @@
       group: t("group.file"),
       keywords: t("command.new.keywords"),
       enabled: !busy,
-      run: () => (schematicDialog = "new"),
+      run: () => void startNewDocument(),
     },
     {
       id: "open",
@@ -772,7 +786,7 @@
       group: t("group.file"),
       shortcut: "Ctrl+S",
       enabled: !busy && docState !== null,
-      run: () => void (docState?.filePath === null ? saveDocumentAs() : saveDocument()),
+      run: () => void saveDocument(),
     },
     {
       id: "save-as",
@@ -1232,6 +1246,39 @@
     }
   }
 
+  /**
+   * Asks before work is thrown away, and answers `true` when there is none.
+   *
+   * `newDocument` in main reassigns the open session without looking at what
+   * was there, and opening another file does the same — so the only defence is
+   * in front of the call. It cannot be inside `session.ts`: by the time main
+   * has the request, the user has already been shown a dialog they answered
+   * about the *new* document.
+   *
+   * The box itself is native and lives in main, which is what lets the window's
+   * own close button ask the identical question with no renderer involved.
+   */
+  async function mayDiscard(intent: "new" | "open" | "close"): Promise<boolean> {
+    if (docState === null || !docState.dirty) return true;
+    try {
+      return await api().confirmDiscard({ intent, fileName: docState.fileName });
+    } catch (err) {
+      /*
+       * A dialog that could not be shown must not become a silent yes. Refusing
+       * leaves the document exactly as it was, which is the answer that cannot
+       * lose anything.
+       */
+      failed(err, t("task.confirming"));
+      return false;
+    }
+  }
+
+  /** New, but only after the open document has been asked about. */
+  async function startNewDocument(): Promise<void> {
+    if (!(await mayDiscard("new"))) return;
+    schematicDialog = "new";
+  }
+
   async function openDocument(): Promise<void> {
     let picked: Awaited<ReturnType<ReturnType<typeof api>["pickFile"]>>;
     try {
@@ -1248,8 +1295,12 @@
     await openDocumentAt(picked.path);
   }
 
-  /** Opens a schematic by path — from the picker, or from a drop. */
+  /** Opens a schematic by path — from the picker, from a drop, or from recents. */
   async function openDocumentAt(filePath: string): Promise<void> {
+    // Here rather than in `openDocument`, because that is only one of four
+    // ways in: the picker, a drop on the viewport, a recent entry, and the
+    // File menu all end up on this line.
+    if (!(await mayDiscard("open"))) return;
     busy = true;
     try {
       const response = await api().openDocument(filePath);
@@ -1540,6 +1591,24 @@
      */
     version?: string,
   ): Promise<void> {
+    /*
+     * Nowhere to save to yet means Save As, which is what every editor does.
+     *
+     * Here rather than at the call sites, and that is the whole point: this
+     * check used to live in the Ctrl+S branch and in the command palette, and
+     * the third caller -- the Save button in the sidebar -- did not have it. It
+     * reached `saveSession`, which threw `NoSaveTargetError`, and the user got
+     * a red banner reading "choose where to put it": advice, where the app
+     * could simply have asked. Three affordances for one verb, and correctness
+     * by discipline instead of by construction.
+     *
+     * Only when no path was *named*: a Save As has already chosen one and
+     * passes it in, and re-entering the dialog from here would loop.
+     */
+    if (filePath === undefined && docState?.filePath === null) {
+      saveDocumentAs();
+      return;
+    }
     busy = true;
     try {
       const response = await api().saveDocument({
@@ -1968,7 +2037,7 @@
           recent={recentDocuments}
           onopenrecent={openDocumentAt}
           onblockchange={(next) => (activeBlock = next)}
-          onnew={() => (schematicDialog = "new")}
+          onnew={() => void startNewDocument()}
           onopen={openDocument}
           onsave={(format) => saveDocument(format)}
           onsaveas={saveDocumentAs}

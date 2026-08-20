@@ -30,6 +30,7 @@ import {
   type GenerateResponse,
   type InspectResponse,
   type OpenCodeModelInfo,
+  type ConfirmDiscardRequest,
   type PickFileRequest,
   type PickFileResponse,
   type PreviewRequest,
@@ -61,6 +62,8 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.opencodeModels) as Promise<OpenCodeModelInfo[] | null>,
 
   pickFile: (req: PickFileRequest) => ipcRenderer.invoke(IPC.pickFile, req) as Promise<PickFileResponse>,
+  confirmDiscard: (req: ConfirmDiscardRequest) =>
+    ipcRenderer.invoke(IPC.confirmDiscard, req) as Promise<boolean>,
   revealPath: (target: string) => ipcRenderer.invoke(IPC.revealPath, target) as Promise<void>,
   getDefaultOutputDir: () => ipcRenderer.invoke(IPC.defaultOutputDir) as Promise<string>,
   listBlocks: () => ipcRenderer.invoke(IPC.blocksList) as Promise<string[]>,

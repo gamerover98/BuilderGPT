@@ -403,6 +403,7 @@ export const en = {
   "task.choosingSaveLocation": "Choosing where to save",
   "task.generating": "Generating the structure",
   "task.recovering": "Recovering unsaved work",
+  "task.confirming": "Asking about unsaved changes",
 
   "status.failed": "{doing}: {message}",
   "status.notOnDisk": "{name} does not come from a file on disk.",

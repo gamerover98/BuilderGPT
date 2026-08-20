@@ -78,6 +78,17 @@ export const IPC = {
   /** Write the clipboard in, with its corner at a coordinate. */
   docPaste: "bgpt:doc:paste",
   docSave: "bgpt:doc:save",
+  /**
+   * The open schematic's own version history: list, add, go back, throw away.
+   *
+   * Four verbs, four channels. Distinct from the chat's checkpoints, which
+   * belong to a conversation and cover agent turns; these belong to the *file*
+   * and outlive both.
+   */
+  docVersionList: "bgpt:doc:version:list",
+  docVersionSave: "bgpt:doc:version:save",
+  docVersionRestore: "bgpt:doc:version:restore",
+  docVersionDelete: "bgpt:doc:version:delete",
   /** Is there unsaved work from a session that ended badly? */
   docRecoveryPeek: "bgpt:doc:recovery:peek",
   /** Restore it, or throw it away. */
@@ -907,6 +918,22 @@ export type AgentResponse =
  * a time they were never opened at. The renderer shows nothing in that column
  * rather than a date it made up.
  */
+/** One kept version of the open schematic. Mirrors `snapshots_core.ts`. */
+export interface DocumentVersion {
+  id: string;
+  at: number;
+  source: "generated" | "manual" | "opened";
+  label: string;
+  size: [number, number, number];
+  blockCount: number;
+}
+
+export interface SaveVersionRequest {
+  source: "generated" | "manual" | "opened";
+  /** What produced it, when there are words for it. */
+  label: string;
+}
+
 export interface RecentDocument {
   filePath: string;
   openedAt: number;
@@ -996,6 +1023,16 @@ export interface BgptApi {
    * of `Settings`, so saving settings cannot overwrite it with a stale copy.
    */
   listRecentDocuments(): Promise<RecentDocument[]>;
+  /**
+   * Versions of the open schematic, newest first.
+   *
+   * Empty for a document that has never been saved: the key is the file, so
+   * there is nowhere to keep a history until there is a file.
+   */
+  listDocumentVersions(): Promise<DocumentVersion[]>;
+  saveDocumentVersion(req: SaveVersionRequest): Promise<DocumentVersion[]>;
+  restoreDocumentVersion(id: string): Promise<DocumentStateResponse>;
+  deleteDocumentVersion(id: string): Promise<DocumentVersion[]>;
   newDocument(req: NewDocumentRequest): Promise<DocumentStateResponse>;
   closeDocument(): Promise<void>;
   getDocumentState(): Promise<DocumentStateResponse>;

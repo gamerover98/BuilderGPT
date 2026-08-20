@@ -25,6 +25,7 @@
   import { findOpenCodeModel, loadOpenCodeModels } from "./lib/models.svelte.js";
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
 import StartScreen from "./lib/StartScreen.svelte";
+import VersionList from "./lib/VersionList.svelte";
   import Viewer, { type CameraMode, type PickedBlock } from "./lib/Viewer.svelte";
   import { api, bridgeAvailable, forIpc, bridgeMissingMessage } from "./lib/bridge.svelte.js";
   import { applyTraceEvent } from "./lib/trace.js";
@@ -59,7 +60,8 @@ import StartScreen from "./lib/StartScreen.svelte";
     type EditResponse,
     type OpenCodeModelInfo,
     type ProgressEvent,
-    type RecentDocument,
+    type DocumentVersion,
+  type RecentDocument,
     type RecoveryOffer,
     type ClipboardInfo,
     type MeshPayload,
@@ -260,6 +262,70 @@ import StartScreen from "./lib/StartScreen.svelte";
    */
   let replaceBlock = $state("");
 
+  /** Re-reads the version history. Cheap, and always after something wrote. */
+  async function refreshVersions(): Promise<void> {
+    if (!bridgeAvailable) return;
+    try {
+      documentVersions = await api().listDocumentVersions();
+    } catch {
+      // A list that could not be read is an empty list, not a banner: nothing
+      // the user did has failed, and the schematic is untouched.
+      documentVersions = [];
+    }
+  }
+
+  /** Keeps a version of the document as it stands. */
+  async function saveVersion(source: "generated" | "manual" | "opened", label: string): Promise<void> {
+    if (!bridgeAvailable) return;
+    try {
+      documentVersions = await api().saveDocumentVersion({ source, label });
+    } catch (err) {
+      failed(err, t("task.savingVersion"));
+    }
+  }
+
+  /**
+   * Puts the schematic back to one of its versions.
+   *
+   * Confirmed in the panel rather than here, because the panel is where the row
+   * being replaced is visible. Main snapshots what is being left before it
+   * adopts the old one, so this is a fork and not a one-way door — which is
+   * what makes a confirmation enough rather than a warning.
+   */
+  async function restoreVersion(id: string): Promise<void> {
+    busy = true;
+    try {
+      const response = await api().restoreDocumentVersion(id);
+      if (!response.ok) {
+        status = { tone: "error", text: response.message };
+        return;
+      }
+      docState = response.state;
+      selection = null;
+      anchor = null;
+      inspection = null;
+      inspectedAt = null;
+      selectionTimeline = forgetTimeline();
+      framingEpoch += 1;
+      await refreshDocument();
+      await refreshVersions();
+      status = { tone: "ok", text: t("status.wentBack") };
+    } catch (err) {
+      failed(err, t("task.restoringVersion"));
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function deleteVersion(id: string): Promise<void> {
+    if (!bridgeAvailable) return;
+    try {
+      documentVersions = await api().deleteDocumentVersion(id);
+    } catch (err) {
+      failed(err, t("task.deletingVersion"));
+    }
+  }
+
   /** Opens the block list for one of the three. */
   function browseBlocks(purpose: "hand" | "fill" | "replace"): void {
     inventoryFor = purpose;
@@ -298,6 +364,15 @@ import StartScreen from "./lib/StartScreen.svelte";
 
   /** Recently opened schematics. Owned by main; re-read after every open. */
   let recentDocuments = $state<RecentDocument[]>([]);
+
+  /**
+   * The open schematic's own version history.
+   *
+   * Refreshed from main rather than kept in step here, for the same reason the
+   * chat log is: main owns the files, and a list the renderer maintained would
+   * drift the first time a write failed.
+   */
+  let documentVersions = $state<DocumentVersion[]>([]);
 
   /**
    * What main's clipboard holds, as it last reported.
@@ -1573,6 +1648,7 @@ import StartScreen from "./lib/StartScreen.svelte";
       await api().closeDocument();
       docState = null;
       mesh = null;
+      documentVersions = [];
       chat = [];
       liveTrace = [];
       selection = null;
@@ -1648,6 +1724,14 @@ import StartScreen from "./lib/StartScreen.svelte";
       // what the user wants: they have not aimed it at anything yet.
       framingEpoch += 1;
       await refreshDocument();
+      /*
+       * A baseline, once per schematic: how the file was when it was first
+       * opened. Only when there is no history yet, so this costs one snapshot
+       * per file rather than one per open -- and it is the version people
+       * actually want when a session has gone wrong.
+       */
+      await refreshVersions();
+      if (documentVersions.length === 0) await saveVersion("opened", "");
     } catch (err) {
       failed(err, t("task.opening"));
     } finally {
@@ -1997,6 +2081,9 @@ import StartScreen from "./lib/StartScreen.svelte";
         }
         docState = response.state;
         project = { format: choice.format, version: choice.version };
+        // A brand-new document has no file, so it has nowhere to keep versions
+        // until it is saved. Clearing beats showing the last file's history.
+        documentVersions = [];
         chat = [];
         liveTrace = [];
         selection = null;
@@ -2193,6 +2280,13 @@ import StartScreen from "./lib/StartScreen.svelte";
         // whenever the work in hand has been dealt with. The usual case is a
         // build asked for with nothing open, where there is nothing to ask.
         await openDocumentAt(response.path);
+        /*
+         * And a version of what it produced, labelled with the prompt that
+         * produced it. This is the whole reason the history exists: generating
+         * replaces everything that was open, and until now the only record of
+         * what it replaced was the file it had overwritten.
+         */
+        await saveVersion("generated", prompt);
       }
       return null;
     } finally {
@@ -2371,6 +2465,15 @@ import StartScreen from "./lib/StartScreen.svelte";
           screen -- which is what lets this tab finally be named after what it
           does.
         -->
+        <VersionList
+          versions={documentVersions}
+          {busy}
+          saved={docState?.filePath != null}
+          onsave={() => void saveVersion("manual", "")}
+          onrestore={(id) => void restoreVersion(id)}
+          ondelete={(id) => void deleteVersion(id)}
+        />
+
         <fieldset>
       <legend>{t("structure.legend")}</legend>
 

@@ -31,6 +31,8 @@ import {
   type InspectResponse,
   type OpenCodeModelInfo,
   type ConfirmDiscardRequest,
+  type DocumentVersion,
+  type SaveVersionRequest,
   type PickFileRequest,
   type PickFileResponse,
   type PreviewRequest,
@@ -80,6 +82,13 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docRecentList) as Promise<RecentDocument[]>,
   newDocument: (req) => ipcRenderer.invoke(IPC.docNew, req) as Promise<DocumentStateResponse>,
   closeDocument: () => ipcRenderer.invoke(IPC.docClose) as Promise<void>,
+  listDocumentVersions: () => ipcRenderer.invoke(IPC.docVersionList) as Promise<DocumentVersion[]>,
+  saveDocumentVersion: (req: SaveVersionRequest) =>
+    ipcRenderer.invoke(IPC.docVersionSave, req) as Promise<DocumentVersion[]>,
+  restoreDocumentVersion: (id: string) =>
+    ipcRenderer.invoke(IPC.docVersionRestore, id) as Promise<DocumentStateResponse>,
+  deleteDocumentVersion: (id: string) =>
+    ipcRenderer.invoke(IPC.docVersionDelete, id) as Promise<DocumentVersion[]>,
   getDocumentState: () => ipcRenderer.invoke(IPC.docState) as Promise<DocumentStateResponse>,
   getDocumentMesh: (settings) =>
     ipcRenderer.invoke(IPC.docMesh, settings) as Promise<DocumentMeshResponse>,

@@ -74,6 +74,15 @@ import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/servic
 import { coerceSettings, coerceUi } from "../src/main/services/settings_coerce.js";
 import { discardPrompt } from "../src/main/services/discard_prompt.js";
 import {
+  addSnapshot,
+  coerceSnapshots,
+  MAX_SNAPSHOTS,
+  order,
+  removeSnapshot,
+  snapshotLabel,
+  type Snapshot,
+} from "../src/main/services/snapshots_core.js";
+import {
   escapeMenuLabel,
   menuModel,
   recentLabels,
@@ -760,6 +769,77 @@ console.log("\n--- discard prompt ---");
     );
     check(`${intent}: it says the loss is permanent`, prompt.detail.includes("cannot be undone"), prompt.detail);
   }
+}
+
+// --- a schematic's version history -----------------------------------------
+//
+// The list itself is the feature: a generation replaces everything that was
+// open, and until this existed the only record of what it replaced was the file
+// it had overwritten. What is worth pinning is the housekeeping, because every
+// row is a whole .schem on disk and a row without its file is a button that
+// fails.
+console.log("\n--- version history ---");
+{
+  const made = (id: string, at: number): Snapshot => ({
+    id,
+    at,
+    source: "manual",
+    label: id,
+    size: [1, 1, 1],
+    blockCount: 1,
+  });
+
+  equal("newest first", order([made("a", 1), made("c", 3), made("b", 2)]).map((v) => v.id), ["c", "b", "a"]);
+
+  /*
+   * Adding past the cap says which files are now unreferenced. The eviction
+   * list is returned rather than acted on inside, because a caller that forgets
+   * to delete leaves orphans -- and that is visible here.
+   */
+  const full = Array.from({ length: MAX_SNAPSHOTS }, (_unused, i) => made(`v${i}`, i + 1));
+  const added = addSnapshot(full, made("new", 999));
+  equal("the cap holds", added.kept.length, MAX_SNAPSHOTS);
+  equal("the newest is kept", added.kept[0].id, "new");
+  equal("...and the oldest is named for deletion", added.dropped, ["v0"]);
+
+  // Re-adding the same id replaces rather than duplicating, and takes nothing
+  // with it: the file is being overwritten, not evicted.
+  const again = addSnapshot([made("a", 1)], made("a", 5));
+  equal("an id is not duplicated", again.kept.length, 1);
+  equal("...and nothing is deleted for it", again.dropped, []);
+
+  const removed = removeSnapshot([made("a", 1), made("b", 2)], "a");
+  equal("removing takes the row", removed.kept.map((v) => v.id), ["b"]);
+  equal("...and names the file", removed.dropped, ["a"]);
+  equal("removing what is not there deletes nothing", removeSnapshot([made("b", 2)], "a").dropped, []);
+
+  /*
+   * An index written by hand, or by another build. A row with no id or no size
+   * cannot name a file or describe one, so it goes -- and must not cost the
+   * user the rows either side of it.
+   */
+  const coerced = coerceSnapshots([
+    { id: "good", at: 5, source: "generated", label: "a castle", size: [2, 3, 4], blockCount: 9 },
+    { at: 5, size: [1, 1, 1] },
+    { id: "nosize", at: 5 },
+    { id: "odd", at: "yesterday", source: "wat", label: 7, size: [1, 1, 1], blockCount: -3 },
+  ]);
+  equal("bad rows are dropped, good ones survive", coerced.map((v) => v.id), ["good", "odd"]);
+  equal("an unreadable date becomes none", coerced[1].at, 0);
+  equal("an unknown source falls back", coerced[1].source, "manual");
+  equal("a non-string label becomes empty", coerced[1].label, "");
+  equal("a negative block count becomes zero", coerced[1].blockCount, 0);
+  equal("a non-array index is no history", coerceSnapshots("nope"), []);
+
+  /*
+   * A label is never empty. A row with no words cannot be told from the one
+   * above it, and "which of these do I want" is the only question the list
+   * exists to answer.
+   */
+  equal("the prompt becomes the label", snapshotLabel("generated", "  a  stone   tower "), "a stone tower");
+  equal("a generation with no words still says what it was", snapshotLabel("generated", ""), "Generated");
+  equal("...and so does an opening", snapshotLabel("opened", "   "), "As opened");
+  equal("...and a manual one", snapshotLabel("manual", ""), "Saved version");
 }
 
 // --- the application menu --------------------------------------------------

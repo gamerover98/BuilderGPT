@@ -153,6 +153,18 @@ export function checkpointsDir(): string {
   return path.join(app.getPath("userData"), "checkpoints");
 }
 
+/**
+ * Where a schematic's own version history lives, one folder per file.
+ *
+ * Apart from `checkpoints/` on purpose, though both hold schematics: a
+ * checkpoint belongs to a conversation and dies with it, while these belong to
+ * the file and outlive everything. Mixing them would mean a conversation being
+ * deleted could take a version of the file with it.
+ */
+export function snapshotsDir(): string {
+  return path.join(app.getPath("userData"), "versions");
+}
+
 /** `generated/` (component.py:137-138), relocated to a writable location. */
 export function generatedDir(): string {
   return path.join(app.getPath("userData"), "generated");

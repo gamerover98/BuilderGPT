@@ -32,6 +32,8 @@ import {
   openCodeModelRequiresKey,
   type OpenCodeModelInfo,
   type ConfirmDiscardRequest,
+  type DocumentVersion,
+  type SaveVersionRequest,
   type PickFileRequest,
   type PickFileResponse,
   type PreviewRequest,
@@ -134,6 +136,7 @@ import {
   autosaveDir,
   checkpointsDir,
   conversationsDir,
+  snapshotsDir,
   defaultResourcePackPath,
   generatedDir,
   legacyBlocksPath,
@@ -152,6 +155,13 @@ import {
   setSettings,
 } from "../services/settings-store.js";
 import { discardPrompt } from "../services/discard_prompt.js";
+import {
+  deleteSnapshot,
+  listSnapshots,
+  readSnapshot,
+  takeSnapshot,
+  useSnapshotDirectory,
+} from "../services/snapshots.js";
 import { refreshShell, rememberInOsRecents } from "../menu.js";
 import { VERSION_NAMES } from "../services/versions.js";
 
@@ -236,6 +246,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   // made for.
   useConversationDirectory(conversationsDir());
   useCheckpointDirectory(checkpointsDir());
+  useSnapshotDirectory(snapshotsDir());
 
   ipcMain.handle(IPC.settingsGet, async (): Promise<Settings> => await getSettings());
 
@@ -825,6 +836,73 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     } catch (err) {
       return failure(err);
     }
+  });
+
+  /*
+   * The open schematic's own version history.
+   *
+   * Keyed on the file, so "which schematic is this a version of" has an answer
+   * that survives the session. A document that has never been saved has no key
+   * and therefore no history -- the same rule conversations follow, and the
+   * list is empty rather than an error, because having none is ordinary.
+   */
+  ipcMain.handle(IPC.docVersionList, async (): Promise<DocumentVersion[]> => {
+    const session = currentSession();
+    return await listSnapshots(session?.doc.filePath ?? null);
+  });
+
+  ipcMain.handle(
+    IPC.docVersionSave,
+    async (_event, req: SaveVersionRequest): Promise<DocumentVersion[]> => {
+      const session = currentSession();
+      if (session === null) return [];
+      await takeSnapshot(session, req.source, req.label);
+      return await listSnapshots(session.doc.filePath);
+    },
+  );
+
+  /*
+   * Going back is a fork, not a one-way door.
+   *
+   * `adoptDocument` starts a fresh history, so a restore cannot be undone --
+   * which is exactly why the state being left is snapshotted first. Same shape
+   * as the chat's checkpoint restore, and for the same reason.
+   */
+  ipcMain.handle(
+    IPC.docVersionRestore,
+    async (_event, id: string): Promise<DocumentStateResponse> => {
+      try {
+        const session = requireSession();
+        const filePath = session.doc.filePath;
+        if (filePath === null) {
+          return {
+            ok: false,
+            kind: "invalid-input",
+            message: "This schematic has never been saved, so it has no versions",
+          };
+        }
+        const restored = await readSnapshot(filePath, id);
+        if (restored === null) {
+          return {
+            ok: false,
+            kind: "io-error",
+            message: "That version is no longer on disk",
+          };
+        }
+        await takeSnapshot(session, "manual", "Before going back");
+        adoptDocument(restored.doc, restored.history);
+        forgetCheckpointMemo();
+        return { ok: true, state: shellState(requireSession()) };
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
+
+  ipcMain.handle(IPC.docVersionDelete, async (_event, id: string): Promise<DocumentVersion[]> => {
+    const session = currentSession();
+    if (session?.doc.filePath == null) return [];
+    return await deleteSnapshot(session.doc.filePath, id);
   });
 
   ipcMain.handle(IPC.docRecoveryPeek, async (): Promise<RecoveryPeekResponse> => {

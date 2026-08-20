@@ -30,7 +30,8 @@
 import { createDocument, setBlock, type SchematicDocument } from "../domain/document.js";
 import { parsePaletteEntry } from "../pipeline/loader_formats.js";
 import type { ChunkGeometry, MeshAtlas } from "../../shared/ipc.js";
-import { buildDocumentPreview, type DocumentPreviewOptions } from "./preview.js";
+import { buildDocumentPreview, warmBaker, type DocumentPreviewOptions } from "./preview.js";
+import { breathe } from "./breathing.js";
 
 export interface BlockIcon {
   block: string;
@@ -103,51 +104,31 @@ async function meshOne(
 /**
  * Decodes what a set of blocks needs, so the atlas stops growing under them.
  *
- * This is the whole bug, and it was not in the renderer. The baker decodes a
- * texture the first time a block asks for it, and `atlasVersion` *is* the
+ * This exists because of a bug that was not in the renderer. The baker decodes
+ * a texture the first time a block asks for it, and `atlasVersion` *is* the
  * texture count -- so meshing sixty blocks in a row produced sixty geometries,
  * each with UVs addressing a different atlas layout, and one atlas to draw them
  * all with. Fifty-nine of them were wrong. Scrolling away and back looked like
  * a fix because by then everything had been decoded and the count had stopped
  * changing.
  *
- * So: prime first, discarding what it builds, and only then mesh. The discarded
- * pass is cheap -- a 1x1x1 document is a handful of triangles, and the
- * expensive half, decoding the textures, is what it exists to do once.
+ * It used to prime by *meshing* every block and throwing the geometry away,
+ * on the grounds that a 1x1x1 document is a handful of triangles and the
+ * expensive half is the decoding. The triangles were indeed free. What was not
+ * free was that each of those meshes asked for an atlas, and the atlas is
+ * repacked whenever the texture set has grown -- so priming nine hundred blocks
+ * packed the atlas nine hundred times over an ever-larger set. That was 38.7 of
+ * the 39 seconds this took.
+ *
+ * So it decodes directly and packs once. Same guarantee, two orders of
+ * magnitude cheaper, and `warmBaker` carries the measurements.
  */
 async function prime(
   blocks: readonly string[],
   options: DocumentPreviewOptions,
   onProgress?: (done: number, total: number) => void,
 ): Promise<void> {
-  for (const [index, block] of blocks.entries()) {
-    await meshOne(block, options);
-    if (onProgress !== undefined) {
-      await breathe(index, blocks.length, onProgress);
-    }
-  }
-}
-
-/**
- * How often a long warm-up lets the process do something else.
- *
- * `await` alone does not: it queues a microtask, and microtasks run *before*
- * I/O, so a loop of awaited work starves the event loop exactly as a
- * synchronous one would. That is what froze the window while nine hundred
- * blocks were meshed -- every IPC call, including the one opening the
- * schematic, sat behind it. `setImmediate` runs in the check phase, after I/O,
- * which is the yield that actually hands the process back.
- */
-const YIELD_EVERY = 16;
-
-async function breathe(
-  index: number,
-  total: number,
-  onProgress: (done: number, total: number) => void,
-): Promise<void> {
-  if (index % YIELD_EVERY !== 0 && index !== total - 1) return;
-  onProgress(index + 1, total);
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await warmBaker(blocks.map(parsePaletteEntry), options, onProgress);
 }
 
 /**
@@ -165,9 +146,10 @@ export async function warmBlockIcons(
   onProgress: (done: number, total: number) => void = () => {},
 ): Promise<number> {
   /*
-   * Two passes, and the progress reported covers both -- the first is the slow
-   * one (it decodes every texture) and the second is nearly free, so a bar that
-   * counted only one of them would stall at half and then leap.
+   * Two passes, and the progress reported covers both -- the first decodes
+   * every texture and the second meshes against them. They are within about
+   * five to one of each other now that neither repacks the atlas, so counting
+   * only one would make the bar stall and then leap.
    */
   const total = blocks.length * 2;
   await prime(blocks, options, (done) => onProgress(done, total));

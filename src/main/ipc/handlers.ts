@@ -51,6 +51,7 @@ import {
   type PasteRequest,
   type RegionSpec,
   type SetNbtRequest,
+  type StartupProgressEvent,
   type TransformRequest,
 } from "../../shared/ipc.js";
 import { SCHEMATIC_FORMAT_LABEL, schematicExtension } from "../../shared/schematic.js";
@@ -417,41 +418,64 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   );
 
   /*
-   * Meshes every block once, so the atlas stops growing under the icons.
+   * Decodes every block's textures once, so the atlas stops growing under the
+   * icons.
    *
-   * Slow on purpose and only ever once: the expensive half is decoding
-   * textures, which the baker then holds. It runs in main, so the window stays
-   * responsive while it does — and the renderer waits for it before drawing a
-   * single icon, because an icon drawn against an atlas that is about to change
-   * is an icon that will have to be thrown away.
+   * It runs *now*, at registration, rather than when the renderer asks for it.
+   * That is the only concurrency available to a single-threaded main process
+   * and it is the useful kind: this overlaps with creating the window, loading
+   * the renderer, mounting it, and the three IPC round-trips it makes before it
+   * gets here. It is under a second of work and most of that second happens
+   * while there is nothing else to wait on.
    *
-   * The promise is held rather than the result, so a second caller arriving
-   * mid-warm joins the one in flight instead of starting another.
+   * `breathe` inside the loop is what makes that safe -- without a yield that
+   * runs *after* I/O, this would starve the very window creation it is meant to
+   * overlap with.
+   *
+   * The promise is held rather than the result, so the renderer's call joins
+   * the run in flight instead of starting another.
    */
   let warming: Promise<number> | null = null;
-  ipcMain.handle(IPC.blockIconsWarm, async (): Promise<number> => {
-    if (warming === null) {
-      warming = (async () => {
-        const settings = await getSettings();
-        const window = getWindow();
-        return await warmBlockIcons(
-          [...(await loadAllowedBlocks(resourcesDir()))],
-          {
-            resourcePackPath: null,
-            fallbackResourcePackPath: await defaultResourcePackPath(),
-            biomeColor: settings.preview.biomeColor,
-            waterColor: settings.preview.waterColor,
-          },
-          (done, total) => {
-            if (window && !window.isDestroyed()) {
-              window.webContents.send(IPC.startupProgress, { done, total });
-            }
-          },
-        );
-      })();
+  /*
+   * The last progress reported, so a renderer that subscribes mid-run is not
+   * left looking at a bar that never moves. Starting the work before the window
+   * exists means the first events have nowhere to go -- which is the price of
+   * starting early, and this is the whole of it.
+   */
+  let warmProgress: StartupProgressEvent = { done: 0, total: 0 };
+
+  const sendWarmProgress = (event: StartupProgressEvent): void => {
+    warmProgress = event;
+    const window = getWindow();
+    if (window && !window.isDestroyed()) {
+      window.webContents.send(IPC.startupProgress, event);
     }
+  };
+
+  const startWarming = (): Promise<number> => {
+    if (warming !== null) return warming;
+    warming = (async () => {
+      const settings = await getSettings();
+      return await warmBlockIcons(
+        [...(await loadAllowedBlocks(resourcesDir()))],
+        {
+          resourcePackPath: null,
+          fallbackResourcePackPath: await defaultResourcePackPath(),
+          biomeColor: settings.preview.biomeColor,
+          waterColor: settings.preview.waterColor,
+        },
+        (done, total) => sendWarmProgress({ done, total }),
+      );
+    })();
+    return warming;
+  };
+
+  ipcMain.handle(IPC.blockIconsWarm, async (): Promise<number> => {
+    const run = startWarming();
+    // Whatever it has reached, to the renderer that just started listening.
+    if (warmProgress.total > 0) sendWarmProgress(warmProgress);
     try {
-      return await warming;
+      return await run;
     } catch {
       // Let it be asked for again: a warm-up that failed leaves the icons
       // working exactly as they did before it, only slower.
@@ -459,6 +483,10 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       return 0;
     }
   });
+
+  // Off it goes, before the window exists. Errors are the handler's problem;
+  // an unhandled rejection here would be a crash on a slow disk.
+  void startWarming().catch(() => {});
 
   ipcMain.handle(IPC.artifactsList, async (): Promise<Artifact[]> => await listArtifacts());
 

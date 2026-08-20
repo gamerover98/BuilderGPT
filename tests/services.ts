@@ -62,6 +62,7 @@ import {
 } from "../src/main/services/output.js";
 import { labelFor, mergeCatalogue } from "../src/main/services/opencode.js";
 import {
+  atlasBuildCount,
   buildDocumentPreview,
   buildPreview,
   clearBakerCache,
@@ -73,7 +74,11 @@ import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/services/versions.js";
 import { coerceSettings, coerceUi } from "../src/main/services/settings_coerce.js";
 import { discardPrompt } from "../src/main/services/discard_prompt.js";
-import { buildBlockIcons, forgetBlockIcons } from "../src/main/services/block_icons.js";
+import {
+  buildBlockIcons,
+  forgetBlockIcons,
+  warmBlockIcons,
+} from "../src/main/services/block_icons.js";
 import {
   addSnapshot,
   coerceSnapshots,
@@ -383,6 +388,32 @@ try {
     check(
       "and they are real geometry, not empty",
       firstPass.icons.every((icon) => icon.geometry !== null && icon.geometry.indices.length > 0),
+    );
+
+    /*
+     * And the cost of that guarantee, which is the part that was catastrophic
+     * and invisible.
+     *
+     * Packing the atlas is O(every texture decoded so far), and the texture set
+     * grows as blocks are asked for -- so the priming pass, which used to make
+     * the atlas stop moving by *meshing* every block and discarding it, packed
+     * the atlas once per block over an ever-larger set. On the real 920-block
+     * list that was 38.7 seconds of the 39 the warm-up took; decoding every
+     * texture is ~740 ms and packing once is ~150 ms.
+     *
+     * Nothing about that reads as a defect from the outside: it is the right
+     * picture, slowly. So the referee is a counter, and it is exact -- "once",
+     * not "not too many", because there is no reason for a second.
+     */
+    console.log("\n--- and it packs the atlas once ---");
+    forgetBlockIcons();
+    clearBakerCache();
+    const packedBefore = atlasBuildCount();
+    await warmBlockIcons(iconBlocks, iconOptions);
+    equal(
+      "warming packs the atlas once, not once per block",
+      atlasBuildCount() - packedBefore,
+      1,
     );
 
     /*

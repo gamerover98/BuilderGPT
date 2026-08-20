@@ -834,10 +834,33 @@ decoded and the count had stopped moving.
 
 Two things follow, and both are load-bearing:
 
-- **`buildBlockIcons` primes before it meshes** — a first pass whose geometry is
-  thrown away, purely to make the atlas stop moving. `tests/services.ts` proves
-  it by calling twice and requiring identical UVs; delete the priming pass and
-  that check fails.
+- **`buildBlockIcons` primes before it meshes** — the atlas has to stop moving
+  before a single geometry is kept. `tests/services.ts` proves it by calling
+  twice and requiring identical UVs; delete the priming pass and that check
+  fails.
+
+  **Priming decodes; it does not mesh.** It used to mesh every block and throw
+  the geometry away, on the reasoning that a 1×1×1 document is a handful of
+  triangles and the expensive half is the decoding. The triangles were indeed
+  free. What was not free is that every one of those meshes asked for an atlas,
+  and **packing the atlas is O(every texture decoded so far)** — so priming nine
+  hundred blocks packed it nine hundred times over an ever-larger set. Measured
+  on the real 920-block list with the bundled pack:
+
+  | | |
+  |---|---|
+  | decode every texture | ~740 ms |
+  | pack the atlas, once | ~150 ms |
+  | mesh all 920 against a settled atlas | ~150 ms |
+  | the same work in an order that let the atlas move | **~38,750 ms** |
+
+  This is the failure mode worth recognising by shape: it is the *right
+  picture*, slowly, so nothing about it reads as a defect. Concurrency is not
+  the answer to it and would have hidden it — the repeated work is quadratic,
+  and the baker's texture map is one mutable object that cannot be shared across
+  threads anyway. `preview.ts`'s `warmBaker` is the correct order, and
+  `atlasBuildCount()` exists so `tests/services.ts` can require **one** pack per
+  warm-up. Not "not too many": there is no reason for a second.
 - **`warmBlockIcons` meshes every block once**, because an atlas that grows
   invalidates every icon already drawn. It is not awaited before the first
   paint — nine hundred blocks is seconds, and blank tiles for all of them would
@@ -892,7 +915,19 @@ awaited work starves the event loop exactly as a synchronous one would. That is
 what froze the window while the block warm-up ran: every IPC call sat behind it,
 including the one opening the document that triggered it. `setImmediate` runs in
 the check phase, after I/O, and is the yield that actually hands the process
-back.
+back. It lives in `services/breathing.ts` — two loops need it, and a rule this
+easy to get wrong, written twice, gets corrected once.
+
+**The warm-up starts at handler registration, not when the renderer asks.**
+That is the only concurrency a single-threaded main process has, and it is the
+useful kind: it overlaps with creating the window, loading the renderer,
+mounting it, and the IPC round-trips it makes before reaching
+`blockIconsWarm` — which then joins the run in flight rather than starting one.
+`breathe` is what makes that safe; without a yield that runs after I/O it would
+starve the window creation it is supposed to overlap with. The price is that
+the first progress events have nowhere to go, so the last one is re-sent when
+the renderer finally subscribes; a bar that never moves would otherwise read as
+a hang.
 
 **Startup is a phase, with named steps.** The block warm-up is seconds, and
 starting it lazily meant starting it the moment a schematic opened. It runs up

@@ -42,6 +42,7 @@ import {
   type StructureData,
 } from "../pipeline/types.js";
 import { toStructureData, type SchematicDocument } from "../domain/document.js";
+import { breathe } from "./breathing.js";
 import {
   buildChunkedMesh,
   createChunkMeshCache,
@@ -281,8 +282,27 @@ function cachedAtlas(entry: CachedBaker): { atlas: ReturnType<typeof buildAtlas>
   if (entry.atlas === null || entry.atlasTextureCount !== count) {
     entry.atlas = buildAtlas(entry.baker.textures);
     entry.atlasTextureCount = count;
+    atlasBuilds += 1;
   }
   return { atlas: entry.atlas, version: entry.atlasTextureCount };
+}
+
+/**
+ * How many times an atlas has been packed, for the life of the process.
+ *
+ * A counter exists because the cost of getting this wrong is invisible and
+ * enormous. Packing is O(every texture decoded so far), and the texture set
+ * grows as blocks are asked for -- so a loop that meshes nine hundred blocks
+ * one at a time packs the atlas nine hundred times, over an ever-larger set,
+ * and takes 39 seconds to do 1 second of work. Nothing about that reads as a
+ * defect from the outside: it is the right picture, slowly.
+ *
+ * `tests/services.ts` reads this and requires a warm-up to pack **once**.
+ */
+let atlasBuilds = 0;
+
+export function atlasBuildCount(): number {
+  return atlasBuilds;
 }
 
 export function clearBakerCache(): void {
@@ -566,6 +586,48 @@ export async function buildDocumentPreview(
     rebuiltChunks: chunked.rebuilt,
     totalChunks: chunked.total,
   };
+}
+
+/**
+ * Decodes what a set of blocks needs and packs the atlas, once.
+ *
+ * This is the difference between a one-second warm-up and a thirty-nine-second
+ * one, and the reason is entirely in `cachedAtlas` above: the atlas is repacked
+ * whenever the texture set grows, and meshing blocks one at a time grows it on
+ * almost every block. Measured on the 920-block list with the bundled pack:
+ * decoding every texture is ~740 ms, packing the atlas once is ~150 ms, and
+ * meshing all 920 against a settled atlas is ~150 ms -- against ~38,750 ms for
+ * the same work done in an order that let the atlas move.
+ *
+ * So the order is the fix, and no amount of concurrency substitutes for it:
+ * the work being repeated is quadratic, and the baker's texture map is one
+ * mutable object that cannot be shared across threads anyway.
+ *
+ * A block that fails to bake is skipped rather than fatal. It contributes no
+ * texture, so it cannot move the atlas, and whatever is wrong with it will be
+ * wrong again where it is actually asked for -- with a message about what it
+ * was, which is not something this loop could give.
+ */
+export async function warmBaker(
+  entries: readonly PaletteEntry[],
+  options: DocumentPreviewOptions,
+  onProgress: (done: number, total: number) => void = () => {},
+): Promise<number> {
+  const cached = await cachedBaker(
+    options.resourcePackPath,
+    options.fallbackResourcePackPath ?? null,
+    options.biomeColor ?? DEFAULT_BIOME_COLOR,
+    options.waterColor ?? DEFAULT_WATER_COLOR,
+  );
+  for (const [index, entry] of entries.entries()) {
+    try {
+      await cached.baker.bakeBlockstate(entry);
+    } catch {
+      // Skipped, for the reason in the note above.
+    }
+    await breathe(index, entries.length, onProgress);
+  }
+  return cachedAtlas(cached).version;
 }
 
 /**

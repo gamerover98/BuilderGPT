@@ -28,7 +28,15 @@
   type GridCell,
   type Ray,
 } from "./build_grid.js";
-import { clickIntent, dragFace, plateScale, type Axis, type Side } from "./selection_drag.js";
+import {
+  clickIntent,
+  dragFace,
+  moveDestination,
+  plateScale,
+  type Axis,
+  type Side,
+} from "./selection_drag.js";
+  import { isSpuriousLook } from "./look_filter.js";
   import type { Face, PlacementLook } from "../../../shared/block_orientation.js";
 import { isTyping } from "./typing.js";
   import * as THREE from "three";
@@ -199,6 +207,21 @@ import { isTyping } from "./typing.js";
      */
     onpickmaterial?: (at: { x: number; y: number; z: number }) => void;
     /**
+     * A region being moved, drawn translucent wherever the pointer is.
+     *
+     * The geometry is the region's real contents, meshed by main through the
+     * same pipeline as the document -- so what the ghost shows and what the
+     * move produces cannot disagree, for the same reason a block icon cannot
+     * disagree with the viewport.
+     *
+     * The wire box stays on the *source* while this is up: seeing where it
+     * came from and where it is going is the whole information the gesture
+     * needs, and the destination is drawn in blocks rather than in outline.
+     */
+    ghost?: { chunks: ChunkGeometry[] } | null;
+    /** The move was confirmed: put the region's corner here. */
+    onghostcommit?: (to: { x: number; y: number; z: number }) => void;
+    /**
      * The palette in force, already resolved against the OS preference.
      *
      * The viewer never reads this value -- the colours come from the same CSS
@@ -232,6 +255,8 @@ import { isTyping } from "./typing.js";
     ongridplace,
     onpickmaterial,
     onselectiongesture,
+    ghost = null,
+    onghostcommit,
   }: Props = $props();
 
   /**
@@ -340,6 +365,8 @@ import { isTyping } from "./typing.js";
   let ambient: THREE.HemisphereLight | undefined;
   let grid: THREE.GridHelper | undefined;
   let loaded: THREE.Object3D | null = null;
+  /** When the pointer lock was taken, for the look filter below. */
+  let lockedAt = 0;
   let selectionBox: THREE.LineSegments | undefined;
 
   /**
@@ -1007,13 +1034,45 @@ import { isTyping } from "./typing.js";
       resize();
 
       fly = new PointerLockControls(camera, renderer.domElement);
-      fly.addEventListener("lock", () => (flying = true));
+      fly.addEventListener("lock", () => {
+        flying = true;
+        lockedAt = performance.now();
+      });
       fly.addEventListener("unlock", () => {
         flying = false;
         // Keys held when the pointer released would otherwise stay held
         // forever: the keyup lands on whatever has focus next, not here.
         held.clear();
       });
+
+      /*
+       * The camera's own input, filtered before the controls ever see it.
+       *
+       * `PointerLockControls` applies `movementX`/`movementY` straight to the
+       * camera, and those are not always a mouse: Chromium delivers a spurious
+       * event the instant the lock is acquired, carrying the distance from
+       * wherever the cursor was to where it was warped to. That is the "the
+       * view snaps somewhere at random" report -- hundreds of pixels of turn
+       * from the click that entered flight.
+       *
+       * Capture phase on the document, which runs before the bubble-phase
+       * listener the library installs there, and `stopImmediatePropagation` so
+       * it never arrives. The rule itself is in `look_filter.ts`, where it can
+       * be read and tested; this is only where it is attached.
+       */
+      const onLookMove = (event: MouseEvent) => {
+        if (!fly?.isLocked) return;
+        if (
+          isSpuriousLook({
+            movementX: event.movementX,
+            movementY: event.movementY,
+            sinceLock: performance.now() - lockedAt,
+          })
+        ) {
+          event.stopImmediatePropagation();
+        }
+      };
+      renderer.domElement.ownerDocument.addEventListener("mousemove", onLookMove, true);
 
       let frame = 0;
       const clock = new THREE.Clock();
@@ -1080,6 +1139,8 @@ import { isTyping } from "./typing.js";
          * camera and the face would never move. Pointer capture keeps the
          * gesture alive if the pointer leaves the canvas mid-drag.
          */
+        // A move owns the pointer while it lasts; the camera keeps the drag.
+        if (ghost !== null) return;
         if (event.button !== 0 || cameraMode !== "orbit") return;
 
         /*
@@ -1159,8 +1220,32 @@ import { isTyping } from "./typing.js";
         event.preventDefault();
       };
 
+      /**
+       * Where a move would put the region, from whatever is under the pointer.
+       *
+       * A block's *outside* face rather than the block itself, so hovering the
+       * top of a wall lands the ghost on top of it rather than inside it —
+       * the same cell `onbuild` places into. The build grid answers when
+       * nothing solid is under the pointer, which is how a region gets moved
+       * across open ground.
+       */
+      const ghostTarget = (clientX: number, clientY: number) => {
+        const hit = pickBlockAt(clientX, clientY);
+        if (hit?.place) return moveDestination(hit.place);
+        const cell = gridCellAt(clientX, clientY);
+        return cell === null ? null : moveDestination(cell);
+      };
+
       const onPointerMove = (event: PointerEvent) => {
         pointerAt = { x: event.clientX, y: event.clientY };
+        if (ghost !== null) {
+          const to = ghostTarget(event.clientX, event.clientY);
+          if (to !== null) {
+            ghostAt = to;
+            ghostGroup?.position.set(to.x, to.y, to.z);
+          }
+          return;
+        }
         if (dragged !== null) {
           dragTo(event.clientX, event.clientY);
           return;
@@ -1313,6 +1398,16 @@ import { isTyping } from "./typing.js";
           }
           return;
         }
+        /*
+         * A stationary click puts the region down, and nothing else here runs
+         * while a move is in flight: the panel and Escape are the two ways out
+         * of it, and a click that also re-selected would end the gesture by
+         * throwing away the thing being moved.
+         */
+        if (ghost !== null) {
+          if (stayed && event.button === 0) onghostcommit?.({ ...ghostAt });
+          return;
+        }
         if (!start || !onpick || !stayed) return;
         const picked = pickBlockAt(event.clientX, event.clientY);
         // The rule itself is in `selection_drag.ts`, where it can be stated and
@@ -1355,6 +1450,7 @@ import { isTyping } from "./typing.js";
       return () => {
         cancelAnimationFrame(frame);
         observer.disconnect();
+        renderer?.domElement.ownerDocument.removeEventListener("mousemove", onLookMove, true);
         window.removeEventListener("keydown", onKey);
         window.removeEventListener("keydown", onKeyDown);
         window.removeEventListener("keyup", onKeyUp);
@@ -1363,6 +1459,8 @@ import { isTyping } from "./typing.js";
         renderer?.domElement.removeEventListener("pointerleave", onPointerLeave);
         renderer?.domElement.removeEventListener("pointerup", onPointerUp);
         renderer?.domElement.removeEventListener("contextmenu", onContextMenu);
+        disposeGhost();
+        ghostMaterial?.dispose();
         if (loaded) disposeObject(loaded);
         // Shared, so nothing above frees them.
         material?.dispose();
@@ -1622,6 +1720,54 @@ import { isTyping } from "./typing.js";
       group.add(mesh);
     }
   }
+
+  /**
+   * The translucent copy of a region being moved.
+   *
+   * Its own group and its own material: unlit and half-transparent with depth
+   * writing off, so it reads as a proposal rather than as part of the build,
+   * and so the structure behind it stays visible while it passes over.
+   */
+  let ghostGroup: THREE.Group | null = null;
+  let ghostMaterial: THREE.MeshBasicMaterial | undefined;
+  /** Where the ghost currently sits, in block coordinates. */
+  let ghostAt: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 };
+
+  function disposeGhost(): void {
+    if (!ghostGroup) return;
+    scene?.remove(ghostGroup);
+    disposeObject(ghostGroup, { keepMaterials: true });
+    ghostGroup = null;
+  }
+
+  $effect(() => {
+    const preview = ghost;
+    if (!scene) return;
+    disposeGhost();
+    if (preview === null || texture === undefined) return;
+    if (!ghostMaterial) {
+      ghostMaterial = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+        alphaTest: 0.1,
+      });
+    } else {
+      ghostMaterial.map = texture;
+      ghostMaterial.needsUpdate = true;
+    }
+    const group = new THREE.Group();
+    group.renderOrder = 997;
+    for (const chunk of preview.chunks) {
+      const mesh = chunkMesh(chunk, ghostMaterial);
+      mesh.renderOrder = 997;
+      group.add(mesh);
+    }
+    group.position.set(ghostAt.x, ghostAt.y, ghostAt.z);
+    ghostGroup = group;
+    scene.add(group);
+  });
 
   $effect(() => {
     const payload = mesh;

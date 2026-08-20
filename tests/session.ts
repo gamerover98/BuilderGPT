@@ -23,6 +23,7 @@ import {
   cutSelection,
   documentMesh,
   documentState,
+  moveRegion,
   editBlockEntityValue,
   DocumentTooLargeError,
   EditTooLargeError,
@@ -732,6 +733,103 @@ console.log("\n--- copying a region ---");
   equal("undo removes the whole paste", getBlock(session.doc, 5, 0, 5).namespacedName, "minecraft:air");
   check("...including the block entity", (session.doc.blockEntities.get("5,0,6") ?? null) === null);
 
+}
+
+/*
+ * Moving a region: not cut-then-paste through the clipboard.
+ *
+ * That would throw away whatever the user had copied, and two transactions
+ * mean a move interrupted between them leaves a hole where the build used to
+ * be.
+ */
+console.log("\n--- moving a region ---");
+{
+  const session = newDocument({ width: 8, height: 4, length: 8 });
+  const rock = { namespacedName: "minecraft:stone", properties: {} };
+  const pane = { namespacedName: "minecraft:glass", properties: {} };
+  setBlock(session.doc, 1, 0, 1, rock);
+  setBlock(session.doc, 2, 0, 1, pane);
+  // Something standing where the move is going, to be overwritten.
+  setBlock(session.doc, 5, 0, 5, rock);
+  copySelection(session, { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 });
+  const clipboardBefore = currentClipboard();
+  session.history.undoStack.length = 0;
+
+  moveRegion(
+    session,
+    { minX: 1, minY: 0, minZ: 1, maxX: 2, maxY: 0, maxZ: 1 },
+    { x: 5, y: 0, z: 5 },
+  );
+
+  equal("the blocks arrive", getBlock(session.doc, 5, 0, 5).namespacedName, "minecraft:stone");
+  equal("...in order", getBlock(session.doc, 6, 0, 5).namespacedName, "minecraft:glass");
+  equal(
+    "...and the ground they came from is empty",
+    getBlock(session.doc, 1, 0, 1).namespacedName,
+    "minecraft:air",
+  );
+  equal("a move is one undo step", session.history.undoStack.length, 1);
+
+  undoEdit(session);
+  equal(
+    "...so one undo puts it all back",
+    getBlock(session.doc, 1, 0, 1).namespacedName,
+    "minecraft:stone",
+  );
+  equal(
+    "...including what it landed on",
+    getBlock(session.doc, 6, 0, 5).namespacedName,
+    "minecraft:air",
+  );
+
+  // The clipboard belongs to the user; moving something is not copying it.
+  equal("the clipboard is untouched", currentClipboard(), clipboardBefore);
+
+  /*
+   * Overlap is the case that decides whether the snapshot is taken before
+   * anything is written. Sliding a region one block along its own axis has to
+   * carry it, not smear it.
+   */
+  const overlap = newDocument({ width: 8, height: 4, length: 8 });
+  setBlock(overlap.doc, 1, 0, 0, rock);
+  setBlock(overlap.doc, 2, 0, 0, pane);
+  moveRegion(
+    overlap,
+    { minX: 1, minY: 0, minZ: 0, maxX: 2, maxY: 0, maxZ: 0 },
+    { x: 2, y: 0, z: 0 },
+  );
+  equal(
+    "a region slid onto itself carries its far end",
+    getBlock(overlap.doc, 3, 0, 0).namespacedName,
+    "minecraft:glass",
+  );
+  equal("...and its near end", getBlock(overlap.doc, 2, 0, 0).namespacedName, "minecraft:stone");
+  equal(
+    "...leaving only the cell it vacated",
+    getBlock(overlap.doc, 1, 0, 0).namespacedName,
+    "minecraft:air",
+  );
+
+  /*
+   * And the air travels with it. Without that, moving a hollow room three
+   * blocks along keeps whatever was standing inside the box it landed on.
+   */
+  const hollow = newDocument({ width: 8, height: 4, length: 8 });
+  setBlock(hollow.doc, 0, 0, 0, rock);
+  // Under the *air* half of the region, which is the only cell that can tell
+  // a move from a stamp: the solid half overwrites whatever it lands on either
+  // way, so a check there would pass against both.
+  setBlock(hollow.doc, 5, 0, 0, pane);
+  moveRegion(
+    hollow,
+    { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 0 },
+    { x: 4, y: 0, z: 0 },
+  );
+  equal(
+    "a moved region's air erases what it lands on",
+    getBlock(hollow.doc, 5, 0, 0).namespacedName,
+    "minecraft:air",
+  );
 }
 
 // The default that makes paste usable: a copied box is mostly air, and writing

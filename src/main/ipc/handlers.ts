@@ -51,6 +51,8 @@ import {
   type PasteRequest,
   type RegionSpec,
   type DocumentMeshRequest,
+  type MoveRegionRequest,
+  type RegionMeshResponse,
   type SetNbtRequest,
   type StartupProgressEvent,
   type TransformRequest,
@@ -74,6 +76,8 @@ import {
   cutSelection,
   documentMesh,
   documentState,
+  moveRegion,
+  regionMesh,
   editBlockEntityValue,
   EditTooLargeError,
   EmptyClipboardError,
@@ -793,6 +797,35 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       return failure(err);
     }
   });
+
+  ipcMain.handle(IPC.docMove, async (_event, request: MoveRegionRequest): Promise<EditResponse> => {
+    try {
+      const session = requireSession();
+      const changed = moveRegion(session, request.region, request.to);
+      return { ok: true, changed, state: shellState(session) };
+    } catch (err) {
+      return failure(err);
+    }
+  });
+
+  ipcMain.handle(
+    IPC.docRegionMesh,
+    async (_event, region: RegionSpec): Promise<RegionMeshResponse> => {
+      try {
+        const settings = await getSettings();
+        const result = await regionMesh(requireSession(), region, {
+          resourcePackPath: null,
+          fallbackResourcePackPath: await defaultResourcePackPath(),
+          biomeColor: settings.preview.biomeColor,
+          showMarkers: settings.preview.showMarkers,
+          waterColor: settings.preview.waterColor,
+        });
+        return { ok: true, ...result };
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
 
   ipcMain.handle(IPC.docTransform, async (_event, request: TransformRequest): Promise<EditResponse> => {
     try {

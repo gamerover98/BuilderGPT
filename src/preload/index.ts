@@ -46,6 +46,8 @@ import {
   type SetKeyRequest,
   type ClipboardResponse,
   type PasteRequest,
+  type MoveRegionRequest,
+  type RegionMeshResponse,
   type SetNbtRequest,
   type TransformRequest,
 } from "../shared/ipc.js";
@@ -108,6 +110,9 @@ const api: BgptApi = {
   cutRegion: (region) => ipcRenderer.invoke(IPC.docCut, region) as Promise<ClipboardResponse>,
   pasteClipboard: (request: PasteRequest) =>
     ipcRenderer.invoke(IPC.docPaste, request) as Promise<EditResponse>,
+  moveRegion: (request: MoveRegionRequest) =>
+    ipcRenderer.invoke(IPC.docMove, request) as Promise<EditResponse>,
+  regionMesh: (region) => ipcRenderer.invoke(IPC.docRegionMesh, region) as Promise<RegionMeshResponse>,
   saveDocument: (request: SaveRequest) =>
     ipcRenderer.invoke(IPC.docSave, request) as Promise<SaveResponse>,
   /**

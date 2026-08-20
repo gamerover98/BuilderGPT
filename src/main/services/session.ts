@@ -15,6 +15,7 @@
 import path from "path";
 
 import type {
+  ChunkGeometry,
   DocumentState,
   EditRequest,
   MeshPayload,
@@ -32,6 +33,7 @@ import {
   normalizeRegion,
   paletteHistogram,
   regionVolume,
+  setBlock,
   type SchematicDocument,
 } from "../domain/document.js";
 import {
@@ -419,6 +421,77 @@ export function pasteSelection(
   return runTransaction(doc, history, "Paste", (tx) =>
     pasteClipboard(doc, tx, held, at, options),
   );
+}
+
+/**
+ * Picks a region up and puts it down somewhere else, as one undoable step.
+ *
+ * Not cut-then-paste through the clipboard, for two reasons that both matter:
+ * the clipboard belongs to the user and moving something must not throw away
+ * what they had copied, and cut and paste are two transactions -- a move
+ * interrupted between them would leave a hole where the build used to be.
+ *
+ * The snapshot is taken before anything is written, so a destination that
+ * overlaps the source is safe: what is pasted came from the document as it was,
+ * not as the clearing left it.
+ *
+ * `includeAir` is what makes this a move rather than a stamp. Without it the
+ * destination keeps whatever was already standing inside the moved box, so
+ * dragging a hollow room three blocks along would smear its walls.
+ */
+export function moveRegion(
+  session: DocumentSession,
+  request: RegionSpec,
+  to: { x: number; y: number; z: number },
+): number {
+  const { doc, history } = session;
+  const region = normalizeRegion(doc, request);
+  const held = copyRegion(doc, region);
+  return runTransaction(doc, history, "Move the selection", (tx) => {
+    let changed = tx.fill(region, { namespacedName: "minecraft:air", properties: {} });
+    changed += pasteClipboard(doc, tx, held, to, { includeAir: true });
+    return changed;
+  });
+}
+
+/**
+ * A region's contents as standalone geometry, for the ghost that shows where a
+ * move would land.
+ *
+ * A one-off document of exactly the region's size, meshed by the same pipeline
+ * as everything else -- so the preview cannot disagree with what the move
+ * actually produces, for the same reason a block icon cannot disagree with the
+ * viewport. Its coordinates come out relative to the region's own corner, which
+ * is what lets the renderer simply position the group.
+ *
+ * No mesh cache: this is built once when the gesture starts and thrown away
+ * when it ends.
+ */
+export async function regionMesh(
+  session: DocumentSession,
+  request: RegionSpec,
+  options: DocumentPreviewOptions,
+): Promise<{ chunks: ChunkGeometry[]; atlasVersion: number }> {
+  const region = normalizeRegion(session.doc, request);
+  const held = copyRegion(session.doc, region);
+  const scratch = createDocument({
+    width: held.width,
+    height: held.height,
+    length: held.length,
+    format: session.doc.format,
+  });
+  for (const cell of held.cells) {
+    setBlock(scratch, cell.dx, cell.dy, cell.dz, cell.entry);
+  }
+  try {
+    const built = await buildDocumentPreview(scratch, options);
+    return { chunks: built.mesh.chunks, atlasVersion: built.mesh.atlasVersion };
+  } catch {
+    // An all-air region meshes to nothing, which is not a failure -- it is a
+    // ghost with nothing in it, and the box the viewer draws says where it
+    // would go perfectly well on its own.
+    return { chunks: [], atlasVersion: -1 };
+  }
 }
 
 /**

@@ -47,6 +47,7 @@ import VersionList from "./lib/VersionList.svelte";
   import { hasTextSelection, isTyping } from "./lib/typing.js";
   import { versionNameOf } from "../../shared/mc_versions.js";
   import { placementState, type PlacementLook } from "../../shared/block_orientation.js";
+  import { movedRegion } from "./lib/selection_drag.js";
   import { t, tn, setLocale } from "./lib/i18n.svelte.js";
   import {
     openCodeModelRequiresKey,
@@ -54,6 +55,7 @@ import VersionList from "./lib/VersionList.svelte";
     type Artifact,
     type BlockInspection,
     type ChatEntry,
+  type ChunkGeometry,
     type ProjectNotes,
     type ChatState,
     type ConversationSummary,
@@ -1098,6 +1100,14 @@ import VersionList from "./lib/VersionList.svelte";
       !inventoryOpen &&
       schematicDialog === null
     ) {
+      if (event.key === "Escape" && moving !== null) {
+        // A move in flight is what Escape means first: it is the thing on
+        // screen that is mid-gesture, and cancelling it must not also throw
+        // away the selection it was going to land on.
+        event.preventDefault();
+        cancelMove();
+        return;
+      }
       if (event.key === "Escape" && selection !== null) {
         event.preventDefault();
         clearSelection();
@@ -2171,6 +2181,59 @@ import VersionList from "./lib/VersionList.svelte";
     reportChange(changed);
   }
 
+  /**
+   * The region being moved, and its contents as geometry.
+   *
+   * A mode rather than a drag, because the gesture does not start on the box:
+   * a press on the selection is already the camera's, and taking it would cost
+   * the one thing that made orbiting bearable. So Move arms it, the pointer
+   * places it, a click puts it down, and Escape puts it back.
+   */
+  let moving = $state<{ region: RegionSpec; chunks: ChunkGeometry[] } | null>(null);
+
+  async function startMove(): Promise<void> {
+    if (!selection || busy) return;
+    const region = selection;
+    busy = true;
+    try {
+      const response = await api().regionMesh(forIpc(region));
+      if (!response.ok) {
+        status = { tone: "warn", text: response.message };
+        return;
+      }
+      moving = { region: { ...region }, chunks: response.chunks };
+    } catch (err) {
+      failed(err, t("task.moving"));
+    } finally {
+      busy = false;
+    }
+  }
+
+  function cancelMove(): void {
+    moving = null;
+  }
+
+  /**
+   * Puts the region down, and takes the selection with it.
+   *
+   * The selection follows because the blocks did: leaving the box behind on the
+   * empty space they came from would make the very next operation act on
+   * nothing, and every editor that moves a thing leaves it selected.
+   */
+  async function commitMove(to: { x: number; y: number; z: number }): Promise<void> {
+    const held = moving;
+    if (held === null) return;
+    moving = null;
+    const changed = await runDocument(t("task.moving"), () =>
+      api().moveRegion({ region: forIpc(held.region), to }),
+    );
+    if (changed !== null) {
+      selection = movedRegion(held.region, to);
+      anchor = { x: to.x, y: to.y, z: to.z };
+    }
+    reportChange(changed);
+  }
+
   /** Drops the selection without touching a block. */
   function clearSelection(): void {
     selection = null;
@@ -2884,6 +2947,8 @@ import VersionList from "./lib/VersionList.svelte";
           oncut={() => void copySelection(true)}
           onpaste={pasteHere}
           ondelete={() => void deleteSelection()}
+          moving={moving !== null}
+          onmove={() => (moving === null ? void startMove() : cancelMove())}
           onclearselection={clearSelection}
           onselectall={selectAll}
         />
@@ -2969,6 +3034,8 @@ import VersionList from "./lib/VersionList.svelte";
       onselectionchange={docState ? onSelectionDragged : undefined}
       onselectiongesture={docState ? onSelectionGesture : undefined}
       onpickmaterial={docState ? onPickMaterial : undefined}
+      ghost={moving}
+      onghostcommit={(to) => void commitMove(to)}
       documentSize={docState?.size ?? null}
       ongridselect={docState ? onGridSelect : undefined}
       ongridplace={docState ? (at, look) => void onGridPlace(at, look) : undefined}

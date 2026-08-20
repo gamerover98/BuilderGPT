@@ -264,3 +264,45 @@ export function clickIntent(gesture: {
   if (gesture.shift && gesture.ctrl) return "extend";
   return "pick";
 }
+
+/**
+ * Where a region being moved would land, from the cell under the pointer.
+ *
+ * The region's **min corner** follows the cursor, which is the same rule paste
+ * already uses ("at the selection's corner"). The alternative -- keeping the
+ * grab point under the cursor -- reads better while dragging a box you pressed
+ * on, and this gesture does not start with a press on the box: it starts from a
+ * button, and there is no grab point to keep. One rule, and it is the one the
+ * app already had.
+ *
+ * Clamped at the origin because the grid has none below it. Moving a build
+ * "down past zero" cannot mean pushing everything else up -- that is what
+ * `grow.ts` does for a fill, and doing it here would move the very coordinates
+ * the user is aiming at, under the pointer, mid-gesture.
+ */
+export function moveDestination(cell: {
+  x: number;
+  y: number;
+  z: number;
+}): { x: number; y: number; z: number } {
+  return {
+    x: Math.max(0, Math.round(cell.x)),
+    y: Math.max(0, Math.round(cell.y)),
+    z: Math.max(0, Math.round(cell.z)),
+  };
+}
+
+/** The region a move would produce: the same box, at the destination corner. */
+export function movedRegion(
+  region: Region,
+  to: { x: number; y: number; z: number },
+): Region {
+  return {
+    minX: to.x,
+    minY: to.y,
+    minZ: to.z,
+    maxX: to.x + (region.maxX - region.minX),
+    maxY: to.y + (region.maxY - region.minY),
+    maxZ: to.z + (region.maxZ - region.minZ),
+  };
+}

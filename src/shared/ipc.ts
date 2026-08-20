@@ -94,6 +94,10 @@ export const IPC = {
   docCut: "bgpt:doc:cut",
   /** Write the clipboard in, with its corner at a coordinate. */
   docPaste: "bgpt:doc:paste",
+  /** Pick a region up and put it down elsewhere, as one step. */
+  docMove: "bgpt:doc:move",
+  /** A region's contents as standalone geometry, for the move preview. */
+  docRegionMesh: "bgpt:doc:region:mesh",
   docSave: "bgpt:doc:save",
   /**
    * The open schematic's own version history: list, add, go back, throw away.
@@ -504,6 +508,25 @@ export interface MeshPayload {
  * Both fields are "I hold this", never "send me this": main decides what to
  * send, and an unrecognised token or version simply means everything.
  */
+/** Pick this region up and put its corner down at `to`. */
+export interface MoveRegionRequest {
+  region: RegionSpec;
+  to: { x: number; y: number; z: number };
+}
+
+/**
+ * A region's contents as geometry, in coordinates relative to its own corner.
+ *
+ * No atlas: this is only ever asked for while a document is on screen, so the
+ * window is already drawing with the one these UVs address.
+ */
+export interface RegionMeshSuccess {
+  chunks: ChunkGeometry[];
+  atlasVersion: number;
+}
+
+export type RegionMeshResponse = Result<RegionMeshSuccess>;
+
 export interface DocumentMeshRequest {
   settings: PreviewSettings;
   /** The `token` from the last payload this window applied, if any. */
@@ -1110,6 +1133,8 @@ export interface BgptApi {
   closeDocument(): Promise<void>;
   getDocumentState(): Promise<DocumentStateResponse>;
   getDocumentMesh(request: DocumentMeshRequest): Promise<DocumentMeshResponse>;
+  moveRegion(request: MoveRegionRequest): Promise<EditResponse>;
+  regionMesh(region: RegionSpec): Promise<RegionMeshResponse>;
   applyEdit(request: EditRequest): Promise<EditResponse>;
   undo(): Promise<EditResponse>;
   redo(): Promise<EditResponse>;

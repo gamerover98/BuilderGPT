@@ -48,6 +48,8 @@ import {
 import {
   clickIntent,
   dragFace,
+  moveDestination,
+  movedRegion,
   dragPlaneNormal,
   faceCentre,
   intersectPlane,
@@ -62,6 +64,11 @@ import { isSafeHref } from "../src/renderer/src/lib/markdown_policy.js";
 import { HOSTILE_CASES } from "./markdown_cases.js";
 import { missingKeys, translate, translatePlural } from "../src/renderer/src/lib/i18n_core.js";
 import { openedAge } from "../src/renderer/src/lib/recent_age.js";
+import {
+  isSpuriousLook,
+  LOCK_SETTLE_MS,
+  MAX_LOOK_STEP,
+} from "../src/renderer/src/lib/look_filter.js";
 import { en } from "../src/renderer/src/lib/locales/en.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -633,6 +640,73 @@ console.log("\n--- click intent ---");
     click(false),
     "ignore",
   );
+}
+
+// --- moving a region --------------------------------------------------------
+//
+// The region's min corner follows the cursor, which is the rule paste already
+// uses. Keeping a grab point under the cursor would read better for a box you
+// pressed on, and this gesture does not start with a press on the box: it
+// starts from a button, so there is no grab point to keep.
+console.log("\n--- moving a region ---");
+{
+  const region = { minX: 4, minY: 2, minZ: 6, maxX: 7, maxY: 3, maxZ: 6 };
+
+  equal("the corner goes where the pointer is", moveDestination({ x: 10, y: 1, z: 2 }), {
+    x: 10,
+    y: 1,
+    z: 2,
+  });
+  /*
+   * The grid has nothing below the origin. Moving "down past zero" cannot mean
+   * pushing everything else up -- that is what growth-on-fill does, and doing it
+   * here would move the coordinates the user is aiming at, under the pointer,
+   * mid-gesture.
+   */
+  equal("below the origin it stops at the origin", moveDestination({ x: -3, y: -1, z: 0 }), {
+    x: 0,
+    y: 0,
+    z: 0,
+  });
+
+  equal("the moved box keeps its size", movedRegion(region, { x: 0, y: 0, z: 0 }), {
+    minX: 0,
+    minY: 0,
+    minZ: 0,
+    maxX: 3,
+    maxY: 1,
+    maxZ: 0,
+  });
+  equal(
+    "...and a move to where it already is changes nothing",
+    movedRegion(region, { x: region.minX, y: region.minY, z: region.minZ }),
+    region,
+  );
+}
+
+// --- the camera's own input -------------------------------------------------
+//
+// In Creative flight the camera is driven by movementX/movementY from
+// pointer-locked mousemove events, and those are not always a mouse. Chromium
+// delivers a spurious one the instant the lock is acquired, carrying the
+// distance from wherever the cursor was to where it was warped -- which is the
+// "the view snaps somewhere at random" report.
+console.log("\n--- look filter ---");
+{
+  const look = (movementX: number, movementY: number, sinceLock: number): boolean =>
+    isSpuriousLook({ movementX, movementY, sinceLock });
+
+  check("an ordinary movement is the user's", !look(12, -7, 1000));
+  check("...however fast, within reason", !look(MAX_LOOK_STEP, -MAX_LOOK_STEP, 1000));
+
+  // The click that entered flight must not also spin the camera.
+  check("everything in the first instants after the lock is discarded", look(1, 0, 0));
+  check("...including a movement that would otherwise be fine", look(3, 3, LOCK_SETTLE_MS - 1));
+  check("...and it stops being discarded once settled", !look(3, 3, LOCK_SETTLE_MS));
+
+  // And the general case: no wrist produces this between two frames.
+  check("a jump larger than any hand is discarded", look(MAX_LOOK_STEP + 1, 0, 5000));
+  check("...on either axis", look(0, -(MAX_LOOK_STEP + 1), 5000));
 }
 
 // --- how long ago a schematic was opened ----------------------------------

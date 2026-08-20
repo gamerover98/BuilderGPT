@@ -69,6 +69,17 @@
      * region, and Delete is the one of them with no other way in.
      */
     ondelete: () => void;
+    /** Whether a move is in flight, so the button can offer to call it off. */
+    moving: boolean;
+    /**
+     * Arms the move, or cancels it.
+     *
+     * A mode rather than a drag on the box, because a press on the selection
+     * already belongs to the camera -- taking it back is what made orbiting a
+     * build nearly impossible the first time, and this gesture is not worth
+     * paying that again.
+     */
+    onmove: () => void;
     onclearselection: () => void;
     onselectall: () => void;
   }
@@ -91,6 +102,8 @@
     oncut,
     onpaste,
     ondelete,
+    moving,
+    onmove,
     onclearselection,
     onselectall,
   }: Props = $props();
@@ -257,6 +270,17 @@
 
   <div class="row">
     <button
+      class:active={moving}
+      onclick={onmove}
+      disabled={busy || none}
+      title={moving ? t("selection.moveCancelHint") : t("selection.moveHint")}
+    >
+      {moving ? t("selection.moveCancel") : t("selection.move")}
+    </button>
+  </div>
+
+  <div class="row">
+    <button
       onclick={() => ontransform({ kind: "rotate", steps: 1 })}
       disabled={busy || none}
       title={t("selection.rotate90Hint")}
@@ -346,6 +370,13 @@
     min-width: 0;
     padding: 5px 6px;
     font-size: 12px;
+  }
+
+  /* Armed, so the button says the app is waiting for a click in the viewport
+     rather than for another press on itself. */
+  .row button.active {
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   /* The one button here that destroys blocks rather than moving or copying

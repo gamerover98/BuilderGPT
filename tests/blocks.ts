@@ -17,6 +17,7 @@ import { searchBlocks } from "../src/renderer/src/lib/block_search.js";
 import {
   ORIENTED_BLOCK_NAMES,
   orientPlacement,
+  placementState,
   type PlacementLook,
 } from "../src/shared/block_orientation.js";
 import { occludesNeighbours, shapeFor } from "../src/main/pipeline/block_shapes.js";
@@ -804,6 +805,63 @@ console.log("\n--- placement orientation ---");
     "a diagonal look still resolves to one direction",
     ["east", "south"].includes(orientPlacement("minecraft:oak_stairs", looking(1, 0, 1, "up")).facing),
   );
+}
+
+/*
+ * The rest of the state, which is the difference between a block you can edit
+ * and one you can only look at.
+ *
+ * A door placed by hand landed as `oak_door[facing=north]`, and the inspector
+ * shows the properties an entry *has* -- so four of the five things that make a
+ * door a door were not on screen and could not be changed. They are on the
+ * block either way; the only question is whether the builder can see them.
+ */
+console.log("\n--- the state a placed block starts in ---");
+{
+  const onFloor = (x: number, z: number): PlacementLook => ({
+    direction: { x, y: 0, z },
+    against: "up",
+    cursorY: 0,
+  });
+
+  const door = placementState("minecraft:oak_door", onFloor(0, -1));
+  equal("a door carries every property a door has", Object.keys(door).sort(), [
+    "facing",
+    "half",
+    "hinge",
+    "open",
+    "powered",
+  ]);
+  equal("...with the direction decided by the camera", door.facing, "north");
+  equal("...and the rest at the state the game would place it in", door.half, "lower");
+
+  // The orientation wins where the two overlap: only one of them looked at the
+  // camera.
+  const chest = placementState("minecraft:chest", onFloor(1, 0));
+  equal("a chest still turns its front to you", chest.facing, "west");
+  equal("...and knows it is not half of a double one", chest.type, "single");
+
+  const stairs = placementState("minecraft:oak_stairs", onFloor(1, 0));
+  equal("stairs gain their shape", stairs.shape, "straight");
+  /*
+   * And do not gain `waterlogged`, which is the one property that would cost
+   * something: the MCEdit writer matches a block's *exact* state against the
+   * legacy table, so putting it on every stair and slab turns a clean 1.12 save
+   * into a page of degraded blocks.
+   */
+  check("...but not waterlogged", !("waterlogged" in stairs), Object.keys(stairs).join(", "));
+
+  // A trapdoor has no hinge, and `oak_trapdoor` does not end in `_door` -- but
+  // it very nearly does, and a family table matched by suffix is exactly where
+  // that stops being true one refactor later.
+  const trapdoor = placementState("minecraft:oak_trapdoor", onFloor(0, -1));
+  check(
+    "a trapdoor is not a door with a longer name",
+    !("hinge" in trapdoor),
+    Object.keys(trapdoor).join(", "),
+  );
+
+  equal("a block with no state to carry gains none", placementState("minecraft:stone", onFloor(0, -1)), {});
 }
 
 // The ids this file names have to be ids. A typo writes a state onto a block

@@ -46,7 +46,7 @@ import VersionList from "./lib/VersionList.svelte";
   import CreativeInventory from "./lib/CreativeInventory.svelte";
   import { hasTextSelection, isTyping } from "./lib/typing.js";
   import { versionNameOf } from "../../shared/mc_versions.js";
-  import { orientPlacement, type PlacementLook } from "../../shared/block_orientation.js";
+  import { placementState, type PlacementLook } from "../../shared/block_orientation.js";
   import { t, tn, setLocale } from "./lib/i18n.svelte.js";
   import {
     openCodeModelRequiresKey,
@@ -214,6 +214,21 @@ import VersionList from "./lib/VersionList.svelte";
   );
   const canRedoAnything = $derived(
     redoTarget(selectionTimeline, docState?.undoDepth ?? 0, docState?.canRedo === true) !== "none",
+  );
+
+  /**
+   * Whether the selection is exactly one block.
+   *
+   * What the inspector is gated on: it describes *a* block, and a region is not
+   * one. A plain click sets the selection to the block it hit, so the ordinary
+   * way of asking still works -- what stops is the panel lingering with a stale
+   * subject after a sweep.
+   */
+  const singleBlockSelection = $derived(
+    selection !== null &&
+      selection.minX === selection.maxX &&
+      selection.minY === selection.maxY &&
+      selection.minZ === selection.maxZ,
   );
 
   /** The last block clicked, and where — the inspector's subject. */
@@ -448,11 +463,15 @@ import VersionList from "./lib/VersionList.svelte";
    * Building from the crosshair. One block, one transaction — the same edit the
    * panel makes, so Ctrl+Z treats them alike.
    *
-   * The block is turned to face the way the game would turn it. That is a
-   * default and not an instruction, which is why the orientation goes *under*
+   * The block is turned to face the way the game would turn it, and lands
+   * carrying the rest of its family's state -- `half`, `hinge`, `open` and
+   * `powered` for a door, not `facing` alone. Those properties are on the block
+   * whether or not anyone writes them; writing them is what puts them in the
+   * inspector, where they can be changed.
+   *
+   * All of it is a default and not an instruction, which is why it goes *under*
    * whatever the held block already spelled out: `oak_stairs[facing=north]`
-   * typed into the block field means north, wherever the camera happens to be
-   * pointing.
+   * typed into the block field means north, wherever the camera is pointing.
    */
   async function onBuild(
     action: "place" | "break",
@@ -467,7 +486,7 @@ import VersionList from "./lib/VersionList.svelte";
         : {
             ...held,
             properties: {
-              ...orientPlacement(held.namespacedName, look),
+              ...placementState(held.namespacedName, look),
               ...(held.properties ?? {}),
             },
           };
@@ -1464,7 +1483,7 @@ import VersionList from "./lib/VersionList.svelte";
       keywords: t("command.showInspector.keywords"),
       // Nothing to show until a block has been asked about, and offering to
       // reveal an empty panel is how a command reads as broken.
-      enabled: inspection !== null,
+      enabled: inspection !== null && singleBlockSelection,
       run: () => (inspectorOpen = !inspectorOpen),
     },
     {
@@ -2871,7 +2890,13 @@ import VersionList from "./lib/VersionList.svelte";
       </ToolWindow>
     {/if}
 
-    {#if docState && inspectorOpen && inspection !== null}
+    <!--
+      Only for a single block, because that is the only time the panel is
+      telling the truth. Sweeping out a region left it showing whichever block
+      the gesture happened to start on, labelled with that block's coordinates,
+      beside a selection of nine hundred others.
+    -->
+    {#if docState && inspectorOpen && inspection !== null && singleBlockSelection}
       <ToolWindow
         title={t("inspector.title")}
         x={inspectorWindowX}

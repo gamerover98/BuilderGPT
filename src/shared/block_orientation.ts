@@ -290,6 +290,84 @@ export function orientPlacement(id: string, look: PlacementLook): Record<string,
 }
 
 /**
+ * The rest of the state a freshly placed block carries, beside its direction.
+ *
+ * ## Why write states nobody chose
+ *
+ * A door placed by hand used to land as `minecraft:oak_door[facing=north]`, and
+ * the inspector shows the properties an entry *has* -- so four of the five
+ * things that make a door a door were not on screen and could not be edited.
+ * They exist on the block either way; the only question is whether the person
+ * building can see them.
+ *
+ * That is what makes the values below a *starting point* rather than a claim.
+ * `facing=north` on a door is not more true than `facing=south`; it is the one
+ * the file would have carried anyway, now written where it can be changed. A
+ * schematic read from disk already spells every property out -- this is what
+ * makes a hand-placed block look like one that was loaded.
+ *
+ * ## `waterlogged` is deliberately absent
+ *
+ * It is real, and on almost everything here. It is also the one property that
+ * would cost something: the MCEdit writer matches a block's *exact* state
+ * against the legacy table, so adding `waterlogged=false` to every stair and
+ * slab would turn a clean 1.12 save into a page of "degraded" reports. It
+ * carries no meaning anyone hand-edits, and it did not exist before 1.13.
+ */
+const DEFAULT_STATE: Record<string, Record<string, string>> = {
+  door: { half: "lower", hinge: "left", open: "false", powered: "false" },
+  trapdoor: { open: "false", powered: "false" },
+  fence_gate: { in_wall: "false", open: "false", powered: "false" },
+  bed: { occupied: "false", part: "foot" },
+  stairs: { shape: "straight" },
+  button: { powered: "false" },
+  lever: { powered: "false" },
+  furnace: { lit: "false" },
+  blast_furnace: { lit: "false" },
+  smoker: { lit: "false" },
+  campfire: { lit: "true", signal_fire: "false" },
+  soul_campfire: { lit: "true", signal_fire: "false" },
+  chest: { type: "single" },
+  trapped_chest: { type: "single" },
+  dispenser: { triggered: "false" },
+  dropper: { triggered: "false" },
+  barrel: { open: "false" },
+  piston: { extended: "false" },
+  sticky_piston: { extended: "false" },
+  lectern: { has_book: "false", powered: "false" },
+  beehive: { honey_level: "0" },
+  bee_nest: { honey_level: "0" },
+  end_portal_frame: { eye: "false" },
+};
+
+/**
+ * Suffixes that decide a family.
+ *
+ * `_trapdoor` and `_door` do not actually collide -- `oak_trapdoor` does not
+ * end in `_door` -- so the order here is not load-bearing, and the test that
+ * looks like it checks the order is really checking that a trapdoor never
+ * grows a hinge.
+ */
+const STATE_SUFFIXES = ["_trapdoor", "_fence_gate", "_stairs", "_button", "_door", "_bed"] as const;
+
+function defaultState(name: string): Record<string, string> {
+  const suffix = STATE_SUFFIXES.find((candidate) => name.endsWith(candidate));
+  const family = suffix === undefined ? name : suffix.slice(1);
+  return DEFAULT_STATE[family] ?? {};
+}
+
+/**
+ * The complete state a placed block starts in: its direction, and every other
+ * property the family carries.
+ *
+ * Orientation wins over the defaults, because `facing` appears in both and only
+ * one of them looked at the camera.
+ */
+export function placementState(id: string, look: PlacementLook): Record<string, string> {
+  return { ...defaultState(baseBlockName(id)), ...orientPlacement(id, look) };
+}
+
+/**
  * Every block id this file claims to know how to orient, by exact name.
  *
  * Exported for the suite that checks each one against `block_id_list.txt` —
@@ -298,6 +376,10 @@ export function orientPlacement(id: string, look: PlacementLook): Record<string,
  * app would ever notice.
  */
 export const ORIENTED_BLOCK_NAMES: readonly string[] = [
+  // The families keyed by a bare name rather than a suffix are ids too.
+  ...Object.keys(DEFAULT_STATE).filter(
+    (name) => !STATE_SUFFIXES.some((suffix) => suffix.slice(1) === name),
+  ),
   ...AXIS_NAMES,
   ...FRONT_TO_PLAYER,
   ...FRONT_TO_PLAYER_ANY_AXIS,

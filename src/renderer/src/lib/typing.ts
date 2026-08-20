@@ -23,3 +23,19 @@ export function isTyping(target: EventTarget | null): boolean {
   const tag = element.tagName.toLowerCase();
   return tag === "input" || tag === "textarea" || tag === "select" || element.isContentEditable;
 }
+
+/**
+ * Whether the user has text highlighted somewhere on the page.
+ *
+ * `isTyping` is not enough for Ctrl+C. The chat log is not a text field, so
+ * highlighting a block id in a reply and pressing Ctrl+C passes that guard —
+ * and the shortcut would copy the *selected region of the schematic* instead,
+ * silently, leaving the clipboard without the thing the user just highlighted.
+ *
+ * Collapsed ranges do not count: a caret sitting somewhere is not a selection,
+ * and every click leaves one.
+ */
+export function hasTextSelection(): boolean {
+  const selection = typeof window === "undefined" ? null : window.getSelection();
+  return selection !== null && !selection.isCollapsed && selection.toString().trim() !== "";
+}

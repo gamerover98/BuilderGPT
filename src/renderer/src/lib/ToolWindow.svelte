@@ -76,6 +76,18 @@
 
   function onPointerDown(event: PointerEvent): void {
     if (event.button !== 0 || !panel) return;
+    /*
+     * A press on the close button is not a press on the title bar.
+     *
+     * This handler is on the whole header, so it fired for the button too --
+     * and then took pointer capture, which is what actually broke it: while a
+     * capture is active the browser dispatches the following `click` to the
+     * *capturing* element, so it landed on the header and `onclose` never ran.
+     * The panel could not be closed at all, and nothing about it looked wrong.
+     */
+    if (event.target instanceof Element && event.target.closest("button") !== null) {
+      return;
+    }
     const rect = panel.getBoundingClientRect();
     grabX = event.clientX - rect.left;
     grabY = event.clientY - rect.top;

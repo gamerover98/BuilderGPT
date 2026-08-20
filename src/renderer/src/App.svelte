@@ -44,7 +44,7 @@ import VersionList from "./lib/VersionList.svelte";
   import SchematicDialog from "./lib/SchematicDialog.svelte";
   import Hotbar from "./lib/Hotbar.svelte";
   import CreativeInventory from "./lib/CreativeInventory.svelte";
-  import { isTyping } from "./lib/typing.js";
+  import { hasTextSelection, isTyping } from "./lib/typing.js";
   import { versionNameOf } from "../../shared/mc_versions.js";
   import { orientPlacement, type PlacementLook } from "../../shared/block_orientation.js";
   import { t, tn, setLocale } from "./lib/i18n.svelte.js";
@@ -1061,6 +1061,35 @@ import VersionList from "./lib/VersionList.svelte";
       inventoryOpen = !inventoryOpen;
       return;
     }
+    /*
+     * Escape drops the selection, and Delete empties it.
+     *
+     * Unmodified, like `E`, so both are behind the same two guards: not while
+     * typing, and not while something modal is up -- Escape belongs to whatever
+     * is on top of the viewport, and a dialog that closed *and* cleared the
+     * selection would be one keystroke doing two jobs.
+     */
+    if (
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !isTyping(event.target) &&
+      !settingsOpen &&
+      !paletteOpen &&
+      !inventoryOpen &&
+      schematicDialog === null
+    ) {
+      if (event.key === "Escape" && selection !== null) {
+        event.preventDefault();
+        clearSelection();
+        return;
+      }
+      if (event.key === "Delete" && docState !== null && !busy && selection !== null) {
+        event.preventDefault();
+        void deleteSelection();
+        return;
+      }
+    }
     if (!(event.ctrlKey || event.metaKey)) {
       return;
     }
@@ -1110,9 +1139,45 @@ import VersionList from "./lib/VersionList.svelte";
     if (key === "z" && !event.shiftKey && !editingText) {
       event.preventDefault();
       void undoAnything();
-    } else if ((key === "y" || (key === "z" && event.shiftKey)) && !editingText) {
+      return;
+    }
+    if ((key === "y" || (key === "z" && event.shiftKey)) && !editingText) {
       event.preventDefault();
       void redoAnything();
+      return;
+    }
+    /*
+     * The clipboard keys, which mean the *region* only when nothing else has a
+     * claim on them.
+     *
+     * `isTyping` is not enough for these. The chat log is not a text field, so
+     * highlighting a block id in a reply and pressing Ctrl+C would pass that
+     * guard and quietly copy a region of the schematic instead of the text the
+     * user had just highlighted -- with the highlight still on screen, saying
+     * it had worked.
+     */
+    if (editingText || hasTextSelection()) {
+      return;
+    }
+    if (key === "a") {
+      event.preventDefault();
+      selectAll();
+      return;
+    }
+    if (key === "c" && selection !== null) {
+      event.preventDefault();
+      void copySelection(false);
+      return;
+    }
+    if (key === "x" && selection !== null) {
+      event.preventDefault();
+      void copySelection(true);
+      return;
+    }
+    if (key === "v" && selection !== null && clipboard !== null) {
+      event.preventDefault();
+      void pasteHere();
+      return;
     }
     /*
      * No Ctrl+S here any more, and none of the other file keys either.
@@ -1276,8 +1341,27 @@ import VersionList from "./lib/VersionList.svelte";
       title: t("command.selectAll"),
       group: t("group.edit"),
       keywords: t("command.selectAll.keywords"),
+      shortcut: "Ctrl+A",
       enabled: !busy && docState !== null,
       run: selectAll,
+    },
+    {
+      id: "delete-blocks",
+      title: t("command.deleteBlocks"),
+      group: t("group.edit"),
+      keywords: t("command.deleteBlocks.keywords"),
+      shortcut: "Del",
+      enabled: !busy && selection !== null,
+      run: () => void deleteSelection(),
+    },
+    {
+      id: "clear-selection",
+      title: t("command.clearSelection"),
+      group: t("group.edit"),
+      keywords: t("command.clearSelection.keywords"),
+      shortcut: "Esc",
+      enabled: selection !== null,
+      run: clearSelection,
     },
     {
       id: "copy",
@@ -1334,16 +1418,6 @@ import VersionList from "./lib/VersionList.svelte";
       keywords: t("command.mirrorZ.keywords"),
       enabled: !busy && selection !== null,
       run: () => void transformSelection({ kind: "mirror", axis: "z" }),
-    },
-    {
-      id: "clear-selection",
-      title: t("command.clearSelection"),
-      group: t("group.edit"),
-      enabled: !busy && selection !== null,
-      run: () => {
-        selection = null;
-        anchor = null;
-      },
     },
     {
       id: "camera-orbit",
@@ -2078,6 +2152,29 @@ import VersionList from "./lib/VersionList.svelte";
     reportChange(changed);
   }
 
+  /** Drops the selection without touching a block. */
+  function clearSelection(): void {
+    selection = null;
+    anchor = null;
+  }
+
+  /**
+   * Empties the selection, which is a fill with air.
+   *
+   * Air is a real block everywhere in this app -- every empty cell in the
+   * document is one, and the writers and the agent both name it -- so there is
+   * no separate "erase" operation to add. It goes through `applyEdit` like any
+   * other fill, which is what makes it one undo step.
+   */
+  async function deleteSelection(): Promise<void> {
+    if (!selection) return;
+    const region = selection;
+    const changed = await runDocument(t("task.deleting"), () =>
+      api().applyEdit({ kind: "fill", region: forIpc(region), block: { namespacedName: "minecraft:air" } }),
+    );
+    reportChange(changed);
+  }
+
   async function fillSelection(block: string): Promise<void> {
     if (!selection) return;
     const region = selection;
@@ -2714,7 +2811,7 @@ import VersionList from "./lib/VersionList.svelte";
       Top-left, which is where the window itself opens, so the panel appears
       more or less from under the button that summoned it.
     -->
-    {#if docState && !toolsOpen}
+    {#if docState && !toolsOpen && selection !== null}
       <button
         class="icon reopen-tools"
         onclick={() => (toolsOpen = true)}
@@ -2725,7 +2822,15 @@ import VersionList from "./lib/VersionList.svelte";
       </button>
     {/if}
 
-    {#if docState && toolsOpen}
+    <!--
+      Only while there is something selected.
+      
+      Every control in it acts on a region, so with none there was a panel of
+      disabled buttons taking up the corner of the viewport and explaining
+      itself with a hint. Select All moved to Ctrl+A and the palette, which is
+      the one thing in here that never needed a selection to begin with.
+    -->
+    {#if docState && toolsOpen && selection !== null}
       <ToolWindow
         title={t("selection.legend")}
         x={toolWindowX}
@@ -2759,10 +2864,8 @@ import VersionList from "./lib/VersionList.svelte";
           oncopy={() => void copySelection(false)}
           oncut={() => void copySelection(true)}
           onpaste={pasteHere}
-          onclearselection={() => {
-            selection = null;
-            anchor = null;
-          }}
+          ondelete={() => void deleteSelection()}
+          onclearselection={clearSelection}
           onselectall={selectAll}
         />
       </ToolWindow>

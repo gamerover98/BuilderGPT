@@ -61,6 +61,14 @@
     oncopy: () => void;
     oncut: () => void;
     onpaste: () => void;
+    /**
+     * Empties the selection, which is a fill with air.
+     *
+     * Beside Copy and Cut rather than beside Fill, because that is the group it
+     * belongs to by *gesture*: these four are what the keyboard does to a
+     * region, and Delete is the one of them with no other way in.
+     */
+    ondelete: () => void;
     onclearselection: () => void;
     onselectall: () => void;
   }
@@ -82,6 +90,7 @@
     oncopy,
     oncut,
     onpaste,
+    ondelete,
     onclearselection,
     onselectall,
   }: Props = $props();
@@ -281,7 +290,17 @@
 
   <div class="row">
     <button onclick={onselectall} disabled={busy}>{t("selection.all")}</button>
-    <button onclick={onclearselection} disabled={busy || none}>{t("selection.clear")}</button>
+    <button onclick={onclearselection} disabled={busy || none} title={t("selection.clearHint")}>
+      {t("selection.clear")}
+    </button>
+    <button
+      class="danger"
+      onclick={ondelete}
+      disabled={busy || none}
+      title={t("selection.deleteHint")}
+    >
+      {t("selection.delete")}
+    </button>
   </div>
 </div>
 
@@ -327,6 +346,13 @@
     min-width: 0;
     padding: 5px 6px;
     font-size: 12px;
+  }
+
+  /* The one button here that destroys blocks rather than moving or copying
+     them, coloured like the risk it carries. */
+  .danger {
+    border-color: var(--danger);
+    color: var(--danger);
   }
 
   /* The picker takes the room; the browse button is a fixed square beside it. */

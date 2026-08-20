@@ -25,7 +25,7 @@ src/
     domain/   document.ts (the mutable schematic), history.ts (transactions, undo)
     agent/    agent.ts (the AI tool loop), tools.ts (what it may do)
     services/ session (the open document), writers, llm, opencode, generate,
-              preview, schematic, output, settings-store, …
+              preview, schematic, output, settings-store, snapshots, …
     pipeline/ schem -> GLB (loader, loader_formats, model_baker, mesher, atlas, …)
     core.ts   sandboxed execution of LLM-generated build scripts
     menu.ts   the application menu + window title (Electron half)
@@ -515,6 +515,47 @@ never moves. The same gesture also has to suppress the click-to-select path on
 and the 4px tolerance does not help, so it would collapse the selection the
 user was about to resize.
 
+**Which is why selecting takes Shift, and a plain drag belongs to the camera.**
+Every selection gesture has to take the button away from OrbitControls, so none
+of them can be the default: orbiting a build was close to impossible, because
+the press that started the orbit landed on it and collapsed the selection to the
+block underneath. Shift-click a block, Shift-drag the grid, Shift-drag a face.
+**Ctrl** took over "grow the selection from the anchor", the job Shift gave up.
+
+One thing survives without Shift: a *stationary* click on the build grid places
+a block. That is how an empty schematic gets its first one, and it cannot be
+confused with an orbit — an orbit moves the pointer, and this only fires when it
+did not.
+
+**Ctrl+Z reaches the selection, and `undoDepth` is what makes that answerable.**
+The block edits live in main and the selection lives in the renderer;
+interleaving two stacks needs a shared ordering, and that field — main's undo
+stack depth — is it. The rule is one sentence: **a selection is undone only while
+no block edit has landed on top of it.** `selection_history.ts` holds it. A drag
+is one step rather than one per frame, which is why `Viewer.svelte` reports
+gesture boundaries at all: only it knows where the press was.
+
+**The hotbar's active slot is what you are holding, in both camera modes.**
+There used to be two answers — an `activeBlock` for orbit, the hotbar for flight
+— chosen between by camera mode. That was tenable only while the hotbar was
+creative-only. Everything that picks a block writes the slot: the inventory, the
+field in the selection tools, the middle mouse button. The wheel is still only
+the bar's *in flight*: in orbit it is the zoom, and the game gets to claim the
+wheel only because the game has no zoom to lose.
+
+**Air is not a block you can hold.** It is a real id everywhere else — every
+empty cell in the document is air, and the writers and the agent both name it —
+but there is nothing to pick up and nothing to draw, so it was a permanently
+blank inventory tile that read as a failure to load. `inventoryBlocks` filters
+it and `coerceUi` refuses it in a slot, which heals a settings file written when
+it was the ninth default.
+
+**Closing a modal over the viewport must release the pointer lock.** In flight
+the canvas holds it, so a panel opened on top of one appeared over a camera
+still turning with every movement, with no cursor to click anything. Releasing
+also stops the flight keys, because the viewer only records WASD while the lock
+is held.
+
 **The chat's markdown goes `sanitize(parse(source))`, in that order, and only
 for `agent` turns.** `Markdown.svelte` is the only `{@html}` in the app, and
 everything reaching it comes through `toSafeHtml`. The policy — allowlisted tags
@@ -668,6 +709,40 @@ cube, and the renderer may not import out of `main/`. The inventory keeps them
 as `data:` URLs because the CSP allows `data:` and forbids `blob:`, and uses one
 `WebGLRenderer` — a context per tile hits the browser's limit at about sixteen
 and then silently loses the oldest.
+
+**One renderer for the whole window, in `renderer/lib/block_icons.svelte.ts`.**
+That limit is per window, not per component, so the hotbar and the inventory
+cannot each keep their own — and they must not each draw their own picture
+either: the bar was hashed colour swatches beside a grid of real blocks, two
+answers to what gravel looks like. Three things that module gets right, each of
+which was visibly wrong first:
+
+- **`SRGBColorSpace` on the atlas**, which the viewport sets. Without it the
+  identical pixels drew darker and flatter in the previews than in the scene
+  they preview — the "everything looks switched off" report.
+- **Face shading, not lighting.** Lambert left every face of a stairs block
+  reading as one flat mass. The game does not light its inventory; it shades
+  each face by which way it points, and the vanilla factors go into a
+  vertex-colour attribute multiplied into an *unlit* material, so the texture's
+  own colours survive exactly.
+- **Requests are serialised, and the texture is uploaded with `initTexture`.**
+  Overlapping requests each built their result from the icon map as they found
+  it and then replaced the whole map, so a slower response erased a faster one's
+  work — which is why half the tiles were wrong until a scroll re-requested
+  them and happened to win.
+
+**A schematic's version history is not the chat's checkpoints.** `snapshots.ts`
+keys on the *file path* and lives under `userData/versions`, so it outlives the
+conversation, the session and the app; `checkpoints.ts` belongs to a conversation
+and dies with it. Both are uncropped Sponge v3 for the same two reasons as the
+autosave: `saveSession` trims to content, and these files are read only by the
+module that wrote them. A document with no path has nowhere to keep a history
+and says so, rather than showing an empty list that looks broken.
+
+Going back is a **fork**: `adoptDocument` starts a fresh history, so main
+snapshots the state being left before adopting the old one. `snapshots_core.ts`
+returns the ids evicted past the cap rather than deleting them, because a caller
+that forgets leaves orphans and that is something a test can see.
 
 **Block geometry is hand-described in `pipeline/block_shapes.ts`, not loaded.**
 The Python original only ever produced full cubes — its model-driven path was

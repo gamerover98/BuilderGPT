@@ -1970,6 +1970,12 @@ import StartScreen from "./lib/StartScreen.svelte";
         // picture of a file: the chat still said "open a schematic first" and
         // none of the editing tools could touch what had just been made. It is
         // a document now, like anything else that arrives on screen.
+        //
+        // Which means it inherits the unsaved-work question, and should: this
+        // replaces whatever was open. Answering no is safe -- the generated
+        // file is already on disk and in the artifact list, so it can be opened
+        // whenever the work in hand has been dealt with. The usual case is a
+        // build asked for with nothing open, where there is nothing to ask.
         await openDocumentAt(response.path);
       }
       return null;

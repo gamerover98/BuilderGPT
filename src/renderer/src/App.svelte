@@ -242,6 +242,30 @@ import StartScreen from "./lib/StartScreen.svelte";
   const activeBlock = $derived(settings.ui.hotbar[settings.ui.hotbarSlot] ?? "minecraft:stone");
   const placingBlock = $derived(activeBlock);
 
+  /**
+   * Who the block list is answering for.
+   *
+   * The same overlay serves three questions -- what am I holding, what does
+   * Fill write, what is Replace looking for -- because they are the same
+   * question about the same nine hundred blocks. Only the destination differs,
+   * and the header says which one is being asked.
+   */
+  let inventoryFor = $state<"hand" | "fill" | "replace">("hand");
+
+  /**
+   * The block Replace looks for.
+   *
+   * Lifted out of `SelectionTools` when the block list gained the ability to
+   * fill it in: a value with two writers cannot live inside one of them.
+   */
+  let replaceBlock = $state("");
+
+  /** Opens the block list for one of the three. */
+  function browseBlocks(purpose: "hand" | "fill" | "replace"): void {
+    inventoryFor = purpose;
+    inventoryOpen = true;
+  }
+
   /** Puts a block in the hand, which is to say into the active slot. */
   function holdBlock(block: string): void {
     void patchUi({
@@ -848,6 +872,8 @@ import StartScreen from "./lib/StartScreen.svelte";
       schematicDialog === null
     ) {
       event.preventDefault();
+      // `E` always asks about the hand; the tools' fields ask for themselves.
+      inventoryFor = "hand";
       inventoryOpen = !inventoryOpen;
       return;
     }
@@ -2185,10 +2211,16 @@ import StartScreen from "./lib/StartScreen.svelte";
   open={inventoryOpen}
   blocks={blockRegistry}
   version={project?.version ?? versionNameOf(docState?.dataVersion ?? null) ?? settings.version}
+  purpose={inventoryFor}
   onclose={() => (inventoryOpen = false)}
   onpick={(block) => {
-    // Always into the hand, which is always the active slot -- see `holdBlock`.
-    holdBlock(block);
+    /*
+     * Where the block goes depends on who asked. The list is the same list --
+     * a second block browser for the tools' two fields would be the same nine
+     * hundred tiles behind a different scrollbar, and would drift.
+     */
+    if (inventoryFor === "replace") replaceBlock = block;
+    else holdBlock(block);
   }}
 />
 
@@ -2601,6 +2633,9 @@ import StartScreen from "./lib/StartScreen.svelte";
           blocks={blockRegistry}
           block={activeBlock}
           onblockchange={holdBlock}
+          replaceFrom={replaceBlock}
+          onreplacefromchange={(next) => (replaceBlock = next)}
+          onbrowse={browseBlocks}
           palette={docState?.palette ?? []}
           {clipboard}
           onfill={fillSelection}
@@ -2679,8 +2714,8 @@ import StartScreen from "./lib/StartScreen.svelte";
       slots={settings.ui.hotbar}
       active={settings.ui.hotbarSlot}
       visible={docState !== null}
-      ownsWheel={cameraMode === "fly"}
-      onopeninventory={() => (inventoryOpen = true)}
+      ownsWheel={cameraMode === "fly" && !inventoryOpen}
+      onopeninventory={() => browseBlocks("hand")}
       onselect={(slot) => void patchUi({ hotbarSlot: slot })}
       onedit={(slot) => void patchUi({ hotbar: settings.ui.hotbar.map((id, at) => (at === slot ? activeBlock : id)) })}
     />

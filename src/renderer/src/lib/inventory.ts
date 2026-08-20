@@ -87,8 +87,22 @@ export function gridWindow(params: {
  * that has to change.
  */
 export function inventoryBlocks(all: readonly string[], query: string): string[] {
+  const offered = all.filter((block) => !isAir(block));
   const trimmed = query.trim();
-  return trimmed === "" ? [...all] : searchBlocks(all, trimmed);
+  return trimmed === "" ? offered : searchBlocks(offered, trimmed);
+}
+
+/**
+ * Air is not a block you can hold.
+ *
+ * It is in the registry because the *document* is full of it — every empty cell
+ * is air, and the writers and the agent both name it. But there is nothing to
+ * pick up and nothing to draw: its icon meshes to nothing, so it showed as a
+ * permanently blank tile that looked like a failure to load. Air is placed by
+ * removing a block, which is the only gesture that ever means it.
+ */
+export function isAir(block: string): boolean {
+  return block.split("[")[0].replace(/^minecraft:/, "") === "air";
 }
 
 /** `minecraft:oak_planks` → `oak planks`, which is what fits under a tile. */

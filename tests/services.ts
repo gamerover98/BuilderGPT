@@ -87,6 +87,7 @@ import {
   shiftRegion,
 } from "../src/main/domain/grow.js";
 import {
+  DEFAULT_HOTBAR,
   DEFAULT_SETTINGS,
   DEFAULT_UI_SETTINGS,
   SIDEBAR_WIDTH,
@@ -996,6 +997,22 @@ console.log("\n--- settings coercion ---");
     DEFAULT_UI_SETTINGS.sidebarWidth,
   );
   equal("a missing ui block is all defaults", coerceUi(undefined), DEFAULT_UI_SETTINGS);
+
+  /*
+   * A slot holding air draws nothing and places nothing, and a settings file
+   * written before that rule has one in slot nine -- the old default. Refused
+   * on read, so it heals rather than needing a migration.
+   */
+  equal(
+    "air is refused from a hotbar slot",
+    coerceUi({ hotbar: ["minecraft:air", ...DEFAULT_HOTBAR.slice(1)] }).hotbar[0],
+    DEFAULT_HOTBAR[0],
+  );
+  check(
+    "...and the default hotbar has none of its own",
+    DEFAULT_HOTBAR.every((block) => block !== "minecraft:air"),
+    DEFAULT_HOTBAR.join(", "),
+  );
 
   // A settings file copied from a 4K screen onto a laptop.
   equal(

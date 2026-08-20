@@ -37,6 +37,23 @@
      * which is exactly when this window exists.
      */
     palette: readonly PaletteCount[];
+    /**
+     * The block Replace looks for.
+     *
+     * A prop rather than local state because the block list can fill it in too,
+     * and a value with two writers cannot live inside one of them.
+     */
+    replaceFrom: string;
+    onreplacefromchange: (block: string) => void;
+    /**
+     * Open the full block list for one of these two fields.
+     *
+     * The typing picker stays: it is faster when you know the name. This is for
+     * when you do not, which is most of the time — and it is the same list `E`
+     * opens, because a second block browser would be the same nine hundred
+     * tiles behind a different scrollbar.
+     */
+    onbrowse: (purpose: "fill" | "replace") => void;
     clipboard: ClipboardInfo | null;
     onfill: (block: string) => void;
     onreplace: (from: string, to: string) => void;
@@ -55,6 +72,9 @@
     block,
     onblockchange,
     palette,
+    replaceFrom,
+    onreplacefromchange,
+    onbrowse,
     clipboard,
     onfill,
     onreplace,
@@ -74,7 +94,6 @@
     return entry.split("[")[0];
   }
 
-  let fromBlock = $state("");
 
   const volume = $derived(
     selection === null
@@ -136,13 +155,23 @@
 
   <div class="group">
     <label for="tool-to-block">{t("selection.block")}</label>
-    <BlockPicker
-      id="tool-to-block"
-      value={block}
-      placeholder="minecraft:stone"
-      {blocks}
-      onchange={onblockchange}
-    />
+    <div class="field">
+      <BlockPicker
+        id="tool-to-block"
+        value={block}
+        placeholder="minecraft:stone"
+        {blocks}
+        onchange={onblockchange}
+      />
+      <button
+        class="icon browse"
+        onclick={() => onbrowse("fill")}
+        title={t("selection.browse")}
+        aria-label={t("selection.browse")}
+      >
+        &#x229E;
+      </button>
+    </div>
     <button
       class="primary wide"
       onclick={() => onfill(block)}
@@ -155,17 +184,27 @@
 
   <div class="group">
     <label for="tool-from-block">{t("selection.replace")}</label>
-    <BlockPicker
-      id="tool-from-block"
-      value={fromBlock}
-      placeholder="minecraft:cobblestone"
-      {blocks}
-      onchange={(next) => (fromBlock = next)}
-    />
+    <div class="field">
+      <BlockPicker
+        id="tool-from-block"
+        value={replaceFrom}
+        placeholder="minecraft:cobblestone"
+        {blocks}
+        onchange={onreplacefromchange}
+      />
+      <button
+        class="icon browse"
+        onclick={() => onbrowse("replace")}
+        title={t("selection.browse")}
+        aria-label={t("selection.browse")}
+      >
+        &#x229E;
+      </button>
+    </div>
     <button
       class="wide"
-      onclick={() => onreplace(fromBlock, block)}
-      disabled={busy || none || fromBlock.trim() === "" || block.trim() === ""}
+      onclick={() => onreplace(replaceFrom, block)}
+      disabled={busy || none || replaceFrom.trim() === "" || block.trim() === ""}
       title={none ? t("selection.selectFirst") : t("selection.replaceHint")}
     >
       {t("selection.replaceButton")}
@@ -288,6 +327,23 @@
     min-width: 0;
     padding: 5px 6px;
     font-size: 12px;
+  }
+
+  /* The picker takes the room; the browse button is a fixed square beside it. */
+  .field {
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+  }
+
+  .field :global(> *:first-child) {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .browse {
+    flex: none;
+    width: 26px;
   }
 
   .wide {

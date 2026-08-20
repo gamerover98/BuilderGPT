@@ -872,6 +872,23 @@ console.log("\n--- creative inventory ---");
   check("an unmeasured grid answers something sane", Number.isFinite(unmeasured.totalRows) && unmeasured.totalRows > 0);
 
   equal("an empty query shows everything", inventoryBlocks(["a", "b"], "  "), ["a", "b"]);
+
+  /*
+   * Except air. It is a real id everywhere else -- every empty cell in the
+   * document is air, and the writers and the agent both name it -- but there is
+   * nothing to pick up and nothing to draw, so it showed as a permanently blank
+   * tile that read as a failure to load. Air is placed by breaking a block.
+   */
+  equal(
+    "air is not offered",
+    inventoryBlocks(["minecraft:air", "minecraft:stone"], ""),
+    ["minecraft:stone"],
+  );
+  equal(
+    "...not even when searched for by name",
+    inventoryBlocks(["minecraft:air", "minecraft:stone"], "air"),
+    [],
+  );
   check(
     "a query filters",
     inventoryBlocks(["minecraft:stone", "minecraft:oak_planks"], "oak").length === 1,

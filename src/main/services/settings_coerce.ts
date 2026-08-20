@@ -95,10 +95,19 @@ function hotbar(raw: unknown): string[] {
   const source = Array.isArray(raw) ? raw : [];
   return Array.from({ length: HOTBAR_SLOTS }, (_unused, index) => {
     const value = source[index];
-    return typeof value === "string" && value.trim() !== ""
-      ? value.trim()
-      : DEFAULT_HOTBAR[index];
+    const held = typeof value === "string" ? value.trim() : "";
+    /*
+     * Air is refused, not just blank entries. It is a legitimate block id
+     * everywhere else in the app -- the document is mostly made of it -- but a
+     * slot holding air is a slot that draws nothing and places nothing, and a
+     * settings file from before this rule has one in slot nine.
+     */
+    return held !== "" && !isAir(held) ? held : DEFAULT_HOTBAR[index];
   });
+}
+
+function isAir(block: string): boolean {
+  return block.split("[")[0].replace(/^minecraft:/, "") === "air";
 }
 
 function coordinate(raw: unknown, fallback: number): number {

@@ -127,10 +127,15 @@ export const en = {
   // The creative hotbar. Right-click a slot to put the picker's current
   // block in it, which is why the hint names both gestures.
   "inventory.title": "Blocks",
+  "inventory.for.hand": "Hold",
+  "inventory.for.fill": "Fill with",
+  "inventory.for.replace": "Replace",
   "inventory.search": "Search blocks",
   "inventory.count": "{count} blocks",
 
   "hotbar.label": "Hotbar",
+  "hotbar.browse": "All blocks (E)",
+  "hotbar.browseShort": "more",
   "hotbar.slotHint": "Press {key} to hold this, right-click to replace it",
 
   "selection.legend": "Selection",
@@ -158,6 +163,7 @@ export const en = {
   "selection.flipZ": "Flip Z",
   "selection.flipZHint": "Reflect the selection north to south",
   "selection.block": "Block",
+  "selection.browse": "Choose from all blocks",
   "selection.fill": "Fill",
   "selection.fillHint": "Fill the selection",
   "selection.selectFirst": "Select a region first",

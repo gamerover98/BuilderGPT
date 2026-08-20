@@ -230,7 +230,9 @@ export const DEFAULT_HOTBAR: readonly string[] = [
   "minecraft:sandstone",
   "minecraft:bricks",
   "minecraft:glowstone",
-  "minecraft:air",
+  // Not air: there is nothing to hold and nothing to draw. A block is removed
+  // by breaking it, which is the only gesture that ever means air.
+  "minecraft:torch",
 ];
 
 /**

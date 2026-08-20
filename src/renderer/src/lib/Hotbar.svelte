@@ -24,6 +24,7 @@
    * be the one that failed to persist.
    */
   import { HOTBAR_SLOTS } from "../../../shared/settings.js";
+  import { blockIcons, requestBlockIcons } from "./block_icons.svelte.js";
   import { t } from "./i18n.svelte.js";
   import { isTyping } from "./typing.js";
 
@@ -57,20 +58,20 @@
   }
 
   /**
-   * A stable colour per block, so slots are told apart at a glance.
+   * The blocks, drawn as blocks.
    *
-   * The same hashed-colour idea the mesher falls back to for a block it has no
-   * texture for. A real texture would be better and is what the inventory is
-   * for; this only has to make nine tiles distinguishable.
+   * These were hashed colour swatches — "a real texture would be better and is
+   * what the inventory is for" was the note, and it was wrong twice over: the
+   * bar is the thing you look at while building, and having two different
+   * pictures of gravel in one window is worse than having none. Same cache the
+   * inventory draws from, so they cannot disagree.
    */
-  function hue(id: string): number {
-    let hash = 2166136261;
-    for (let i = 0; i < id.length; i += 1) {
-      hash ^= id.charCodeAt(i);
-      hash = Math.imul(hash, 16777619);
-    }
-    return (hash >>> 0) % 360;
-  }
+  const icons = $derived(blockIcons());
+
+  $effect(() => {
+    if (!visible) return;
+    requestBlockIcons(slots);
+  });
 
   function step(by: number): void {
     onselect(((active + by) % HOTBAR_SLOTS + HOTBAR_SLOTS) % HOTBAR_SLOTS);
@@ -128,11 +129,30 @@
         title={`${id} — ${t("hotbar.slotHint", { key: String(index + 1) })}`}
         aria-pressed={index === active}
       >
-        <span class="swatch" style={`--swatch-hue: ${hue(id)}`} aria-hidden="true"></span>
+        {#if icons.get(id)}
+          <img src={icons.get(id)} alt="" width="26" height="26" />
+        {:else}
+          <span class="pending" aria-hidden="true"></span>
+        {/if}
         <span class="key" aria-hidden="true">{index + 1}</span>
         <span class="name">{label(id)}</span>
       </button>
     {/each}
+
+    <!--
+      Past the ninth slot, because that is where a tenth would be and there is
+      no tenth. `E` opens the same list; this is for the hand that is already
+      on the mouse.
+    -->
+    <button
+      class="slot browse"
+      onclick={() => onopeninventory?.()}
+      title={t("hotbar.browse")}
+      aria-label={t("hotbar.browse")}
+    >
+      <span class="glyph" aria-hidden="true">&#x229E;</span>
+      <span class="name">{t("hotbar.browseShort")}</span>
+    </button>
   </div>
 {/if}
 
@@ -172,11 +192,36 @@
     color: var(--text);
   }
 
-  .swatch {
+  img {
+    width: 26px;
+    height: 26px;
+    /* The atlas is 16px art; anything but nearest turns a face into mush. */
+    image-rendering: pixelated;
+  }
+
+  /* Held open at the icon's size, so a slot does not resize when one arrives. */
+  .pending {
     width: 26px;
     height: 26px;
     border-radius: 4px;
-    background: hsl(var(--swatch-hue) 45% 52%);
+    background: var(--bg-panel);
+  }
+
+  .browse {
+    width: 44px;
+    margin-left: 4px;
+    border-left: 1px solid var(--border);
+    border-radius: 0 6px 6px 0;
+  }
+
+  .glyph {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    font-size: 17px;
+    line-height: 1;
   }
 
   .key {

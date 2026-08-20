@@ -62,6 +62,14 @@ export interface ChunkedMeshResult {
    * only the chunks that moved.
    */
   pieces: MeshBuffers[];
+  /**
+   * The chunk key of each entry in `pieces`, in the same order.
+   *
+   * Carried so a payload can name what it is replacing. Without it the only
+   * thing a caller can do with a changed chunk is send every chunk, which is
+   * what an edit used to cost.
+   */
+  pieceKeys: number[];
   cache: ChunkMeshCache;
   /** How many chunks had to be re-meshed, and how many there are. */
   rebuilt: number;
@@ -250,12 +258,15 @@ export async function buildChunkedMesh(
   // the same bytes, however it was reached — which is what makes an
   // incremental build comparable to a rebuilt-from-scratch one.
   const ordered: MeshBuffers[] = [];
+  const orderedKeys: number[] = [];
   for (let cz = 0; cz < nz; cz += 1) {
     for (let cy = 0; cy < ny; cy += 1) {
       for (let cx = 0; cx < nx; cx += 1) {
-        const piece = chunks.get(chunkKey(cx, cy, cz, nx, ny));
+        const key = chunkKey(cx, cy, cz, nx, ny);
+        const piece = chunks.get(key);
         if (piece) {
           ordered.push(piece);
+          orderedKeys.push(key);
         }
       }
     }
@@ -264,6 +275,7 @@ export async function buildChunkedMesh(
   return {
     buffers: concatChunks(ordered),
     pieces: ordered,
+    pieceKeys: orderedKeys,
     cache: {
       width,
       height,

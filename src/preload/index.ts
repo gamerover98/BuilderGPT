@@ -92,8 +92,8 @@ const api: BgptApi = {
   deleteDocumentVersion: (id: string) =>
     ipcRenderer.invoke(IPC.docVersionDelete, id) as Promise<DocumentVersion[]>,
   getDocumentState: () => ipcRenderer.invoke(IPC.docState) as Promise<DocumentStateResponse>,
-  getDocumentMesh: (settings) =>
-    ipcRenderer.invoke(IPC.docMesh, settings) as Promise<DocumentMeshResponse>,
+  getDocumentMesh: (request) =>
+    ipcRenderer.invoke(IPC.docMesh, request) as Promise<DocumentMeshResponse>,
   applyEdit: (request: EditRequest) =>
     ipcRenderer.invoke(IPC.docApply, request) as Promise<EditResponse>,
   undo: () => ipcRenderer.invoke(IPC.docUndo) as Promise<EditResponse>,

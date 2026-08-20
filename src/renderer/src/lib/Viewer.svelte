@@ -17,7 +17,7 @@
    * with depthWrite off, same 1.6·maxDim framing, same R-to-reset.
    */
   import { onMount, untrack } from "svelte";
-  import type { MeshAtlas, MeshPayload } from "../../../shared/ipc.js";
+  import type { ChunkGeometry, MeshAtlas, MeshPayload } from "../../../shared/ipc.js";
   import type { ResolvedTheme } from "../../../shared/settings.js";
   import { t } from "./i18n.svelte.js";
   import {
@@ -1564,23 +1564,63 @@ import { isTyping } from "./typing.js";
     return next;
   }
 
+  /** Which chunk each mesh under `loaded` is, so a delta can find it. */
+  const chunkMeshes = new Map<number, THREE.Mesh>();
+
+  function chunkMesh(chunk: ChunkGeometry, material: THREE.Material): THREE.Mesh {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(chunk.positions, 3));
+    geometry.setAttribute("normal", new THREE.BufferAttribute(chunk.normals, 3));
+    geometry.setAttribute("uv", new THREE.BufferAttribute(chunk.uvs, 2));
+    geometry.setIndex(new THREE.BufferAttribute(chunk.indices, 1));
+    // Per chunk, so three.js can frustum-cull them individually — the reason
+    // for keeping the chunks apart rather than fusing them back together.
+    geometry.computeBoundingSphere();
+    geometry.computeBoundingBox();
+    return new THREE.Mesh(geometry, material);
+  }
+
   /** One mesh per chunk, under a group the rest of the viewer treats as before. */
   function buildModel(payload: MeshPayload, texture: THREE.Texture): THREE.Group {
     const group = new THREE.Group();
     const shared = ensureMaterial(texture);
+    chunkMeshes.clear();
     for (const chunk of payload.chunks) {
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute("position", new THREE.BufferAttribute(chunk.positions, 3));
-      geometry.setAttribute("normal", new THREE.BufferAttribute(chunk.normals, 3));
-      geometry.setAttribute("uv", new THREE.BufferAttribute(chunk.uvs, 2));
-      geometry.setIndex(new THREE.BufferAttribute(chunk.indices, 1));
-      // Per chunk, so three.js can frustum-cull them individually — the reason
-      // for keeping the chunks apart rather than fusing them back together.
-      geometry.computeBoundingSphere();
-      geometry.computeBoundingBox();
-      group.add(new THREE.Mesh(geometry, shared));
+      const mesh = chunkMesh(chunk, shared);
+      chunkMeshes.set(chunk.key, mesh);
+      group.add(mesh);
     }
     return group;
+  }
+
+  /**
+   * Replaces only the chunks that arrived, and takes down the ones that went.
+   *
+   * This is the other half of what stopped a placed block from costing tens of
+   * megabytes: main sends three chunks of a hundred and twenty-eight, and this
+   * rebuilds three `BufferGeometry` rather than all of them. Rebuilding the
+   * whole group from a partial payload would draw three chunks and nothing
+   * else, so `partial` is a fact the renderer has to honour, not a hint.
+   */
+  function applyDelta(group: THREE.Object3D, payload: MeshPayload, texture: THREE.Texture): void {
+    const shared = ensureMaterial(texture);
+    for (const key of payload.dropped) {
+      const gone = chunkMeshes.get(key);
+      if (!gone) continue;
+      group.remove(gone);
+      gone.geometry.dispose();
+      chunkMeshes.delete(key);
+    }
+    for (const chunk of payload.chunks) {
+      const existing = chunkMeshes.get(chunk.key);
+      if (existing) {
+        group.remove(existing);
+        existing.geometry.dispose();
+      }
+      const mesh = chunkMesh(chunk, shared);
+      chunkMeshes.set(chunk.key, mesh);
+      group.add(mesh);
+    }
   }
 
   $effect(() => {
@@ -1595,11 +1635,20 @@ import { isTyping } from "./typing.js";
      * structure stayed in the scene afterwards — still lit, still raycasting,
      * belonging to a document the app no longer had open.
      */
-    if (!payload || payload.chunks.length === 0) {
+    /*
+     * `partial` is checked first, and that is not defensive tidiness.
+     *
+     * A delta with nothing in it is the ordinary answer to "redraw, nothing
+     * moved" -- a refresh after an edit that changed no block, or after a
+     * setting the viewer applies itself. Read as a full payload it says the
+     * document is empty, and the whole structure comes down.
+     */
+    if (!payload || (!payload.partial && payload.chunks.length === 0)) {
       if (loaded) {
         scene.remove(loaded);
         disposeObject(loaded, { keepMaterials: true });
         loaded = null;
+        chunkMeshes.clear();
       }
       error = null;
       return;
@@ -1625,7 +1674,24 @@ import { isTyping } from "./typing.js";
         // Main only omits the atlas when the renderer is known to hold it.
         throw new Error(t("viewport.noAtlas"));
       }
-      const built = buildModel(payload, payload.atlas ? ensureTexture(payload.atlas) : texture!);
+      const map = payload.atlas ? ensureTexture(payload.atlas) : texture!;
+
+      /*
+       * An update to what is already up, rather than a replacement for it.
+       *
+       * Only when there *is* something up: a partial payload against an empty
+       * scene would draw the three chunks that changed and leave out the rest
+       * of the document. Main cannot produce that -- it only answers
+       * incrementally to a token it issued -- but the check costs nothing and
+       * the failure it prevents is a structure with holes in it.
+       */
+      if (payload.partial && previous !== null) {
+        applyDelta(previous, payload, map);
+        applyWireframe(previous, wireframe);
+        error = null;
+        return;
+      }
+      const built = buildModel(payload, map);
       if (previous) {
         target.remove(previous);
         disposeObject(previous, { keepMaterials: true });

@@ -50,6 +50,7 @@ import {
   type ClipboardResponse,
   type PasteRequest,
   type RegionSpec,
+  type DocumentMeshRequest,
   type SetNbtRequest,
   type StartupProgressEvent,
   type TransformRequest,
@@ -736,16 +737,23 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
 
   ipcMain.handle(
     IPC.docMesh,
-    async (_event, settings: PreviewSettings): Promise<DocumentMeshResponse> => {
+    async (_event, request: DocumentMeshRequest): Promise<DocumentMeshResponse> => {
       try {
+        const { settings } = request;
         const session = requireSession();
-        const mesh = await documentMesh(session, {
-          resourcePackPath: null,
-          fallbackResourcePackPath: await defaultResourcePackPath(),
-          biomeColor: settings.biomeColor,
-          showMarkers: settings.showMarkers,
-          waterColor: settings.waterColor,
-        });
+        const mesh = await documentMesh(
+          session,
+          {
+            resourcePackPath: null,
+            fallbackResourcePackPath: await defaultResourcePackPath(),
+            biomeColor: settings.biomeColor,
+            showMarkers: settings.showMarkers,
+            waterColor: settings.waterColor,
+          },
+          // What the window says it already has. Main decides what to send
+          // from it; it is never a request for anything in particular.
+          { mesh: request.haveMesh, atlas: request.haveAtlas },
+        );
         const sun = sunAnglesRadians(settings);
         return {
           ok: true,

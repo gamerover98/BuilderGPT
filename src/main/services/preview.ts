@@ -120,16 +120,23 @@ function boundsOf(pieces: readonly MeshBuffers[]): {
 /** Geometry and pixels, in the shape the renderer draws from. */
 function toMeshPayload(
   pieces: readonly MeshBuffers[],
+  keys: readonly number[],
   atlas: ReturnType<typeof buildAtlas>,
   version: number,
 ): MeshPayload {
   return {
-    chunks: pieces.map((piece) => ({
+    chunks: pieces.map((piece, index) => ({
+      key: keys[index] ?? 0,
       positions: piece.positions,
       normals: piece.normals,
       uvs: piece.uvs,
       indices: piece.indices,
     })),
+    // A whole payload says what exists by listing it; there is nothing left
+    // over to take down, and no token because nothing here is incremental.
+    dropped: [],
+    partial: false,
+    token: "",
     atlas: {
       width: atlas.image.width,
       height: atlas.image.height,
@@ -460,7 +467,7 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
   const bounds = boundsOf([mesh]);
 
   const result: CachedPreview = {
-    mesh: toMeshPayload([mesh], atlas, version),
+    mesh: toMeshPayload([mesh], [0], atlas, version),
     center: bounds.center,
     size: bounds.size,
     format: structure.format,
@@ -579,7 +586,7 @@ export async function buildDocumentPreview(
   }
   const bounds = boundsOf(chunked.pieces);
   return {
-    mesh: toMeshPayload(chunked.pieces, atlas, version),
+    mesh: toMeshPayload(chunked.pieces, chunked.pieceKeys, atlas, version),
     center: bounds.center,
     size: bounds.size,
     meshCache: chunked.cache,

@@ -91,6 +91,22 @@ export interface DocumentSession {
    * baker and atlas behind it are shared and live in `preview.ts`.
    */
   meshCache?: ChunkMeshCache;
+  /**
+   * What the renderer was last *sent*, so the next answer can be the
+   * difference.
+   *
+   * The token is the mesh key it was sent with; the map is chunk key to the
+   * `positions` array of the geometry it received. Identity is the whole test:
+   * `buildChunkedMesh` reuses the very same `MeshBuffers` object for a chunk it
+   * did not re-mesh, so a chunk whose positions array is the one already on the
+   * other side is a chunk that has not changed.
+   *
+   * Kept per session because it describes one document. There is exactly one
+   * window, which is what makes "what the renderer holds" a thing main can
+   * know at all -- and the token means a wrong guess costs a full payload
+   * rather than a wrong picture.
+   */
+  sent?: { token: string; chunks: Map<number, Float32Array> } | null;
 }
 
 let current: DocumentSession | null = null;
@@ -472,6 +488,7 @@ export function editBlockEntityValue(
 export async function documentMesh(
   session: DocumentSession,
   options: DocumentPreviewOptions,
+  held: { mesh: string | null; atlas: number | null } = { mesh: null, atlas: null },
 ): Promise<{ mesh: MeshPayload; center: [number, number, number]; size: [number, number, number]; cached: boolean }> {
   // The revision is not the whole key. The two biome tints are multiplied into
   // the texture atlas rather than applied by the viewer, so changing one has to
@@ -489,19 +506,85 @@ export async function documentMesh(
     options.showMarkers === false ? "hide" : "show",
   ].join("|");
 
-  if (session.mesh && session.mesh.key === key) {
-    const { payload, center, size } = session.mesh;
-    return { mesh: payload, center, size, cached: true };
+  const cached = session.mesh !== null && session.mesh.key === key;
+  if (!cached) {
+    const built = await buildDocumentPreview(session.doc, options, session.meshCache);
+    session.meshCache = built.meshCache;
+    session.mesh = {
+      key,
+      payload: built.mesh,
+      center: built.center,
+      size: built.size,
+    };
   }
-  const built = await buildDocumentPreview(session.doc, options, session.meshCache);
-  session.meshCache = built.meshCache;
-  session.mesh = {
-    key,
-    payload: built.mesh,
-    center: built.center,
-    size: built.size,
+  const { payload, center, size } = session.mesh!;
+  return { mesh: shipMesh(session, key, payload, held), center, size, cached };
+}
+
+/**
+ * The smallest honest answer to "what changed since the thing you already
+ * have".
+ *
+ * Main re-meshes only the chunks an edit touched -- three of a hundred and
+ * twenty-eight, for one placed block -- and then shipped all of them anyway,
+ * with the atlas: 17.5 MB of geometry plus 20.8 MB of pixels, structured-cloned
+ * across the boundary and rebuilt into fresh `BufferGeometry` on arrival, per
+ * block. That is what the stutter was, and none of it was the meshing.
+ *
+ * The test for "changed" is object identity on the positions array, which is
+ * exact rather than approximate: `buildChunkedMesh` carries the very same
+ * `MeshBuffers` forward for a chunk it did not re-mesh, so a different array
+ * means a different chunk and the same array means the same one. No hashing,
+ * no bookkeeping at the call sites, nothing to forget.
+ *
+ * A token the renderer does not recognise -- or does not send -- costs a full
+ * payload, which is the right failure: everything is a correct answer to
+ * everything, and only the size varies.
+ */
+function shipMesh(
+  session: DocumentSession,
+  token: string,
+  payload: MeshPayload,
+  held: { mesh: string | null; atlas: number | null },
+): MeshPayload {
+  const sent = session.sent ?? null;
+  /*
+   * `sent.chunks.size > 0` keeps the renderer's side simple.
+   *
+   * An empty document sends no chunks, so the viewport takes its model down --
+   * and a delta against nothing would then arrive at a scene with nothing to
+   * update. Answering the first payload after an empty one in full means the
+   * renderer never has to reason about that case at all.
+   */
+  const incremental =
+    sent !== null && sent.chunks.size > 0 && held.mesh !== null && held.mesh === sent.token;
+
+  const chunks = incremental
+    ? payload.chunks.filter((chunk) => sent!.chunks.get(chunk.key) !== chunk.positions)
+    : payload.chunks;
+
+  let dropped: number[] = [];
+  if (incremental) {
+    const present = new Set(payload.chunks.map((chunk) => chunk.key));
+    dropped = [...sent!.chunks.keys()].filter((chunkKey) => !present.has(chunkKey));
+  }
+
+  session.sent = {
+    token,
+    chunks: new Map(payload.chunks.map((chunk) => [chunk.key, chunk.positions])),
   };
-  return { mesh: built.mesh, center: built.center, size: built.size, cached: false };
+
+  return {
+    chunks,
+    dropped,
+    partial: incremental,
+    token,
+    // The atlas is the larger half and changes far less often than the
+    // geometry: it grows only when a block type nothing has drawn before
+    // appears, which after the startup warm-up is never.
+    atlas: held.atlas === payload.atlasVersion ? null : payload.atlas,
+    atlasVersion: payload.atlasVersion,
+  };
 }
 
 

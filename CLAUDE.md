@@ -409,6 +409,35 @@ by the main process — that is the whole reason this is an Electron app rather
 than a web app. If a feature seems to need network access in the renderer, it
 belongs in main.
 
+**A mesh answer is the difference, not the document.** The chunked mesher
+re-meshes only the chunks an edit touched — three of a hundred and twenty-eight,
+for one placed block — and main then shipped all of them anyway, with the atlas:
+on a 128×32×128 that is **17.5 MB of geometry plus 20.8 MB of pixels**,
+structured-cloned across the boundary and rebuilt into fresh `BufferGeometry` on
+arrival, *per block placed*. That was the stutter, and none of it was the
+meshing.
+
+So `MeshPayload` carries `partial`, `dropped` and a `token`, and the request
+carries what the window already holds. Four things about it are load-bearing:
+
+- **"Changed" is object identity on the positions array.** `buildChunkedMesh`
+  carries the very same `MeshBuffers` forward for a chunk it did not re-mesh, so
+  a different array *is* a different chunk. No hashing, and nothing to remember
+  at the call sites — which matters, because there are several ways to edit and
+  a notification missed at any one of them would ship a stale chunk.
+- **The token is main's own cache key and is opaque to the renderer**, which may
+  only hand it back. An unrecognised token is not an error, it is a full
+  payload: every answer is a correct answer to every question, and only the size
+  varies.
+- **A delta with no chunks in it is the ordinary answer to "nothing moved".**
+  Read as a full payload it says the document is empty, so `Viewer.svelte` must
+  check `partial` *before* it checks for emptiness or the whole structure comes
+  down on a redraw.
+- **Main answers in full whenever the last thing it sent was nothing.** An empty
+  document takes the viewport's model down, and a delta would then arrive at a
+  scene with nothing to update; refusing to be incremental there means the
+  renderer never has to reason about that case.
+
 **The viewport receives geometry, not a container format.** `docMesh` hands over
 per-chunk `Float32Array`/`Uint32Array` attributes plus the atlas as raw RGBA
 pixels; `Viewer.svelte` builds `BufferGeometry` and a `DataTexture` directly.

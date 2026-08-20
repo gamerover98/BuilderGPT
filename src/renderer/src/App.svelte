@@ -1645,13 +1645,30 @@ import VersionList from "./lib/VersionList.svelte";
    * half: main serves it from cache whenever `revision` has not moved, so
    * calling this after every edit costs nothing when nothing changed.
    */
+  /**
+   * What the viewport is currently drawing, so main can answer with the
+   * difference.
+   *
+   * Both are "I hold this", never "send me this". Cleared whenever the mesh is
+   * taken down, because after that the window holds nothing and a token
+   * claiming otherwise would be answered with a delta against geometry that is
+   * no longer on screen.
+   */
+  let meshToken = $state<string | null>(null);
+  let heldAtlas = $state<number | null>(null);
+
   async function refreshDocument(): Promise<void> {
     if (docState === null) {
       mesh = null;
       bounds = null;
+      meshToken = null;
       return;
     }
-    const response = await api().getDocumentMesh(forIpc(settings.preview));
+    const response = await api().getDocumentMesh({
+      settings: forIpc(settings.preview),
+      haveMesh: meshToken,
+      haveAtlas: heldAtlas,
+    });
     if (!response.ok) {
       /*
        * Cleared either way. Leaving the last mesh up meant deleting every block
@@ -1670,10 +1687,13 @@ import VersionList from "./lib/VersionList.svelte";
       if (docState.blockCount > 0) {
         status = { tone: "warn", text: response.message };
       }
+      meshToken = null;
       return;
     }
     mesh = response.mesh;
     bounds = { center: response.center, size: response.size };
+    meshToken = response.mesh.token;
+    heldAtlas = response.mesh.atlasVersion;
   }
 
   /**
@@ -1757,6 +1777,9 @@ import VersionList from "./lib/VersionList.svelte";
       await api().closeDocument();
       docState = null;
       mesh = null;
+      // Nothing on screen holds nothing: a token left behind here would ask
+      // main for the difference from geometry that has been taken down.
+      meshToken = null;
       documentVersions = [];
       chat = [];
       liveTrace = [];

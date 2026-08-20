@@ -429,6 +429,14 @@ export interface PreviewRequest {
  * arrives as a plain object, not about typed arrays in general.
  */
 export interface ChunkGeometry {
+  /**
+   * Which chunk of the document this is.
+   *
+   * The identity that makes a partial update possible: the renderer keeps one
+   * mesh per key and replaces only the ones that arrive. Zero for geometry that
+   * is not part of a chunked document -- a block icon is one block.
+   */
+  key: number;
   positions: Float32Array;
   normals: Float32Array;
   uvs: Float32Array;
@@ -457,11 +465,51 @@ export interface MeshAtlas {
 }
 
 export interface MeshPayload {
-  /** One entry per non-empty chunk; the renderer draws one mesh from each. */
+  /**
+   * Chunks the renderer should draw. Every non-empty one when `partial` is
+   * false; only the ones that moved when it is true.
+   */
   chunks: ChunkGeometry[];
+  /**
+   * Chunks that became empty and should be taken down. Only meaningful
+   * alongside `partial` -- a full payload says what exists by listing it.
+   */
+  dropped: number[];
+  /**
+   * Whether `chunks` updates what the renderer holds or replaces it.
+   *
+   * This is what stopped a placed block from costing tens of megabytes. Main
+   * re-meshes only the chunks a change touched -- three of a hundred and
+   * twenty-eight, for one block -- and then used to ship all of them anyway:
+   * 17.5 MB of geometry plus a 20.8 MB atlas, structured-cloned across the
+   * boundary and rebuilt into fresh `BufferGeometry` on the other side, for
+   * every single block placed. That was the stutter.
+   */
+  partial: boolean;
+  /**
+   * What the renderer now holds, to be handed back on the next request.
+   *
+   * Opaque: it is main's own cache key, and the only thing the renderer may do
+   * with it is give it back. A mismatch is not an error, it is a full payload.
+   */
+  token: string;
   /** Omitted when `atlasVersion` matches what the renderer already holds. */
   atlas: MeshAtlas | null;
   atlasVersion: number;
+}
+
+/**
+ * What the renderer already has, so main can answer with the difference.
+ *
+ * Both fields are "I hold this", never "send me this": main decides what to
+ * send, and an unrecognised token or version simply means everything.
+ */
+export interface DocumentMeshRequest {
+  settings: PreviewSettings;
+  /** The `token` from the last payload this window applied, if any. */
+  haveMesh: string | null;
+  /** The atlas version it is drawing with, if any. */
+  haveAtlas: number | null;
 }
 
 export interface PreviewSuccess {
@@ -1061,7 +1109,7 @@ export interface BgptApi {
   newDocument(req: NewDocumentRequest): Promise<DocumentStateResponse>;
   closeDocument(): Promise<void>;
   getDocumentState(): Promise<DocumentStateResponse>;
-  getDocumentMesh(settings: PreviewSettings): Promise<DocumentMeshResponse>;
+  getDocumentMesh(request: DocumentMeshRequest): Promise<DocumentMeshResponse>;
   applyEdit(request: EditRequest): Promise<EditResponse>;
   undo(): Promise<EditResponse>;
   redo(): Promise<EditResponse>;

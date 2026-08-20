@@ -334,6 +334,71 @@ try {
     );
   }
 
+  /*
+   * --- what an edit actually ships ------------------------------------------
+   *
+   * The chunked mesher re-meshes only the chunks an edit touched, and main
+   * then shipped all of them anyway, with the atlas: on a 128x32x128 that was
+   * 17.5 MB of geometry and 20.8 MB of pixels, structured-cloned across the
+   * boundary and rebuilt into fresh BufferGeometry on arrival, for every single
+   * block placed. That was the stutter, and none of it was the meshing.
+   *
+   * Nothing about the picture changes if this regresses, which is why the size
+   * of the answer is asserted rather than its contents.
+   */
+  console.log("\n--- what an edit ships ---");
+  {
+    const session = requireSession();
+    const previewOptions = {
+      resourcePackPath: null,
+      fallbackResourcePackPath: null,
+      biomeColor: "#91bd59",
+      waterColor: "#3f76e4",
+    };
+
+    // A window that has nothing gets everything, including the pixels.
+    const full = await documentMesh(session, previewOptions, { mesh: null, atlas: null });
+    check("a window holding nothing is sent every chunk", !full.mesh.partial);
+    check("...and the atlas with it", full.mesh.atlas !== null);
+    check("...and a token to hand back", full.mesh.token !== "");
+    const chunkCount = full.mesh.chunks.length;
+    check("the fixture has geometry to ship", chunkCount > 0);
+
+    // Same document, same token: there is nothing to say.
+    const again = await documentMesh(session, previewOptions, {
+      mesh: full.mesh.token,
+      atlas: full.mesh.atlasVersion,
+    });
+    check("asking again with the same token ships no geometry", again.mesh.chunks.length === 0);
+    check("...and is marked as a delta, not as an empty document", again.mesh.partial);
+    check("...and no atlas, because the window already has it", again.mesh.atlas === null);
+
+    // One block, in one chunk.
+    applyEdit(session, { kind: "setBlock", x: 1, y: 1, z: 1, block: stone });
+    const delta = await documentMesh(session, previewOptions, {
+      mesh: again.mesh.token,
+      atlas: again.mesh.atlasVersion,
+    });
+    check("an edit ships something", delta.mesh.chunks.length > 0);
+    check(
+      "...but not the whole document, when only one chunk moved",
+      delta.mesh.chunks.length < chunkCount || chunkCount === 1,
+      `${delta.mesh.chunks.length} of ${chunkCount}`,
+    );
+    check("...still without the atlas", delta.mesh.atlas === null);
+
+    // A token from before that edit is not one main can subtract from.
+    const stale = await documentMesh(session, previewOptions, {
+      mesh: "not-a-token-main-issued",
+      atlas: null,
+    });
+    check("an unrecognised token is answered in full", !stale.mesh.partial);
+    equal("...meaning every chunk", stale.mesh.chunks.length, chunkCount);
+    check("...and the atlas again", stale.mesh.atlas !== null);
+
+    undoEdit(session);
+  }
+
   // --- inspecting -----------------------------------------------------------
   console.log("\n--- inspecting ---");
   {

@@ -28,6 +28,8 @@ src/
               preview, schematic, output, settings-store, …
     pipeline/ schem -> GLB (loader, loader_formats, model_baker, mesher, atlas, …)
     core.ts   sandboxed execution of LLM-generated build scripts
+    menu.ts   the application menu + window title (Electron half)
+    menu_model.ts  what the menu contains, as data — testable, no Electron
   preload/    contextBridge — the only renderer↔main surface
   renderer/   Svelte 5 UI + the Three.js viewer
 resources/    shipped as extraResources: the default pack, legacy_blocks.json,
@@ -316,6 +318,33 @@ tables for 1.13+. Editing it by hand is fine right up until someone regenerates
 it. It is also the list spliced into the prompt, so the set the model is told
 about cannot drift from the set it is judged against.
 
+**There are two ways into a document and neither is a panel.** The File menu and
+the start screen — the card the empty viewport shows. That is the answer to a
+whole class of "X is missing" reports that turned out to be "X is in the sidebar
+tab you never open": recents, New, Open and Save had all been wired end to end
+for weeks, behind `sidebarTab = $state("chat")` and a name that did not say what
+the tab held. `sidebarTab` is persisted now, and the tab is called **Generate**,
+because once the file verbs left it holds one thing — the generator and the
+files it produced — instead of three.
+
+The start screen is a sibling of the viewer, not part of it: `Viewer.svelte`
+receives geometry and has no business knowing what a recent document is. Only
+its card takes the pointer — a full-bleed overlay would swallow `dragover` on
+the one screen where dropping a file is the obvious move.
+
+**"Nothing open" stays a real state.** It is tempting to create an untitled
+document at launch so the build grid always has a target, and it would silently
+delete a feature: a message typed with nothing open goes to the **generator**,
+which is how a schematic gets built from a sentence. The start screen names that
+path, because it is otherwise discoverable only by accident.
+
+**The application bar carries the document, and the window title carries both.**
+Filename, size, block count, container, version and the dirty marker were all
+visible only inside the sidebar's second tab — so the app could tell you there
+was unsaved work, but only while you were looking away from what you were
+building. The title is main's (`windowTitle` in `menu_model.ts`), with the dirty
+marker leading, because a taskbar button truncates from the right.
+
 **A Svelte prop may not be called `state`.** A local binding of that name makes
 every `$state(...)` in the same component parse as a store subscription to it
 (`store_rune_conflict`), and the fields silently stop being reactive.
@@ -374,6 +403,62 @@ leave it drifting.
 **One IPC channel per verb, all declared in `src/shared/ipc.ts`.** No generic
 dispatcher. Everything crossing must be structured-clone-safe — binary payloads
 are `Uint8Array`, never `Buffer`.
+
+The application menu is where that rule costs the most and earns it: eight
+channels, `menuNew` through `menuRedo`, rather than one `menuCommand` carrying a
+string. The string version is the dispatcher the rule refuses, *and* it would
+blind the channel walk in `tests/services.ts` on the eight channels most likely
+to be declared and never wired. For the same reason `menu.ts` writes
+`send(IPC.menuNew)` out once per verb instead of looking the channel up in a
+table — the walk matches the **call**, so `{ new: IPC.menuNew }` reads as a
+mention and proves nothing. That walk now reads every `.ts` under `src/main`,
+not `handlers.ts` alone: pinned to one file it called all eight menu channels
+unserved, which is a correct menu reported as broken, and that is how a tripwire
+gets deleted rather than fixed.
+
+**The menu is main's because the accelerators are.** An accelerator declared in
+a `Menu` is claimed before the window sees the keystroke, so a menu item and a
+`keydown` branch cannot both own Ctrl+S — one of them silently stops working.
+Where the menu takes a key, `App.svelte` has given it up.
+
+The exception is **Undo and Redo, which have menu entries and deliberately no
+accelerator.** A menu item cannot ask where the caret is, so Ctrl+Z there would
+stop undoing what you are typing in the chat and start undoing block edits —
+from a field where nothing on screen suggests it. They stay on the keyboard
+handler, behind `isTyping`, alongside the buttons in the document bar.
+`tests/services.ts` asserts the absence, because it looks like an omission.
+
+**Enablement is decided from main's own state**, not reported back by the
+renderer: `currentSession() !== null` plus the recents list main already owns.
+`busy` is deliberately not modelled — it is a renderer convention, and every
+action behind these items refuses on its own. `refreshShell` rebuilds the menu
+only when its *shape* moved (a signature over `hasDocument` and the recent
+paths) and always retitles, because it is called from every handler that answers
+with a `DocumentState` — which is many times a second during a drag, and
+rebuilding a native menu at that rate flickers the bar.
+
+**Anything that can throw away unsaved work asks first**, and the box lives in
+main. `newDocument` reassigns the open session without looking at what was
+there and opening a file does the same, so the check has to be *in front of* the
+call — by the time `session.ts` has the request, the user has already been shown
+a dialog about the new document. The wording is in `services/discard_prompt.ts`,
+Electron-free so the suites can reach it, and shared with
+`mainWindow.on("close")`, where there is no renderer left to ask with. The
+destructive button never becomes a bare "OK": "Discard changes?" answered
+OK/Cancel is a coin flip, and half the flips lose work.
+
+**`saveDocument` falls through to Save As on its own.** That check used to be
+written out at the call sites, and the third caller did not have it — so New,
+one edit, Save produced a red banner reading "choose where to put it": advice,
+where the app could have asked. A rule enforced by discipline at three call
+sites is a rule that is wrong at one of them.
+
+**An empty document is not a failure.** `buildDocumentPreview` raises
+`EmptyPreviewError` rather than returning an empty mesh, which is right for
+previewing a *generated* file and wrong for the editor — a new schematic has
+nothing in it by definition. `refreshDocument` therefore only surfaces that
+message when `blockCount > 0`, and clears the mesh on **any** failed refresh:
+without that, deleting every block left its ghost on screen, still selectable.
 
 **Objects built from `$state` must go through `forIpc()` before an IPC call.**
 `$state` on an object is a deep `Proxy`, and structured clone cannot serialize a

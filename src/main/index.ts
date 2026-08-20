@@ -11,10 +11,13 @@
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, dialog, shell } from "electron";
 
 import { registerIpcHandlers } from "./ipc/handlers.js";
 import { installMenu } from "./menu.js";
+import { isDirty } from "./domain/history.js";
+import { currentSession } from "./services/session.js";
+import { discardPrompt } from "./services/discard_prompt.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -48,6 +51,49 @@ function createWindow(): void {
 
   mainWindow.once("ready-to-show", () => mainWindow?.show());
 
+  /*
+   * The window's own close button asks about unsaved work.
+   *
+   * Entirely in main, with no channel, because main already knows both halves:
+   * whether a document is open and whether it differs from disk. There is also
+   * nowhere else it could live — by the time the renderer could be asked, the
+   * decision to close has already been taken.
+   *
+   * `close` is not async, so the only way to ask is to refuse the first one and
+   * close again once answered. `closing` is what stops that second `close()`
+   * from asking the same question forever.
+   */
+  let closing = false;
+  mainWindow.on("close", (event) => {
+    if (closing) return;
+    const session = currentSession();
+    if (session === null || !isDirty(session.history)) return;
+
+    event.preventDefault();
+    const target = mainWindow;
+    if (!target) return;
+
+    const prompt = discardPrompt(
+      "close",
+      session.doc.filePath === null ? null : path.basename(session.doc.filePath),
+    );
+    void dialog
+      .showMessageBox(target, {
+        type: "warning",
+        buttons: [prompt.confirmLabel, prompt.cancelLabel],
+        // Escape and the box's own close button both land on "keep my work".
+        defaultId: 1,
+        cancelId: 1,
+        message: prompt.message,
+        detail: prompt.detail,
+      })
+      .then((answer) => {
+        if (answer.response !== 0) return;
+        closing = true;
+        target.close();
+      });
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -73,7 +119,7 @@ app.whenReady().then(() => {
   /*
    * After the window, because the menu titles it as well as builds itself, and
    * before anything can be opened. It rebuilds from main's own state on every
-   * document change -- see `refreshMenu`.
+   * document change -- see `refreshShell`.
    */
   installMenu(() => mainWindow);
 

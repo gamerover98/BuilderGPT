@@ -14,7 +14,7 @@
  * differently-ordered schematic, the already-trusted reader disagrees.
  */
 
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { createServer } from "http";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
@@ -47,7 +47,7 @@ import {
   storeFileName,
   titleFor,
 } from "../src/main/services/conversation_store.js";
-import type { ChatEntry } from "../src/shared/ipc.js";
+import type { ChatEntry, RecentDocument } from "../src/shared/ipc.js";
 import { callLlm, LlmError, resolveBaseUrl } from "../src/main/services/llm.js";
 import { describeFor, sanitizeName } from "../src/main/services/naming.js";
 import {
@@ -73,6 +73,13 @@ import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/services/versions.js";
 import { coerceSettings, coerceUi } from "../src/main/services/settings_coerce.js";
 import { discardPrompt } from "../src/main/services/discard_prompt.js";
+import {
+  escapeMenuLabel,
+  menuModel,
+  recentLabels,
+  windowTitle,
+  type MenuItemModel,
+} from "../src/main/menu_model.js";
 import {
   extentVolume,
   growthToInclude,
@@ -754,6 +761,104 @@ console.log("\n--- discard prompt ---");
   }
 }
 
+// --- the application menu --------------------------------------------------
+//
+// The menu itself is Electron's; what is worth pinning is everything the model
+// decides before Electron sees it. Enablement is the load-bearing half: main
+// builds this from its own state, so a wrong answer here is a Save that
+// silently does nothing rather than a Save that is greyed out.
+console.log("\n--- application menu ---");
+{
+  const at = (items: MenuItemModel[], label: string): MenuItemModel | undefined =>
+    items.find((item) => item.label === label);
+  const fileMenu = (state: Parameters<typeof menuModel>[0]): MenuItemModel[] =>
+    at(menuModel(state), "File")?.submenu ?? [];
+  const editMenu = (state: Parameters<typeof menuModel>[0]): MenuItemModel[] =>
+    at(menuModel(state), "Edit")?.submenu ?? [];
+
+  const empty = { hasDocument: false, recents: [] as RecentDocument[] };
+  const open = { hasDocument: true, recents: [] as RecentDocument[] };
+
+  // New and Open never depend on a document -- they are how you get one.
+  equal("New works with nothing open", at(fileMenu(empty), "New…")?.enabled, true);
+  equal("Open works with nothing open", at(fileMenu(empty), "Open…")?.enabled, true);
+
+  for (const label of ["Save", "Save As…", "Close Schematic"]) {
+    equal(`${label} is off with nothing open`, at(fileMenu(empty), label)?.enabled, false);
+    equal(`${label} is on with a document`, at(fileMenu(open), label)?.enabled, true);
+  }
+  equal("Undo is off with nothing open", at(editMenu(empty), "Undo")?.enabled, false);
+  equal("Redo is on with a document", at(editMenu(open), "Redo")?.enabled, true);
+
+  /*
+   * No accelerator on Undo/Redo, and this is the check that keeps it that way.
+   *
+   * Electron claims an accelerator before the window sees the keystroke, and a
+   * menu item cannot ask where the caret is -- so Ctrl+Z here would stop
+   * undoing what you are typing in the chat and start undoing block edits.
+   */
+  for (const item of editMenu(open)) {
+    equal(`${item.label ?? "?"} has no accelerator`, item.accelerator, undefined);
+  }
+  equal("Save keeps its accelerator", at(fileMenu(open), "Save")?.accelerator, "CmdOrCtrl+S");
+
+  // The recents submenu.
+  const recent = (paths: string[]): RecentDocument[] =>
+    paths.map((filePath, index) => ({ filePath, openedAt: 1000 - index }));
+
+  const withNone = at(fileMenu(empty), "Open Recent");
+  equal("with no history the submenu is off", withNone?.enabled, false);
+  equal("...and empty", withNone?.submenu?.length, 0);
+
+  const some = at(
+    fileMenu({ hasDocument: false, recents: recent(["C:/a/one.schem", "C:/b/two.schem"]) }),
+    "Open Recent",
+  );
+  equal("history switches it on", some?.enabled, true);
+  equal("one row per file", some?.submenu?.length, 2);
+  equal("rows are named by the file", some?.submenu?.[0].label, "one.schem");
+  equal("...and carry the path", some?.submenu?.[0].filePath, "C:/a/one.schem");
+
+  /*
+   * Two builds called `house.schem` in two folders is the ordinary case -- a
+   * build and its backup -- and a menu offering the same word twice is a coin
+   * flip. Only the names that actually repeat pay for the folder.
+   */
+  const clashing = recentLabels(recent(["C:/mine/house.schem", "D:/old/house.schem", "C:/mine/hut.schem"]));
+  equal("a repeated name gets its folder", clashing[0], "house.schem — mine");
+  equal("...both of them", clashing[1], "house.schem — old");
+  equal("a unique name stays short", clashing[2], "hut.schem");
+
+  // `&` is a mnemonic marker in a native menu, so `A&B.schem` would render as
+  // "AB" with the B underlined -- and pressing B would open it.
+  equal("an ampersand in a file name is escaped", escapeMenuLabel("A&B.schem"), "A&&B.schem");
+  equal(
+    "...on the way into the menu, not only in principle",
+    at(fileMenu({ hasDocument: false, recents: recent(["C:/a/A&B.schem"]) }), "Open Recent")
+      ?.submenu?.[0].label,
+    "A&&B.schem",
+  );
+
+  // The title bar. Name first, app second: both the taskbar and Alt-Tab
+  // truncate from the right, and which schematic this is survives.
+  equal("nothing open is just the app", windowTitle({ hasDocument: false, fileName: null, dirty: false }), "Schematic AI Studio");
+  equal(
+    "a saved document leads with its name",
+    windowTitle({ hasDocument: true, fileName: "castle.schem", dirty: false }),
+    "castle.schem — Schematic AI Studio",
+  );
+  equal(
+    "unsaved work is marked, and the marker leads",
+    windowTitle({ hasDocument: true, fileName: "castle.schem", dirty: true }),
+    "• castle.schem — Schematic AI Studio",
+  );
+  equal(
+    "a document with no file is Untitled here too",
+    windowTitle({ hasDocument: true, fileName: null, dirty: true }),
+    "• Untitled — Schematic AI Studio",
+  );
+}
+
 // --- growing the document to reach a region outside it ---------------------
 console.log("\n--- growth ---");
 {
@@ -1243,10 +1348,27 @@ console.log("\n--- what a trace costs on disk ---");
 // `handlers.ts` imports Electron and cannot be loaded here.
 console.log("\n--- ipc channels ---");
 {
-  const handlers = readFileSync(
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "main", "ipc", "handlers.ts"),
-    "utf8",
-  );
+  /*
+   * Every `.ts` under `src/main`, not only `handlers.ts`.
+   *
+   * It read that one file, which was right while it was the only place a
+   * channel was ever served from. The menu broke that: its eight channels are
+   * sent from `menu.ts`, and a check pinned to one file would have called all
+   * eight unserved — reporting a correct menu as broken, which is the failure
+   * mode that gets a tripwire deleted instead of fixed. The rule was always
+   * "main serves it", never "this file serves it".
+   */
+  const mainDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "main");
+  const sources: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".ts")) sources.push(readFileSync(full, "utf8"));
+    }
+  };
+  walk(mainDir);
+  const handlers = sources.join("\n");
 
   // Two ways a channel is legitimately served: answered as a request, or sent
   // as an event. A mention in a comment or a name in a type does not count,
@@ -1254,8 +1376,11 @@ console.log("\n--- ipc channels ---");
   // The whitespace is loose because a handler with a long signature is split
   // across lines by the formatter, and a check that only recognised the
   // one-line form would report perfectly good channels as unserved.
+  // `\bsend(` rather than `.send(`, and `[,)]` rather than `,`: an event with
+  // no payload is `send(IPC.menuNew)` through a local helper, and the older
+  // pattern would have missed every one of them.
   const served = (name: string): boolean =>
-    new RegExp(`(?:ipcMain\\.handle|\\.send)\\(\\s*IPC\\.${name}\\s*,`).test(handlers);
+    new RegExp(`(?:ipcMain\\.handle|\\bsend)\\(\\s*IPC\\.${name}\\s*[,)]`).test(handlers);
 
   const unserved = Object.keys(IPC).filter((name) => !served(name));
   equal("every channel in IPC is handled or sent by main", unserved.join(", "), "");

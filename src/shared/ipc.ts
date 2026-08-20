@@ -108,6 +108,27 @@ export const IPC = {
    * rule here. Both reach the user as the same Stop button.
    */
   generateCancel: "bgpt:generate:cancel",
+  /*
+   * main → renderer, one per menu verb.
+   *
+   * Eight channels rather than one `menuCommand` carrying a string, because a
+   * string would be exactly the generic dispatcher rule R-2 refuses — and
+   * because the channel walk in `tests/services.ts` only catches a menu item
+   * that was declared and never wired if each verb has a name of its own.
+   *
+   * The menu is main's because the accelerators are: an accelerator declared in
+   * a `Menu` is claimed before the window sees the keystroke.
+   */
+  menuNew: "bgpt:menu:new",
+  menuOpen: "bgpt:menu:open",
+  /** Carries the path; the menu already knows which entry was clicked. */
+  menuOpenRecent: "bgpt:menu:openRecent",
+  menuSave: "bgpt:menu:save",
+  menuSaveAs: "bgpt:menu:saveAs",
+  menuClose: "bgpt:menu:close",
+  menuUndo: "bgpt:menu:undo",
+  menuRedo: "bgpt:menu:redo",
+
   /** main → renderer: one tool call the agent just made. */
   agentStep: "bgpt:agent:step",
   /** main → renderer: what the turn in flight is doing, as it does it. */
@@ -1058,4 +1079,20 @@ export interface BgptApi {
    * conversations hold.
    */
   onAgentTrace(listener: (event: TraceEvent) => void): () => void;
+
+  /**
+   * The application menu, one subscription per verb.
+   *
+   * They carry no payload because the menu carries no information the renderer
+   * does not already have — except `onMenuOpenRecent`, where the whole point is
+   * *which* entry was clicked.
+   */
+  onMenuNew(listener: () => void): () => void;
+  onMenuOpen(listener: () => void): () => void;
+  onMenuOpenRecent(listener: (filePath: string) => void): () => void;
+  onMenuSave(listener: () => void): () => void;
+  onMenuSaveAs(listener: () => void): () => void;
+  onMenuClose(listener: () => void): () => void;
+  onMenuUndo(listener: () => void): () => void;
+  onMenuRedo(listener: () => void): () => void;
 }

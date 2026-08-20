@@ -14,6 +14,7 @@ import { fileURLToPath } from "url";
 import { app, BrowserWindow, shell } from "electron";
 
 import { registerIpcHandlers } from "./ipc/handlers.js";
+import { installMenu } from "./menu.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -69,6 +70,12 @@ function createWindow(): void {
 app.whenReady().then(() => {
   registerIpcHandlers(() => mainWindow);
   createWindow();
+  /*
+   * After the window, because the menu titles it as well as builds itself, and
+   * before anything can be opened. It rebuilds from main's own state on every
+   * document change -- see `refreshMenu`.
+   */
+  installMenu(() => mainWindow);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

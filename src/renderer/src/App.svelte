@@ -594,11 +594,48 @@
       if (event.requestId !== inFlight?.id) return;
       liveTrace = applyTraceEvent(liveTrace, event);
     });
+    /*
+     * The application menu, one subscription per verb.
+     *
+     * The menu is main's because the accelerators are: a key claimed by a
+     * `Menu` never reaches this window, so Ctrl+N, Ctrl+O, Ctrl+S,
+     * Ctrl+Shift+S and Ctrl+W are no longer handled in `onWindowKey` — they
+     * arrive here instead. Undo and redo deliberately have no accelerator in
+     * the menu and stay on the keyboard handler, where they can ask whether
+     * the caret is in a text field.
+     *
+     * Every one of these lands on the same function the buttons call, so the
+     * confirmations and the Save-As fallthrough come along for free.
+     */
+    const unsubscribeMenu = [
+      api().onMenuNew(() => void startNewDocument()),
+      api().onMenuOpen(() => void openDocument()),
+      api().onMenuOpenRecent((filePath) => void openDocumentAt(filePath)),
+      api().onMenuSave(() => {
+        if (docState !== null && !busy) void saveDocument();
+      }),
+      api().onMenuSaveAs(() => {
+        if (docState !== null && !busy) saveDocumentAs();
+      }),
+      api().onMenuClose(() => void closeDocument()),
+      api().onMenuUndo(() => {
+        if (docState?.canUndo === true && !busy) {
+          void runDocument(t("task.undoing"), () => api().undo());
+        }
+      }),
+      api().onMenuRedo(() => {
+        if (docState?.canRedo === true && !busy) {
+          void runDocument(t("task.redoing"), () => api().redo());
+        }
+      }),
+    ];
+
     return () => {
       window.removeEventListener("keydown", onWindowKey);
       dark.removeEventListener("change", onSystemTheme);
       unsubscribe();
       unsubscribeTrace();
+      for (const off of unsubscribeMenu) off();
     };
   });
 
@@ -678,12 +715,14 @@
     } else if ((key === "y" || (key === "z" && event.shiftKey)) && !editingText) {
       event.preventDefault();
       void runDocument(t("task.redoing"), () => api().redo());
-    } else if (key === "s") {
-      event.preventDefault();
-      // `saveDocument` falls through to Save As on its own when there is
-      // nowhere to save to yet -- see the note there.
-      void saveDocument();
     }
+    /*
+     * No Ctrl+S here any more, and none of the other file keys either.
+     *
+     * The File menu declares them as accelerators, and an accelerator is
+     * claimed by Electron before this window sees the keystroke — so a branch
+     * here would simply never run, and anyone reading it would believe it did.
+     */
   }
 
   let paletteOpen = $state(false);
@@ -795,6 +834,15 @@
       keywords: t("command.saveAs.keywords"),
       enabled: !busy && docState !== null,
       run: () => void saveDocumentAs(),
+    },
+    {
+      id: "close",
+      title: t("command.close"),
+      group: t("group.file"),
+      keywords: t("command.close.keywords"),
+      shortcut: "Ctrl+W",
+      enabled: !busy && docState !== null,
+      run: () => void closeDocument(),
     },
     {
       id: "undo",
@@ -1277,6 +1325,39 @@
   async function startNewDocument(): Promise<void> {
     if (!(await mayDiscard("new"))) return;
     schematicDialog = "new";
+  }
+
+  /**
+   * Puts the document away and goes back to the start screen.
+   *
+   * `closeDocument` has been on the bridge since it was written and had no
+   * caller at all: there was no way to stop editing a schematic short of
+   * quitting. Everything derived from the document is cleared here rather than
+   * left to fall out of `docState = null`, because a stale selection or
+   * inspection would be re-applied to whatever is opened next.
+   */
+  async function closeDocument(): Promise<void> {
+    if (!(await mayDiscard("close"))) return;
+    busy = true;
+    try {
+      await api().closeDocument();
+      docState = null;
+      mesh = null;
+      chat = [];
+      liveTrace = [];
+      selection = null;
+      anchor = null;
+      inspection = null;
+      inspectedAt = null;
+      project = null;
+      inventoryOpen = false;
+      recentDocuments = await api().listRecentDocuments();
+      status = null;
+    } catch (err) {
+      failed(err, t("task.closing"));
+    } finally {
+      busy = false;
+    }
   }
 
   async function openDocument(): Promise<void> {

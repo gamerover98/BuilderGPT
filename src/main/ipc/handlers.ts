@@ -17,6 +17,7 @@ import {
   type AgentResponse,
   type Artifact,
   type DocumentMeshResponse,
+  type DocumentState,
   type DocumentStateResponse,
   type EditRequest,
   type EditResponse,
@@ -60,6 +61,7 @@ import {
   type Settings,
 } from "../../shared/settings.js";
 import {
+  type DocumentSession,
   adoptDocument,
   applyEdit,
   closeDocument,
@@ -150,6 +152,7 @@ import {
   setSettings,
 } from "../services/settings-store.js";
 import { discardPrompt } from "../services/discard_prompt.js";
+import { refreshShell, rememberInOsRecents } from "../menu.js";
 import { VERSION_NAMES } from "../services/versions.js";
 
 /** File-picking kinds only; `directory` takes the folder branch instead. */
@@ -199,6 +202,23 @@ function emitProgress(window: BrowserWindow | null, event: ProgressEvent): void 
   if (window && !window.isDestroyed()) {
     window.webContents.send(IPC.progress, event);
   }
+}
+
+/**
+ * `documentState`, and the window chrome derived from the same facts.
+ *
+ * Every handler that answers with a `DocumentState` has, by construction, just
+ * changed one — so this is the single place the title bar and the File menu are
+ * brought back in step, rather than fourteen separate reminders to remember to.
+ * `refreshShell` rebuilds the menu only when its shape actually moved; the
+ * title is cheap and always set, which is what makes the dirty marker live.
+ *
+ * Not awaited: nothing downstream depends on the chrome having repainted, and
+ * making every edit wait on a menu rebuild would be the wrong trade.
+ */
+function shellState(session: DocumentSession): DocumentState {
+  void refreshShell();
+  return documentState(session);
 }
 
 export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
@@ -563,6 +583,9 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       // Only once it really opened. Recording the attempt would fill the list
       // with paths that fail every time they are clicked.
       await rememberRecentDocument(filePath);
+      // The OS keeps its own list, and it is the only part of "what was I
+      // working on" that survives the app not being open.
+      rememberInOsRecents(filePath);
       /*
        * Not an unconditional reset. A chat that built this file with nothing
        * open is *about* it, and this is the moment it gets opened -- clearing
@@ -571,7 +594,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
        */
       await adoptSubject(filePath);
       forgetCheckpointMemo();
-      return { ok: true, state: documentState(session), project: await projectNotes(filePath) };
+      return { ok: true, state: shellState(session), project: await projectNotes(filePath) };
     } catch (err) {
       // Moved, deleted, or no longer readable: take it off the list rather than
       // leave an entry whose only behaviour is to produce this same error.
@@ -596,7 +619,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         if (refusal !== null) {
           return { ok: false, kind: "invalid-input", message: refusal };
         }
-        const state = documentState(
+        const state = shellState(
           newDocument(
             { width: req.width, height: req.height, length: req.length },
             req.format,
@@ -617,6 +640,9 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     await saveConversation();
     resetConversation(null);
     closeDocument();
+    // The only handler that changes whether a document exists and answers with
+    // nothing, so it is the only one `shellState` cannot cover.
+    await refreshShell();
   });
 
   ipcMain.handle(IPC.docState, async (): Promise<DocumentStateResponse> => {
@@ -653,7 +679,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     try {
       const session = requireSession();
       const changed = applyEdit(session, request);
-      return { ok: true, changed, state: documentState(session) };
+      return { ok: true, changed, state: shellState(session) };
     } catch (err) {
       return failure(err);
     }
@@ -670,7 +696,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         request.path,
         request.value,
       );
-      return { ok: true, changed, state: documentState(session) };
+      return { ok: true, changed, state: shellState(session) };
     } catch (err) {
       return failure(err);
     }
@@ -680,7 +706,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     try {
       const session = requireSession();
       const changed = transformRegion(session, request.region, request.transform);
-      return { ok: true, changed, state: documentState(session) };
+      return { ok: true, changed, state: shellState(session) };
     } catch (err) {
       return failure(err);
     }
@@ -696,7 +722,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   ipcMain.handle(IPC.docCopy, async (_event, region: RegionSpec): Promise<ClipboardResponse> => {
     try {
       const session = requireSession();
-      return { ok: true, clipboard: clipboardInfo(copySelection(session, region)), state: documentState(session) };
+      return { ok: true, clipboard: clipboardInfo(copySelection(session, region)), state: shellState(session) };
     } catch (err) {
       return failure(err);
     }
@@ -705,7 +731,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   ipcMain.handle(IPC.docCut, async (_event, region: RegionSpec): Promise<ClipboardResponse> => {
     try {
       const session = requireSession();
-      return { ok: true, clipboard: clipboardInfo(cutSelection(session, region)), state: documentState(session) };
+      return { ok: true, clipboard: clipboardInfo(cutSelection(session, region)), state: shellState(session) };
     } catch (err) {
       return failure(err);
     }
@@ -715,7 +741,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     try {
       const session = requireSession();
       const changed = pasteSelection(session, request, { includeAir: request.includeAir });
-      return { ok: true, changed, state: documentState(session) };
+      return { ok: true, changed, state: shellState(session) };
     } catch (err) {
       return failure(err);
     }
@@ -725,7 +751,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     try {
       const session = requireSession();
       undoEdit(session);
-      return { ok: true, changed: 0, state: documentState(session) };
+      return { ok: true, changed: 0, state: shellState(session) };
     } catch (err) {
       return failure(err);
     }
@@ -735,7 +761,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     try {
       const session = requireSession();
       redoEdit(session);
-      return { ok: true, changed: 0, state: documentState(session) };
+      return { ok: true, changed: 0, state: shellState(session) };
     } catch (err) {
       return failure(err);
     }
@@ -794,7 +820,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         format: result.format,
         degraded: [...result.degraded],
         cropped: result.cropped,
-        state: documentState(session),
+        state: shellState(session),
       };
     } catch (err) {
       return failure(err);
@@ -830,7 +856,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           return { ok: false, kind: "io-error", message: "The recovered file could not be read." };
         }
         adoptDocument(session.doc, session.history);
-        return { ok: true, state: documentState(requireSession()) };
+        return { ok: true, state: shellState(requireSession()) };
       } catch (err) {
         return failure(err);
       }
@@ -981,7 +1007,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           text: result.text,
           changed: result.changed,
           steps: [...result.steps],
-          state: documentState(session),
+          state: shellState(session),
           remembered: result.remembered,
           summary,
           undoLabel: result.undoLabel,
@@ -1097,7 +1123,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       );
       await saveConversation();
 
-      return { ok: true, state: documentState(requireSession()), chat, undoneEdits };
+      return { ok: true, state: shellState(requireSession()), chat, undoneEdits };
     },
   );
 

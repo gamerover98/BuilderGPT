@@ -345,6 +345,8 @@ export const en = {
   "command.save": "Save",
   "command.saveAs": "Save as…",
   "command.saveAs.keywords": "export format sponge mcedit",
+  "command.close": "Close schematic",
+  "command.close.keywords": "shut done finish put away",
   "command.undo": "Undo",
   "command.redo": "Redo",
   "command.selectAll": "Select the whole schematic",
@@ -404,6 +406,7 @@ export const en = {
   "task.generating": "Generating the structure",
   "task.recovering": "Recovering unsaved work",
   "task.confirming": "Asking about unsaved changes",
+  "task.closing": "Closing the schematic",
 
   "status.failed": "{doing}: {message}",
   "status.notOnDisk": "{name} does not come from a file on disk.",

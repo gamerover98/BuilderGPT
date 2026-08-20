@@ -155,6 +155,40 @@ const api: BgptApi = {
     ipcRenderer.on(IPC.agentTrace, wrapped);
     return () => ipcRenderer.removeListener(IPC.agentTrace, wrapped);
   },
+
+  /*
+   * The menu, one subscription per verb.
+   *
+   * Written out rather than generated from a table so each name is greppable
+   * from both sides -- the same reason `shared/ipc.ts` lists the channels
+   * literally instead of composing them.
+   */
+  onMenuNew: (listener) => subscribe(IPC.menuNew, listener),
+  onMenuOpen: (listener) => subscribe(IPC.menuOpen, listener),
+  onMenuOpenRecent(listener) {
+    const wrapped = (_event: unknown, filePath: string) => listener(filePath);
+    ipcRenderer.on(IPC.menuOpenRecent, wrapped);
+    return () => ipcRenderer.removeListener(IPC.menuOpenRecent, wrapped);
+  },
+  onMenuSave: (listener) => subscribe(IPC.menuSave, listener),
+  onMenuSaveAs: (listener) => subscribe(IPC.menuSaveAs, listener),
+  onMenuClose: (listener) => subscribe(IPC.menuClose, listener),
+  onMenuUndo: (listener) => subscribe(IPC.menuUndo, listener),
+  onMenuRedo: (listener) => subscribe(IPC.menuRedo, listener),
 };
+
+/**
+ * A payload-free `ipcRenderer.on`, returning its own unsubscribe.
+ *
+ * The wrapper is not optional: the raw `IpcRendererEvent` carries `sender`, a
+ * live handle back into the main process, and handing it to a renderer
+ * listener would put it one property access away from the thing
+ * `contextIsolation` exists to prevent.
+ */
+function subscribe(channel: string, listener: () => void): () => void {
+  const wrapped = () => listener();
+  ipcRenderer.on(channel, wrapped);
+  return () => ipcRenderer.removeListener(channel, wrapped);
+}
 
 contextBridge.exposeInMainWorld("bgpt", api);

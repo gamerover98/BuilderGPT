@@ -25,6 +25,13 @@ import { ModelBaker, type BakedBlock } from "../src/main/pipeline/model_baker.js
 import { buildMesh, culledFaces } from "../src/main/pipeline/mesher.js";
 import { buildAtlas } from "../src/main/pipeline/atlas.js";
 import type { BakedFace, PaletteEntry, StructureData } from "../src/main/pipeline/types.js";
+import {
+  blockEmission,
+  computeLight,
+  cornerOcclusion,
+  MAX_LIGHT,
+  OCCLUSION_LEVELS,
+} from "../src/main/pipeline/lighting.js";
 
 let failures = 0;
 
@@ -895,6 +902,143 @@ console.log("\n--- the state a placed block starts in ---");
     "axis turns the log",
     uvsOf(upright) !== uvsOf(lying),
     "the baker ignores axis, so a lying log draws as a standing one",
+  );
+}
+
+// --- light, and how far it gets -----------------------------------------------
+//
+// Two grids and a flood fill, all of it the game's own arithmetic. It is in
+// main because propagation is a walk over the voxel grid and the renderer has
+// no voxels -- it receives geometry.
+console.log("\n--- lighting ---");
+{
+  const size = { x: 9, y: 5, z: 9 };
+  const palette: PaletteEntry[] = [
+    { namespacedName: "minecraft:air", properties: {} },
+    { namespacedName: "minecraft:stone", properties: {} },
+    { namespacedName: "minecraft:torch", properties: {} },
+    { namespacedName: "minecraft:glass", properties: {} },
+  ];
+  const voxels = new Int32Array(size.x * size.y * size.z);
+  const at = (x: number, y: number, z: number): number => x * size.y * size.z + y * size.z + z;
+  const structure = (): StructureData => ({
+    palette,
+    voxels,
+    bounds: { minX: 0, minY: 0, minZ: 0, maxX: size.x - 1, maxY: size.y - 1, maxZ: size.z - 1 },
+  });
+
+  // An open box of air: everything sees the sky, nothing glows.
+  {
+    const light = computeLight(structure());
+    equal("open air is fully sky-lit", light.sky[at(4, 0, 4)], MAX_LIGHT);
+    equal("...and unlit by blocks", light.block[at(4, 0, 4)], 0);
+  }
+
+  // A roof at the top. Underneath it the sky stops -- but only underneath: the
+  // sky spreads sideways in from the open edges, one level per step.
+  {
+    voxels.fill(0);
+    for (let x = 2; x <= 6; x += 1) {
+      for (let z = 2; z <= 6; z += 1) voxels[at(x, size.y - 1, z)] = 1;
+    }
+    const light = computeLight(structure());
+    check(
+      "under the middle of a roof the sky is dimmed",
+      light.sky[at(4, size.y - 2, 4)] < MAX_LIGHT,
+      String(light.sky[at(4, size.y - 2, 4)]),
+    );
+    equal("beside the roof it is undimmed", light.sky[at(0, size.y - 2, 0)], MAX_LIGHT);
+  }
+
+  /*
+   * A torch, and the level it loses per step -- one per *step*, which is
+   * Manhattan distance and not a radius. The corner of this grid is twenty
+   * steps from the corner the torch is in, which is what makes "and then it
+   * runs out" a thing the fixture can actually show.
+   */
+  {
+    voxels.fill(0);
+    voxels[at(0, 0, 0)] = 2;
+    const light = computeLight(structure());
+    equal("a torch is as bright as a torch", light.block[at(0, 0, 0)], 14);
+    equal("...one block away it is one dimmer", light.block[at(1, 0, 0)], 13);
+    equal("...and three steps away, three", light.block[at(1, 1, 1)], 11);
+    equal("...and past fourteen steps, nothing", light.block[at(8, 4, 8)], 0);
+  }
+
+  /*
+   * Glass is not a wall, and a single stone block is not one either -- light
+   * goes round it. So the wall has to be a wall: a whole plane, or the check
+   * passes against a version of this that does not block light at all.
+   *
+   * What is asked is `occludesNeighbours`, which is the same question the
+   * mesher asks about culling. A shape that does not cover a face does not
+   * stop light through it either, and that is one rule rather than two.
+   */
+  {
+    const wall = (kind: number): void => {
+      voxels.fill(0);
+      voxels[at(0, 2, 4)] = 2;
+      for (let y = 0; y < size.y; y += 1) {
+        for (let z = 0; z < size.z; z += 1) voxels[at(4, y, z)] = kind;
+      }
+    };
+
+    wall(3);
+    const throughGlass = computeLight(structure());
+    check(
+      "light passes through a wall of glass",
+      throughGlass.block[at(5, 2, 4)] > 0,
+      String(throughGlass.block[at(5, 2, 4)]),
+    );
+
+    wall(1);
+    const walled = computeLight(structure());
+    equal("...and stops at a wall of stone", walled.block[at(5, 2, 4)], 0);
+  }
+
+  // A furnace that is not burning is not a light. `placementState` writes
+  // `lit=false` on a placed one, so reading the name alone would light a
+  // village by its cold furnaces.
+  equal(
+    "an unlit furnace emits nothing",
+    blockEmission({ namespacedName: "minecraft:furnace", properties: { lit: "false" } }),
+    0,
+  );
+  equal(
+    "...and a burning one does",
+    blockEmission({ namespacedName: "minecraft:furnace", properties: { lit: "true" } }),
+    13,
+  );
+  equal(
+    "a block nobody listed emits nothing",
+    blockEmission({ namespacedName: "minecraft:stone", properties: {} }),
+    0,
+  );
+}
+
+// --- how buried a corner is ---------------------------------------------------
+console.log("\n--- ambient occlusion ---");
+{
+  equal("an open corner is open", cornerOcclusion(false, false, false), 3);
+  equal("one neighbour takes a step", cornerOcclusion(true, false, false), 2);
+  equal("the diagonal alone takes one too", cornerOcclusion(false, false, true), 2);
+  equal("two sides and a diagonal is nearly buried", cornerOcclusion(true, false, true), 1);
+  /*
+   * Two solid sides enclose the corner whatever the diagonal does, and that
+   * special case is the whole reason this is a named function rather than a
+   * subtraction: without it a corner between two walls reads one step lighter
+   * than a corner between two walls and a diagonal, which is not what an eye
+   * expects of a corner it cannot see into.
+   */
+  equal("two sides bury it however the diagonal falls", cornerOcclusion(true, true, false), 0);
+  equal("...including with it", cornerOcclusion(true, true, true), 0);
+
+  check("every step has a brightness", OCCLUSION_LEVELS.length === 4);
+  check("...and the open one is full", OCCLUSION_LEVELS[3] === 1);
+  check(
+    "...getting darker as it closes",
+    OCCLUSION_LEVELS.every((level, i) => i === 0 || level > OCCLUSION_LEVELS[i - 1]),
   );
 }
 

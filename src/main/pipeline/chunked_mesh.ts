@@ -34,6 +34,8 @@
  */
 
 import type { MeshBuffers, StructureData } from "./types.js";
+import type { LightGrid } from "./lighting.js";
+import type { Shading } from "./mesher.js";
 import { buildMesh, culledFaces } from "./mesher.js";
 import type { ModelBaker } from "./model_baker.js";
 import type { UVRect } from "./types.js";
@@ -48,6 +50,16 @@ export interface ChunkMeshCache {
   atlasVersion: number;
   /** The grid as it was when the cached chunks were built. */
   voxels: Int32Array;
+  /**
+   * The light as it was, for the same reason: a torch changes what a chunk
+   * looks like fifteen blocks away without changing a single voxel there.
+   *
+   * Diffed exactly like the voxels are, which keeps the rule the same one --
+   * dirtiness is *observed*, not announced. A caller that had to remember to
+   * say "and light spread this far" would forget, and the chunk that stayed
+   * dark would be a bug nobody could reproduce.
+   */
+  light: Uint8Array;
   /** Chunk key -> that chunk's geometry. */
   chunks: Map<number, MeshBuffers>;
 }
@@ -95,6 +107,7 @@ function emptyBuffers(): MeshBuffers {
     normals: new Float32Array(0),
     uvs: new Float32Array(0),
     indices: new Uint32Array(0),
+    light: new Float32Array(0),
   };
 }
 
@@ -121,6 +134,7 @@ function concatChunks(pieces: readonly MeshBuffers[]): MeshBuffers {
   const positions = new Float32Array(positionCount);
   const normals = new Float32Array(positionCount);
   const uvs = new Float32Array(uvCount);
+  const light = new Float32Array(positionCount);
   const indices = new Uint32Array(indexCount);
 
   let positionAt = 0;
@@ -130,6 +144,7 @@ function concatChunks(pieces: readonly MeshBuffers[]): MeshBuffers {
   for (const piece of pieces) {
     positions.set(piece.positions, positionAt);
     normals.set(piece.normals, positionAt);
+    light.set(piece.light, positionAt);
     uvs.set(piece.uvs, uvAt);
     for (let i = 0; i < piece.indices.length; i += 1) {
       indices[indexAt + i] = piece.indices[i] + vertexBase;
@@ -139,7 +154,7 @@ function concatChunks(pieces: readonly MeshBuffers[]): MeshBuffers {
     indexAt += piece.indices.length;
     vertexBase += piece.positions.length / 3;
   }
-  return { positions, normals, uvs, indices };
+  return { positions, normals, uvs, indices, light };
 }
 
 /** The chunks a changed voxel invalidates: its own, and its face-neighbours'. */
@@ -178,8 +193,25 @@ export function createChunkMeshCache(): ChunkMeshCache {
     length: -1,
     atlasVersion: -1,
     voxels: new Int32Array(0),
+    light: new Uint8Array(0),
     chunks: new Map(),
   };
+}
+
+/**
+ * The two light grids packed into one byte per cell, for diffing.
+ *
+ * Sky in the high nibble and block in the low one. A single array to compare
+ * rather than two, and the comparison is the whole reason it exists -- the
+ * values themselves are read from the `LightGrid` where they are separate.
+ */
+function packLight(lighting: LightGrid | null, cells: number): Uint8Array {
+  const packed = new Uint8Array(cells);
+  if (lighting === null) return packed;
+  for (let i = 0; i < cells; i += 1) {
+    packed[i] = (lighting.sky[i] << 4) | lighting.block[i];
+  }
+  return packed;
 }
 
 /**
@@ -195,18 +227,21 @@ export async function buildChunkedMesh(
   atlasUv: Record<string, UVRect>,
   atlasVersion: number,
   cache: ChunkMeshCache,
+  shading: Shading | null = null,
 ): Promise<ChunkedMeshResult> {
   const width = struct.bounds.maxX - struct.bounds.minX + 1;
   const height = struct.bounds.maxY - struct.bounds.minY + 1;
   const length = struct.bounds.maxZ - struct.bounds.minZ + 1;
   const [nx, ny, nz] = chunkCounts(width, height, length);
 
+  const light = packLight(shading?.light ?? null, struct.voxels.length);
   const reusable =
     cache.width === width &&
     cache.height === height &&
     cache.length === length &&
     cache.atlasVersion === atlasVersion &&
-    cache.voxels.length === struct.voxels.length;
+    cache.voxels.length === struct.voxels.length &&
+    cache.light.length === light.length;
 
   const dirty = new Set<number>();
   if (!reusable) {
@@ -220,8 +255,9 @@ export async function buildChunkedMesh(
   } else {
     const previous = cache.voxels;
     const current = struct.voxels;
+    const wasLit = cache.light;
     for (let i = 0; i < current.length; i += 1) {
-      if (current[i] !== previous[i]) {
+      if (current[i] !== previous[i] || light[i] !== wasLit[i]) {
         // The flat layout is x-major: i = x*height*length + y*length + z.
         const x = Math.floor(i / (height * length));
         const rest = i - x * height * length;
@@ -236,14 +272,19 @@ export async function buildChunkedMesh(
     const cx = key % nx;
     const cy = Math.floor(key / nx) % ny;
     const cz = Math.floor(key / (nx * ny));
-    const faces = await culledFaces(struct, baker, {
-      minX: cx * CHUNK_SIZE,
-      minY: cy * CHUNK_SIZE,
-      minZ: cz * CHUNK_SIZE,
-      maxX: cx * CHUNK_SIZE + CHUNK_SIZE - 1,
-      maxY: cy * CHUNK_SIZE + CHUNK_SIZE - 1,
-      maxZ: cz * CHUNK_SIZE + CHUNK_SIZE - 1,
-    });
+    const faces = await culledFaces(
+      struct,
+      baker,
+      {
+        minX: cx * CHUNK_SIZE,
+        minY: cy * CHUNK_SIZE,
+        minZ: cz * CHUNK_SIZE,
+        maxX: cx * CHUNK_SIZE + CHUNK_SIZE - 1,
+        maxY: cy * CHUNK_SIZE + CHUNK_SIZE - 1,
+        maxZ: cz * CHUNK_SIZE + CHUNK_SIZE - 1,
+      },
+      shading,
+    );
     const buffers = buildMesh(faces, atlasUv);
     if (buffers.indices.length === 0) {
       // An all-air chunk holds nothing; dropping it keeps the concatenation
@@ -284,6 +325,7 @@ export async function buildChunkedMesh(
       // A copy, not the document's own array: the document keeps mutating it,
       // and a shared reference would compare equal to itself and see no change.
       voxels: Int32Array.from(struct.voxels),
+      light,
       chunks,
     },
     rebuilt: dirty.size,

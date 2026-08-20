@@ -73,7 +73,53 @@ export interface PreviewSettings {
   maxDrawDistance: number;
   showGrid: boolean;
   wireframe: boolean;
+  /**
+   * Ambient occlusion, and it means the real thing now.
+   *
+   * It used to nudge the intensity of two lights, which is not occlusion by
+   * any reading -- occlusion at a corner depends on the blocks around it, and
+   * the viewer has no blocks. So this reaches the *mesher*: it bakes a
+   * darkening factor into every vertex, and turning it off re-meshes.
+   */
   ambientOcclusion: boolean;
+  /**
+   * Whether blocks that glow light the scene.
+   *
+   * Also the mesher's: light is a flood fill over the voxel grid, so it is
+   * baked into the vertices with the occlusion. Off is a flat, evenly lit
+   * structure, which is what the viewport did before there was any such thing.
+   */
+  blockLight: boolean;
+  /**
+   * The sky: a gradient, a square sun and moon, and stars.
+   *
+   * The viewer's own, and free to change: nothing about it touches geometry.
+   * Off leaves the flat background the window painted before.
+   */
+  sky: boolean;
+  /**
+   * Where in the day it is, in Minecraft's own ticks: 0 is sunrise, 6000 noon,
+   * 12000 sunset, 18000 midnight, 24000 back to sunrise.
+   *
+   * The unit is the game's rather than an angle or a clock time because it is
+   * the one everybody building a schematic already thinks in -- `/time set
+   * 18000` is a thing people type.
+   */
+  timeOfDay: number;
+  /** Whether the time advances on its own. */
+  daylightCycle: boolean;
+  /** How many game minutes pass per real second while it does. */
+  daylightSpeed: number;
+  /**
+   * Whether the sun and moon cast shadows.
+   *
+   * The most expensive thing in the viewport by a distance -- a whole extra
+   * pass over the geometry from the light's point of view, every frame the
+   * light moves. Off by default for that reason.
+   */
+  shadows: boolean;
+  /** Shadow map resolution, in pixels along one side. */
+  shadowQuality: number;
   /**
    * `#rrggbb` multiplied into the greyscale textures Minecraft tints per
    * biome. Unlike every other field here this one is consumed by the *mesher*,
@@ -110,6 +156,15 @@ export const DEFAULT_PREVIEW_SETTINGS: PreviewSettings = {
   showGrid: true,
   wireframe: false,
   ambientOcclusion: true,
+  blockLight: true,
+  sky: true,
+  // Mid-morning: the sun is up and off to one side, so a build has a lit face
+  // and a shaded one. Noon is flatter and reads worse.
+  timeOfDay: 2000,
+  daylightCycle: false,
+  daylightSpeed: 60,
+  shadows: false,
+  shadowQuality: 2048,
   biomeColor: DEFAULT_BIOME_COLOR,
   waterColor: DEFAULT_WATER_COLOR,
   flySpeed: 12,
@@ -124,7 +179,12 @@ export const PREVIEW_SETTING_RANGES = {
   renderScale: { min: 0.5, max: 2, step: 0.1 },
   maxDrawDistance: { min: 64, max: 2048, step: 8 },
   flySpeed: { min: 2, max: 60, step: 1 },
+  timeOfDay: { min: 0, max: 24000, step: 100 },
+  daylightSpeed: { min: 5, max: 600, step: 5 },
 } as const;
+
+/** Shadow map sizes offered, in pixels along one side. */
+export const SHADOW_QUALITIES = [1024, 2048, 4096] as const;
 
 /**
  * The three values a theme setting can take.

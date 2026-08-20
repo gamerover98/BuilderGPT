@@ -445,6 +445,14 @@ export interface ChunkGeometry {
   normals: Float32Array;
   uvs: Float32Array;
   indices: Uint32Array;
+  /**
+   * Three floats per vertex: block light, sky light, occlusion, each 0..1.
+   *
+   * Three channels and not one brightness, because only the sky half moves
+   * with the time of day. Folded together in main, the sun would re-mesh the
+   * document every frame it moved and a torch would go out at dusk.
+   */
+  light: Float32Array;
 }
 
 /**

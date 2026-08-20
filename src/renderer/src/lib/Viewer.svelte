@@ -37,6 +37,7 @@ import {
   type Side,
 } from "./selection_drag.js";
   import { isSpuriousLook } from "./look_filter.js";
+  import { skyAt } from "./sky.js";
   import type { Face, PlacementLook } from "../../../shared/block_orientation.js";
 import { isTyping } from "./typing.js";
   import * as THREE from "three";
@@ -133,7 +134,18 @@ import { isTyping } from "./typing.js";
     maxDrawDistance: number;
     showGrid: boolean;
     wireframe: boolean;
-    ambientOcclusion: boolean;
+    /**
+     * Whether the sky is drawn, and where in the day it is.
+     *
+     * Nothing here touches geometry: the sky is a dome, the sun and moon are
+     * two squares on it, and the time moves the light. What the *mesher* bakes
+     * is the two light channels and the corner shading, and those arrive on
+     * the vertices — see `MeshPayload`.
+     */
+    sky: boolean;
+    timeOfDay: number;
+    shadows: boolean;
+    shadowQuality: number;
     /** Drawn as a wire box; `null` hides it. */
     selection?: Region | null;
     /**
@@ -241,7 +253,10 @@ import { isTyping } from "./typing.js";
     maxDrawDistance,
     showGrid,
     wireframe,
-    ambientOcclusion,
+    sky,
+    timeOfDay,
+    shadows,
+    shadowQuality,
     selection = null,
     onpick,
     cameraMode = "orbit",
@@ -364,6 +379,20 @@ import { isTyping } from "./typing.js";
   let sun: THREE.DirectionalLight | undefined;
   let ambient: THREE.HemisphereLight | undefined;
   let grid: THREE.GridHelper | undefined;
+  /** The sky dome, the two bodies on it, and the stars. */
+  let skyDome: THREE.Mesh | undefined;
+  let sunDisc: THREE.Mesh | undefined;
+  let moonDisc: THREE.Mesh | undefined;
+  let stars: THREE.Points | undefined;
+  /**
+   * How much of the sky-light channel reaches a surface, as the shader reads
+   * it.
+   *
+   * A uniform, shared by the one material every chunk uses, which is what lets
+   * the sun move without re-meshing anything: the vertices carry block light
+   * and sky light separately and this decides how much of the second counts.
+   */
+  const daylight = { value: 1 };
   let loaded: THREE.Object3D | null = null;
   /** When the pointer lock was taken, for the look filter below. */
   let lockedAt = 0;
@@ -939,6 +968,202 @@ import { isTyping } from "./typing.js";
     scene.add(selectionBox);
   }
 
+
+  /**
+   * How far out the sky sits.
+   *
+   * Inside the camera's far plane at its smallest setting, because a dome the
+   * camera clips through is a dome that vanishes when someone lowers the draw
+   * distance — and the dome does not need to be far away, only further than
+   * anything anyone builds.
+   */
+  const SKY_RADIUS = 3000;
+
+  /**
+   * The dome, painted by a two-colour vertical gradient.
+   *
+   * `BackSide` because we are inside it, and depth writing off so it never
+   * hides anything: it is the background, drawn first and never tested against.
+   * Its own shader rather than a texture, because the two colours change with
+   * the hour and re-uploading a gradient every frame to say so would be absurd.
+   */
+  function buildSky(): void {
+    if (!scene || skyDome) return;
+    const material = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      depthTest: false,
+      uniforms: {
+        uHorizon: { value: new THREE.Color(0x78a7ff) },
+        uZenith: { value: new THREE.Color(0x3c6bdc) },
+      },
+      vertexShader: `
+        varying float vHeight;
+        void main() {
+          vHeight = normalize(position).y;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 uHorizon;
+        uniform vec3 uZenith;
+        varying float vHeight;
+        void main() {
+          // Curved rather than linear, so the horizon band stays narrow and
+          // the sunset colour does not wash the whole sky.
+          float t = pow(clamp(vHeight, 0.0, 1.0), 0.55);
+          gl_FragColor = vec4(mix(uHorizon, uZenith, t), 1.0);
+        }
+      `,
+    });
+    skyDome = new THREE.Mesh(new THREE.SphereGeometry(SKY_RADIUS, 24, 16), material);
+    skyDome.renderOrder = -1000;
+    skyDome.frustumCulled = false;
+    scene.add(skyDome);
+
+    /*
+     * The sun and the moon: squares, because that is what they are. Unlit and
+     * depth-free like the dome, so nothing in the world can occlude them and
+     * nothing about them lands in the depth buffer.
+     */
+    const disc = (color: number, size: number): THREE.Mesh => {
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(size, size),
+        new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          depthWrite: false,
+          depthTest: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      mesh.renderOrder = -999;
+      mesh.frustumCulled = false;
+      scene?.add(mesh);
+      return mesh;
+    };
+    sunDisc = disc(0xfff4d6, 340);
+    moonDisc = disc(0xe8ecff, 260);
+
+    /*
+     * Stars, scattered over the upper half of the dome and faded in by the
+     * night factor. Points rather than quads: there are six hundred of them
+     * and none is ever more than a pixel or two.
+     */
+    const positions = new Float32Array(600 * 3);
+    for (let i = 0; i < 600; i += 1) {
+      // Rejection-free: pick a direction, keep it above the horizon by taking
+      // the absolute height, so they never appear underneath the build.
+      const theta = Math.random() * Math.PI * 2;
+      const height = Math.abs(Math.random() * 2 - 1) * 0.9 + 0.08;
+      const ring = Math.sqrt(Math.max(0, 1 - height * height));
+      positions[i * 3] = Math.cos(theta) * ring * SKY_RADIUS * 0.96;
+      positions[i * 3 + 1] = height * SKY_RADIUS * 0.96;
+      positions[i * 3 + 2] = Math.sin(theta) * ring * SKY_RADIUS * 0.96;
+    }
+    const starGeometry = new THREE.BufferGeometry();
+    starGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    stars = new THREE.Points(
+      starGeometry,
+      new THREE.PointsMaterial({
+        color: 0xffffff,
+        size: 12,
+        sizeAttenuation: true,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        depthTest: false,
+      }),
+    );
+    stars.renderOrder = -998;
+    stars.frustumCulled = false;
+    scene.add(stars);
+  }
+
+  function disposeSky(): void {
+    for (const object of [skyDome, sunDisc, moonDisc, stars]) {
+      if (!object) continue;
+      scene?.remove(object);
+      object.geometry.dispose();
+      const material = object.material as THREE.Material;
+      material.dispose();
+    }
+    skyDome = undefined;
+    sunDisc = undefined;
+    moonDisc = undefined;
+    stars = undefined;
+  }
+
+  /**
+   * Puts the sky, the two bodies and the light where the hour says.
+   *
+   * One function for all of it because they are one fact: the sun's direction
+   * decides where its square hangs, which way the shadows fall, what colour
+   * the light is, and how much of the sky-light channel counts. Splitting
+   * them into separate effects would be four chances for them to disagree.
+   */
+  function applySky(): void {
+    const state = skyAt(timeOfDay, (sunAzimuth * 180) / Math.PI);
+    daylight.value = sky ? state.daylight : 1;
+
+    if (!sky) {
+      // The manual light, which is what the two angle sliders are for.
+      setSunFromAngles(sunAzimuth, sunElevation);
+      if (sun) {
+        sun.color.setRGB(1, 1, 1);
+        sun.intensity = 1;
+      }
+      if (ambient) ambient.intensity = 0.9;
+      if (scene) scene.background = themeColor("--viewport-bg", 0x0b0f14);
+      return;
+    }
+
+    const [dx, dy, dz] = state.sunDirection;
+    if (sun) {
+      // The light comes *from* whichever body is up, so at night it is the
+      // moon's direction that matters — otherwise the shadows at midnight fall
+      // as though the sun were shining through the world.
+      const from = state.night ? state.moonDirection : state.sunDirection;
+      sun.position.set(from[0] * 2000, from[1] * 2000, from[2] * 2000);
+      sun.color.setRGB(state.lightColor[0], state.lightColor[1], state.lightColor[2]);
+      sun.intensity = state.lightIntensity;
+    }
+    if (ambient) {
+      ambient.intensity = 0.35 + 0.55 * state.daylight;
+      ambient.color.setRGB(state.zenith[0], state.zenith[1], state.zenith[2]);
+      ambient.groundColor.setRGB(0.1, 0.11, 0.14);
+    }
+
+    if (skyDome) {
+      const uniforms = (skyDome.material as THREE.ShaderMaterial).uniforms;
+      (uniforms.uHorizon.value as THREE.Color).setRGB(
+        state.horizon[0],
+        state.horizon[1],
+        state.horizon[2],
+      );
+      (uniforms.uZenith.value as THREE.Color).setRGB(
+        state.zenith[0],
+        state.zenith[1],
+        state.zenith[2],
+      );
+    }
+    if (sunDisc) {
+      sunDisc.position.set(dx, dy, dz).multiplyScalar(SKY_RADIUS * 0.94);
+      sunDisc.lookAt(0, 0, 0);
+    }
+    if (moonDisc) {
+      moonDisc.position.set(-dx, -dy, -dz).multiplyScalar(SKY_RADIUS * 0.94);
+      moonDisc.lookAt(0, 0, 0);
+    }
+    if (stars) {
+      (stars.material as THREE.PointsMaterial).opacity = state.starOpacity;
+    }
+    // The dome is the background now, so the flat colour must go: leaving it
+    // set would paint over nothing but would be a second answer to the same
+    // question, and the first one to be wrong after a theme change.
+    if (scene) scene.background = null;
+  }
+
   function setSunFromAngles(az: number, el: number): void {
     if (!sun) return;
     const radius = 2000;
@@ -1460,6 +1685,7 @@ import { isTyping } from "./typing.js";
         renderer?.domElement.removeEventListener("pointerup", onPointerUp);
         renderer?.domElement.removeEventListener("contextmenu", onContextMenu);
         disposeGhost();
+        disposeSky();
         ghostMaterial?.dispose();
         if (loaded) disposeObject(loaded);
         // Shared, so nothing above frees them.
@@ -1503,13 +1729,54 @@ import { isTyping } from "./typing.js";
     camera.updateProjectionMatrix();
   });
 
+  /*
+   * The sky, the sun, the moon and the light, from one reading of the clock.
+   *
+   * `ambientOcclusion` is not here any more and must not come back: it used to
+   * nudge these two intensities, which is not occlusion by any reading. It
+   * reaches the *mesher* now — occlusion at a corner depends on the blocks
+   * around it, and the viewer has no blocks.
+   */
   $effect(() => {
-    setSunFromAngles(sunAzimuth, sunElevation);
+    void timeOfDay;
+    void sunAzimuth;
+    void sunElevation;
+    if (!scene) return;
+    if (sky) buildSky();
+    else disposeSky();
+    applySky();
   });
 
+  /*
+   * Shadows, which are the most expensive thing in here by a distance: a whole
+   * extra pass over the geometry from the light's point of view.
+   *
+   * The shadow camera is a fixed box rather than one fitted to the structure.
+   * Fitting it would be better and is a change to make deliberately: it has to
+   * follow the *light*, not the model, and a box that moves with the sun makes
+   * the shadow edges crawl as it does.
+   */
   $effect(() => {
-    if (ambient) ambient.intensity = ambientOcclusion ? 0.9 : 0.5;
-    if (sun) sun.intensity = ambientOcclusion ? 1.0 : 0.7;
+    if (!renderer || !sun) return;
+    renderer.shadowMap.enabled = shadows;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    sun.castShadow = shadows;
+    const extent = 220;
+    sun.shadow.mapSize.set(shadowQuality, shadowQuality);
+    sun.shadow.camera.left = -extent;
+    sun.shadow.camera.right = extent;
+    sun.shadow.camera.top = extent;
+    sun.shadow.camera.bottom = -extent;
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 4000;
+    // Without this a face lit at a grazing angle shadows itself in stripes,
+    // which on a flat wall of blocks is the whole wall.
+    sun.shadow.bias = -0.0006;
+    sun.shadow.normalBias = 0.05;
+    sun.shadow.camera.updateProjectionMatrix();
+    sun.shadow.map?.dispose();
+    sun.shadow.map = null;
+    if (loaded) applyWireframe(loaded, wireframe);
   });
 
   $effect(() => {
@@ -1566,7 +1833,8 @@ import { isTyping } from "./typing.js";
   $effect(() => {
     void theme;
     if (!scene) return;
-    scene.background = themeColor("--viewport-bg", 0x0b0f14);
+    // Only when there is no dome: with the sky on, the background is the sky.
+    if (!sky) scene.background = themeColor("--viewport-bg", 0x0b0f14);
     buildGrid();
   });
 
@@ -1623,12 +1891,54 @@ import { isTyping } from "./typing.js";
         roughness: 1,
         alphaTest: 0.5,
         side: THREE.DoubleSide,
+        // The three channels main baked into every vertex: block light, sky
+        // light, occlusion. Declared here so the attribute is bound; what is
+        // done with it is the injection below, because three's own use of
+        // vertex colour is a plain multiply and these are not colours.
+        vertexColors: true,
       });
+      shadeWithBakedLight(material);
     } else if (material.map !== texture) {
       material.map = texture;
       material.needsUpdate = true;
     }
     return material;
+  }
+
+  /**
+   * Teaches a material to read the light main baked into the vertices.
+   *
+   * The vertex colour is not a colour: r is block light, g is sky light and b
+   * is corner occlusion, each 0..1. Three's own `vertexColors` would multiply
+   * all three into the texture, turning a lit wall green — so the standard
+   * chunk is replaced rather than reused.
+   *
+   * The daylight uniform is why the two light channels are kept apart all the
+   * way from the mesher. A torch and the sun are different lights: the sun sets
+   * and the torch does not, and folding them together in main would mean
+   * re-meshing the whole document every time the sun moved.
+   *
+   * The floor of 0.06 is deliberate. Fully unlit means black, and a block in a
+   * sealed room would be a hole in the picture — this is an editor, and "you
+   * cannot see what you are working on" is a bug however faithful it is.
+   */
+  function shadeWithBakedLight(target: THREE.Material): void {
+    target.onBeforeCompile = (shader) => {
+      shader.uniforms.uDaylight = daylight;
+      shader.fragmentShader = shader.fragmentShader
+        .replace("void main() {", "uniform float uDaylight;\nvoid main() {")
+        .replace(
+          "#include <color_fragment>",
+          `
+          float blockLight = vColor.r;
+          float skyLight = vColor.g * uDaylight;
+          float occlusion = vColor.b;
+          float lit = max(blockLight, skyLight);
+          diffuseColor.rgb *= max(0.06, lit) * occlusion;
+          `,
+        );
+    };
+    target.needsUpdate = true;
   }
 
   /**
@@ -1670,6 +1980,11 @@ import { isTyping } from "./typing.js";
     geometry.setAttribute("position", new THREE.BufferAttribute(chunk.positions, 3));
     geometry.setAttribute("normal", new THREE.BufferAttribute(chunk.normals, 3));
     geometry.setAttribute("uv", new THREE.BufferAttribute(chunk.uvs, 2));
+    // Block light, sky light and occlusion, riding the colour attribute
+    // because it is the one three.js already interpolates for us.
+    if (chunk.light.length === chunk.positions.length) {
+      geometry.setAttribute("color", new THREE.BufferAttribute(chunk.light, 3));
+    }
     geometry.setIndex(new THREE.BufferAttribute(chunk.indices, 1));
     // Per chunk, so three.js can frustum-cull them individually — the reason
     // for keeping the chunks apart rather than fusing them back together.
@@ -1686,6 +2001,8 @@ import { isTyping } from "./typing.js";
     for (const chunk of payload.chunks) {
       const mesh = chunkMesh(chunk, shared);
       chunkMeshes.set(chunk.key, mesh);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
       group.add(mesh);
     }
     return group;
@@ -1716,6 +2033,8 @@ import { isTyping } from "./typing.js";
         existing.geometry.dispose();
       }
       const mesh = chunkMesh(chunk, shared);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
       chunkMeshes.set(chunk.key, mesh);
       group.add(mesh);
     }

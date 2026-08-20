@@ -24,6 +24,7 @@
     DEFAULT_WATER_COLOR,
     LANGUAGES,
     PREVIEW_SETTING_RANGES,
+    SHADOW_QUALITIES,
     THEMES,
     type KeyStorageStatus,
     type Language,
@@ -38,6 +39,7 @@
   type Category =
     | "appearance"
     | "schematic"
+    | "sky"
     | "viewport"
     | "quality"
     | "textures"
@@ -94,9 +96,25 @@
     onclearkey,
   }: Props = $props();
 
+  /**
+   * A tick count as a clock face.
+   *
+   * Ticks are what the setting stores and what anyone typing `/time set` knows,
+   * but "18000" does not read as midnight to anybody. Both, then: the slider is
+   * in ticks and the label says what hour that is.
+   */
+  function clockLabel(ticks: number): string {
+    // Tick 0 is dawn, which the game puts at 06:00.
+    const minutes = Math.round(((ticks / 24000) * 24 * 60 + 6 * 60) % (24 * 60));
+    const hh = String(Math.floor(minutes / 60)).padStart(2, "0");
+    const mm = String(minutes % 60).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+
   const CATEGORIES: readonly { id: Category; key: string }[] = [
     { id: "appearance", key: "settings.appearance" },
     { id: "schematic", key: "settings.schematic" },
+    { id: "sky", key: "settings.sky" },
     { id: "viewport", key: "settings.viewport" },
     { id: "quality", key: "settings.quality" },
     { id: "textures", key: "settings.textures" },
@@ -229,6 +247,152 @@
             </div>
             <p class="hint">{t("settings.outputHint")}</p>
           </div>
+        {:else if category === "sky"}
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={preview.sky}
+              onchange={(event) => onpreviewchange({ sky: event.currentTarget.checked })}
+            />
+            {t("preview.sky")}
+          </label>
+          <p class="hint">{t("preview.skyHint")}</p>
+
+          {#if preview.sky}
+            <div class="field">
+              <label for="time-of-day">
+                {t("preview.timeOfDay", { time: clockLabel(preview.timeOfDay) })}
+              </label>
+              <input
+                id="time-of-day"
+                type="range"
+                min={PREVIEW_SETTING_RANGES.timeOfDay.min}
+                max={PREVIEW_SETTING_RANGES.timeOfDay.max}
+                step={PREVIEW_SETTING_RANGES.timeOfDay.step}
+                value={preview.timeOfDay}
+                oninput={(event) =>
+                  onpreviewchange({ timeOfDay: Number(event.currentTarget.value) })}
+              />
+              <p class="hint">{t("preview.timeOfDayHint")}</p>
+            </div>
+
+            <label class="check">
+              <input
+                type="checkbox"
+                checked={preview.daylightCycle}
+                onchange={(event) =>
+                  onpreviewchange({ daylightCycle: event.currentTarget.checked })}
+              />
+              {t("preview.daylightCycle")}
+            </label>
+
+            {#if preview.daylightCycle}
+              <div class="field">
+                <label for="daylight-speed">
+                  {t("preview.daylightSpeed", { value: preview.daylightSpeed.toFixed(0) })}
+                </label>
+                <input
+                  id="daylight-speed"
+                  type="range"
+                  min={PREVIEW_SETTING_RANGES.daylightSpeed.min}
+                  max={PREVIEW_SETTING_RANGES.daylightSpeed.max}
+                  step={PREVIEW_SETTING_RANGES.daylightSpeed.step}
+                  value={preview.daylightSpeed}
+                  oninput={(event) =>
+                    onpreviewchange({ daylightSpeed: Number(event.currentTarget.value) })}
+                />
+              </div>
+            {/if}
+          {:else}
+            <!--
+              With no sky there is no hour, so the light is placed by hand.
+              These two are the controls the app has always had; they are shown
+              here rather than always, because with the sky on the sun's
+              elevation is the time of day and two answers to that would be one
+              too many.
+            -->
+            <div class="field">
+              <label for="sun-az">
+                {t("preview.sunAzimuth", { value: preview.sunAzimuthDeg.toFixed(0) })}
+              </label>
+              <input
+                id="sun-az"
+                type="range"
+                min={PREVIEW_SETTING_RANGES.sunAzimuthDeg.min}
+                max={PREVIEW_SETTING_RANGES.sunAzimuthDeg.max}
+                step={PREVIEW_SETTING_RANGES.sunAzimuthDeg.step}
+                value={preview.sunAzimuthDeg}
+                oninput={(event) =>
+                  onpreviewchange({ sunAzimuthDeg: Number(event.currentTarget.value) })}
+              />
+            </div>
+            <div class="field">
+              <label for="sun-el">
+                {t("preview.sunElevation", { value: preview.sunElevationDeg.toFixed(0) })}
+              </label>
+              <input
+                id="sun-el"
+                type="range"
+                min={PREVIEW_SETTING_RANGES.sunElevationDeg.min}
+                max={PREVIEW_SETTING_RANGES.sunElevationDeg.max}
+                step={PREVIEW_SETTING_RANGES.sunElevationDeg.step}
+                value={preview.sunElevationDeg}
+                oninput={(event) =>
+                  onpreviewchange({ sunElevationDeg: Number(event.currentTarget.value) })}
+              />
+            </div>
+          {/if}
+
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={preview.shadows}
+              onchange={(event) => onpreviewchange({ shadows: event.currentTarget.checked })}
+            />
+            {t("preview.shadows")}
+          </label>
+          <p class="hint">{t("preview.shadowsHint")}</p>
+
+          {#if preview.shadows}
+            <div class="field">
+              <label for="shadow-quality">{t("preview.shadowQuality")}</label>
+              <select
+                id="shadow-quality"
+                value={String(preview.shadowQuality)}
+                onchange={(event) =>
+                  onpreviewchange({ shadowQuality: Number(event.currentTarget.value) })}
+              >
+                {#each SHADOW_QUALITIES as size (size)}
+                  <option value={String(size)}>{size}&#xd7;{size}</option>
+                {/each}
+              </select>
+            </div>
+          {/if}
+
+          <!--
+            The two that reach the mesher rather than the viewer, which is why
+            they say so: turning either on or off rebuilds the mesh.
+          -->
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={preview.blockLight}
+              onchange={(event) => onpreviewchange({ blockLight: event.currentTarget.checked })}
+            />
+            {t("preview.blockLight")}
+          </label>
+          <p class="hint">{t("preview.blockLightHint")}</p>
+
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={preview.ambientOcclusion}
+              onchange={(event) =>
+                onpreviewchange({ ambientOcclusion: event.currentTarget.checked })}
+            />
+            {t("preview.ambientOcclusion")}
+          </label>
+          <p class="hint">{t("preview.ambientOcclusionHint")}</p>
         {:else if category === "viewport"}
           <div class="field">
             <label for="sun-az">

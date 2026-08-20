@@ -74,7 +74,8 @@ import VersionList from "./lib/VersionList.svelte";
   import type { SchematicFormat } from "../../shared/schematic.js";
   import {
     DEFAULT_SETTINGS,
-    DEFAULT_UI_SETTINGS,
+    DEFAULT_PREVIEW_SETTINGS,
+  DEFAULT_UI_SETTINGS,
     providerRequiresApiKey,
     type ExportType,
     type KeyStorageStatus,
@@ -410,6 +411,36 @@ import VersionList from "./lib/VersionList.svelte";
 
   /** The registry, for the block pickers to search — fetched once at startup. */
   let blockRegistry = $state<string[]>([]);
+
+  /**
+   * Where in the day the viewport is, in Minecraft ticks.
+   *
+   * Mirrored from the setting rather than read from it, because the daylight
+   * cycle advances it many times a second: writing that through `patchPreview`
+   * would be a disk write per frame. The setting is the *starting* point and
+   * what a fresh window opens on; this is what is on screen.
+   */
+  let clockTicks = $state(DEFAULT_PREVIEW_SETTINGS.timeOfDay);
+
+  /**
+   * The daylight cycle, which is a timer and not an animation frame.
+   *
+   * `requestAnimationFrame` would be the obvious home and is the wrong one:
+   * the viewport already has a render loop, and a second one running at the
+   * display's rate would advance the clock at a different speed on a 144Hz
+   * screen. A timer moves the sun in wall-clock time, which is what "sixty
+   * game minutes per real second" means.
+   */
+  $effect(() => {
+    if (!settings.preview.daylightCycle) return;
+    const perSecond = (settings.preview.daylightSpeed / 1440) * 24000;
+    const step = 100;
+    const timer = setInterval(
+      () => (clockTicks = (clockTicks + perSecond * (step / 1000)) % 24000),
+      step,
+    );
+    return () => clearInterval(timer);
+  });
 
   /** Recently opened schematics. Owned by main; re-read after every open. */
   let recentDocuments = $state<RecentDocument[]>([]);
@@ -964,6 +995,7 @@ import VersionList from "./lib/VersionList.svelte";
         toolWindowY = settings.ui.toolWindowY;
         inspectorWindowX = settings.ui.inspectorWindowX;
         inspectorWindowY = settings.ui.inspectorWindowY;
+        clockTicks = settings.preview.timeOfDay;
         versionsWindowX = settings.ui.versionsWindowX;
         versionsWindowY = settings.ui.versionsWindowY;
         hotbar = [...settings.ui.hotbar];
@@ -1563,6 +1595,9 @@ import VersionList from "./lib/VersionList.svelte";
   }
 
   async function patchPreview(patch: Partial<PreviewSettings>): Promise<void> {
+    // The clock on screen follows the setting when the setting is what moved
+    // it; the daylight cycle writes only the mirror.
+    if (patch.timeOfDay !== undefined) clockTicks = patch.timeOfDay;
     await patchSettings({ preview: { ...settings.preview, ...patch } });
     // Every other preview setting is applied by the viewer on the GLB it
     // already has. The two tints are baked into the texture atlas, so they are
@@ -1570,6 +1605,11 @@ import VersionList from "./lib/VersionList.svelte";
     const rebuilds =
       patch.biomeColor !== undefined ||
       patch.waterColor !== undefined ||
+      // Light and occlusion are baked into the vertices by the mesher, not
+      // applied by the viewer -- which is the whole reason ambient occlusion
+      // finally means occlusion.
+      patch.blockLight !== undefined ||
+      patch.ambientOcclusion !== undefined ||
       // The markers are turned back into air by the mesher, not hidden by the
       // viewer, so this one rebuilds too — see `hideMarkers`.
       patch.showMarkers !== undefined;
@@ -3044,7 +3084,10 @@ import VersionList from "./lib/VersionList.svelte";
       maxDrawDistance={settings.preview.maxDrawDistance}
       showGrid={settings.preview.showGrid}
       wireframe={settings.preview.wireframe}
-      ambientOcclusion={settings.preview.ambientOcclusion}
+      sky={settings.preview.sky}
+      timeOfDay={clockTicks}
+      shadows={settings.preview.shadows}
+      shadowQuality={settings.preview.shadowQuality}
       theme={resolvedTheme}
     />
 

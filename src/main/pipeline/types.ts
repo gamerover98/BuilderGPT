@@ -180,10 +180,27 @@ export interface BakedFace {
   readonly uvs: Float32Array;
   readonly normal: readonly [number, number, number];
   readonly textureKey: string;
+  /**
+   * How lit and how buried each of the four vertices is: block light, sky
+   * light and occlusion, each 0..1, twelve floats in vertex order.
+   *
+   * Absent on a face straight out of the baker -- it is a property of *where
+   * the block is*, not of what it looks like, so only `culledFaces` can fill
+   * it in, and only when it was given a light grid to read. A face without it
+   * meshes at full daylight and no occlusion, which is exactly what the
+   * viewport did before any of this existed.
+   */
+  readonly shade?: Float32Array;
 }
 
 /** Ported from `BakedFace.offset` (`types.py:83-89`). */
-export function bakedFaceOffset(face: BakedFace, dx: number, dy: number, dz: number): BakedFace {
+export function bakedFaceOffset(
+  face: BakedFace,
+  dx: number,
+  dy: number,
+  dz: number,
+  shade?: Float32Array,
+): BakedFace {
   const positions = new Float32Array(face.positions.length);
   for (let i = 0; i < face.positions.length; i += 3) {
     positions[i] = face.positions[i] + dx;
@@ -195,6 +212,7 @@ export function bakedFaceOffset(face: BakedFace, dx: number, dy: number, dz: num
     uvs: face.uvs.slice(),
     normal: face.normal,
     textureKey: face.textureKey,
+    shade,
   };
 }
 
@@ -208,6 +226,15 @@ export interface MeshBuffers {
   readonly normals: Float32Array;
   readonly uvs: Float32Array;
   readonly indices: Uint32Array;
+  /**
+   * Three floats per vertex: block light, sky light, occlusion.
+   *
+   * Kept as three channels rather than one brightness because only one of them
+   * moves with the time of day. Folding them together here would mean
+   * re-meshing the whole document every time the sun moved -- and a torch
+   * would go out at dusk along with the sky.
+   */
+  readonly light: Float32Array;
 }
 
 /**

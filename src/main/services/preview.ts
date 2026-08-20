@@ -48,6 +48,7 @@ import {
   createChunkMeshCache,
   type ChunkMeshCache,
 } from "../pipeline/chunked_mesh.js";
+import { computeLight } from "../pipeline/lighting.js";
 
 /** preview.py:66-67 -- "50 MB is generous for a .schem file". */
 export const MAX_SCHEM_BYTES = 50 * 1024 * 1024;
@@ -131,6 +132,7 @@ function toMeshPayload(
       normals: piece.normals,
       uvs: piece.uvs,
       indices: piece.indices,
+      light: piece.light,
     })),
     // A whole payload says what exists by listing it; there is nothing left
     // over to take down, and no token because nothing here is incremental.
@@ -499,6 +501,21 @@ export interface DocumentPreviewOptions {
    * default is the one the game does not give you.
    */
   showMarkers?: boolean;
+  /**
+   * Whether blocks that glow light the mesh. Default true.
+   *
+   * Off means every surface sits at full sky light, which is what the viewport
+   * looked like before any of this existed. It is the expensive half -- a flood
+   * fill over every cell, and a chunk re-meshed wherever the light reached.
+   */
+  blockLight?: boolean;
+  /** Whether corners are darkened by what is buried in them. Default true. */
+  occlusion?: boolean;
+
+  /*
+   * Both are part of the mesh cache key, for the same reason the two tints
+   * are: they change the geometry and move no revision.
+   */
 }
 
 /**
@@ -573,12 +590,27 @@ export async function buildDocumentPreview(
   await primeBaker(structure, cached.baker);
   const { atlas, version } = cachedAtlas(cached);
 
+  /*
+   * Light before geometry, and for the whole structure at once.
+   *
+   * It cannot be a per-chunk job: a torch lights fifteen blocks in every
+   * direction, straight across chunk boundaries, so a chunk cannot know how
+   * bright it is without seeing the rest of the document. The chunk cache
+   * diffs the result and re-meshes whatever the light actually reached, which
+   * is how placing a torch relights the room and nothing else.
+   */
+  const shading = {
+    light: options.blockLight === false ? null : computeLight(structure),
+    occlusion: options.occlusion !== false,
+  };
+
   const chunked = await buildChunkedMesh(
     structure,
     cached.baker,
     atlas.uvRects,
     version,
     meshCache ?? createChunkMeshCache(),
+    shading,
   );
   await warnAboutBlocksWithNoGeometry(structure, cached.baker, new Set(Object.keys(atlas.uvRects)));
   if (chunked.buffers.indices.length === 0) {

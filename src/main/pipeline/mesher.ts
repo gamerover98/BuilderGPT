@@ -21,6 +21,25 @@ import { occludesNeighbours } from "./block_shapes.js";
 import type { BakedFace, MeshBuffers, PaletteEntry, StructureData, UVRect } from "./types.js";
 import { bakedFaceOffset, paletteEntryIsAir } from "./types.js";
 import type { BakedBlock, ModelBaker } from "./model_baker.js";
+import {
+  cornerOcclusion,
+  MAX_LIGHT,
+  OCCLUSION_LEVELS,
+  type LightGrid,
+} from "./lighting.js";
+
+/**
+ * What a face should be shaded by, if anything.
+ *
+ * The two halves are separate settings and separate work: light is a flood
+ * fill over the whole grid, occlusion is three lookups per vertex. Either can
+ * be off, and `light: null` with `occlusion: true` is a perfectly ordinary
+ * combination -- evenly lit, with the corners still reading as corners.
+ */
+export interface Shading {
+  readonly light: LightGrid | null;
+  readonly occlusion: boolean;
+}
 
 /**
  * `_DIRECTIONS` — ported from mesher.py:10-17. 6 face-name -> offset-tuple
@@ -56,6 +75,16 @@ export async function culledFaces(
    * edit and keep the rest. Omitted means the whole structure.
    */
   region?: { minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number },
+  /**
+   * The light in the structure, if it has been worked out.
+   *
+   * Optional because meshing does not depend on it: without it every face comes
+   * out at full daylight with no occlusion, which is what the viewport looked
+   * like before there was any such thing. `preview.ts` computes the light grid
+   * once per document and hands the same one to every chunk -- light crosses
+   * chunk boundaries, so it cannot be a per-chunk job.
+   */
+  shading?: Shading | null,
 ): Promise<BakedFace[]> {
   const voxels = struct.voxels;
   const [sizeX, sizeY, sizeZ] = [
@@ -80,6 +109,113 @@ export async function culledFaces(
 
   const faces: BakedFace[] = [];
 
+  /*
+   * Opacity per *palette entry*, not per cell: a structure has a few dozen
+   * distinct blocks and millions of cells, and `occludesNeighbours` walks a
+   * shape table every time it is asked.
+   */
+  const opaqueEntry = struct.palette.map(
+    (entry) => !paletteEntryIsAir(entry) && occludesNeighbours(entry),
+  );
+
+  const inside = (x: number, y: number, z: number): boolean =>
+    x >= 0 && y >= 0 && z >= 0 && x < sizeX && y < sizeY && z < sizeZ;
+
+  /** Out of bounds is open sky, which is what makes an outside wall lit. */
+  const solidAt = (x: number, y: number, z: number): boolean =>
+    inside(x, y, z) ? opaqueEntry[voxels[flatIndex(x, y, z)]] === true : false;
+
+  /**
+   * How lit a face is: the cell it looks into.
+   *
+   * A face is lit by the air in front of it, which is what the game does. Two
+   * cases have no air to read -- a face pointing out of the grid, and the
+   * inside faces of a shape like a staircase, whose normal points back into
+   * its own block. The first is sky, the second takes the brightest of the
+   * block's six neighbours, because a step in a lit room is lit even though
+   * nothing is directly in front of it.
+   */
+  const lighting = shading?.light ?? null;
+
+  const lightAt = (
+    x: number,
+    y: number,
+    z: number,
+    nx: number,
+    ny: number,
+    nz: number,
+  ): [number, number] => {
+    if (!lighting) return [0, MAX_LIGHT];
+    const front = [x + nx, y + ny, z + nz] as const;
+    if (!inside(front[0], front[1], front[2])) return [0, MAX_LIGHT];
+    const frontIndex = flatIndex(front[0], front[1], front[2]);
+    if (opaqueEntry[voxels[frontIndex]] !== true) {
+      return [lighting.block[frontIndex], lighting.sky[frontIndex]];
+    }
+    let block = 0;
+    let sky = 0;
+    for (const [dx, dy, dz] of Object.values(DIRECTIONS)) {
+      if (!inside(x + dx, y + dy, z + dz)) continue;
+      const index = flatIndex(x + dx, y + dy, z + dz);
+      if (opaqueEntry[voxels[index]] === true) continue;
+      block = Math.max(block, lighting.block[index]);
+      sky = Math.max(sky, lighting.sky[index]);
+    }
+    return [block, sky];
+  };
+
+  /**
+   * The twelve numbers a face carries: block light, sky light and occlusion,
+   * for each of its four vertices.
+   *
+   * The light is per face and the occlusion is per vertex, which is the split
+   * that makes this cheap and still look right -- flat lighting is what vanilla
+   * does with smooth lighting off, and the corner shading is what the eye
+   * actually reads as depth.
+   *
+   * A vertex's three occluding cells are found from which side of the block's
+   * centre it sits on, along the two axes the normal does not use. That works
+   * for any vertex of any shape; a diagonal normal (a cross quad) has no such
+   * axes, and those faces are left unoccluded rather than guessed at.
+   */
+  const shadeFace = (face: BakedFace, x: number, y: number, z: number): Float32Array | undefined => {
+    if (!shading) return undefined;
+    const [nx, ny, nz] = face.normal;
+    const [blockLight, skyLight] = lightAt(x, y, z, Math.round(nx), Math.round(ny), Math.round(nz));
+    const block = blockLight / MAX_LIGHT;
+    const sky = skyLight / MAX_LIGHT;
+
+    // The two axes in the face's plane, or none when the normal is diagonal.
+    const axis = Math.abs(nx) > 0.9 ? 0 : Math.abs(ny) > 0.9 ? 1 : Math.abs(nz) > 0.9 ? 2 : -1;
+    const out = new Float32Array(12);
+    for (let v = 0; v < 4; v += 1) {
+      let occlusion = 1;
+      if (axis !== -1 && shading.occlusion) {
+        const local = [
+          face.positions[v * 3] - 0.5,
+          face.positions[v * 3 + 1] - 0.5,
+          face.positions[v * 3 + 2] - 0.5,
+        ];
+        const step = [Math.round(nx), Math.round(ny), Math.round(nz)];
+        const t1 = (axis + 1) % 3;
+        const t2 = (axis + 2) % 3;
+        const s1 = local[t1] >= 0 ? 1 : -1;
+        const s2 = local[t2] >= 0 ? 1 : -1;
+        const cell = (a: number, b: number): boolean => {
+          const at = [x + step[0], y + step[1], z + step[2]];
+          at[t1] += a;
+          at[t2] += b;
+          return solidAt(at[0], at[1], at[2]);
+        };
+        occlusion = OCCLUSION_LEVELS[cornerOcclusion(cell(s1, 0), cell(0, s2), cell(s1, s2))];
+      }
+      out[v * 3] = block;
+      out[v * 3 + 1] = sky;
+      out[v * 3 + 2] = occlusion;
+    }
+    return out;
+  };
+
   function paletteEntry(index: number): PaletteEntry {
     if (index < 0 || index >= struct.palette.length) {
       return { namespacedName: "minecraft:air", properties: {} };
@@ -102,7 +238,7 @@ export async function culledFaces(
         // quads of a cross. Their surfaces sit inside the block, where a
         // neighbour cannot cover them.
         for (const face of bakedBlock.extraFaces) {
-          faces.push(bakedFaceOffset(face, x, y, z));
+          faces.push(bakedFaceOffset(face, x, y, z, shadeFace(face, x, y, z)));
         }
         if (!bakedBlock.isFullCube) {
           continue;
@@ -139,7 +275,7 @@ export async function culledFaces(
           if (bakedFace === undefined) {
             continue;
           }
-          faces.push(bakedFaceOffset(bakedFace, x, y, z));
+          faces.push(bakedFaceOffset(bakedFace, x, y, z, shadeFace(bakedFace, x, y, z)));
         }
       }
     }
@@ -153,8 +289,19 @@ function emptyMeshBuffers(): MeshBuffers {
     normals: new Float32Array(0),
     uvs: new Float32Array(0),
     indices: new Uint32Array(0),
+    light: new Float32Array(0),
   };
 }
+
+/**
+ * What a vertex looks like with nothing known about where it is: full daylight,
+ * no torch, no occlusion.
+ *
+ * The default matters. A face meshed without a light grid -- a block icon, a
+ * test, anything built before this existed -- has to come out looking exactly
+ * as it did, and this is the triple that means "unshaded".
+ */
+const UNSHADED = [0, 1, 1] as const;
 
 /**
  * Ported from `build_mesh` (mesher.py:56-104). Synchronous — pure in-memory
@@ -168,6 +315,7 @@ export function buildMesh(faces: readonly BakedFace[], atlasUv: Record<string, U
   const positionsChunks: Float32Array[] = [];
   const normalsChunks: Float32Array[] = [];
   const uvsChunks: Float32Array[] = [];
+  const lightChunks: Float32Array[] = [];
   const indices: number[] = [];
 
   let vertexOffset = 0;
@@ -203,6 +351,18 @@ export function buildMesh(faces: readonly BakedFace[], atlasUv: Record<string, U
     normalsChunks.push(normalTile);
     uvsChunks.push(uv);
 
+    if (face.shade !== undefined) {
+      lightChunks.push(face.shade);
+    } else {
+      const flat = new Float32Array(12);
+      for (let v = 0; v < 4; v += 1) {
+        flat[v * 3] = UNSHADED[0];
+        flat[v * 3 + 1] = UNSHADED[1];
+        flat[v * 3 + 2] = UNSHADED[2];
+      }
+      lightChunks.push(flat);
+    }
+
     for (const qi of quadIndices) {
       indices.push(qi + vertexOffset);
     }
@@ -218,6 +378,7 @@ export function buildMesh(faces: readonly BakedFace[], atlasUv: Record<string, U
     normals: concatFloat32(normalsChunks),
     uvs: concatFloat32(uvsChunks),
     indices: new Uint32Array(indices),
+    light: concatFloat32(lightChunks),
   };
 }
 

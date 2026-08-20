@@ -753,6 +753,8 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
             biomeColor: settings.biomeColor,
             showMarkers: settings.showMarkers,
             waterColor: settings.waterColor,
+            blockLight: settings.blockLight,
+            occlusion: settings.ambientOcclusion,
           },
           // What the window says it already has. Main decides what to send
           // from it; it is never a request for anything in particular.

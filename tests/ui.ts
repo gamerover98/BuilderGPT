@@ -64,6 +64,7 @@ import { isSafeHref } from "../src/renderer/src/lib/markdown_policy.js";
 import { HOSTILE_CASES } from "./markdown_cases.js";
 import { missingKeys, translate, translatePlural } from "../src/renderer/src/lib/i18n_core.js";
 import { openedAge } from "../src/renderer/src/lib/recent_age.js";
+import { normalizeTicks, skyAt } from "../src/renderer/src/lib/sky.js";
 import {
   isSpuriousLook,
   LOCK_SETTLE_MS,
@@ -707,6 +708,66 @@ console.log("\n--- look filter ---");
   // And the general case: no wrist produces this between two frames.
   check("a jump larger than any hand is discarded", look(MAX_LOOK_STEP + 1, 0, 5000));
   check("...on either axis", look(0, -(MAX_LOOK_STEP + 1), 5000));
+}
+
+// --- the sky through a day --------------------------------------------------
+//
+// Curves through a 24000-tick day, every one of them with boundaries where it
+// is easy to be a whole phase out, and none of it observable from a component
+// that owns a WebGL context.
+console.log("\n--- sky ---");
+{
+  const dawn = skyAt(0);
+  const noon = skyAt(6000);
+  const dusk = skyAt(12000);
+  const midnight = skyAt(18000);
+
+  // The sun rises in the east (+X), is overhead at noon, sets in the west.
+  check("at dawn the sun is on the eastern horizon", dawn.sunDirection[0] > 0.99);
+  check("at noon it is overhead", noon.sunDirection[1] > 0.99);
+  check("at dusk it is west", dusk.sunDirection[0] < -0.99);
+  check("at midnight it is under the world", midnight.sunDirection[1] < -0.99);
+  check("the moon is always opposite", Math.abs(noon.moonDirection[1] + 1) < 1e-6);
+
+  check("noon is day", !noon.night);
+  check("midnight is not", midnight.night);
+
+  /*
+   * The floor is what makes this usable. Sky light at night in the game is
+   * dim, and an editor that went black at 18000 would be a setting nobody
+   * could turn on -- "you cannot see what you are working on" is a bug however
+   * faithful it is.
+   */
+  check("full daylight at noon", noon.daylight === 1);
+  check("...dimmed at midnight", midnight.daylight < 0.5);
+  check("...but never dark", midnight.daylight > 0);
+
+  check("stars are out at midnight", midnight.starOpacity > 0.9);
+  check("...and gone at noon", noon.starOpacity === 0);
+
+  // Dusk is orange, and noon is not.
+  check("the horizon warms at dusk", dusk.horizon[0] > dusk.horizon[2]);
+  check("...and is blue at noon", noon.horizon[2] > noon.horizon[0]);
+
+  // The moon lights far less than the sun, which is what keeps night readable
+  // without pretending it is daytime.
+  check("the moon is weaker than the sun", midnight.lightIntensity < noon.lightIntensity);
+  check("...but not nothing", midnight.lightIntensity > 0);
+
+  // The clock wraps, and midnight-to-dawn has no seam in it.
+  equal("a day later is the same sky", skyAt(24000).daylight, dawn.daylight);
+  equal("...and so is a day earlier", skyAt(-24000).daylight, dawn.daylight);
+  equal("ticks wrap", normalizeTicks(-1000), 23000);
+
+  // The azimuth turns the whole path, so a facade can be lit without inventing
+  // an hour that does not exist.
+  const turned = skyAt(6000, 90);
+  check("turning the path leaves noon overhead", turned.sunDirection[1] > 0.99);
+  const morning = skyAt(1000, 90);
+  check(
+    "...but moves where the low sun comes from",
+    Math.abs(morning.sunDirection[2]) > Math.abs(skyAt(1000, 0).sunDirection[2]),
+  );
 }
 
 // --- how long ago a schematic was opened ----------------------------------

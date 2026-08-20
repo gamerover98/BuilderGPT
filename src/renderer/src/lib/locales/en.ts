@@ -36,6 +36,7 @@ export const en = {
   "settings.openShortcut": "Settings (Ctrl+,)",
   "settings.keywords": "preferences options theme language api key",
   "settings.appearance": "Appearance",
+  "settings.sky": "Sky & light",
   "settings.viewport": "Viewport",
   "settings.quality": "Quality",
   "settings.textures": "Textures & colours",
@@ -312,6 +313,22 @@ export const en = {
   "preview.showGrid": "Show grid",
   "preview.wireframe": "Wireframe",
   "preview.ambientOcclusion": "Ambient occlusion",
+  "preview.ambientOcclusionHint":
+    "Darkens the corners a block is buried in. Baked into the mesh, so changing it rebuilds.",
+  "preview.sky": "Draw the sky",
+  "preview.skyHint":
+    "A gradient that follows the hour, a square sun and moon, and stars. Off leaves the flat background.",
+  "preview.timeOfDay": "Time of day — {time}",
+  "preview.timeOfDayHint": "In game ticks: 0 dawn, 6000 noon, 12000 dusk, 18000 midnight.",
+  "preview.daylightCycle": "Let time pass",
+  "preview.daylightSpeed": "{value} game minutes per second",
+  "preview.shadows": "Cast shadows",
+  "preview.shadowsHint":
+    "The most expensive thing in the viewport: a second pass over the geometry from the light’s point of view.",
+  "preview.shadowQuality": "Shadow detail",
+  "preview.blockLight": "Light from blocks",
+  "preview.blockLightHint":
+    "Torches, lanterns and lava light what is around them. Baked into the mesh, so changing it rebuilds.",
 
   "chat.needsKey": "Add an API key for {provider} in Settings before sending",
   "chat.attachImage": "Reference image",

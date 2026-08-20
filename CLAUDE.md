@@ -993,6 +993,59 @@ anything unlisted stays a cube. Two consequences worth knowing:
   a dyed-wool stand-in — their sheets need layer composition this code does not
   do.
 
+**Light and occlusion are baked into the vertices, and that is why they are
+main's.** Occlusion at a corner depends on the blocks *around* it and light is a
+flood fill over the voxel grid — the renderer has neither, it receives geometry.
+`preview.ambientOcclusion` used to nudge the intensity of two lights, which is a
+different thing wearing the same name.
+
+Every vertex carries **three** numbers, riding the colour attribute: block
+light, sky light, occlusion. Three and not one brightness, because only the sky
+half moves with the hour. Folded together in main, the sun would re-mesh the
+whole document every time it moved and a torch would go out at dusk; kept apart,
+the viewer's `uDaylight` uniform is the entire cost of a day passing.
+
+`vertexColors` is declared on the material to *bind* the attribute, and three's
+own use of it — a plain multiply into the diffuse — is then replaced in
+`onBeforeCompile`. These are not colours; left as colours a lit wall turns
+green.
+
+The floor of `0.06` in that shader is deliberate: fully unlit is black, a block
+in a sealed room would be a hole in the picture, and this is an editor where
+"you cannot see what you are working on" is a bug however faithful it is. The
+sky's night floor of `0.2` in `sky.ts` is the same decision at the other end.
+
+Two things about the flood fill, both measured:
+
+- **The sky pass is seeded from the edge of the open sky, not from all of it.**
+  Every open cell in an unroofed column is already at 15, which on an open build
+  is most of the volume — half a million cells, each dequeued, decomposed into
+  coordinates and asked about six neighbours only to find them all already at 15.
+  That was **223 ms an edit**; seeding from cells that touch something solid is
+  **16 ms**.
+- **`spread` writes its six neighbours out longhand.** A closure allocated per
+  dequeue was most of the rest.
+
+**The chunk cache diffs the light, not just the voxels.** A torch changes what a
+chunk looks like fifteen blocks away without changing a voxel there, so light is
+packed to a byte per cell and compared exactly as the voxels are. Same rule as
+ever: dirtiness is *observed*, not announced — a caller that had to remember to
+say "and the light reached this far" would forget, and the chunk that stayed
+dark would be a bug nobody could reproduce.
+
+**The sky is the viewer's alone, and `sky.ts` is the part that is testable.**
+The dome, the two squares and the stars are geometry with no relationship to the
+schematic; what needed writing down is the set of curves through a
+24000-tick day, every one of which has boundaries where being a whole phase out
+is easy. The clock is Minecraft's ticks because that is the unit anyone building
+a schematic already thinks in — `/time set 18000` is a thing people type.
+
+The daylight cycle is a **timer, not an animation frame**. The viewport already
+has a render loop, and a second one running at the display's rate would advance
+the clock faster on a 144Hz screen; "sixty game minutes per real second" is a
+claim about wall-clock time. It writes a mirror in `App.svelte` rather than the
+setting, because the setting is on disk and this moves ten times a second.
+
 **`biomeColor` and `waterColor` are the two preview settings that rebuild the
 GLB.** Foliage and water both ship greyscale and are tinted per biome — from
 two different colours, which is why there are two settings. The tint is

@@ -577,6 +577,9 @@ export async function documentMesh(
     // Same reasoning as the tints: it changes the mesh and changes no block, so
     // the revision alone would hand back a stale one.
     options.showMarkers === false ? "hide" : "show",
+    // And the same again: light and occlusion are baked into the vertices.
+    options.blockLight === false ? "flat" : "lit",
+    options.occlusion === false ? "open" : "ao",
   ].join("|");
 
   const cached = session.mesh !== null && session.mesh.key === key;

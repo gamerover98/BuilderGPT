@@ -18,6 +18,7 @@
   import type {
     ChatEntry,
     ConversationSummary,
+    ProgressEvent,
     RegionSpec,
     TraceItem,
   } from "../../../shared/ipc.js";
@@ -39,6 +40,15 @@
      * dot and nothing else. This carries the thinking and the request too.
      */
     live: TraceItem[];
+    /**
+     * How far a *build* has got, when the message in flight is building.
+     *
+     * A generation's only feedback used to be a bar in the Structure fieldset,
+     * in a sidebar tab -- which is to say, not on screen, since asking for a
+     * build is something you do here. `null` for an agent turn, which reports
+     * itself through the trace instead.
+     */
+    progress: ProgressEvent | null;
     selection: RegionSpec | null;
     /** Exchanges the agent is carrying into the next question. */
     remembered: number;
@@ -59,6 +69,18 @@
      * schematic to build, and the generator makes one.
      */
     hasDocument: boolean;
+    /**
+     * The reference image and the format a *build* would use. Passed straight
+     * through to the composer, which is the only place they are shown -- and
+     * only with nothing open, which is when a message builds rather than edits.
+     */
+    imageName: string | null;
+    acceptsImages: boolean;
+    imageHint: string;
+    /** Whether the chosen provider has no key and so cannot answer at all. */
+    blockedOnKey: boolean;
+    onpickimage: () => void;
+    onclearimage: () => void;
     busy: boolean;
     /**
      * Whether there is a run to stop. Passed straight down: the composer is
@@ -68,7 +90,7 @@
     running: boolean;
     settings: Settings;
     keyStatus: KeyStorageStatus | null;
-    /** Held by `App.svelte` so a tab switch cannot throw it away. */
+    /** Held by `App.svelte`, which is where the conversation's state lives. */
     draft: string;
     ondraftchange: (draft: string) => void;
     /**
@@ -99,10 +121,17 @@
   const {
     entries,
     live,
+    progress,
     selection,
     remembered,
     rememberedFrom,
     hasDocument,
+    imageName,
+    acceptsImages,
+    imageHint,
+    blockedOnKey,
+    onpickimage,
+    onclearimage,
     busy,
     running,
     settings,
@@ -315,12 +344,24 @@
       </article>
     {/each}
 
-    {#if live.length > 0}
+    {#if live.length > 0 || progress !== null}
       <article class="turn agent">
         <div class="avatar pulse" aria-hidden="true">&#x2726;</div>
         <div class="body">
           <span class="who">{t("chat.ai")}</span>
-          <TraceView items={live} live />
+          {#if live.length > 0}
+            <TraceView items={live} live />
+          {/if}
+          {#if progress !== null}
+            <div
+              class="progress"
+              role="progressbar"
+              aria-valuenow={Math.round(progress.fraction * 100)}
+            >
+              <div class="bar" style={`width: ${Math.round(progress.fraction * 100)}%`}></div>
+            </div>
+            <span class="hint">{progress.message}</span>
+          {/if}
         </div>
       </article>
     {/if}
@@ -332,6 +373,12 @@
       {busy}
       {running}
       {hasDocument}
+      {imageName}
+      {acceptsImages}
+      {imageHint}
+      {blockedOnKey}
+      {onpickimage}
+      {onclearimage}
       {settings}
       {keyStatus}
       {draft}
@@ -348,6 +395,20 @@
 </section>
 
 <style>
+  .progress {
+    height: 4px;
+    margin: 6px 0 4px;
+    border-radius: 2px;
+    background: var(--bg-input);
+    overflow: hidden;
+  }
+
+  .bar {
+    height: 100%;
+    background: var(--accent);
+    transition: width 120ms linear;
+  }
+
   /*
    * `min-height: 0` on the log is what lets it scroll instead of stretching the
    * panel: a flex item's automatic minimum size is its content, so without it a

@@ -1123,6 +1123,8 @@ console.log("\n--- settings coercion ---");
     toolWindowY: 96,
     inspectorWindowX: 300,
     inspectorWindowY: 480,
+    versionsWindowX: 360,
+    versionsWindowY: 640,
     // Nine entries, none of them the default, so a `coerceUi` that quietly
     // substituted the default hotbar would not survive the comparison.
     hotbar: [
@@ -1137,9 +1139,6 @@ console.log("\n--- settings coercion ---");
       "minecraft:water",
     ],
     hotbarSlot: 4,
-    // Not the default, so a `coerceUi` that dropped it would be caught by the
-    // round-trip rather than only by the compiler.
-    sidebarTab: "generate",
   } satisfies UiSettings;
 
   equal("every ui field survives a round-trip", coerceUi(ui), ui);
@@ -1161,12 +1160,13 @@ console.log("\n--- settings coercion ---");
   const fallback = coerceUi({ theme: "neon", language: "xx", sidebarWidth: "wide" });
   equal("an unknown theme falls back", fallback.theme, DEFAULT_UI_SETTINGS.theme);
   equal("an unknown language falls back", fallback.language, DEFAULT_UI_SETTINGS.language);
-  // "schematic" is what a settings file written before the tab was renamed
-  // holds, and it must land on a tab that exists rather than on nothing.
-  equal(
-    "the old tab name falls back",
-    coerceUi({ sidebarTab: "schematic" }).sidebarTab,
-    DEFAULT_UI_SETTINGS.sidebarTab,
+  // The tabs are gone, and so is the field that remembered which one was
+  // showing. A settings file written by a build that had them still carries
+  // it, and this function drops anything it does not name -- which is the
+  // whole reason it does not spread.
+  check(
+    "a field from an older build is dropped rather than carried",
+    !("sidebarTab" in coerceUi({ sidebarTab: "generate" })),
   );
   equal(
     "a non-numeric width falls back",

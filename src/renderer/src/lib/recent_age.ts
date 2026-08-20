@@ -27,7 +27,11 @@ export function openedAge(openedAt: number, now: number): OpenedAge {
   // Zero means "never recorded". Anything in the future is a clock that moved
   // backwards — a timezone change, an NTP correction — and "just now" is the
   // honest reading of a moment that has not happened yet.
-  if (openedAt <= 0) return { kind: "none" };
+  // `!(x > 0)` rather than `x <= 0` so a NaN lands here too: the generated-file
+  // list stores its timestamp as an ISO string, and a `Date.parse` of a
+  // corrupted one otherwise fell through every branch below and rendered
+  // "Invalid Date".
+  if (!(openedAt > 0)) return { kind: "none" };
 
   const elapsed = now - openedAt;
   if (elapsed < MINUTE) return { kind: "justNow" };

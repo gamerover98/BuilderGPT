@@ -14,7 +14,7 @@
    * carry the actual size.
    */
   import type { RegionSpec } from "../../../shared/ipc.js";
-  import type { KeyStorageStatus, Settings } from "../../../shared/settings.js";
+  import type { ExportType, KeyStorageStatus, Settings } from "../../../shared/settings.js";
   import { t } from "./i18n.svelte.js";
   import ModelPicker from "./ModelPicker.svelte";
 
@@ -32,15 +32,38 @@
     running: boolean;
     /** Whether a schematic is open; decides what a message means, not whether one can be sent. */
     hasDocument: boolean;
+    /**
+     * The reference image a *build* will be given, if any.
+     *
+     * Only ever consulted with nothing open, because that is the only time a
+     * message goes to the generator. It used to live in a form in a sidebar tab
+     * next to a second text box for the description -- which is to say the app
+     * had two places to ask a model to build something, and this one already
+     * had the conversation.
+     */
+    imageName: string | null;
+    /** Whether the chosen model can read an image at all. */
+    acceptsImages: boolean;
+    imageHint: string;
+    /**
+     * Whether the chosen provider has no key.
+     *
+     * The generator's own button had this guard and the chat never did, so the
+     * same missing key greyed one control out and let the other send a message
+     * that could only come back as an error. Only one of those controls is left.
+     */
+    blockedOnKey: boolean;
+    onpickimage: () => void;
+    onclearimage: () => void;
     settings: Settings;
     keyStatus: KeyStorageStatus | null;
     /**
      * The half-written message.
      *
-     * Owned by `App.svelte` rather than held here, and that is not tidiness.
-     * Switching sidebar tabs unmounts this component, so a draft living in it
-     * would be thrown away by a glance at the Schematic tab -- which is exactly
-     * the sort of thing someone does mid-sentence to check a block name.
+     * Owned by `App.svelte` rather than held here. It was tabs that made this
+     * necessary -- switching one unmounted the composer and threw the draft
+     * away -- and the tabs are gone, but the ownership stays: a draft is part
+     * of the conversation's state, and the conversation belongs to the app.
      */
     draft: string;
     ondraftchange: (draft: string) => void;
@@ -55,6 +78,12 @@
     busy,
     running,
     hasDocument,
+    imageName,
+    acceptsImages,
+    imageHint,
+    blockedOnKey,
+    onpickimage,
+    onclearimage,
     settings,
     keyStatus,
     draft,
@@ -95,7 +124,7 @@
 
   function submit(): void {
     const prompt = draft.trim();
-    if (prompt === "" || busy) return;
+    if (prompt === "" || busy || blockedOnKey) return;
     ondraftchange("");
     onask(prompt);
   }
@@ -124,6 +153,37 @@
     {#if !hasDocument}
       <!-- Nothing to act *on*: the message describes what to make. -->
       <span class="chip dim" title={t("chat.actsAsBuild")}>#new-schematic</span>
+      <!--
+        And the two things a build takes that a message cannot carry by itself.
+        Shown only here, because with a document open the message goes to the
+        agent and neither of them means anything.
+      -->
+      {#if imageName === null}
+        <button
+          class="chip attach"
+          onclick={onpickimage}
+          disabled={!acceptsImages || busy}
+          title={acceptsImages ? t("chat.attachImageHint") : imageHint}
+        >
+          &#x1f4ce; {t("chat.attachImage")}
+        </button>
+      {:else}
+        <span class="chip" title={imageName}>
+          &#x1f4ce; <em>{imageName}</em>
+          <button class="clear" onclick={onclearimage} aria-label={t("common.clear")}>&#x00d7;</button>
+        </span>
+      {/if}
+      <select
+        class="format"
+        value={settings.exportType}
+        onchange={(event) =>
+          onsettingschange({ exportType: event.currentTarget.value as ExportType })}
+        title={t("chat.exportTypeHint")}
+        aria-label={t("chat.exportType")}
+      >
+        <option value="schem">.schem</option>
+        <option value="mcfunction">.mcfunction</option>
+      </select>
     {:else if selection}
       <span class="chip" title={t("chat.actsOnSelection")}>
         #selection
@@ -153,9 +213,9 @@
       <button
         class="send primary"
         onclick={submit}
-        disabled={busy || draft.trim() === ""}
+        disabled={busy || blockedOnKey || draft.trim() === ""}
         aria-label={t("chat.send")}
-        title={t("chat.send")}
+        title={blockedOnKey ? t("chat.needsKey", { provider: settings.provider }) : t("chat.send")}
       >
         &#x27a4;
       </button>
@@ -201,6 +261,7 @@
     grid-area: context;
     display: flex;
     align-items: center;
+    gap: 4px;
     min-width: 0;
   }
 
@@ -222,6 +283,34 @@
 
   .chip.dim {
     color: var(--text-dim);
+  }
+
+  /* A chip that is also a button: same shape, so the row reads as one strip of
+     small facts about the request rather than as a toolbar. */
+  .chip.attach {
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+
+  .chip.attach:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--accent);
+  }
+
+  .chip .clear {
+    padding: 0 2px;
+    border: none;
+    background: none;
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1;
+  }
+
+  .format {
+    flex: none;
+    padding: 1px 4px;
+    border-radius: 999px;
+    font-size: 11px;
   }
 
   .chip em {

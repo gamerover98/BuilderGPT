@@ -35,7 +35,13 @@
   import ApiKeysSection from "./ApiKeysSection.svelte";
   import { t } from "./i18n.svelte.js";
 
-  type Category = "appearance" | "viewport" | "quality" | "textures" | "providers";
+  type Category =
+    | "appearance"
+    | "schematic"
+    | "viewport"
+    | "quality"
+    | "textures"
+    | "providers";
 
   interface Props {
     open: boolean;
@@ -43,6 +49,19 @@
     keyStatus: KeyStorageStatus | null;
     resourcePackPath: string | null;
     resourcePackName: string | null;
+    /**
+     * The Minecraft versions a schematic can be written for, and where
+     * generated files land.
+     *
+     * Both were fields in the generator's form, in a sidebar tab, which made
+     * them look like inputs to that one button. They are not: the version is
+     * stamped on anything saved, and the folder is where every generation ever
+     * goes. They are preferences, and this is where preferences live.
+     */
+    versions: readonly string[];
+    defaultOutputDir: string;
+    onpickoutputdir: () => void;
+    onrevealoutputdir: () => void;
     busy: boolean;
     onclose: () => void;
     onchange: (patch: Partial<Settings>) => void;
@@ -60,6 +79,10 @@
     keyStatus,
     resourcePackPath,
     resourcePackName,
+    versions,
+    defaultOutputDir,
+    onpickoutputdir,
+    onrevealoutputdir,
     busy,
     onclose,
     onchange,
@@ -73,6 +96,7 @@
 
   const CATEGORIES: readonly { id: Category; key: string }[] = [
     { id: "appearance", key: "settings.appearance" },
+    { id: "schematic", key: "settings.schematic" },
     { id: "viewport", key: "settings.viewport" },
     { id: "quality", key: "settings.quality" },
     { id: "textures", key: "settings.textures" },
@@ -168,6 +192,42 @@
               {/each}
             </select>
             <p class="hint">{t("settings.languageHint")}</p>
+          </div>
+        {:else if category === "schematic"}
+          <div class="field">
+            <label for="target-version">{t("settings.version")}</label>
+            <select
+              id="target-version"
+              value={settings.version}
+              onchange={(event) => onchange({ version: event.currentTarget.value })}
+            >
+              {#each versions as version (version)}
+                <option value={version}>{version}</option>
+              {/each}
+            </select>
+            <p class="hint">{t("settings.versionHint")}</p>
+          </div>
+
+          <div class="field">
+            <label for="output-dir">{t("settings.outputDir")}</label>
+            <div class="pick-row">
+              <input
+                id="output-dir"
+                readonly
+                value={settings.outputDir}
+                placeholder={defaultOutputDir}
+                title={settings.outputDir || defaultOutputDir}
+              />
+              <button onclick={onpickoutputdir} disabled={busy}>{t("common.choose")}</button>
+              <button
+                onclick={() => onchange({ outputDir: "" })}
+                disabled={busy || settings.outputDir === ""}>{t("settings.outputDefault")}</button
+              >
+              <!-- The way to find a generated .mcfunction, which is the one
+                   output the app never opens for you. -->
+              <button onclick={onrevealoutputdir}>{t("common.open")}</button>
+            </div>
+            <p class="hint">{t("settings.outputHint")}</p>
           </div>
         {:else if category === "viewport"}
           <div class="field">

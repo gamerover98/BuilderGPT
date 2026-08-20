@@ -190,6 +190,17 @@ export interface UiSettings {
   inspectorWindowX: number;
   inspectorWindowY: number;
   /**
+   * The version history's own floating window.
+   *
+   * It was a sidebar tab, alongside the generator form and a list of every
+   * file the generator had ever produced -- three things about three different
+   * subjects sharing one drawer, which is why the drawer never had a name that
+   * described it. This is the same kind of thing as the inspector: a reflection
+   * of the open document, wanted for a moment and then dismissed.
+   */
+  versionsWindowX: number;
+  versionsWindowY: number;
+  /**
    * The nine blocks on the creative hotbar, and which one is held.
    *
    * Persisted because a hotbar you have to refill every launch is not a hotbar.
@@ -199,32 +210,24 @@ export interface UiSettings {
    */
   hotbar: string[];
   hotbarSlot: number;
-  /**
-   * Which sidebar panel was showing when the window last closed.
-   *
-   * It was a plain `$state("chat")` in `App.svelte`, so every launch landed on
-   * the chat -- and everything about files lived one click away, behind a tab
-   * whose name did not say it held them. That is most of why the recents
-   * looked missing when they had been wired end to end for weeks.
-   */
-  sidebarTab: SidebarTab;
 }
 
-/**
- * The sidebar's two panels.
+/*
+ * There is no `sidebarTab` any more, and there are no tabs.
  *
- * In `shared/` rather than beside the component, because `coerceUi` in main
- * has to validate it and main may not import out of the renderer -- the same
- * reason `openCodeModelRequiresKey` and the version era rule live here.
+ * The second one was called Schematic and then Generate, and neither name was
+ * wrong -- the drawer really did hold three unrelated things, and renaming it
+ * only ever narrowed which of the three the name lied about. The file verbs
+ * went to the menu and the start screen, the version history went to a floating
+ * window, the generated files went to the start screen beside the recents, and
+ * the generator form turned out to be a second, worse chat: the chat has built
+ * a schematic from a sentence since the day it learned to, with the same model
+ * and the same progress. What was left to keep was the reference image and the
+ * export format, and those are inputs to a message rather than a panel.
  *
- * `generate` was called `schematic`, which was the honest name for a drawer
- * holding three unrelated things: the file verbs, the generator form, and the
- * list of generated files. The first of those has a menu and a start screen
- * now, so what is left is one thing and can be named after it.
+ * So the sidebar is the chat, and a tab strip over a single panel is a control
+ * with nothing to choose.
  */
-export type SidebarTab = "chat" | "generate";
-
-export const SIDEBAR_TABS: readonly SidebarTab[] = ["chat", "generate"];
 
 /** Nine, because that is how many keys there are between 1 and 9. */
 export const HOTBAR_SLOTS = 9;
@@ -268,9 +271,12 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   // is tall, and two panels down the same edge leave the middle clear.
   inspectorWindowX: 16,
   inspectorWindowY: 320,
+  // Further down again, and only ever open on purpose: nothing summons this
+  // one the way clicking a block summons the inspector.
+  versionsWindowX: 16,
+  versionsWindowY: 560,
   hotbar: [...DEFAULT_HOTBAR],
   hotbarSlot: 0,
-  sidebarTab: "chat",
 };
 
 export interface Settings {

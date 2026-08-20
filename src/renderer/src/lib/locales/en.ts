@@ -51,6 +51,16 @@ export const en = {
   "settings.languageHint":
     "Applies to this window straight away. Messages from the schematic reader and writers are " +
     "not translated.",
+  "settings.schematic": "Schematics",
+  "settings.version": "Game version",
+  "settings.versionHint":
+    "Stamped on what you save, and what a build is written for. Anything up to 1.12.2 is " +
+    "MCEdit only.",
+  "settings.outputDir": "Where builds are written",
+  "settings.outputDefault": "Default",
+  "settings.outputHint":
+    "A file of the same name is renamed with a timestamp before being replaced, never " +
+    "overwritten.",
   "settings.qualityHint":
     "These cost frame time, not accuracy — lower them if the viewport feels heavy on a large " +
     "schematic.",
@@ -90,6 +100,8 @@ export const en = {
   "doc.recent": "Recent",
   "start.title": "Nothing open",
   "start.lead": "Create a schematic to build in, or open one you already have.",
+  "start.generated": "Generated",
+  "start.reveal": "Show in folder",
   "start.dropHint": "You can also drop a .schem or .schematic file anywhere on this view.",
   "start.chatHint": "Or describe what you want in the chat: with nothing open, a message builds the schematic instead of editing one.",
   "doc.openedJustNow": "just now",
@@ -268,26 +280,6 @@ export const en = {
   "provider.images": "images",
   "provider.cost": "${input}/${output} per M",
 
-  "structure.legend": "Structure",
-  "structure.version": "Game version",
-  "structure.exportType": "Export type",
-  "structure.description": "Description",
-  "structure.descriptionPlaceholder": "Describe the structure you want to build...",
-  "structure.image": "Optional reference image",
-  "structure.noImage": "No image chosen",
-  "structure.imageUnsupported": "Not supported by this model",
-  "structure.imageHint":
-    "{model} takes text only. Pick a model marked “images” to use a reference picture.",
-  "structure.outputDir": "Output folder",
-  "structure.outputHint":
-    "A file of the same name is renamed with a timestamp before being replaced, never " +
-    "overwritten.",
-  "structure.default": "Default",
-  "structure.generate": "Generate",
-  "structure.usesModel": "Uses {model}, the model chosen in the chat.",
-  "structure.rerender": "Re-render",
-  "structure.rerenderHint": "Refresh the preview using the last schematic without regenerating",
-
   "preview.resourcePack": "Resource pack (.zip)",
   "preview.resourcePackPlaceholder": "Faithful 64x (bundled)",
   "preview.resourcePackHint":
@@ -314,7 +306,17 @@ export const en = {
   "preview.wireframe": "Wireframe",
   "preview.ambientOcclusion": "Ambient occlusion",
 
+  "chat.needsKey": "Add an API key for {provider} in Settings before sending",
+  "chat.attachImage": "Reference image",
+  "chat.attachImageHint": "Give the model a picture to build from",
+  "chat.imageUnsupported":
+    "{model} takes text only. Pick a model marked “images” to use a reference picture.",
+  "chat.exportType": "Output format",
+  "chat.exportTypeHint": "What a build writes: a schematic file, or commands",
+
   "versions.legend": "Version history",
+  "versions.open": "Versions",
+  "versions.openHint": "What this schematic has been, and the way back",
   "versions.unsaved": "Save this schematic to a file and its versions will be kept here.",
   "versions.empty": "No versions yet. One is kept whenever a build is generated, and you can add one now.",
   "versions.save": "Save a version",
@@ -325,10 +327,6 @@ export const en = {
   "versions.source.generated": "Generated",
   "versions.source.manual": "Saved",
   "versions.source.opened": "Opened",
-  "artifacts.legend": "Generated files",
-  "artifacts.empty": "Nothing generated yet.",
-  "artifacts.preview": "Preview",
-  "artifacts.reveal": "Reveal",
 
   "palette.label": "Commands",
   "palette.placeholder": "Type a command…",
@@ -344,10 +342,6 @@ export const en = {
   "recovery.notOnDisk": "It has not been written to disk yet — save when you are happy with it.",
   "recovery.restore": "Restore it",
   "recovery.discard": "Discard",
-
-  "tabs.label": "Sidebar panels",
-  "tabs.chat": "Chat",
-  "tabs.generate": "Generate",
 
   "group.file": "File",
   "group.recent": "Recent",
@@ -386,6 +380,9 @@ export const en = {
   "command.cameraFly": "Camera: Creative flight",
   "command.cameraFly.keywords": "wasd walk fly first person",
   "command.showTools": "Show the selection tools",
+  "command.showVersions": "Show version history",
+  "command.hideVersions": "Hide version history",
+  "command.showVersions.keywords": "versions history go back restore",
   "command.showTools.keywords": "panel palette fill replace floating window",
   "command.hideInspector": "Hide the inspector",
   "command.showInspector": "Show the inspector",
@@ -414,7 +411,6 @@ export const en = {
   "task.copying": "Copying the selection",
   "task.cutting": "Cutting the selection",
   "task.savingLayout": "Saving the panel layout",
-  "task.rendering": "Rendering the schematic",
   "task.openingChooser": "Opening the schematic chooser",
   "task.openingPicker": "Opening the file chooser",
   "task.opening": "Opening the schematic",

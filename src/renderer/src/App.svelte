@@ -13,15 +13,13 @@
    */
   import { onMount, untrack } from "svelte";
 
-  import ArtifactList from "./lib/ArtifactList.svelte";
-  import ChatPanel from "./lib/ChatPanel.svelte";
+    import ChatPanel from "./lib/ChatPanel.svelte";
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
   import DocumentBar from "./lib/DocumentBar.svelte";
   import InspectorPanel from "./lib/InspectorPanel.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
   import SelectionTools from "./lib/SelectionTools.svelte";
-  import SidebarTabs from "./lib/SidebarTabs.svelte";
-  import ToolWindow from "./lib/ToolWindow.svelte";
+    import ToolWindow from "./lib/ToolWindow.svelte";
   import { findOpenCodeModel, loadOpenCodeModels } from "./lib/models.svelte.js";
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
 import StartScreen from "./lib/StartScreen.svelte";
@@ -75,7 +73,6 @@ import VersionList from "./lib/VersionList.svelte";
   import {
     DEFAULT_SETTINGS,
     DEFAULT_UI_SETTINGS,
-  type SidebarTab,
     providerRequiresApiKey,
     type ExportType,
     type KeyStorageStatus,
@@ -122,14 +119,12 @@ import VersionList from "./lib/VersionList.svelte";
   /** What an empty `settings.outputDir` resolves to, shown as the placeholder. */
   let defaultOutputDir = $state("");
 
-  let description = $state("");
   let imagePath = $state<string | null>(null);
   let imageName = $state<string | null>(null);
   let resourcePackPath = $state<string | null>(null);
   let resourcePackName = $state<string | null>(null);
 
   /** component.py:281-282's `st.session_state["bgpt_last_schem_path"]`. */
-  let lastSchemPath = $state<string | null>(null);
 
   let busy = $state(false);
   let progress = $state<ProgressEvent | null>(null);
@@ -864,14 +859,6 @@ import VersionList from "./lib/VersionList.svelte";
   /** Text-only models: the picker is disabled rather than silently ignored. */
   const acceptsImages = $derived(openCodeModel === null || openCodeModel.imageInput !== "no");
 
-  const canGenerate = $derived(description.trim() !== "" && !busy && !blockedOnKey);
-  /**
-   * Re-render rebuilds a *file* preview. With a document open the document owns
-   * the viewport — painting a file into it would show something the next edit
-   * would silently replace.
-   */
-  const canRerender = $derived(lastSchemPath !== null && docState === null && !busy);
-
   /**
    * Puts the chosen palette on `<html>`, where `app.css` can see it.
    *
@@ -956,7 +943,8 @@ import VersionList from "./lib/VersionList.svelte";
         toolWindowY = settings.ui.toolWindowY;
         inspectorWindowX = settings.ui.inspectorWindowX;
         inspectorWindowY = settings.ui.inspectorWindowY;
-        sidebarTab = settings.ui.sidebarTab;
+        versionsWindowX = settings.ui.versionsWindowX;
+        versionsWindowY = settings.ui.versionsWindowY;
         hotbar = [...settings.ui.hotbar];
         hotbarSlot = settings.ui.hotbarSlot;
         keyStatus = await api().getKeyStatus();
@@ -1137,13 +1125,13 @@ import VersionList from "./lib/VersionList.svelte";
 
   let paletteOpen = $state(false);
   let settingsOpen = $state(false);
-  let sidebarTab = $state<SidebarTab>(DEFAULT_UI_SETTINGS.sidebarTab);
   /**
    * The half-written chat message.
    *
-   * Up here rather than in the composer because switching sidebar tabs
-   * unmounts it, and losing a half-typed question to a glance at the Schematic
-   * tab is exactly the kind of thing tabs make easy to do by accident.
+   * Up here rather than in the composer because that is where the rest of the
+   * conversation's state lives. It began as a defence against a tab switch
+   * unmounting the composer mid-sentence; the tabs are gone and the ownership
+   * is still right.
    */
   let chatDraft = $state("");
 
@@ -1170,6 +1158,19 @@ import VersionList from "./lib/VersionList.svelte";
   let inspectorOpen = $state(true);
   let inspectorWindowX = $state(DEFAULT_UI_SETTINGS.inspectorWindowX);
   let inspectorWindowY = $state(DEFAULT_UI_SETTINGS.inspectorWindowY);
+
+  /**
+   * The version history, which used to be the first thing in the Generate tab.
+   *
+   * One difference from the other two floating windows: nothing summons it. A
+   * selection brings back the tools and a click brings back the inspector, so
+   * both can default to open without ever being in the way. This one is asked
+   * for -- from the button in the document bar, or from Ctrl+K -- so it starts
+   * closed.
+   */
+  let versionsOpen = $state(false);
+  let versionsWindowX = $state(DEFAULT_UI_SETTINGS.versionsWindowX);
+  let versionsWindowY = $state(DEFAULT_UI_SETTINGS.versionsWindowY);
 
   /**
    * Fetches OpenCode's model list when the provider calls for it.
@@ -1393,6 +1394,14 @@ import VersionList from "./lib/VersionList.svelte";
       run: () => (inspectorOpen = !inspectorOpen),
     },
     {
+      id: "toggle-versions",
+      title: versionsOpen ? t("command.hideVersions") : t("command.showVersions"),
+      group: t("group.view"),
+      keywords: t("command.showVersions.keywords"),
+      enabled: docState !== null,
+      run: () => (versionsOpen = !versionsOpen),
+    },
+    {
       id: "settings",
       title: t("settings.title"),
       group: t("group.view"),
@@ -1466,11 +1475,7 @@ import VersionList from "./lib/VersionList.svelte";
     // the file-preview path, so changing one with a document open did nothing
     // at all — and it is the one setting pair that cannot be applied by the
     // viewer, because it is multiplied into the atlas.
-    if (docState !== null) {
-      await refreshDocument();
-    } else if (lastSchemPath) {
-      await runPreview(lastSchemPath);
-    }
+    if (docState !== null) await refreshDocument();
   }
 
   /**
@@ -1614,44 +1619,22 @@ import VersionList from "./lib/VersionList.svelte";
     }
   }
 
-  async function renderPreview(schemPath: string): Promise<void> {
-    let response: Awaited<ReturnType<ReturnType<typeof api>["preview"]>>;
-    try {
-      response = await api().preview({
-        requestId: requestId(),
-        schemPath,
-        resourcePackPath,
-        settings: forIpc(settings.preview),
-      });
-    } catch (err) {
-      failed(err, t("task.rendering"));
-      return;
-    }
-    if (!response.ok) {
-      // component.py:456 used st.warning, not st.error: a failed preview never
-      // invalidates the generated file.
-      status = { tone: "warn", text: response.message };
-      return;
-    }
-    // A different file is a different structure and gets framed; re-rendering
-    // the same one — which is what changing a biome tint does — must not move
-    // a camera the user has placed.
-    if (schemPath !== lastSchemPath) {
-      framingEpoch += 1;
-    }
-    mesh = response.mesh;
-    bounds = { center: response.center, size: response.size };
-    lastSchemPath = schemPath;
-  }
-
-  async function runPreview(schemPath: string): Promise<void> {
-    busy = true;
-    try {
-      await renderPreview(schemPath);
-    } finally {
-      busy = false;
-    }
-  }
+  /*
+   * There is no `renderPreview` here any more, and that is a deletion worth
+   * naming rather than noticing.
+   *
+   * It drew a *file* without opening it, which is what the app did before a
+   * generated schematic became a document: you got a picture of what had been
+   * made and none of the editing tools could touch it. Generating opens its
+   * result now, dropping a file opens it, and the start screen opens one --
+   * so every route that used to end in a preview ends in a document, which can
+   * do everything a preview could and more.
+   *
+   * `IPC.preview` and `services/preview.ts`'s `buildPreview` are therefore
+   * left with no caller. They are still served and still tested; treat them
+   * like `pipeline/gltf_builder.ts` -- delete them or grow the feature that
+   * wants them, but do not leave them drifting unnamed.
+   */
 
   // --- the open document ----------------------------------------------------
 
@@ -2312,10 +2295,6 @@ import VersionList from "./lib/VersionList.svelte";
     }
   }
 
-  function onGenerate(): Promise<string | null> {
-    return generateFrom(description);
-  }
-
   /**
    * Builds a schematic from a description and opens it.
    *
@@ -2466,7 +2445,11 @@ import VersionList from "./lib/VersionList.svelte";
   {keyStatus}
   {resourcePackPath}
   {resourcePackName}
+  {versions}
+  {defaultOutputDir}
   {busy}
+  onpickoutputdir={() => pick("directory")}
+  onrevealoutputdir={() => api().revealPath(settings.outputDir || defaultOutputDir)}
   onclose={() => (settingsOpen = false)}
   onchange={patchSettings}
   onpreviewchange={patchPreview}
@@ -2505,6 +2488,7 @@ import VersionList from "./lib/VersionList.svelte";
       canredo={canRedoAnything}
       onundo={() => void undoAnything()}
       onredo={() => void redoAnything()}
+      onversions={() => (versionsOpen = !versionsOpen)}
     />
 
     <div class="camera-modes" role="group" aria-label={t("viewport.cameraMode")}>
@@ -2542,187 +2526,59 @@ import VersionList from "./lib/VersionList.svelte";
       >
     </header>
 
-    <SidebarTabs
-      active={sidebarTab}
-      onselect={(tab) => {
-        sidebarTab = tab;
-        // Mirrored locally first, then persisted: the click must repaint at
-        // once, and the write is a round trip through main.
-        void patchUi({ sidebarTab: tab });
-      }}
-    />
-
     <!--
-      The chat is the one tab that manages its own scrolling, so it must not be
-      put inside a second scroller: nesting them is what made the old panel's
-      input drift away down the column.
+      No tab strip: the sidebar is the chat.
+
+      The second tab was called Schematic and then Generate, and neither name
+      was wrong -- the drawer really did hold three unrelated things, so every
+      rename only changed which of the three the name lied about. The file verbs
+      went to the menu and the start screen, the version history to a floating
+      window, the generated files to the start screen beside the recents, and
+      the generator form turned out to be a second, worse chat: the chat has
+      built a schematic from a sentence since the day it learned to, with the
+      same model and the same progress. What was worth keeping from the form
+      was the reference image and the export format, and those are inputs to a
+      message rather than a panel.
     -->
-    <div class="tab-body" class:owns-scroll={sidebarTab === "chat"}>
-      {#if sidebarTab === "chat"}
-        <ChatPanel
-          entries={chat}
-          live={liveTrace}
-          {selection}
-          {remembered}
-          {rememberedFrom}
-          {conversations}
-          {activeConversationId}
-          onrefreshconversations={() => void refreshConversations()}
-          onrestore={(index) => void restoreCheckpoint(index)}
-          onopenconversation={(id) => void openConversation(id)}
-          ondeleteconversation={(id) => void deleteConversation(id)}
-          hasDocument={docState !== null}
-          {busy}
-          running={inFlight !== null}
-          {settings}
-          {keyStatus}
-          draft={chatDraft}
-          ondraftchange={(next) => (chatDraft = next)}
-          undoLabel={docState?.undoLabel ?? null}
-          undoTransactionId={docState?.undoTransactionId ?? null}
-          onask={askAgent}
-          onforget={forgetConversation}
-          onstop={stopAgent}
-          onundo={() => runDocument(t("task.undoing"), () => api().undo())}
-          onsettingschange={patchSettings}
-          onopensettings={() => (settingsOpen = true)}
-        />
-      {:else}
-        <!--
-          Two things that are one thing: describe a build and get a file, then
-          the files that came out. The document's own facts left for the
-          application bar, and its verbs for the File menu and the start
-          screen -- which is what lets this tab finally be named after what it
-          does.
-        -->
-        <VersionList
-          versions={documentVersions}
-          {busy}
-          saved={docState?.filePath != null}
-          onsave={() => void saveVersion("manual", "")}
-          onrestore={(id) => void restoreVersion(id)}
-          ondelete={(id) => void deleteVersion(id)}
-        />
-
-        <fieldset>
-      <legend>{t("structure.legend")}</legend>
-
-      <div class="row">
-        <div>
-          <label for="version">{t("structure.version")}</label>
-          <select
-            id="version"
-            value={settings.version}
-            onchange={(event) => patchSettings({ version: event.currentTarget.value })}
-          >
-            {#each versions as version (version)}
-              <option value={version}>{version}</option>
-            {/each}
-          </select>
-        </div>
-        <div>
-          <label for="export-type">{t("structure.exportType")}</label>
-          <select
-            id="export-type"
-            value={settings.exportType}
-            onchange={(event) =>
-              patchSettings({ exportType: event.currentTarget.value as ExportType })}
-          >
-            <option value="schem">schem</option>
-            <option value="mcfunction">mcfunction</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="field">
-        <label for="description">{t("structure.description")}</label>
-        <textarea
-          id="description"
-          bind:value={description}
-          placeholder={t("structure.descriptionPlaceholder")}
-        ></textarea>
-      </div>
-
-      <div class="field">
-        <label for="image">{t("structure.image")}</label>
-        <div class="pick-row">
-          <input
-            id="image"
-            readonly
-            value={imageName ?? ""}
-            placeholder={acceptsImages
-              ? t("structure.noImage")
-              : t("structure.imageUnsupported")}
-          />
-          <button onclick={() => pick("image")} disabled={!acceptsImages}>{t("common.choose")}</button>
-          <button
-            onclick={() => {
-              imagePath = null;
-              imageName = null;
-            }}
-            disabled={!imagePath}>{t("common.clear")}</button
-          >
-        </div>
-        {#if !acceptsImages}
-          <p class="hint">{t("structure.imageHint", { model: openCodeModel?.name ?? "" })}</p>
-        {/if}
-      </div>
-
-      <div class="field">
-        <label for="output-dir">{t("structure.outputDir")}</label>
-        <div class="pick-row">
-          <input
-            id="output-dir"
-            readonly
-            value={settings.outputDir}
-            placeholder={defaultOutputDir}
-            title={settings.outputDir || defaultOutputDir}
-          />
-          <button onclick={() => pick("directory")}>{t("common.choose")}</button>
-          <button
-            onclick={() => patchSettings({ outputDir: "" })}
-            disabled={settings.outputDir === ""}>{t("structure.default")}</button
-          >
-          <button onclick={() => api().revealPath(settings.outputDir || defaultOutputDir)}>
-            {t("common.open")}
-          </button>
-        </div>
-        <p class="hint">{t("structure.outputHint")}</p>
-      </div>
-
-      <div class="buttons">
-        <button class="primary" onclick={onGenerate} disabled={!canGenerate}>
-          {t("structure.generate")}
-        </button>
-        <button
-          onclick={() => lastSchemPath && runPreview(lastSchemPath)}
-          disabled={!canRerender}
-          title={t("structure.rerenderHint")}
-        >
-          {t("structure.rerender")}
-        </button>
-      </div>
-      <!--
-        The model picker lives in the chat now, so this says which model
-        Generate will actually run on. There is one LLM configuration in the
-        app and both use it; leaving that implicit here would make choosing a
-        model in the chat look like it had nothing to do with this button.
-      -->
-      <p class="hint">
-        {t("structure.usesModel", { model: openCodeModel?.name ?? settings.model })}
-      </p>
-
-      {#if progress}
-        <div class="progress" role="progressbar" aria-valuenow={Math.round(progress.fraction * 100)}>
-          <div class="bar" style={`width: ${Math.round(progress.fraction * 100)}%`}></div>
-        </div>
-        <p class="hint">{progress.message}</p>
-      {/if}
-
-    </fieldset>
-
-        <ArtifactList {artifacts} onselect={(artifact) => runPreview(artifact.path)} />
-      {/if}
+    <div class="tab-body">
+      <ChatPanel
+        entries={chat}
+        live={liveTrace}
+        progress={progress !== null && progress.requestId === buildRequestId ? progress : null}
+        {selection}
+        {remembered}
+        {rememberedFrom}
+        {conversations}
+        {activeConversationId}
+        onrefreshconversations={() => void refreshConversations()}
+        onrestore={(index) => void restoreCheckpoint(index)}
+        onopenconversation={(id) => void openConversation(id)}
+        ondeleteconversation={(id) => void deleteConversation(id)}
+        hasDocument={docState !== null}
+        {imageName}
+        {acceptsImages}
+        {blockedOnKey}
+        imageHint={t("chat.imageUnsupported", { model: openCodeModel?.name ?? "" })}
+        onpickimage={() => void pick("image")}
+        onclearimage={() => {
+          imagePath = null;
+          imageName = null;
+        }}
+        {busy}
+        running={inFlight !== null}
+        {settings}
+        {keyStatus}
+        draft={chatDraft}
+        ondraftchange={(next) => (chatDraft = next)}
+        undoLabel={docState?.undoLabel ?? null}
+        undoTransactionId={docState?.undoTransactionId ?? null}
+        onask={askAgent}
+        onforget={forgetConversation}
+        onstop={stopAgent}
+        onundo={() => runDocument(t("task.undoing"), () => api().undo())}
+        onsettingschange={patchSettings}
+        onopensettings={() => (settingsOpen = true)}
+      />
     </div>
   </section>
 
@@ -2775,10 +2631,13 @@ import VersionList from "./lib/VersionList.svelte";
     {#if docState === null && recovery === null}
       <StartScreen
         recent={recentDocuments}
+        {artifacts}
         {busy}
         onnew={() => void startNewDocument()}
         onopen={() => void openDocument()}
         onopenrecent={openDocumentAt}
+        onopenartifact={(artifact) => void openDocumentAt(artifact.path)}
+        onrevealartifact={(artifact) => api().revealPath(artifact.path)}
       />
     {/if}
 
@@ -2913,6 +2772,39 @@ import VersionList from "./lib/VersionList.svelte";
       </ToolWindow>
     {/if}
 
+    <!--
+      The version history. A reflection of the open document, exactly like the
+      inspector, and it was a sidebar tab for the same bad reason: it arrived
+      when there was a drawer to put things in.
+    -->
+    {#if docState && versionsOpen}
+      <ToolWindow
+        title={t("versions.legend")}
+        x={versionsWindowX}
+        y={versionsWindowY}
+        closeLabel={t("common.close")}
+        onmove={(x, y) => {
+          versionsWindowX = x;
+          versionsWindowY = y;
+        }}
+        oncommit={(x, y) => {
+          versionsWindowX = x;
+          versionsWindowY = y;
+          void patchUi({ versionsWindowX: x, versionsWindowY: y });
+        }}
+        onclose={() => (versionsOpen = false)}
+      >
+        <VersionList
+          versions={documentVersions}
+          {busy}
+          saved={docState?.filePath != null}
+          onsave={() => void saveVersion("manual", "")}
+          onrestore={(id) => void restoreVersion(id)}
+          ondelete={(id) => void deleteVersion(id)}
+        />
+      </ToolWindow>
+    {/if}
+
     <Viewer
       {mesh}
       {sunAzimuth}
@@ -3030,16 +2922,12 @@ import VersionList from "./lib/VersionList.svelte";
     border-left: 1px solid var(--border);
   }
 
+  /* The chat scrolls its own log and pins its own composer, so this must not
+     scroll: nesting two scrollers is what made the old panel's input drift
+     away down the column. */
   .tab-body {
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
-    overflow-x: hidden;
-  }
-
-  /* The chat scrolls its own log and pins its own composer; a scroller around
-     it would defeat both. */
-  .tab-body.owns-scroll {
     overflow: hidden;
   }
 
@@ -3188,35 +3076,6 @@ import VersionList from "./lib/VersionList.svelte";
     border-top: 1px solid var(--border);
     font-size: 12px;
     color: var(--text-dim);
-  }
-
-  .pick-row {
-    display: flex;
-    gap: 8px;
-  }
-
-  .pick-row input {
-    flex: 1;
-  }
-
-  .buttons {
-    display: flex;
-    gap: 8px;
-    margin-top: 4px;
-  }
-
-  .progress {
-    height: 6px;
-    margin-top: 12px;
-    background: var(--bg-input);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-
-  .bar {
-    height: 100%;
-    background: var(--accent);
-    transition: width 0.2s ease;
   }
 
   .status {

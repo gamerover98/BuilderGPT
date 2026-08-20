@@ -18,22 +18,55 @@
    * conversation then edits — a real capability that is completely invisible
    * until someone tries it by accident.
    */
-  import type { RecentDocument } from "../../../shared/ipc.js";
+  import type { Artifact, RecentDocument } from "../../../shared/ipc.js";
   import { ageLabel } from "./age_label.js";
   import { t } from "./i18n.svelte.js";
 
   interface Props {
     recent: readonly RecentDocument[];
+    /**
+     * Every file the generator has ever written, newest first.
+     *
+     * It had a fieldset of its own in the sidebar, which is a strange place for
+     * a list whose only two verbs are "open this" and "show me where it is":
+     * those are the verbs of this screen. And an `.mcfunction` is never opened,
+     * so this is the only thing in the app that admits it exists.
+     */
+    artifacts: readonly Artifact[];
     busy: boolean;
     onnew: () => void;
     onopen: () => void;
     onopenrecent: (filePath: string) => void;
+    onopenartifact: (artifact: Artifact) => void;
+    onrevealartifact: (artifact: Artifact) => void;
   }
 
-  const { recent, busy, onnew, onopen, onopenrecent }: Props = $props();
+  const {
+    recent,
+    artifacts,
+    busy,
+    onnew,
+    onopen,
+    onopenrecent,
+    onopenartifact,
+    onrevealartifact,
+  }: Props = $props();
 
   /** Six is what fits without the card starting to scroll. */
   const shown = $derived(recent.slice(0, 6));
+
+  /*
+   * Fewer, and only the ones the recents do not already carry.
+   *
+   * A generated `.schem` is opened the moment it is made, so it is in the
+   * recents by the time anyone sees this screen -- listing it twice would make
+   * the card longer without making anything findable.
+   */
+  const generated = $derived(
+    artifacts
+      .filter((artifact) => !recent.some((entry) => entry.filePath === artifact.path))
+      .slice(0, 4),
+  );
 
   function fileName(filePath: string): string {
     return filePath.split(/[\\/]/).pop() ?? filePath;
@@ -71,6 +104,32 @@
               <span class="where">{folder(entry.filePath)}</span>
               <span class="when">{ageLabel(entry.openedAt)}</span>
             </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+
+    {#if generated.length > 0}
+      <h3>{t("start.generated")}</h3>
+      <ul class="recent">
+        {#each generated as artifact (artifact.path)}
+          <li class="generated">
+            <button
+              class="row"
+              onclick={() => onopenartifact(artifact)}
+              disabled={busy}
+              title={artifact.path}
+            >
+              <span class="name">{artifact.name}</span>
+              <span class="where">.{artifact.type}</span>
+              <span class="when">{ageLabel(Date.parse(artifact.createdAt))}</span>
+            </button>
+            <button
+              class="reveal"
+              onclick={() => onrevealartifact(artifact)}
+              title={t("start.reveal")}
+              aria-label={t("start.reveal")}>&#x2026;</button
+            >
           </li>
         {/each}
       </ul>
@@ -193,6 +252,27 @@
     color: var(--text-dim);
     font-variant-numeric: tabular-nums;
     font-size: 11px;
+  }
+
+  .generated {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  /* The one thing an `.mcfunction` can do, since nothing opens it. */
+  .reveal {
+    flex: none;
+    padding: 2px 7px;
+    border: 1px solid transparent;
+    background: none;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+
+  .reveal:hover {
+    border-color: var(--border);
+    color: var(--text);
   }
 
   .aside {

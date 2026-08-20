@@ -21,7 +21,6 @@ import {
   HOTBAR_SLOTS,
   LANGUAGES,
   PROVIDERS,
-  SIDEBAR_TABS,
   SIDEBAR_WIDTH,
   THEMES,
   type Language,
@@ -67,19 +66,15 @@ export function coerceUi(raw: unknown): UiSettings {
     toolWindowY: coordinate(source.toolWindowY, DEFAULT_UI_SETTINGS.toolWindowY),
     inspectorWindowX: coordinate(source.inspectorWindowX, DEFAULT_UI_SETTINGS.inspectorWindowX),
     inspectorWindowY: coordinate(source.inspectorWindowY, DEFAULT_UI_SETTINGS.inspectorWindowY),
+    versionsWindowX: coordinate(source.versionsWindowX, DEFAULT_UI_SETTINGS.versionsWindowX),
+    versionsWindowY: coordinate(source.versionsWindowY, DEFAULT_UI_SETTINGS.versionsWindowY),
     hotbar: hotbar(source.hotbar),
     // Wrapped rather than clamped, so a stored index from a build with a
     // different slot count lands somewhere reachable instead of always on 0.
     hotbarSlot: ((Math.trunc(Number(source.hotbarSlot)) || 0) % HOTBAR_SLOTS + HOTBAR_SLOTS) % HOTBAR_SLOTS,
-    // Whitelisted like everything else here. A file written before the tab was
-    // renamed holds "schematic", which is not one of the two and correctly
-    // falls back rather than leaving the sidebar showing nothing.
-    // Whitelisted like everything else here. A file written before the tab was
-    // renamed holds "schematic", which is not one of the two and correctly
-    // falls back rather than leaving the sidebar showing nothing.
-    sidebarTab: (SIDEBAR_TABS as readonly string[]).includes(String(source.sidebarTab))
-      ? (source.sidebarTab as UiSettings["sidebarTab"])
-      : DEFAULT_UI_SETTINGS.sidebarTab,
+    // `sidebarTab` was here and is gone with the tabs. Not naming a field is
+    // how this function drops one, which is exactly what should happen to a
+    // value left behind in a settings file written by an older build.
   };
 }
 

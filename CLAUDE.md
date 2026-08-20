@@ -323,9 +323,41 @@ the start screen — the card the empty viewport shows. That is the answer to a
 whole class of "X is missing" reports that turned out to be "X is in the sidebar
 tab you never open": recents, New, Open and Save had all been wired end to end
 for weeks, behind `sidebarTab = $state("chat")` and a name that did not say what
-the tab held. `sidebarTab` is persisted now, and the tab is called **Generate**,
-because once the file verbs left it holds one thing — the generator and the
-files it produced — instead of three.
+the tab held.
+
+**And there is no second tab at all: the sidebar is the chat.** It was called
+Schematic, then Generate, and neither name was wrong — the drawer really did
+hold three unrelated things, so each rename only changed which of the three the
+name lied about. Renaming a container that holds unlike things is the move to
+distrust; the fix is to stop it holding them.
+
+Where the three went, and why each destination is the honest one:
+
+- the **version history** to a floating window over the canvas, because it is a
+  reflection of the open document, exactly like the inspector. It differs from
+  the tools and the inspector in one way that decides its default: nothing
+  *summons* it — a selection brings the tools back and a click brings the
+  inspector back — so it starts closed and has a button in the document bar. A
+  floating panel with no way back is a feature you delete by accident.
+- the **generated files** to the start screen beside the recents. Their only two
+  verbs are "open this" and "show me where it is", which are that screen's whole
+  job, and it is the one place a generated `.mcfunction` is admitted to exist —
+  nothing opens one. Entries already in the recents are filtered out, because a
+  generated `.schem` is opened the moment it is made.
+- the **generator form** nowhere, because it was a second, worse chat. The chat
+  has built a schematic from a sentence since the day it learned to, with the
+  same model and the same progress. What was worth keeping was the reference
+  image and the export format, and those are inputs to a *message*: they sit on
+  the composer, and only with nothing open, which is exactly when a message
+  builds rather than edits.
+
+Two things fell out of that and are worth knowing. The generation progress bar
+was in the form, in a tab, which is to say **not on screen while you waited for
+the build you had asked for in the chat** — it is in the chat's live turn now,
+matched to the build by request id because previews emit progress too. And the
+form's Generate button was disabled when the provider had no key while the chat
+would happily send a message that could only come back as an error; the guard
+moved to the send button, which is now the only control that can start either.
 
 The start screen is a sibling of the viewer, not part of it: `Viewer.svelte`
 receives geometry and has no business knowing what a recent document is. Only
@@ -396,6 +428,15 @@ that used to detect it (`untexturedReason`) is gone with the failure.
 `pipeline/gltf_builder.ts` still builds GLBs and is still tested, but nothing in
 the app calls it any more. Delete it or grow an "export .glb" feature — do not
 leave it drifting.
+
+**`IPC.preview` and `buildPreview` are now in the same position, and for a good
+reason.** They drew a *file* without opening it, which is what the app did
+before a generated schematic became a document: you got a picture of what had
+been made and none of the editing tools could touch it. Generating opens its
+result, dropping a file opens it, and the start screen opens one — every route
+that used to end in a preview now ends in a document, which can do everything a
+preview could. Same instruction as above: delete them or grow the feature that
+wants them.
 
 **API keys never travel main → renderer.** They are stored encrypted via
 `safeStorage`; the renderer only ever learns `{ hasKey: true }`.

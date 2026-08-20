@@ -34,9 +34,18 @@
     canredo: boolean;
     onundo: () => void;
     onredo: () => void;
+    /**
+     * Opens the version history.
+     *
+     * Here because nothing else summons it. The tools come back with the next
+     * selection and the inspector with the next click, so both can be closed
+     * without being lost; this one has no gesture of its own, and a floating
+     * window with no way back is a feature you delete by accident.
+     */
+    onversions: () => void;
   }
 
-  const { doc, busy, canundo, canredo, onundo, onredo }: Props = $props();
+  const { doc, busy, canundo, canredo, onundo, onredo, onversions }: Props = $props();
 
   /**
    * The version the file will be stamped with, when it carries one at all.
@@ -86,6 +95,9 @@
       title={doc.redoLabel ?? t("doc.nothingToRedo")}
     >
       {t("doc.redo")}
+    </button>
+    <button onclick={onversions} disabled={busy} title={t("versions.openHint")}>
+      {t("versions.open")}
     </button>
   </div>
 {/if}

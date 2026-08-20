@@ -11,8 +11,10 @@
    *
    * `OrbitControls` maps it, so this listens with `capture` and calls
    * `preventDefault` — the same problem the left mouse button poses for
-   * selection drags, and the same remedy. Only in creative: in orbit mode the
-   * wheel stays the zoom, because there is no hotbar on screen to step through.
+   * selection drags, and the same remedy. Only in flight (`ownsWheel`): in
+   * orbit the wheel is the zoom, and the bar is on screen there too now, so
+   * "there is no hotbar to step through" has stopped being the reason. The
+   * reason is that the game has no zoom to lose and this does.
    *
    * ## Only what it is told
    *
@@ -30,14 +32,24 @@
     slots: readonly string[];
     /** Which one is held, 0-based. */
     active: number;
-    /** Shown only in creative; orbit mode has the block picker instead. */
+    /** Shown whenever a document is open, in either camera mode. */
     visible: boolean;
+    /**
+     * Whether the wheel belongs to this bar.
+     *
+     * Only in flight. In orbit the wheel is the zoom, and taking it would trade
+     * a control the user needs constantly for one the number keys already
+     * provide -- the game gets to claim the wheel because the game has no zoom.
+     */
+    ownsWheel: boolean;
     onselect: (slot: number) => void;
     /** A slot was emptied or asked to be filled from the inventory. */
     onedit?: (slot: number) => void;
+    /** The button past the ninth slot: open the full block list. */
+    onopeninventory?: () => void;
   }
 
-  const { slots, active, visible, onselect, onedit }: Props = $props();
+  const { slots, active, visible, ownsWheel, onselect, onedit, onopeninventory }: Props = $props();
 
   /** `minecraft:oak_planks` → `oak planks`, which is what fits under a tile. */
   function label(id: string): string {
@@ -92,7 +104,9 @@
     };
 
     window.addEventListener("keydown", onKey);
-    window.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    if (ownsWheel) {
+      window.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    }
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("wheel", onWheel, { capture: true });

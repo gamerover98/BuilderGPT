@@ -49,7 +49,7 @@ import { isTyping } from "./typing.js";
     x: number;
     y: number;
     z: number;
-    /** True when the click carried Shift — the gesture that extends a selection. */
+    /** True when the click carried Ctrl — the gesture that grows a selection. */
     extend: boolean;
     /**
      * The empty cell on the outside of the face that was hit — where a new
@@ -136,6 +136,16 @@ import { isTyping } from "./typing.js";
     /** A face was dragged; the region is already snapped and clamped. */
     onselectionchange?: (region: Region) => void;
     /**
+     * A selection *gesture* began or ended.
+     *
+     * Both drags report the region on every pointer move, which is what makes
+     * them feel attached to the pointer -- and would put forty entries on the
+     * undo stack for one drag. This is the boundary the app coalesces between,
+     * so a drag is one step to undo. It has to come from here: only this
+     * component knows where the press was.
+     */
+    onselectiongesture?: (phase: "start" | "end") => void;
+    /**
      * The document's size, so the build grid knows where the box ends.
      *
      * `null` when nothing is open, which is also when there is nothing to build
@@ -152,6 +162,15 @@ import { isTyping } from "./typing.js";
     ongridselect?: (region: Region) => void;
     /** A click on the build grid in creative mode, meaning "put a block here". */
     ongridplace?: (at: { x: number; y: number; z: number }) => void;
+    /**
+     * The middle button, on a block: take what it is made of.
+     *
+     * A coordinate rather than a block id, because this component has neither
+     * -- the mesh is one fused geometry with no per-block identity in it, and
+     * the palette lives in main. The app resolves it and puts the answer in
+     * the hand, which is what the game's middle button does.
+     */
+    onpickmaterial?: (at: { x: number; y: number; z: number }) => void;
     /**
      * The palette in force, already resolved against the OS preference.
      *
@@ -184,6 +203,8 @@ import { isTyping } from "./typing.js";
     documentSize = null,
     ongridselect,
     ongridplace,
+    onpickmaterial,
+    onselectiongesture,
   }: Props = $props();
 
   /**
@@ -329,6 +350,14 @@ import { isTyping } from "./typing.js";
   let gridCell = $state<GridCell | null>(null);
   /** Where a grid drag began, or null when no drag is in progress. */
   let gridAnchor: GridCell | null = null;
+  /**
+   * The grid cell a plain press landed on, kept until the release decides.
+   *
+   * A placement cannot be committed on the press: the same press might be the
+   * start of an orbit, and the camera keeps the drag. So the cell is
+   * remembered and only used if the pointer never moved.
+   */
+  let placeCandidate: GridCell | null = null;
   let lastGridAt = 0;
 
   /**
@@ -946,9 +975,14 @@ import { isTyping } from "./typing.js";
       // Left-drag orbits and pans, so a click cannot simply be pointerup: the
       // gesture is only a selection if the pointer barely moved. Four pixels is
       // the usual allowance for a shaky hand on a trackpad.
-      let downAt: { x: number; y: number } | null = null;
+      let downAt: { x: number; y: number; button: number } | null = null;
       const onPointerDown = (event: PointerEvent) => {
-        downAt = event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
+        // Middle is recorded too: it is the pick-block button, and like every
+        // other gesture here it only counts if the pointer stayed put.
+        downAt =
+          event.button === 0 || event.button === 1
+            ? { x: event.clientX, y: event.clientY, button: event.button }
+            : null;
 
         /*
          * A press on a face handle takes over the gesture.
@@ -959,21 +993,40 @@ import { isTyping } from "./typing.js";
          * gesture alive if the pointer leaves the canvas mid-drag.
          */
         if (event.button !== 0 || cameraMode !== "orbit") return;
+
+        /*
+         * Selecting takes Shift; a plain drag belongs to the camera.
+         *
+         * It did not, and orbiting a structure was close to impossible: the
+         * press that started the orbit landed on the build and collapsed the
+         * selection to whatever block was under it. The left button is mapped
+         * to `THREE.MOUSE.PAN`, so *every* selection gesture here has to take
+         * the button away from OrbitControls — which is exactly why they cannot
+         * also be the default.
+         */
+        if (!event.shiftKey) {
+          /*
+           * One thing survives without Shift: a stationary click on the build
+           * grid still places a block. That gesture is how an empty schematic
+           * gets its first block, and it cannot be confused with an orbit —
+           * an orbit moves the pointer, and this only fires when it did not.
+           * The camera keeps the drag either way, so nothing is taken.
+           */
+          const cell = gridCellAt(event.clientX, event.clientY);
+          placeCandidate =
+            cell !== null && pickBlockAt(event.clientX, event.clientY) === null ? cell : null;
+          return;
+        }
+
         const face = faceAt(event.clientX, event.clientY);
         if (face === null) {
-          /*
-           * Nothing solid under the pointer, but the grid is there.
-           *
-           * Taking the left button is not optional: it is mapped to
-           * `THREE.MOUSE.PAN`, so a drag left to OrbitControls pans the camera
-           * and the region never forms. Same reasoning as the face handles
-           * above, same remedy.
-           */
+          // Nothing solid under the pointer, but the grid is there.
           const cell = gridCellAt(event.clientX, event.clientY);
           if (cell === null || pickBlockAt(event.clientX, event.clientY) !== null) return;
           gridAnchor = cell;
           gridCell = cell;
           draggedThisGesture = true;
+          onselectiongesture?.("start");
           if (controls) controls.enabled = false;
           try {
             renderer?.domElement.setPointerCapture(event.pointerId);
@@ -986,6 +1039,7 @@ import { isTyping } from "./typing.js";
         dragged = face;
         hovered = face;
         draggedThisGesture = true;
+        onselectiongesture?.("start");
         if (controls) controls.enabled = false;
         try {
           renderer?.domElement.setPointerCapture(event.pointerId);
@@ -1019,6 +1073,32 @@ import { isTyping } from "./typing.js";
       const onPointerUp = (event: PointerEvent) => {
         const start = downAt;
         downAt = null;
+        const candidate = placeCandidate;
+        placeCandidate = null;
+        const stayed =
+          start !== null && Math.hypot(event.clientX - start.x, event.clientY - start.y) <= 4;
+
+        /*
+         * Middle button: take the block being looked at, as the game does.
+         *
+         * From the crosshair while flying and from the pointer while orbiting,
+         * because those are the two things "being looked at" means in the two
+         * modes. On release and only if the pointer stayed put, so a
+         * middle-drag is still the dolly OrbitControls maps it to.
+         */
+        if (event.button === 1 && start?.button === 1) {
+          if (!stayed || !onpickmaterial) return;
+          const target =
+            cameraMode === "fly" ? pickAtCrosshair() : pickBlockAt(event.clientX, event.clientY);
+          if (target) onpickmaterial({ x: target.x, y: target.y, z: target.z });
+          return;
+        }
+
+        // A plain, stationary click on the build grid: put a block there.
+        if (candidate !== null && gridAnchor === null) {
+          if (stayed) ongridplace?.({ x: candidate.x, y: candidate.y, z: candidate.z });
+          return;
+        }
 
         if (gridAnchor !== null) {
           const anchor = gridAnchor;
@@ -1030,17 +1110,15 @@ import { isTyping } from "./typing.js";
             // Nothing captured; nothing to release.
           }
           /*
-           * A press that never moved is a placement, not a selection of one
-           * cell: with nothing built yet, "click the floor" means "put a block
-           * here", and asking the user to drag one cell first would be a rule
-           * with no reason behind it.
+           * A Shift-press that never moved selects that one cell. It used to
+           * place a block, which was right while a plain click did nothing —
+           * now a plain click is the placement and this gesture only ever
+           * means "select", down to a single cell.
            */
-          const moved =
-            start !== null &&
-            Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4;
-          if (!moved) {
-            ongridplace?.({ x: anchor.x, y: anchor.y, z: anchor.z });
+          if (stayed) {
+            ongridselect?.(regionBetween(anchor, anchor));
           }
+          onselectiongesture?.("end");
           draggedThisGesture = false;
           return;
         }
@@ -1053,6 +1131,7 @@ import { isTyping } from "./typing.js";
           } catch {
             // Nothing captured; nothing to release.
           }
+          onselectiongesture?.("end");
           return;
         }
 
@@ -1086,13 +1165,20 @@ import { isTyping } from "./typing.js";
           }
           return;
         }
-        if (!start || !onpick) return;
-        if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
+        // Selecting is a Shift gesture now; a plain click is the camera's.
+        if (!event.shiftKey || !start || !onpick || !stayed) return;
         const picked = pickBlockAt(event.clientX, event.clientY);
-        // A click that hit nothing is reported as such rather than swallowed:
-        // clicking empty space is how you *stop* having a selection, and doing
-        // nothing left no way to clear one but the button in the panel.
-        onpick(picked === null ? null : { ...picked, extend: event.shiftKey });
+        // A Shift-click that hit nothing is reported as such rather than
+        // swallowed: it is how you *stop* having a selection, and doing nothing
+        // left no way to clear one but the button in the tools.
+        onpick(
+          picked === null
+            ? null
+            : // Ctrl grows the selection from the anchor. Shift used to mean
+              // this, and had to give the job up when it became the modifier
+              // that starts a selection at all.
+              { ...picked, extend: event.ctrlKey || event.metaKey },
+        );
       };
       // Right-click places a block in flight, so the context menu must not
       // also appear. Only suppressed while flying: in orbit mode right-drag
@@ -1342,7 +1428,25 @@ import { isTyping } from "./typing.js";
 
   $effect(() => {
     const payload = mesh;
-    if (!scene || !payload || payload.chunks.length === 0) return;
+    if (!scene) return;
+
+    /*
+     * No geometry to show means take down what is showing.
+     *
+     * This used to return early, which is only correct while a mesh can never
+     * go away. It can: closing the schematic sets it to `null`, and the
+     * structure stayed in the scene afterwards — still lit, still raycasting,
+     * belonging to a document the app no longer had open.
+     */
+    if (!payload || payload.chunks.length === 0) {
+      if (loaded) {
+        scene.remove(loaded);
+        disposeObject(loaded, { keepMaterials: true });
+        loaded = null;
+      }
+      error = null;
+      return;
+    }
     const target = scene;
     /*
      * Read without subscribing. If this effect depended on `framingKey` it

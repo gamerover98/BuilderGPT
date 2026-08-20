@@ -200,6 +200,7 @@ export function documentState(session: DocumentSession): DocumentState {
     palette: paletteCounts(doc),
     dirty: isDirty(history),
     canUndo: canUndo(history),
+    undoDepth: history.undoStack.length,
     canRedo: canRedo(history),
     undoLabel: nextUndoLabel(history),
     undoTransactionId: nextUndoId(history),

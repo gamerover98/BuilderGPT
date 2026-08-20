@@ -27,6 +27,16 @@ import {
   OVERSCAN_ROWS,
 } from "../src/renderer/src/lib/inventory.js";
 import {
+  emptyTimeline,
+  recordDocumentEdit,
+  recordSelection,
+  redoTarget,
+  takeRedo,
+  takeUndo,
+  undoTarget,
+  type SelectionState,
+} from "../src/renderer/src/lib/selection_history.js";
+import {
   cellFade,
   cellUnderRay,
   isInsideBox,
@@ -727,6 +737,91 @@ console.log("\n--- build grid ---");
   equal("a region inside the box just fits", placementNeeds(regionBetween({ x: 1, y: 0, z: 1 }, { x: 2, y: 0, z: 2 }), size), "fits");
   equal("...past the far side asks to grow", placementNeeds(regionBetween({ x: 1, y: 0, z: 1 }, { x: 20, y: 0, z: 2 }), size), "grows");
   equal("...and below the origin is refused", placementNeeds(regionBetween({ x: -1, y: 0, z: 1 }, { x: 2, y: 0, z: 2 }), size), "blocked");
+}
+
+// --- undo that reaches the selection ---------------------------------------
+//
+// Ctrl+Z used to reach only the main process, because only the main process had
+// anything to undo. So dragging a face across a build, seeing it was wrong, and
+// pressing Ctrl+Z undid the last *block edit* -- destroying work in answer to a
+// request to undo a highlight.
+//
+// The rule is one sentence: a selection is undone only while no block edit has
+// landed on top of it. `undoDepth` is what makes that answerable.
+console.log("\n--- selection history ---");
+{
+  const box = (n: number) => ({ minX: n, minY: 0, minZ: 0, maxX: n, maxY: 0, maxZ: 0 });
+  const at = (n: number): SelectionState => ({ selection: box(n), anchor: { x: n, y: 0, z: 0 } });
+  const none: SelectionState = { selection: null, anchor: null };
+
+  // Nothing recorded, nothing to do -- and "none" rather than a document undo
+  // that main would refuse.
+  equal("an empty timeline with a clean document has nothing to undo", undoTarget(emptyTimeline(), 0, false), "none");
+  equal("...but defers to the document when it has something", undoTarget(emptyTimeline(), 3, true), "document");
+
+  // A selection made since the last block edit comes back first.
+  let timeline = recordSelection(emptyTimeline(), 0, none, at(1));
+  equal("a fresh selection is the thing to undo", undoTarget(timeline, 0, true), "selection");
+
+  /*
+   * ...and a block edit on top of it buries it. This is the whole feature: the
+   * selection is still on the stack, but the last thing that happened was the
+   * fill, so that is what Ctrl+Z takes.
+   */
+  timeline = recordDocumentEdit(timeline, 1);
+  equal("a block edit on top takes precedence", undoTarget(timeline, 1, true), "document");
+  // Undoing it puts the depth back, and the selection surfaces again.
+  equal("...and once it is undone the selection surfaces", undoTarget(timeline, 0, false), "selection");
+
+  // Restoring walks back through the recorded states.
+  let stack = recordSelection(emptyTimeline(), 0, none, at(1));
+  stack = recordSelection(stack, 0, at(1), at(2));
+  const first = takeUndo(stack);
+  equal("undo restores what was there before the last change", first?.state.selection, box(1));
+  const second = takeUndo(first!.timeline);
+  equal("...and then before the one before that", second?.state.selection, null);
+  equal("nothing left to take", takeUndo(second!.timeline), null);
+
+  // Redo is the mirror, and only while the depth still matches.
+  const back = takeRedo(second!.timeline);
+  equal("redo puts the change back", back?.state.selection, box(1));
+  equal("redo knows there is one waiting", redoTarget(second!.timeline, 0, false), "selection");
+
+  /*
+   * A new change discards the redo stack, as it does in any editor: once you
+   * branch, the future you branched away from is gone.
+   */
+  const branched = recordSelection(second!.timeline, 0, none, at(9));
+  equal("a new change drops the redo stack", branched.redo.length, 0);
+  equal("...and is the thing to redo nothing of", redoTarget(branched, 0, false), "none");
+
+  /*
+   * Steps stranded above the current depth go. They belong to block edits that
+   * were undone and then written over -- main has already dropped its own redo,
+   * and keeping ours would offer to restore a selection into a document that
+   * never had it.
+   */
+  let stranded = recordSelection(emptyTimeline(), 2, none, at(5));
+  stranded = recordDocumentEdit(stranded, 1);
+  equal("a selection above the new depth is dropped", stranded.undo.length, 0);
+
+  /*
+   * The same, reached the other way: a block edit is undone -- which lowers the
+   * depth without `recordDocumentEdit` ever running -- and then a new selection
+   * is made. The step recorded at the higher depth belongs to a future main has
+   * already dropped, so recording must drop it too.
+   */
+  let afterUndo = recordSelection(emptyTimeline(), 1, none, at(4));
+  afterUndo = recordSelection(afterUndo, 0, none, at(6));
+  equal("recording at a lower depth strands nothing above it", afterUndo.undo.length, 1);
+  equal("...and what remains is the new one", afterUndo.undo[0].after.selection, box(6));
+
+  // A change to nothing is not a change.
+  equal(
+    "recording the same selection twice records once",
+    recordSelection(recordSelection(emptyTimeline(), 0, none, at(1)), 0, at(1), at(1)).undo.length,
+    1,
+  );
 }
 
 // --- the creative inventory ------------------------------------------------

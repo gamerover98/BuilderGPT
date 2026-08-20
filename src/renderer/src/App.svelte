@@ -11,7 +11,7 @@
    * counterpart and is deliberately dropped -- it existed only to survive the
    * module being re-executed on every interaction (ARCHITECTURE.md §4 change 2).
    */
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
 
   import ArtifactList from "./lib/ArtifactList.svelte";
   import ChatPanel from "./lib/ChatPanel.svelte";
@@ -28,6 +28,18 @@ import StartScreen from "./lib/StartScreen.svelte";
   import Viewer, { type CameraMode, type PickedBlock } from "./lib/Viewer.svelte";
   import { api, bridgeAvailable, forIpc, bridgeMissingMessage } from "./lib/bridge.svelte.js";
   import { applyTraceEvent } from "./lib/trace.js";
+  import {
+    emptyTimeline,
+    forgetTimeline,
+    recordDocumentEdit,
+    recordSelection,
+    redoTarget,
+    takeRedo,
+    takeUndo,
+    undoTarget,
+    type SelectionState,
+    type Timeline,
+  } from "./lib/selection_history.js";
   import SchematicDialog from "./lib/SchematicDialog.svelte";
   import Hotbar from "./lib/Hotbar.svelte";
   import CreativeInventory from "./lib/CreativeInventory.svelte";
@@ -168,6 +180,42 @@ import StartScreen from "./lib/StartScreen.svelte";
   /** The first corner of a selection being built, before Shift-click extends it. */
   let anchor = $state<{ x: number; y: number; z: number } | null>(null);
 
+  /**
+   * Undo and redo that reach the selection as well as the blocks.
+   *
+   * Kept here rather than in `SelectionTools`, because the two keys are a
+   * window-level binding and the document state they interleave with lives
+   * here. The rule and the arithmetic are in `selection_history.ts`; this is
+   * only the plumbing.
+   */
+  let selectionTimeline = $state<Timeline>(emptyTimeline());
+  /** The selection as it was when the timeline last agreed with the screen. */
+  let lastSelection: SelectionState = { selection: null, anchor: null };
+  /** True while a step is being put back, so restoring is not itself recorded. */
+  let restoringSelection = false;
+  /**
+   * Where a drag started, or `null` when no drag is in progress.
+   *
+   * A drag reports the region on every pointer move. Recording each one would
+   * put a step on the stack per frame and make Ctrl+Z walk backwards through a
+   * gesture the user experienced as one movement.
+   */
+  let gestureFrom: SelectionState | null = null;
+  /** Main's undo depth as of the last time it was accounted for. */
+  let lastUndoDepth = 0;
+
+  /*
+   * Whether there is anything at all to take back, from either stack. The
+   * buttons and the palette read this rather than `docState.canUndo`, or they
+   * would sit greyed out with a selection change waiting to be undone.
+   */
+  const canUndoAnything = $derived(
+    undoTarget(selectionTimeline, docState?.undoDepth ?? 0, docState?.canUndo === true) !== "none",
+  );
+  const canRedoAnything = $derived(
+    redoTarget(selectionTimeline, docState?.undoDepth ?? 0, docState?.canRedo === true) !== "none",
+  );
+
   /** The last block clicked, and where — the inspector's subject. */
   let inspection = $state<BlockInspection | null>(null);
   let inspectedAt = $state<{ x: number; y: number; z: number } | null>(null);
@@ -179,23 +227,47 @@ import StartScreen from "./lib/StartScreen.svelte";
   let cameraMode = $state<CameraMode>("orbit");
 
   /**
-   * The block Fill writes and the one Creative mode places. Held here rather
-   * than in the panel because the viewport places it too, and one of them
-   * having a different idea of "the current block" would be a bug nobody could
-   * see.
+   * What is in your hand: the active hotbar slot, in both camera modes.
+   *
+   * There used to be two answers — a `activeBlock` for orbit and the hotbar for
+   * flight — with a `$derived` picking between them by camera mode. That was
+   * only tenable while the hotbar was creative-only. It is on screen in both
+   * modes now, and two controls each claiming to say what you are holding is
+   * one too many: Fill would write one block and a click would place another,
+   * with nothing on screen to say why.
+   *
+   * So the slot is the value. Everything that chooses a block — the inventory,
+   * the field in the selection tools, the middle button — writes the slot.
    */
-  let activeBlock = $state("minecraft:stone");
+  const activeBlock = $derived(settings.ui.hotbar[settings.ui.hotbarSlot] ?? "minecraft:stone");
+  const placingBlock = $derived(activeBlock);
+
+  /** Puts a block in the hand, which is to say into the active slot. */
+  function holdBlock(block: string): void {
+    void patchUi({
+      hotbar: settings.ui.hotbar.map((id, at) => (at === settings.ui.hotbarSlot ? block : id)),
+    });
+  }
 
   /**
-   * In creative, what you are holding is the hotbar slot -- not the picker.
+   * The middle button, on a block: hold what it is made of.
    *
-   * Derived rather than kept in step by an effect: two writers to one variable
-   * is how the picker and the hotbar end up disagreeing about what is in your
-   * hand, and only one of them would be the one that places a block.
+   * The viewer sends a coordinate because it has nothing else — the mesh is one
+   * fused geometry and the palette lives in main — so the block id comes back
+   * from the same `inspectBlock` the inspector uses. Its base name, not the
+   * full state: picking a stair should hand you a stair, not one facing the way
+   * that particular one happened to face.
    */
-  const placingBlock = $derived(
-    cameraMode === "fly" ? (settings.ui.hotbar[settings.ui.hotbarSlot] ?? activeBlock) : activeBlock,
-  );
+  async function onPickMaterial(at: { x: number; y: number; z: number }): Promise<void> {
+    if (busy) return;
+    try {
+      const response = await api().inspectBlock(at.x, at.y, at.z);
+      if (!response.ok || response.block === "minecraft:air") return;
+      holdBlock(response.block.split("[")[0]);
+    } catch (err) {
+      failed(err, t("task.pickingBlock"));
+    }
+  }
 
   /** The registry, for the block pickers to search — fetched once at startup. */
   let blockRegistry = $state<string[]>([]);
@@ -251,6 +323,127 @@ import StartScreen from "./lib/StartScreen.svelte";
   function onGridSelect(region: RegionSpec): void {
     selection = region;
     anchor = null;
+  }
+
+  /** The selection as a plain value — `$state` proxies do not compare. */
+  function selectionNow(): SelectionState {
+    return {
+      selection: selection === null ? null : { ...selection },
+      anchor: anchor === null ? null : { ...anchor },
+    };
+  }
+
+  function restoreSelection(state: SelectionState): void {
+    restoringSelection = true;
+    selection = state.selection === null ? null : { ...state.selection };
+    anchor = state.anchor === null ? null : { ...state.anchor };
+    lastSelection = state;
+    // Cleared after the assignments rather than in an effect: the recorder
+    // below runs synchronously off these writes.
+    restoringSelection = false;
+  }
+
+  /**
+   * A drag is one step, not one step per frame.
+   *
+   * The viewer reports the region continuously — that is what makes the box
+   * feel attached to the pointer — so the boundary has to come from the gesture
+   * itself. Between `start` and `end` nothing is recorded; on `end` the whole
+   * movement goes on the stack as a single change.
+   */
+  function onSelectionGesture(phase: "start" | "end"): void {
+    if (phase === "start") {
+      gestureFrom = lastSelection;
+      return;
+    }
+    const from = gestureFrom;
+    gestureFrom = null;
+    if (from === null) return;
+    const now = selectionNow();
+    selectionTimeline = recordSelection(selectionTimeline, docState?.undoDepth ?? 0, from, now);
+    lastSelection = now;
+  }
+
+  /*
+   * Every other way the selection changes, recorded in one place.
+   *
+   * An effect rather than a call at each site, because there are a dozen sites
+   * — a click, a transform, a paste, Select all, Clear, closing the document —
+   * and the one that gets forgotten is the one that breaks Ctrl+Z. The writes
+   * are wrapped in `untrack` so recording does not re-trigger the effect that
+   * did the recording.
+   */
+  $effect(() => {
+    const now = selectionNow();
+    untrack(() => {
+      if (restoringSelection || gestureFrom !== null) {
+        lastSelection = now;
+        return;
+      }
+      selectionTimeline = recordSelection(
+        selectionTimeline,
+        docState?.undoDepth ?? 0,
+        lastSelection,
+        now,
+      );
+      lastSelection = now;
+    });
+  });
+
+  /*
+   * A block edit landed, or the document was replaced.
+   *
+   * Main owns those steps; all this does is keep the two stacks in the same
+   * ordering and drop selection steps that belong to a future main has
+   * discarded.
+   */
+  $effect(() => {
+    const depth = docState?.undoDepth ?? null;
+    untrack(() => {
+      if (depth === null) {
+        selectionTimeline = forgetTimeline();
+        lastUndoDepth = 0;
+        return;
+      }
+      if (depth > lastUndoDepth) {
+        selectionTimeline = recordDocumentEdit(selectionTimeline, depth);
+      }
+      lastUndoDepth = depth;
+    });
+  });
+
+  /**
+   * Ctrl+Z, over both stacks.
+   *
+   * The selection comes back first while nothing has been built on top of it,
+   * which is what "undo" means when the last thing you did was drag a box.
+   */
+  async function undoAnything(): Promise<void> {
+    if (busy) return;
+    const target = undoTarget(selectionTimeline, docState?.undoDepth ?? 0, docState?.canUndo === true);
+    if (target === "document") {
+      await runDocument(t("task.undoing"), () => api().undo());
+      return;
+    }
+    if (target !== "selection") return;
+    const taken = takeUndo(selectionTimeline);
+    if (taken === null) return;
+    selectionTimeline = taken.timeline;
+    restoreSelection(taken.state);
+  }
+
+  async function redoAnything(): Promise<void> {
+    if (busy) return;
+    const target = redoTarget(selectionTimeline, docState?.undoDepth ?? 0, docState?.canRedo === true);
+    if (target === "document") {
+      await runDocument(t("task.redoing"), () => api().redo());
+      return;
+    }
+    if (target !== "selection") return;
+    const taken = takeRedo(selectionTimeline);
+    if (taken === null) return;
+    selectionTimeline = taken.timeline;
+    restoreSelection(taken.state);
   }
 
   /**
@@ -621,16 +814,8 @@ import StartScreen from "./lib/StartScreen.svelte";
         if (docState !== null && !busy) saveDocumentAs();
       }),
       api().onMenuClose(() => void closeDocument()),
-      api().onMenuUndo(() => {
-        if (docState?.canUndo === true && !busy) {
-          void runDocument(t("task.undoing"), () => api().undo());
-        }
-      }),
-      api().onMenuRedo(() => {
-        if (docState?.canRedo === true && !busy) {
-          void runDocument(t("task.redoing"), () => api().redo());
-        }
-      }),
+      api().onMenuUndo(() => void undoAnything()),
+      api().onMenuRedo(() => void redoAnything()),
     ];
 
     return () => {
@@ -714,10 +899,10 @@ import StartScreen from "./lib/StartScreen.svelte";
     const editingText = isTyping(event.target);
     if (key === "z" && !event.shiftKey && !editingText) {
       event.preventDefault();
-      void runDocument(t("task.undoing"), () => api().undo());
+      void undoAnything();
     } else if ((key === "y" || (key === "z" && event.shiftKey)) && !editingText) {
       event.preventDefault();
-      void runDocument(t("task.redoing"), () => api().redo());
+      void redoAnything();
     }
     /*
      * No Ctrl+S here any more, and none of the other file keys either.
@@ -852,16 +1037,16 @@ import StartScreen from "./lib/StartScreen.svelte";
       title: t("command.undo"),
       group: t("group.edit"),
       shortcut: "Ctrl+Z",
-      enabled: !busy && docState?.canUndo === true,
-      run: () => void runDocument(t("task.undoing"), () => api().undo()),
+      enabled: !busy && canUndoAnything,
+      run: () => void undoAnything(),
     },
     {
       id: "redo",
       title: t("command.redo"),
       group: t("group.edit"),
       shortcut: "Ctrl+Y",
-      enabled: !busy && docState?.canRedo === true,
-      run: () => void runDocument(t("task.redoing"), () => api().redo()),
+      enabled: !busy && canRedoAnything,
+      run: () => void redoAnything(),
     },
     {
       id: "select-all",
@@ -1477,10 +1662,16 @@ import StartScreen from "./lib/StartScreen.svelte";
       return;
     }
     void inspectBlock(block.x, block.y, block.z);
-    // Selecting something is the gesture that wants the tools. Closing the
-    // panel is therefore "not now" rather than "never" -- which is what keeps
-    // it from being a thing a user can lose.
-    toolsOpen = true;
+    /*
+     * The tools no longer reappear here.
+     *
+     * They used to, on the grounds that closing them meant "not now" and a
+     * panel you can dismiss for good is one you can lose. That reasoning
+     * assumed there was no way back — there is one now, a button in the corner
+     * of the viewport — and without it "close" did not mean close: the panel
+     * came back on the very next selection, which is the gesture you were
+     * most likely to make next.
+     */
     if (block.extend && anchor !== null) {
       selection = {
         minX: Math.min(anchor.x, block.x),
@@ -1519,7 +1710,6 @@ import StartScreen from "./lib/StartScreen.svelte";
 
   function selectAll(): void {
     if (!docState) return;
-    toolsOpen = true;
     anchor = { x: 0, y: 0, z: 0 };
     selection = {
       minX: 0,
@@ -1997,18 +2187,8 @@ import StartScreen from "./lib/StartScreen.svelte";
   version={project?.version ?? versionNameOf(docState?.dataVersion ?? null) ?? settings.version}
   onclose={() => (inventoryOpen = false)}
   onpick={(block) => {
-    /*
-     * Into the hotbar in creative, into the picker otherwise. The inventory is
-     * how you fill a slot, and in orbit mode there is no slot to fill -- so it
-     * writes to whichever control is the one saying what gets placed.
-     */
-    if (cameraMode === "fly") {
-      void patchUi({
-        hotbar: settings.ui.hotbar.map((id, at) => (at === settings.ui.hotbarSlot ? block : id)),
-      });
-    } else {
-      activeBlock = block;
-    }
+    // Always into the hand, which is always the active slot -- see `holdBlock`.
+    holdBlock(block);
   }}
 />
 
@@ -2065,8 +2245,10 @@ import StartScreen from "./lib/StartScreen.svelte";
     <DocumentBar
       doc={docState}
       {busy}
-      onundo={() => runDocument(t("task.undoing"), () => api().undo())}
-      onredo={() => runDocument(t("task.redoing"), () => api().redo())}
+      canundo={canUndoAnything}
+      canredo={canRedoAnything}
+      onundo={() => void undoAnything()}
+      onredo={() => void redoAnything()}
     />
 
     <div class="camera-modes" role="group" aria-label={t("viewport.cameraMode")}>
@@ -2380,6 +2562,22 @@ import StartScreen from "./lib/StartScreen.svelte";
       </div>
     {/if}
 
+    <!--
+      The way back to the tools, and the reason "close" can mean close.
+      Top-left, which is where the window itself opens, so the panel appears
+      more or less from under the button that summoned it.
+    -->
+    {#if docState && !toolsOpen}
+      <button
+        class="icon reopen-tools"
+        onclick={() => (toolsOpen = true)}
+        title={t("command.showTools")}
+        aria-label={t("command.showTools")}
+      >
+        &#x2317;
+      </button>
+    {/if}
+
     {#if docState && toolsOpen}
       <ToolWindow
         title={t("selection.legend")}
@@ -2402,7 +2600,7 @@ import StartScreen from "./lib/StartScreen.svelte";
           {busy}
           blocks={blockRegistry}
           block={activeBlock}
-          onblockchange={(next) => (activeBlock = next)}
+          onblockchange={holdBlock}
           palette={docState?.palette ?? []}
           {clipboard}
           onfill={fillSelection}
@@ -2458,6 +2656,8 @@ import StartScreen from "./lib/StartScreen.svelte";
       framingKey={framingEpoch}
       onbuild={docState ? onBuild : undefined}
       onselectionchange={docState ? onSelectionDragged : undefined}
+      onselectiongesture={docState ? onSelectionGesture : undefined}
+      onpickmaterial={docState ? onPickMaterial : undefined}
       documentSize={docState?.size ?? null}
       ongridselect={docState ? onGridSelect : undefined}
       ongridplace={docState ? (at) => void onGridPlace(at) : undefined}
@@ -2471,13 +2671,16 @@ import StartScreen from "./lib/StartScreen.svelte";
     />
 
     <!--
-      Only in creative. In orbit mode the block to place is the picker's, and
-      two controls claiming to say what is in your hand is one too many.
+      In both camera modes. It was creative-only while orbit had a block field
+      of its own; that field writes the slot now, so there is one answer to
+      "what am I holding" and it is on screen wherever you are.
     -->
     <Hotbar
       slots={settings.ui.hotbar}
       active={settings.ui.hotbarSlot}
-      visible={docState !== null && cameraMode === "fly"}
+      visible={docState !== null}
+      ownsWheel={cameraMode === "fly"}
+      onopeninventory={() => (inventoryOpen = true)}
       onselect={(slot) => void patchUi({ hotbarSlot: slot })}
       onedit={(slot) => void patchUi({ hotbar: settings.ui.hotbar.map((id, at) => (at === slot ? activeBlock : id)) })}
     />
@@ -2597,6 +2800,17 @@ import StartScreen from "./lib/StartScreen.svelte";
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+  }
+
+  /*
+   * Where the tool window lives, so the two read as the same object: the
+   * button is what the panel collapses into.
+   */
+  .reopen-tools {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    z-index: 3;
   }
 
   /* Against the edge the panel will slide back in from. */

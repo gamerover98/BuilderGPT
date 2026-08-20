@@ -406,6 +406,7 @@ export const en = {
   "task.recovering": "Recovering unsaved work",
   "task.confirming": "Asking about unsaved changes",
   "task.closing": "Closing the schematic",
+  "task.pickingBlock": "Picking up the block",
 
   "status.failed": "{doing}: {message}",
   "status.notOnDisk": "{name} does not come from a file on disk.",

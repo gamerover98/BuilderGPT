@@ -24,11 +24,19 @@
     /** `doc`, not `state`: a prop of that name breaks every rune in the file. */
     doc: DocumentState | null;
     busy: boolean;
+    /**
+     * Whether there is anything to take back — which is not the same question
+     * as `doc.canUndo`. A selection change is undoable too, and it lives in the
+     * renderer, so main's answer alone would grey the button out with a step
+     * still waiting on the stack.
+     */
+    canundo: boolean;
+    canredo: boolean;
     onundo: () => void;
     onredo: () => void;
   }
 
-  const { doc, busy, onundo, onredo }: Props = $props();
+  const { doc, busy, canundo, canredo, onundo, onredo }: Props = $props();
 
   /**
    * The version the file will be stamped with, when it carries one at all.
@@ -67,14 +75,14 @@
   <div class="edits" role="group" aria-label={t("bar.editing")}>
     <button
       onclick={onundo}
-      disabled={busy || !doc.canUndo}
+      disabled={busy || !canundo}
       title={doc.undoLabel ?? t("doc.nothingToUndo")}
     >
       {t("doc.undo")}
     </button>
     <button
       onclick={onredo}
-      disabled={busy || !doc.canRedo}
+      disabled={busy || !canredo}
       title={doc.redoLabel ?? t("doc.nothingToRedo")}
     >
       {t("doc.redo")}

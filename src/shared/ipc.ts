@@ -491,6 +491,15 @@ export interface DocumentState {
   palette: PaletteCount[];
   dirty: boolean;
   canUndo: boolean;
+  /**
+   * How many transactions are on the undo stack.
+   *
+   * Not a dirty flag and not a cache key -- `revision` is those. This is the
+   * one number that lets the renderer interleave its own undoable steps with
+   * main's: a selection change records the depth it happened at, and Ctrl+Z
+   * takes the selection back only while no block edit has landed since.
+   */
+  undoDepth: number;
   canRedo: boolean;
   /** What the undo/redo menu items should say, or `null` when unavailable. */
   undoLabel: string | null;

@@ -115,10 +115,39 @@ async function meshOne(
  * pass is cheap -- a 1x1x1 document is a handful of triangles, and the
  * expensive half, decoding the textures, is what it exists to do once.
  */
-async function prime(blocks: readonly string[], options: DocumentPreviewOptions): Promise<void> {
-  for (const block of blocks) {
+async function prime(
+  blocks: readonly string[],
+  options: DocumentPreviewOptions,
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
+  for (const [index, block] of blocks.entries()) {
     await meshOne(block, options);
+    if (onProgress !== undefined) {
+      await breathe(index, blocks.length, onProgress);
+    }
   }
+}
+
+/**
+ * How often a long warm-up lets the process do something else.
+ *
+ * `await` alone does not: it queues a microtask, and microtasks run *before*
+ * I/O, so a loop of awaited work starves the event loop exactly as a
+ * synchronous one would. That is what froze the window while nine hundred
+ * blocks were meshed -- every IPC call, including the one opening the
+ * schematic, sat behind it. `setImmediate` runs in the check phase, after I/O,
+ * which is the yield that actually hands the process back.
+ */
+const YIELD_EVERY = 16;
+
+async function breathe(
+  index: number,
+  total: number,
+  onProgress: (done: number, total: number) => void,
+): Promise<void> {
+  if (index % YIELD_EVERY !== 0 && index !== total - 1) return;
+  onProgress(index + 1, total);
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 /**
@@ -133,17 +162,26 @@ async function prime(blocks: readonly string[], options: DocumentPreviewOptions)
 export async function warmBlockIcons(
   blocks: readonly string[],
   options: DocumentPreviewOptions,
+  onProgress: (done: number, total: number) => void = () => {},
 ): Promise<number> {
-  await prime(blocks, options);
+  /*
+   * Two passes, and the progress reported covers both -- the first is the slow
+   * one (it decodes every texture) and the second is nearly free, so a bar that
+   * counted only one of them would stall at half and then leap.
+   */
+  const total = blocks.length * 2;
+  await prime(blocks, options, (done) => onProgress(done, total));
 
   let version = settled?.version ?? 0;
   let atlas = settled?.atlas ?? null;
-  for (const block of blocks) {
+  for (const [index, block] of blocks.entries()) {
     const built = await meshOne(block, options);
-    if (built === null) continue;
-    version = built.version;
-    if (built.atlas !== null) atlas = built.atlas;
-    cache.set(`${built.version}:${block}`, built.geometry);
+    if (built !== null) {
+      version = built.version;
+      if (built.atlas !== null) atlas = built.atlas;
+      cache.set(`${built.version}:${block}`, built.geometry);
+    }
+    await breathe(blocks.length + index, total, onProgress);
   }
   if (atlas !== null) settled = { version, atlas };
 

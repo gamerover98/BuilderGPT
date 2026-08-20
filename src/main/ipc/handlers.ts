@@ -433,12 +433,21 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     if (warming === null) {
       warming = (async () => {
         const settings = await getSettings();
-        return await warmBlockIcons([...(await loadAllowedBlocks(resourcesDir()))], {
-          resourcePackPath: null,
-          fallbackResourcePackPath: await defaultResourcePackPath(),
-          biomeColor: settings.preview.biomeColor,
-          waterColor: settings.preview.waterColor,
-        });
+        const window = getWindow();
+        return await warmBlockIcons(
+          [...(await loadAllowedBlocks(resourcesDir()))],
+          {
+            resourcePackPath: null,
+            fallbackResourcePackPath: await defaultResourcePackPath(),
+            biomeColor: settings.preview.biomeColor,
+            waterColor: settings.preview.waterColor,
+          },
+          (done, total) => {
+            if (window && !window.isDestroyed()) {
+              window.webContents.send(IPC.startupProgress, { done, total });
+            }
+          },
+        );
       })();
     }
     try {

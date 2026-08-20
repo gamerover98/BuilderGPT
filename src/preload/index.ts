@@ -38,6 +38,7 @@ import {
   type PreviewRequest,
   type PreviewResponse,
   type ProgressEvent,
+  type StartupProgressEvent,
   type RecentDocument,
   type RecoveryPeekResponse,
   type SaveRequest,
@@ -152,6 +153,12 @@ const api: BgptApi = {
     const wrapped = (_event: unknown, payload: ProgressEvent) => listener(payload);
     ipcRenderer.on(IPC.progress, wrapped);
     return () => ipcRenderer.removeListener(IPC.progress, wrapped);
+  },
+
+  onStartupProgress(listener) {
+    const wrapped = (_event: unknown, payload: StartupProgressEvent) => listener(payload);
+    ipcRenderer.on(IPC.startupProgress, wrapped);
+    return () => ipcRenderer.removeListener(IPC.startupProgress, wrapped);
   },
 
   onAgentStep(listener) {

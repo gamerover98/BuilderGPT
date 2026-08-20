@@ -57,6 +57,14 @@ export const IPC = {
    * as it is scrolled.
    */
   blockIconsWarm: "bgpt:blocks:icons:warm",
+  /**
+   * main -> renderer: how far the warm-up has got.
+   *
+   * It is the one startup step slow enough to need saying so. Its own channel
+   * rather than reusing `progress`, which belongs to a generation and carries
+   * a request id this has none of.
+   */
+  startupProgress: "bgpt:startup:progress",
 
   generate: "bgpt:generate",
   preview: "bgpt:preview",
@@ -172,6 +180,12 @@ export type ProgressPhase =
   | "saving"
   | "previewing"
   | "done";
+
+/** How far the block warm-up has got, in blocks. */
+export interface StartupProgressEvent {
+  done: number;
+  total: number;
+}
 
 export interface ProgressEvent {
   /** Correlates with the `requestId` of the invoke that started the work. */
@@ -1126,6 +1140,8 @@ export interface BgptApi {
   cancelGenerate(requestId: string): Promise<boolean>;
 
   onProgress(listener: (event: ProgressEvent) => void): () => void;
+  /** How far the block warm-up has got. Only fires while it is running. */
+  onStartupProgress(listener: (event: StartupProgressEvent) => void): () => void;
   onAgentStep(listener: (event: AgentStepEvent) => void): () => void;
   /**
    * What the turn in flight is doing, as it does it.

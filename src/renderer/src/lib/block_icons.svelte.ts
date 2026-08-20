@@ -115,7 +115,17 @@ let warmed: Promise<void> | null = null;
  * Flipping `ready` is what re-triggers the callers' effects: they read it, so
  * the request goes out again on its own rather than waiting for a scroll. That
  * scroll was the old workaround, and it was the report.
+ *
+ * Startup awaits `primeBlockIcons` before the window is usable, so in practice
+ * this has already finished by the time anything asks. The lazy path stays as
+ * the floor: it is what makes a component correct on its own rather than
+ * correct because something else remembered to warm it first.
  */
+export function primeBlockIcons(): Promise<void> {
+  warm();
+  return warmed ?? Promise.resolve();
+}
+
 function warm(): void {
   if (warmed !== null) return;
   warmed = (async () => {

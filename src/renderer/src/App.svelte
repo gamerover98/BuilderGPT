@@ -25,10 +25,12 @@
   import { findOpenCodeModel, loadOpenCodeModels } from "./lib/models.svelte.js";
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
 import StartScreen from "./lib/StartScreen.svelte";
+import StartupScreen, { type StartupStep } from "./lib/StartupScreen.svelte";
 import VersionList from "./lib/VersionList.svelte";
   import Viewer, { type CameraMode, type PickedBlock } from "./lib/Viewer.svelte";
   import { api, bridgeAvailable, forIpc, bridgeMissingMessage } from "./lib/bridge.svelte.js";
   import { applyTraceEvent } from "./lib/trace.js";
+  import { primeBlockIcons } from "./lib/block_icons.svelte.js";
   import {
     emptyTimeline,
     forgetTimeline,
@@ -398,6 +400,23 @@ import VersionList from "./lib/VersionList.svelte";
 
   /** Recently opened schematics. Owned by main; re-read after every open. */
   let recentDocuments = $state<RecentDocument[]>([]);
+
+  /**
+   * What the app is doing before it can be used, and whether it still is.
+   *
+   * There was no startup phase, which was survivable until the block warm-up
+   * arrived: it is seconds of the main process, and starting it lazily meant
+   * starting it the moment a schematic opened — with every other IPC call
+   * queued behind it, which is exactly what "the program freezes" was.
+   */
+  let startupSteps = $state<StartupStep[]>([]);
+  let startingUp = $state(true);
+
+  function step(id: string, state: StartupStep["state"], progress?: { done: number; total: number }): void {
+    startupSteps = startupSteps.map((entry) =>
+      entry.id === id ? { ...entry, state, ...(progress === undefined ? {} : { progress }) } : entry,
+    );
+  }
 
   /**
    * The open schematic's own version history.
@@ -890,34 +909,79 @@ import VersionList from "./lib/VersionList.svelte";
       };
     }
 
-    void (async () => {
-      settings = await api().getSettings();
-      sidebarWidth = settings.ui.sidebarWidth;
-      sidebarCollapsed = settings.ui.sidebarCollapsed;
-      toolWindowX = settings.ui.toolWindowX;
-      toolWindowY = settings.ui.toolWindowY;
-      inspectorWindowX = settings.ui.inspectorWindowX;
-      inspectorWindowY = settings.ui.inspectorWindowY;
-      sidebarTab = settings.ui.sidebarTab;
-      hotbar = [...settings.ui.hotbar];
-      hotbarSlot = settings.ui.hotbarSlot;
-      keyStatus = await api().getKeyStatus();
-      versions = await api().listVersions();
-      artifacts = await api().listArtifacts();
-      defaultOutputDir = await api().getDefaultOutputDir();
-      blockRegistry = await api().listBlocks();
-      recentDocuments = await api().listRecentDocuments();
+    /*
+     * Startup, in named steps.
+     *
+     * The order is not decoration: the block models come last of the slow
+     * ones because everything above them is needed to draw a window at all,
+     * and they are the only step long enough that finishing without them
+     * would be a lie. Nothing here can fail in a way worth stopping for — a
+     * settings read that throws leaves the defaults, and the app is more
+     * useful up than not.
+     */
+    startupSteps = [
+      { id: "settings", label: t("startup.settings"), state: "pending" },
+      { id: "catalogue", label: t("startup.catalogue"), state: "pending" },
+      { id: "models", label: t("startup.models"), state: "pending" },
+      { id: "recent", label: t("startup.recent"), state: "pending" },
+    ];
 
-      // Asked once, at startup, before the user has done anything they could
-      // lose by answering it.
-      const found = await api().peekRecovery();
-      if (found.ok) {
-        recovery = found.recovery;
+    void (async () => {
+      try {
+        step("settings", "running");
+        settings = await api().getSettings();
+        sidebarWidth = settings.ui.sidebarWidth;
+        sidebarCollapsed = settings.ui.sidebarCollapsed;
+        toolWindowX = settings.ui.toolWindowX;
+        toolWindowY = settings.ui.toolWindowY;
+        inspectorWindowX = settings.ui.inspectorWindowX;
+        inspectorWindowY = settings.ui.inspectorWindowY;
+        sidebarTab = settings.ui.sidebarTab;
+        hotbar = [...settings.ui.hotbar];
+        hotbarSlot = settings.ui.hotbarSlot;
+        keyStatus = await api().getKeyStatus();
+        step("settings", "done");
+
+        step("catalogue", "running");
+        versions = await api().listVersions();
+        artifacts = await api().listArtifacts();
+        defaultOutputDir = await api().getDefaultOutputDir();
+        blockRegistry = await api().listBlocks();
+        step("catalogue", "done");
+
+        /*
+         * The slow one, and the reason this screen exists. Awaited here so it
+         * is over before anything can be opened -- lazily, it started the
+         * moment a schematic did, and held the process for the whole of it.
+         */
+        step("models", "running", { done: 0, total: blockRegistry.length * 2 });
+        await primeBlockIcons();
+        step("models", "done");
+
+        step("recent", "running");
+        recentDocuments = await api().listRecentDocuments();
+        // Asked once, at startup, before the user has done anything they could
+        // lose by answering it.
+        const found = await api().peekRecovery();
+        if (found.ok) {
+          recovery = found.recovery;
+        }
+        step("recent", "done");
+      } catch (err) {
+        // Up with less is better than not up: the steps that did finish stand,
+        // and whatever failed will fail again where it is asked for, with a
+        // message about what it was.
+        status = { tone: "error", text: err instanceof Error ? err.message : String(err) };
+      } finally {
+        startingUp = false;
       }
     })();
 
     const unsubscribe = api().onProgress((event) => {
       progress = event.phase === "done" ? null : event;
+    });
+    const unsubscribeStartup = api().onStartupProgress((event) => {
+      step("models", "running", event);
     });
     const unsubscribeTrace = api().onAgentTrace((event) => {
       // Every run in flight sends on one channel; a reply from a run this
@@ -957,6 +1021,7 @@ import VersionList from "./lib/VersionList.svelte";
       window.removeEventListener("keydown", onWindowKey);
       dark.removeEventListener("change", onSystemTheme);
       unsubscribe();
+      unsubscribeStartup();
       unsubscribeTrace();
       for (const off of unsubscribeMenu) off();
     };
@@ -2389,6 +2454,10 @@ import VersionList from "./lib/VersionList.svelte";
   onsavekey={saveKey}
   onclearkey={clearKey}
 />
+
+{#if startingUp}
+  <StartupScreen steps={startupSteps} />
+{/if}
 
 <main
   class:collapsed={sidebarCollapsed}

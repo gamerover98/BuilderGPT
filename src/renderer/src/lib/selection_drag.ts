@@ -231,3 +231,36 @@ export function plateScale(
   if (axis === "y") return { width: size.x, height: size.z };
   return { width: size.x, height: size.y };
 }
+
+/**
+ * What a stationary click in orbit mode means.
+ *
+ * Written out because it is the rule that broke. Selecting was made a Shift
+ * gesture so that a plain *drag* would belong to the camera — orbiting a build
+ * was close to impossible while the press that started the orbit collapsed the
+ * selection to the block underneath — and the click went along with it, which
+ * silently took the block inspector with it. Asking what a block is had never
+ * been anything but a click.
+ *
+ * A drag never reaches this: the caller only asks once the pointer has been
+ * shown to have stayed put, so nothing is taken back from the camera here.
+ *
+ * The asymmetry on a miss is deliberate and is the other half of the same
+ * lesson. Clearing the selection by clicking past the structure is right when
+ * the click *meant* something, and clicking past the structure is also the most
+ * ordinary accident there is while framing a shot — so it stays behind Shift.
+ */
+export type ClickIntent = "pick" | "extend" | "clear" | "ignore";
+
+export function clickIntent(gesture: {
+  /** Whether the ray found a block at all. */
+  readonly hit: boolean;
+  /** Shift: the modifier every selection gesture takes. */
+  readonly shift: boolean;
+  /** Ctrl: grow the selection from the anchor, the job Shift gave up. */
+  readonly ctrl: boolean;
+}): ClickIntent {
+  if (!gesture.hit) return gesture.shift ? "clear" : "ignore";
+  if (gesture.shift && gesture.ctrl) return "extend";
+  return "pick";
+}

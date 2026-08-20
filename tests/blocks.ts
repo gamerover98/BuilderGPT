@@ -14,6 +14,11 @@ import { fileURLToPath } from "url";
 
 import { parseBlockList } from "../src/main/core.js";
 import { searchBlocks } from "../src/renderer/src/lib/block_search.js";
+import {
+  ORIENTED_BLOCK_NAMES,
+  orientPlacement,
+  type PlacementLook,
+} from "../src/shared/block_orientation.js";
 import { occludesNeighbours, shapeFor } from "../src/main/pipeline/block_shapes.js";
 import { ModelBaker, type BakedBlock } from "../src/main/pipeline/model_baker.js";
 import { buildMesh, culledFaces } from "../src/main/pipeline/mesher.js";
@@ -655,6 +660,183 @@ if (pack === null) {
       Buffer.from(still.data),
       Buffer.from(otherWater.textures["minecraft:block/water_still"].data),
     ) !== 0,
+  );
+}
+
+// --- which way a placed block points -----------------------------------------
+//
+// Everything placed by hand used to land in its default state, which for a
+// block with a direction is a lie the file then carries: every staircase
+// facing north, every log standing up, every slab on the floor. The game
+// answers this from where the player is looking and which face they clicked,
+// and so does `block_orientation.ts`.
+//
+// Two kinds of check below, and both are needed. The arithmetic ones say the
+// rule is the game's rule. The baking ones say the property reaches the
+// picture -- a `facing` the mesher ignores would pass every arithmetic check
+// ever written and still place the same staircase four times.
+console.log("\n--- placement orientation ---");
+{
+  const looking = (
+    x: number,
+    y: number,
+    z: number,
+    against: PlacementLook["against"],
+    cursorY = 0,
+  ): PlacementLook => ({ direction: { x, y, z }, against, cursorY });
+
+  // North is -Z and east is +X, as Minecraft has it.
+  const north = looking(0, 0, -1, "up");
+  const east = looking(1, 0, 0, "up");
+
+  equal(
+    "a staircase rises away from you",
+    orientPlacement("minecraft:oak_stairs", north),
+    { facing: "north", half: "bottom" },
+  );
+  equal(
+    "...whichever way you happen to be turned",
+    orientPlacement("minecraft:oak_stairs", east).facing,
+    "east",
+  );
+  // A namespace and a state are both things a caller may be holding: the
+  // hotbar keeps ids, the block field keeps whatever was typed into it.
+  equal(
+    "the id may arrive bare, or spelled out, or already stated",
+    orientPlacement("oak_stairs[facing=west]", east).facing,
+    "east",
+  );
+
+  // The half rule. A click on top of something puts the new block on its
+  // floor; a click underneath puts it on the ceiling; only a side face has to
+  // ask *where* on the face, which is what the game does too.
+  equal(
+    "placed on a floor, a slab is a bottom slab",
+    orientPlacement("minecraft:oak_slab", looking(0, -1, 0, "up")),
+    { type: "bottom" },
+  );
+  equal(
+    "placed under a ceiling, it is a top slab",
+    orientPlacement("minecraft:oak_slab", looking(0, 1, 0, "down")),
+    { type: "top" },
+  );
+  equal(
+    "on the upper half of a side, it is a top slab",
+    orientPlacement("minecraft:oak_slab", looking(1, 0, 0, "west", 0.8)),
+    { type: "top" },
+  );
+  equal(
+    "on the lower half of the same side, it is not",
+    orientPlacement("minecraft:oak_slab", looking(1, 0, 0, "west", 0.2)),
+    { type: "bottom" },
+  );
+
+  // Pillars take their axis from the face, never from the look direction --
+  // laying a log down by clicking the side of a block is the whole gesture.
+  equal("a log clicked on top stands up", orientPlacement("minecraft:oak_log", north), {
+    axis: "y",
+  });
+  equal(
+    "...and clicked on a north face, lies along Z",
+    orientPlacement("minecraft:oak_log", looking(0, 0, -1, "north")),
+    { axis: "z" },
+  );
+  equal(
+    "...and on an east face, along X",
+    orientPlacement("minecraft:stripped_spruce_wood", looking(0, 0, -1, "east")),
+    { axis: "x" },
+  );
+  equal(
+    "a nether stem is a pillar",
+    orientPlacement("minecraft:crimson_hyphae", looking(0, 0, -1, "east")),
+    { axis: "x" },
+  );
+  /*
+   * The trap the suffix rule falls into if it is written as "_stem":
+   * `crimson_stem` is a pillar and `melon_stem` is a crop with an `age`.
+   * Writing an axis onto the crop invents a block state that does not exist.
+   */
+  equal(
+    "a melon stem is not, whatever its name ends with",
+    orientPlacement("minecraft:melon_stem", looking(0, 0, -1, "east")),
+    {},
+  );
+
+  // A furnace turns its front to you. It is why a freshly placed dispenser
+  // fires at the person who placed it.
+  equal("a furnace faces the player", orientPlacement("minecraft:furnace", east).facing, "west");
+  equal(
+    "...and so does a dropper, up or down included",
+    orientPlacement("minecraft:dropper", looking(0, -1, 0, "up")).facing,
+    "up",
+  );
+  // A piston is the other way round: it acts where you are pointing.
+  equal(
+    "a piston points where you are looking",
+    orientPlacement("minecraft:sticky_piston", looking(0, -1, 0, "up")).facing,
+    "down",
+  );
+
+  equal(
+    "a ladder faces out of the wall it was hung on",
+    orientPlacement("minecraft:ladder", looking(0, 0, -1, "south")),
+    { facing: "south" },
+  );
+  equal(
+    "a button on a wall knows it is on a wall",
+    orientPlacement("minecraft:stone_button", looking(0, 0, -1, "south")),
+    { face: "wall", facing: "south" },
+  );
+  equal(
+    "...and on the floor takes the direction you were facing",
+    orientPlacement("minecraft:stone_button", north),
+    { face: "floor", facing: "north" },
+  );
+
+  // Silence for anything with nothing to get wrong. An omission costs nothing;
+  // a state written onto a block that has no such property is worse than the
+  // default, because it looks deliberate.
+  equal("a plain block is left alone", orientPlacement("minecraft:stone", north), {});
+  equal("...and so is one this file does not claim to know", orientPlacement("minecraft:observer", north), {});
+
+  // Exactly 45 degrees has no right answer; having *an* answer is the point.
+  check(
+    "a diagonal look still resolves to one direction",
+    ["east", "south"].includes(orientPlacement("minecraft:oak_stairs", looking(1, 0, 1, "up")).facing),
+  );
+}
+
+// The ids this file names have to be ids. A typo writes a state onto a block
+// that does not exist, which nothing else in the app would ever notice -- the
+// same reason the block-list generator checks itself against the resource pack.
+{
+  const registry = new Set(parseBlockList(readFileSync("block_id_list.txt", "utf-8")));
+  const unknown = ORIENTED_BLOCK_NAMES.filter((name) => !registry.has(`minecraft:${name}`));
+  check("every block it claims to orient is a real block", unknown.length === 0, unknown.join(", "));
+}
+
+// And the half that says the property reaches the picture. Without it every
+// arithmetic check above would still pass against a mesher that drew the same
+// staircase four times.
+{
+  const east = await baker.bakeBlockstate(block("oak_stairs", { facing: "east", half: "bottom" }));
+  const west = await baker.bakeBlockstate(block("oak_stairs", { facing: "west", half: "bottom" }));
+  const top = await baker.bakeBlockstate(block("oak_stairs", { facing: "east", half: "top" }));
+  check(
+    "facing turns the staircase",
+    JSON.stringify(allVertices(east)) !== JSON.stringify(allVertices(west)),
+    "the mesher ignores facing, so orienting one places the same block four times",
+  );
+  check("half flips it", JSON.stringify(allVertices(east)) !== JSON.stringify(allVertices(top)));
+
+  const upright = await baker.bakeBlockstate(block("oak_log", { axis: "y" }));
+  const lying = await baker.bakeBlockstate(block("oak_log", { axis: "x" }));
+  const uvsOf = (baked: BakedBlock): string =>
+    JSON.stringify(Object.entries(baked.faces).map(([face, f]) => [face, f.textureKey, f.uvs]));
+  check(
+    "axis turns the log",
+    uvsOf(upright) !== uvsOf(lying),
+    "the baker ignores axis, so a lying log draws as a standing one",
   );
 }
 

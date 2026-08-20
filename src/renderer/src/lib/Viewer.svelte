@@ -28,7 +28,8 @@
   type GridCell,
   type Ray,
 } from "./build_grid.js";
-import { dragFace, plateScale, type Axis, type Side } from "./selection_drag.js";
+import { clickIntent, dragFace, plateScale, type Axis, type Side } from "./selection_drag.js";
+  import type { Face, PlacementLook } from "../../../shared/block_orientation.js";
 import { isTyping } from "./typing.js";
   import * as THREE from "three";
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -57,6 +58,21 @@ import { isTyping } from "./typing.js";
      * the only honest answer: the grid does not grow by being built against.
      */
     place: { x: number; y: number; z: number } | null;
+    /**
+     * Which face of the block was hit, as a compass direction.
+     *
+     * The dominant axis of the surface normal, so a cross quad's diagonal
+     * answers with the side it mostly is rather than with nothing. It is half
+     * of what decides which way a placed block ends up pointing — the other
+     * half is where the camera was looking.
+     */
+    face: Face;
+    /**
+     * How far up the hit *cell* the ray landed, 0 at its floor and 1 at its
+     * ceiling. What separates a top-half slab from a bottom-half one when the
+     * face clicked is a side.
+     */
+    cursorY: number;
   }
 
   /** Placing or removing one block, from the crosshair in flight. */
@@ -131,8 +147,19 @@ import { isTyping } from "./typing.js";
      * it.
      */
     framingKey?: string | number;
-    /** Building from the crosshair, in flight. */
-    onbuild?: (action: BuildAction, at: { x: number; y: number; z: number }) => void;
+    /**
+     * Building from the crosshair, in flight.
+     *
+     * The `look` is what lets a placed block point the way the game would
+     * point it. It has to come from here: the camera's heading and the face
+     * that was clicked both exist only inside this component, and by the time
+     * a coordinate has reached the app they are gone.
+     */
+    onbuild?: (
+      action: BuildAction,
+      at: { x: number; y: number; z: number },
+      look: PlacementLook,
+    ) => void;
     /** A face was dragged; the region is already snapped and clamped. */
     onselectionchange?: (region: Region) => void;
     /**
@@ -161,7 +188,7 @@ import { isTyping } from "./typing.js";
      */
     ongridselect?: (region: Region) => void;
     /** A click on the build grid in creative mode, meaning "put a block here". */
-    ongridplace?: (at: { x: number; y: number; z: number }) => void;
+    ongridplace?: (at: { x: number; y: number; z: number }, look: PlacementLook) => void;
     /**
      * The middle button, on a block: take what it is made of.
      *
@@ -478,15 +505,28 @@ import { isTyping } from "./typing.js";
     const ay = Math.abs(normal.y);
     const az = Math.abs(normal.z);
     let place: { x: number; y: number; z: number } | null = null;
+    let face: Face;
     if (ax >= ay && ax >= az && ax > 0) {
       place = { x: x + Math.sign(normal.x), y, z };
+      face = normal.x > 0 ? "east" : "west";
     } else if (ay >= az && ay > 0) {
       place = { x, y: y + Math.sign(normal.y), z };
+      face = normal.y > 0 ? "up" : "down";
     } else if (az > 0) {
       place = { x, y, z: z + Math.sign(normal.z) };
+      face = normal.z > 0 ? "south" : "north";
+    } else {
+      // A degenerate normal. "up" is the answer that behaves like a floor,
+      // which is the least surprising thing to place onto.
+      face = "up";
     }
 
-    return { x, y, z, extend: false, place };
+    // Measured against the *cell*, not the surface: a bottom slab's top face
+    // is halfway up its cell, and a stair placed on it belongs to the lower
+    // half exactly as one placed on a full block's side would.
+    const cursorY = hit.point.y - Math.floor(inside.y);
+
+    return { x, y, z, extend: false, place, face, cursorY };
   }
 
   /**
@@ -555,6 +595,39 @@ import { isTyping } from "./typing.js";
     if (!container) return null;
     const rect = container.getBoundingClientRect();
     return pickBlockAt(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  }
+
+  /** Reused, because this is read on every placement and allocates otherwise. */
+  const heading = new THREE.Vector3();
+
+  /**
+   * The half of a placement that is about the camera rather than the target.
+   *
+   * `against` is the face of the *existing* block, so a new block placed on
+   * top of one is placed against its `up` face -- which is what tells a slab
+   * it belongs to the lower half of its own cell.
+   */
+  function lookAt(picked: PickedBlock | null): PlacementLook {
+    if (camera) camera.getWorldDirection(heading);
+    return {
+      direction: { x: heading.x, y: heading.y, z: heading.z },
+      against: picked?.face ?? null,
+      cursorY: picked?.cursorY ?? 0,
+    };
+  }
+
+  /**
+   * The build grid is a floor, so anything put on it is placed against `up`.
+   * There is no block underneath to have been clicked, which is exactly what
+   * makes that the honest answer rather than a stand-in.
+   */
+  function lookAtGrid(): PlacementLook {
+    if (camera) camera.getWorldDirection(heading);
+    return {
+      direction: { x: heading.x, y: heading.y, z: heading.z },
+      against: "up",
+      cursorY: 0,
+    };
   }
 
   /**
@@ -1169,7 +1242,9 @@ import { isTyping } from "./typing.js";
 
         // A plain, stationary click on the build grid: put a block there.
         if (candidate !== null && gridAnchor === null) {
-          if (stayed) ongridplace?.({ x: candidate.x, y: candidate.y, z: candidate.z });
+          if (stayed) {
+            ongridplace?.({ x: candidate.x, y: candidate.y, z: candidate.z }, lookAtGrid());
+          }
           return;
         }
 
@@ -1232,26 +1307,35 @@ import { isTyping } from "./typing.js";
           const target = pickAtCrosshair();
           if (!target) return;
           if (event.button === 0) {
-            onbuild("break", { x: target.x, y: target.y, z: target.z });
+            onbuild("break", { x: target.x, y: target.y, z: target.z }, lookAt(target));
           } else if (event.button === 2 && target.place) {
-            onbuild("place", target.place);
+            onbuild("place", target.place, lookAt(target));
           }
           return;
         }
-        // Selecting is a Shift gesture now; a plain click is the camera's.
-        if (!event.shiftKey || !start || !onpick || !stayed) return;
+        if (!start || !onpick || !stayed) return;
         const picked = pickBlockAt(event.clientX, event.clientY);
-        // A Shift-click that hit nothing is reported as such rather than
-        // swallowed: it is how you *stop* having a selection, and doing nothing
-        // left no way to clear one but the button in the tools.
-        onpick(
-          picked === null
-            ? null
-            : // Ctrl grows the selection from the anchor. Shift used to mean
-              // this, and had to give the job up when it became the modifier
-              // that starts a selection at all.
-              { ...picked, extend: event.ctrlKey || event.metaKey },
-        );
+        // The rule itself is in `selection_drag.ts`, where it can be stated and
+        // tested; a pointerup handler is not somewhere a rule can be read.
+        switch (
+          clickIntent({
+            hit: picked !== null,
+            shift: event.shiftKey,
+            ctrl: event.ctrlKey || event.metaKey,
+          })
+        ) {
+          case "ignore":
+            return;
+          case "clear":
+            onpick(null);
+            return;
+          case "extend":
+            if (picked) onpick({ ...picked, extend: true });
+            return;
+          case "pick":
+            if (picked) onpick({ ...picked, extend: false });
+            return;
+        }
       };
       // Right-click places a block in flight, so the context menu must not
       // also appear. Only suppressed while flying: in orbit mode right-drag

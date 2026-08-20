@@ -531,10 +531,24 @@ two towers — and a region that collapsed every time the ray missed would be
 unusable. A sweep that never moved still falls through to the single-block pick,
 so the click keeps its inspector and its Ctrl-extend.
 
-One thing survives without Shift: a *stationary* click on the build grid places
-a block. That is how an empty schematic gets its first one, and it cannot be
-confused with an orbit — an orbit moves the pointer, and this only fires when it
-did not.
+Two things survive without Shift, and both for the same reason: an orbit moves
+the pointer, so a gesture that only fires when it *did not* takes nothing from
+the camera. A stationary click on the build grid places a block — that is how an
+empty schematic gets its first one. A stationary click on a block asks what it
+is, which is the inspector.
+
+That second one is a rule that was already broken once. Selecting was made a
+Shift gesture to keep the *drag* for the camera, and the click went along with
+it — silently taking the block inspector, because asking what a block is had
+never been anything but a click. So the rule lives in `clickIntent` in
+`selection_drag.ts` rather than in a `pointerup` handler, where a rule cannot be
+read: `tests/ui.ts` states it, and reverting to the Shift-only version fails
+three checks by name.
+
+Its asymmetry on a **miss** is deliberate. Shift-clicking past the structure
+clears the selection; a plain click past it does nothing. Clearing is right when
+the click meant something, and clicking past the build while framing a shot is
+the most ordinary accident there is.
 
 **Ctrl+Z reaches the selection, and `undoDepth` is what makes that answerable.**
 The block edits live in main and the selection lives in the renderer;
@@ -543,6 +557,36 @@ stack depth — is it. The rule is one sentence: **a selection is undone only wh
 no block edit has landed on top of it.** `selection_history.ts` holds it. A drag
 is one step rather than one per frame, which is why `Viewer.svelte` reports
 gesture boundaries at all: only it knows where the press was.
+
+**A placed block points where the game would point it.** Every block placed by
+hand used to land in its default state, which for anything with a direction is a
+lie the file then carries: every staircase `facing=north`, every log standing
+up, every slab on the floor. `shared/block_orientation.ts` answers from the two
+things the game asks — where the camera is looking, and which face was clicked —
+and it is in `shared/` because it is a fact about Minecraft rather than about a
+process: the renderer applies it at the click, which is the only place the look
+direction exists, and main will want the same answer the day the agent places a
+block the way a person does.
+
+The orientation goes **under** whatever the held block already spelled out, not
+over it: `oak_stairs[facing=north]` typed into the block field is an
+instruction, and this is only a default.
+
+A block the file does not name keeps its default state, which is exactly what
+happened before — so an omission costs nothing, while a wrong guess writes a
+state that is *worse* than the default because it looks deliberate. `observer`
+and `anvil` are left out for that reason rather than overlooked, and stairs'
+`shape` is left out because a corner is decided by the *neighbours*, which is a
+question about the document and not about the click.
+
+Two things `tests/blocks.ts` holds that are easy to lose. Every exact id the
+table names is checked against `block_id_list.txt` — a typo writes a state onto
+a block that does not exist, which nothing in the app would ever notice. And the
+properties are **baked**, because a `facing` the mesher ignored would pass every
+arithmetic check ever written and still place the same staircase four times.
+
+`_stem` is not a suffix in the pillar table and must not become one:
+`crimson_stem` is a pillar and `melon_stem` is a crop with an `age`.
 
 **The hotbar's active slot is what you are holding, in both camera modes.**
 There used to be two answers — an `activeBlock` for orbit, the hotbar for flight

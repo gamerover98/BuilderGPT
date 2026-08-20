@@ -46,6 +46,7 @@ import {
   MAX_GRID_REACH,
 } from "../src/renderer/src/lib/build_grid.js";
 import {
+  clickIntent,
   dragFace,
   dragPlaneNormal,
   faceCentre,
@@ -604,6 +605,33 @@ console.log("\n--- selection face drag ---");
       view,
     }),
     null,
+  );
+}
+
+// --- what a stationary click means -----------------------------------------
+//
+// The rule that broke. Selecting became a Shift gesture so a plain *drag*
+// would belong to the camera, and the click was taken along with it -- which
+// quietly removed the block inspector, because asking what a block is had
+// never been anything but a click. It was in an event handler, where a rule
+// cannot be read, which is why it is here now.
+console.log("\n--- click intent ---");
+{
+  const click = (hit: boolean, shift = false, ctrl = false) => clickIntent({ hit, shift, ctrl });
+
+  equal("a plain click on a block asks what it is", click(true), "pick");
+  equal("...and so does a Shift-click, which also selects it", click(true, true), "pick");
+  equal("Ctrl grows the selection, behind Shift", click(true, true, true), "extend");
+  // Ctrl without Shift is not the extend gesture: extending is a selection
+  // gesture and every one of those takes Shift.
+  equal("Ctrl alone is still a plain pick", click(true, false, true), "pick");
+
+  // The asymmetry on a miss, which is the whole of the second half of the rule.
+  equal("Shift-clicking past the structure clears the selection", click(false, true), "clear");
+  equal(
+    "...but a plain click past it does nothing, because that is the usual accident",
+    click(false),
+    "ignore",
   );
 }
 

@@ -48,6 +48,7 @@ import VersionList from "./lib/VersionList.svelte";
   import CreativeInventory from "./lib/CreativeInventory.svelte";
   import { isTyping } from "./lib/typing.js";
   import { versionNameOf } from "../../shared/mc_versions.js";
+  import { orientPlacement, type PlacementLook } from "../../shared/block_orientation.js";
   import { t, tn, setLocale } from "./lib/i18n.svelte.js";
   import {
     openCodeModelRequiresKey,
@@ -451,14 +452,30 @@ import VersionList from "./lib/VersionList.svelte";
   /**
    * Building from the crosshair. One block, one transaction — the same edit the
    * panel makes, so Ctrl+Z treats them alike.
+   *
+   * The block is turned to face the way the game would turn it. That is a
+   * default and not an instruction, which is why the orientation goes *under*
+   * whatever the held block already spelled out: `oak_stairs[facing=north]`
+   * typed into the block field means north, wherever the camera happens to be
+   * pointing.
    */
   async function onBuild(
     action: "place" | "break",
     at: { x: number; y: number; z: number },
+    look: PlacementLook,
   ): Promise<void> {
     if (busy) return;
+    const held = parseBlock(placingBlock);
     const block =
-      action === "break" ? { namespacedName: "minecraft:air" } : parseBlock(placingBlock);
+      action === "break"
+        ? { namespacedName: "minecraft:air" }
+        : {
+            ...held,
+            properties: {
+              ...orientPlacement(held.namespacedName, look),
+              ...(held.properties ?? {}),
+            },
+          };
     await runDocument(action === "break" ? t("task.breakingBlock") : t("task.placingBlock"), () =>
       api().applyEdit({ kind: "setBlock", x: at.x, y: at.y, z: at.z, block }),
     );
@@ -605,9 +622,12 @@ import VersionList from "./lib/VersionList.svelte";
    * built yet "click the floor" plainly means place, and requiring a one-cell
    * drag first would be a rule with nothing behind it.
    */
-  async function onGridPlace(at: { x: number; y: number; z: number }): Promise<void> {
+  async function onGridPlace(
+    at: { x: number; y: number; z: number },
+    look: PlacementLook,
+  ): Promise<void> {
     if (busy || cameraMode !== "orbit") return;
-    await onBuild("place", at);
+    await onBuild("place", at, look);
   }
 
   /**
@@ -2902,13 +2922,13 @@ import VersionList from "./lib/VersionList.svelte";
       {cameraMode}
       flySpeed={settings.preview.flySpeed}
       framingKey={framingEpoch}
-      onbuild={docState ? onBuild : undefined}
+      onbuild={docState ? (action, at, look) => void onBuild(action, at, look) : undefined}
       onselectionchange={docState ? onSelectionDragged : undefined}
       onselectiongesture={docState ? onSelectionGesture : undefined}
       onpickmaterial={docState ? onPickMaterial : undefined}
       documentSize={docState?.size ?? null}
       ongridselect={docState ? onGridSelect : undefined}
-      ongridplace={docState ? (at) => void onGridPlace(at) : undefined}
+      ongridplace={docState ? (at, look) => void onGridPlace(at, look) : undefined}
       maxDpr={settings.preview.maxDpr}
       renderScale={settings.preview.renderScale}
       maxDrawDistance={settings.preview.maxDrawDistance}

@@ -24,6 +24,7 @@
   import ToolWindow from "./lib/ToolWindow.svelte";
   import { findOpenCodeModel, loadOpenCodeModels } from "./lib/models.svelte.js";
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
+import StartScreen from "./lib/StartScreen.svelte";
   import Viewer, { type CameraMode, type PickedBlock } from "./lib/Viewer.svelte";
   import { api, bridgeAvailable, forIpc, bridgeMissingMessage } from "./lib/bridge.svelte.js";
   import { applyTraceEvent } from "./lib/trace.js";
@@ -1255,7 +1256,23 @@
     }
     const response = await api().getDocumentMesh(forIpc(settings.preview));
     if (!response.ok) {
-      status = { tone: "warn", text: response.message };
+      /*
+       * Cleared either way. Leaving the last mesh up meant deleting every block
+       * left its ghost on screen, still selectable, until something else
+       * happened to succeed.
+       */
+      mesh = null;
+      bounds = null;
+      /*
+       * An empty document is not a failure; it is where every build starts.
+       * `buildDocumentPreview` raises `EmptyPreviewError` rather than handing
+       * back an empty mesh, which is right for previewing a *generated* file
+       * and wrong for the editor — so pressing New was answered with "the
+       * schematic contains no blocks other than air" every single time.
+       */
+      if (docState.blockCount > 0) {
+        status = { tone: "warn", text: response.message };
+      }
       return;
     }
     mesh = response.mesh;
@@ -2288,6 +2305,22 @@
       scrolling column used to render above the fold, off-screen -- visually
       indistinguishable from nothing happening.
     -->
+    <!--
+      Nothing open: say so, and offer the two things that fix it. Above the
+      canvas rather than instead of it -- the scene keeps its floor, and the
+      card is the only part that takes the pointer, so a file can still be
+      dropped anywhere around it.
+    -->
+    {#if docState === null && recovery === null}
+      <StartScreen
+        recent={recentDocuments}
+        {busy}
+        onnew={() => void startNewDocument()}
+        onopen={() => void openDocument()}
+        onopenrecent={openDocumentAt}
+      />
+    {/if}
+
     {#if dropActive}
       <div class="drop-hint" aria-hidden="true">
         <strong>{t("viewport.dropTitle")}</strong>

@@ -114,9 +114,17 @@
       <ul class="recent">
         {#each generated as artifact (artifact.path)}
           <li class="generated">
+            <!--
+              Only a `.schem` opens. An `.mcfunction` is a list of commands and
+              nothing in this app reads one back, so its row reveals instead --
+              a button whose only outcome is an error would be worse than one
+              that does the single thing the file supports, and a disabled row
+              worse still, since nothing on it would say why.
+            -->
             <button
               class="row"
-              onclick={() => onopenartifact(artifact)}
+              onclick={() =>
+                artifact.type === "schem" ? onopenartifact(artifact) : onrevealartifact(artifact)}
               disabled={busy}
               title={artifact.path}
             >

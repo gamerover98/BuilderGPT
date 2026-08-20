@@ -27,12 +27,22 @@
  * viewport sets. The same pixels therefore drew darker and flatter in the
  * inventory than in the scene they were previews of.
  *
- * **Wrong on first open, right after scrolling:** requests overlapped. Each one
- * built its result from the `painted` map as it found it and then replaced the
- * whole map, so a slower response overwrote a faster one's work; scrolling away
- * and back re-requested and usually won the race. Requests are serialised now,
- * one queue, and the texture is uploaded with `initTexture` before the first
- * render rather than lazily on it.
+ * **Wrong on first open, right after scrolling:** the atlas was growing under
+ * the icons. The baker decodes a texture the first time a block asks for it and
+ * the atlas version *is* the texture count, so a batch of sixty came back as
+ * sixty geometries each addressing a different layout, with one atlas to draw
+ * them all. Fifty-nine were wrong, and scrolling looked like a cure only
+ * because by then everything had been decoded and the count had stopped moving.
+ *
+ * Main settles the atlas per batch now, which fixes any one batch. The rest is
+ * here: nothing is drawn until `warmBlockIcons` has meshed the whole block list
+ * once, because an atlas that is still growing invalidates every icon already
+ * drawn — visible as the grid blanking and refilling as it is scrolled. After
+ * the warm-up main holds every block's geometry and a request is a cache hit.
+ *
+ * Requests are also serialised, one queue: overlapping ones each built their
+ * result from the `painted` map as they found it and then replaced the whole
+ * map, so a slower response erased a faster one's work.
  *
  * ## Shading, because an unlit cube is a coloured square
  *
@@ -51,6 +61,9 @@ import { api, bridgeAvailable } from "./bridge.svelte.js";
 
 /** The rendered size. Tiles are drawn smaller; the extra is for crispness. */
 const ICON_SIZE = 72;
+
+/** How many icons are drawn before the frame is let through. */
+const PAINT_SLICE = 12;
 
 /**
  * Vanilla's face shading, by the sign and axis of the normal.
@@ -80,6 +93,57 @@ let painted = $state<Map<string, string>>(new Map());
 
 /** Blocks already asked for, so a scroll does not ask twice. */
 let requested = new Set<string>();
+
+/**
+ * The one-time warm-up, held as a promise so everyone joins the same one.
+ *
+ * `null` until something needs an icon: there is no reason to spend a few
+ * seconds of the main process on someone who never opens the block list.
+ */
+let warmed: Promise<void> | null = null;
+
+/**
+ * Starts the warm-up, once, and repaints everything when it lands.
+ *
+ * Not awaited before the first paint, deliberately. Meshing nine hundred
+ * blocks takes seconds, and holding every tile blank for them would trade one
+ * visible fault for a worse one. So icons are drawn straight away against
+ * whatever the atlas is, and when it settles the drawn ones are thrown away and
+ * asked for again — main has them cached by then, so the second pass is a
+ * round trip and a repaint rather than any real work.
+ *
+ * Flipping `ready` is what re-triggers the callers' effects: they read it, so
+ * the request goes out again on its own rather than waiting for a scroll. That
+ * scroll was the old workaround, and it was the report.
+ */
+function warm(): void {
+  if (warmed !== null) return;
+  warmed = (async () => {
+    if (!bridgeAvailable) return;
+    try {
+      await api().warmBlockIcons();
+    } catch {
+      // Icons still work without it, they just churn as the atlas grows.
+      // Not worth a banner: nothing the user asked for has failed.
+    }
+  })().then(() => {
+    painted = new Map();
+    requested = new Set();
+    ready = true;
+  });
+}
+
+/**
+ * Whether the atlas has settled.
+ *
+ * Read it from an effect that requests icons: that is what makes the repaint
+ * happen by itself when the warm-up lands.
+ */
+let ready = $state(false);
+
+export function iconsReady(): boolean {
+  return ready;
+}
 
 let gl: THREE.WebGLRenderer | undefined;
 let scene: THREE.Scene | undefined;
@@ -211,6 +275,8 @@ export function requestBlockIcons(blocks: readonly string[]): void {
   if (wanted.length === 0 || !bridgeAvailable) return;
   for (const block of wanted) requested.add(block);
 
+  warm();
+
   queue = queue.then(async () => {
     let response;
     try {
@@ -229,11 +295,25 @@ export function requestBlockIcons(blocks: readonly string[]): void {
 
     ensureRenderer();
     adoptAtlas(response.atlas, response.atlasVersion);
-    const next = new Map(painted);
-    for (const icon of response.icons) {
-      const url = paint(icon);
-      if (url !== null) next.set(icon.block, url);
+
+    /*
+     * Painted in slices, yielding between them.
+     *
+     * Each icon is a render and a `toDataURL`, and a hundred of them back to
+     * back is a hundred milliseconds in which the window does not repaint --
+     * felt as the scroll sticking. Yielding lets the frame through, and the map
+     * is published each time so tiles appear as they are drawn rather than all
+     * at the end.
+     */
+    let next = new Map(painted);
+    for (let at = 0; at < response.icons.length; at += PAINT_SLICE) {
+      for (const icon of response.icons.slice(at, at + PAINT_SLICE)) {
+        const url = paint(icon);
+        if (url !== null) next.set(icon.block, url);
+      }
+      painted = next;
+      next = new Map(next);
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
-    painted = next;
   });
 }

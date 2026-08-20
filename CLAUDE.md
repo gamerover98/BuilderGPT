@@ -522,6 +522,15 @@ the press that started the orbit landed on it and collapsed the selection to the
 block underneath. Shift-click a block, Shift-drag the grid, Shift-drag a face.
 **Ctrl** took over "grow the selection from the anchor", the job Shift gave up.
 
+Shift-dragging *across the structure* sweeps out a region, which is what anyone
+tries first: before it, a Shift-press on the blocks could only ever produce the
+one block under it, so picking out a wall meant clicking a corner and then
+dragging a face. The reached cell is remembered rather than recomputed, because
+a sweep leaves the structure constantly — the pointer passes over sky between
+two towers — and a region that collapsed every time the ray missed would be
+unusable. A sweep that never moved still falls through to the single-block pick,
+so the click keeps its inspector and its Ctrl-extend.
+
 One thing survives without Shift: a *stationary* click on the build grid places
 a block. That is how an empty schematic gets its first one, and it cannot be
 confused with an orbit — an orbit moves the pointer, and this only fires when it
@@ -728,8 +737,29 @@ which was visibly wrong first:
 - **Requests are serialised, and the texture is uploaded with `initTexture`.**
   Overlapping requests each built their result from the icon map as they found
   it and then replaced the whole map, so a slower response erased a faster one's
-  work — which is why half the tiles were wrong until a scroll re-requested
-  them and happened to win.
+  work.
+
+**The atlas grows as blocks are meshed, and its version *is* the texture count.**
+That is the fault behind "the icons are wrong until I scroll", and it was in
+main, not the renderer: the baker decodes a texture the first time a block asks
+for it, so meshing sixty blocks in a row produced sixty geometries each with UVs
+into a *different* layout, and one atlas to draw them all with. Fifty-nine were
+wrong. Scrolling looked like a cure only because by then everything had been
+decoded and the count had stopped moving.
+
+Two things follow, and both are load-bearing:
+
+- **`buildBlockIcons` primes before it meshes** — a first pass whose geometry is
+  thrown away, purely to make the atlas stop moving. `tests/services.ts` proves
+  it by calling twice and requiring identical UVs; delete the priming pass and
+  that check fails.
+- **`warmBlockIcons` meshes every block once**, because an atlas that grows
+  invalidates every icon already drawn. It is not awaited before the first
+  paint — nine hundred blocks is seconds, and blank tiles for all of them would
+  trade one visible fault for a worse one — so icons are drawn immediately and
+  redrawn once when it settles. `iconsReady()` is what makes that redraw happen
+  by itself: the callers read it inside the effect that requests, so the
+  re-request needs no scroll. Waiting for a scroll *was* the bug report.
 
 **A schematic's version history is not the chat's checkpoints.** `snapshots.ts`
 keys on the *file path* and lives under `userData/versions`, so it outlives the

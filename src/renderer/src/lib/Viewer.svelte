@@ -358,6 +358,21 @@ import { isTyping } from "./typing.js";
    * remembered and only used if the pointer never moved.
    */
   let placeCandidate: GridCell | null = null;
+
+  /**
+   * Where a Shift-drag across the structure began, and where it has reached.
+   *
+   * Selecting a region used to need the build grid: on the blocks themselves a
+   * Shift-press could only ever produce the one block under it, so picking out
+   * a wall meant clicking a corner and then dragging a face. Holding Shift and
+   * sweeping is what everyone tries first.
+   *
+   * The last cell is kept because a sweep leaves the structure constantly — the
+   * pointer passes over sky between two towers — and a region that collapsed
+   * every time the ray missed would be unusable.
+   */
+  let blockAnchor: { x: number; y: number; z: number } | null = null;
+  let blockReach: { x: number; y: number; z: number } | null = null;
   let lastGridAt = 0;
 
   /**
@@ -1020,9 +1035,31 @@ import { isTyping } from "./typing.js";
 
         const face = faceAt(event.clientX, event.clientY);
         if (face === null) {
+          /*
+           * A Shift-press on the structure starts a sweep. The block under it
+           * is both ends of the region until the pointer moves, so releasing
+           * without moving still selects exactly that block — the gesture this
+           * replaces, kept intact inside the one that generalises it.
+           */
+          const hit = pickBlockAt(event.clientX, event.clientY);
+          if (hit !== null) {
+            blockAnchor = { x: hit.x, y: hit.y, z: hit.z };
+            blockReach = blockAnchor;
+            draggedThisGesture = true;
+            onselectiongesture?.("start");
+            if (controls) controls.enabled = false;
+            try {
+              renderer?.domElement.setPointerCapture(event.pointerId);
+            } catch {
+              // Best effort; the drag still tracks while the pointer is in bounds.
+            }
+            event.preventDefault();
+            return;
+          }
+
           // Nothing solid under the pointer, but the grid is there.
           const cell = gridCellAt(event.clientX, event.clientY);
-          if (cell === null || pickBlockAt(event.clientX, event.clientY) !== null) return;
+          if (cell === null) return;
           gridAnchor = cell;
           gridCell = cell;
           draggedThisGesture = true;
@@ -1053,6 +1090,20 @@ import { isTyping } from "./typing.js";
         pointerAt = { x: event.clientX, y: event.clientY };
         if (dragged !== null) {
           dragTo(event.clientX, event.clientY);
+          return;
+        }
+        /*
+         * A sweep across the structure. Not throttled, for the same reason the
+         * grid drag below is not: a drag is the user actively saying where the
+         * box goes, and a region lagging fifty milliseconds behind the pointer
+         * feels broken in a way a highlight does not.
+         */
+        if (blockAnchor !== null) {
+          const hit = pickBlockAt(event.clientX, event.clientY);
+          if (hit !== null) blockReach = { x: hit.x, y: hit.y, z: hit.z };
+          if (blockReach !== null) {
+            onselectionchange?.(regionBetween(blockAnchor, blockReach));
+          }
           return;
         }
         // Not throttled, unlike the hover: a drag is the user actively saying
@@ -1092,6 +1143,28 @@ import { isTyping } from "./typing.js";
             cameraMode === "fly" ? pickAtCrosshair() : pickBlockAt(event.clientX, event.clientY);
           if (target) onpickmaterial({ x: target.x, y: target.y, z: target.z });
           return;
+        }
+
+        /*
+         * The end of a sweep. A press that never moved falls through to the
+         * single-block pick below, which is what carries the Ctrl-extend and
+         * the inspector — a sweep of one block is still a click.
+         */
+        if (blockAnchor !== null) {
+          const swept = !stayed && blockReach !== null;
+          blockAnchor = null;
+          blockReach = null;
+          if (controls) controls.enabled = true;
+          try {
+            renderer?.domElement.releasePointerCapture(event.pointerId);
+          } catch {
+            // Nothing captured; nothing to release.
+          }
+          onselectiongesture?.("end");
+          if (swept) {
+            draggedThisGesture = false;
+            return;
+          }
         }
 
         // A plain, stationary click on the build grid: put a block there.

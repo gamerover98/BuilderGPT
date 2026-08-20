@@ -24,7 +24,7 @@
    * be the one that failed to persist.
    */
   import { HOTBAR_SLOTS } from "../../../shared/settings.js";
-  import { blockIcons, requestBlockIcons } from "./block_icons.svelte.js";
+  import { blockIcons, iconsReady, requestBlockIcons } from "./block_icons.svelte.js";
   import { t } from "./i18n.svelte.js";
   import { isTyping } from "./typing.js";
 
@@ -70,6 +70,8 @@
 
   $effect(() => {
     if (!visible) return;
+    // Read, so the warm-up landing re-draws these rather than leaving them wrong.
+    void iconsReady();
     requestBlockIcons(slots);
   });
 

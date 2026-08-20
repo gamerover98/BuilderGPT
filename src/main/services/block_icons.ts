@@ -60,7 +60,7 @@ const cache = new Map<string, ChunkGeometry | null>();
  * Each entry is one block's worth of triangles — a few kilobytes — so this is
  * megabytes at worst, against a 900-block list somebody may scroll all of.
  */
-const MAX_CACHED_ICONS = 2048;
+const MAX_CACHED_ICONS = 4096;
 
 /** A one-block document, which is what an icon is a picture of. */
 function documentFor(block: string): SchematicDocument {
@@ -69,55 +69,149 @@ function documentFor(block: string): SchematicDocument {
   return doc;
 }
 
+/**
+ * The atlas the cached geometry addresses, once it has stopped moving.
+ *
+ * Held because a caller that already has this version needs no pixels back,
+ * and because a cache key without it would be a lie -- see `buildBlockIcons`.
+ */
+let settled: { version: number; atlas: MeshAtlas } | null = null;
+
+/**
+ * Meshes one block and reports which atlas its UVs address.
+ *
+ * `null` geometry for anything the mesher declines to draw, which is a tile
+ * with a placeholder in it rather than a failed request: one bad id must not
+ * empty the whole inventory.
+ */
+async function meshOne(
+  block: string,
+  options: DocumentPreviewOptions,
+): Promise<{ geometry: ChunkGeometry | null; atlas: MeshAtlas | null; version: number } | null> {
+  try {
+    const preview = await buildDocumentPreview(documentFor(block), options);
+    return {
+      geometry: preview.mesh.chunks[0] ?? null,
+      atlas: preview.mesh.atlas,
+      version: preview.mesh.atlasVersion,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Decodes what a set of blocks needs, so the atlas stops growing under them.
+ *
+ * This is the whole bug, and it was not in the renderer. The baker decodes a
+ * texture the first time a block asks for it, and `atlasVersion` *is* the
+ * texture count -- so meshing sixty blocks in a row produced sixty geometries,
+ * each with UVs addressing a different atlas layout, and one atlas to draw them
+ * all with. Fifty-nine of them were wrong. Scrolling away and back looked like
+ * a fix because by then everything had been decoded and the count had stopped
+ * changing.
+ *
+ * So: prime first, discarding what it builds, and only then mesh. The discarded
+ * pass is cheap -- a 1x1x1 document is a handful of triangles, and the
+ * expensive half, decoding the textures, is what it exists to do once.
+ */
+async function prime(blocks: readonly string[], options: DocumentPreviewOptions): Promise<void> {
+  for (const block of blocks) {
+    await meshOne(block, options);
+  }
+}
+
+/**
+ * Meshes every block there is, so the atlas reaches its final size once.
+ *
+ * Without this the atlas keeps growing as someone scrolls, and every growth
+ * invalidates every icon already drawn -- correct, and visible as the whole
+ * grid blanking and refilling. Nine hundred one-block documents is a few
+ * seconds in the main process, spent once, off the renderer's thread; the
+ * geometry is kept, so afterwards every request is a cache hit.
+ */
+export async function warmBlockIcons(
+  blocks: readonly string[],
+  options: DocumentPreviewOptions,
+): Promise<number> {
+  await prime(blocks, options);
+
+  let version = settled?.version ?? 0;
+  let atlas = settled?.atlas ?? null;
+  for (const block of blocks) {
+    const built = await meshOne(block, options);
+    if (built === null) continue;
+    version = built.version;
+    if (built.atlas !== null) atlas = built.atlas;
+    cache.set(`${built.version}:${block}`, built.geometry);
+  }
+  if (atlas !== null) settled = { version, atlas };
+
+  evict();
+  return version;
+}
+
 export async function buildBlockIcons(
   blocks: readonly string[],
   options: DocumentPreviewOptions,
   knownAtlasVersion: number | null,
 ): Promise<BlockIconsResult> {
-  const icons: BlockIcon[] = [];
-  let atlas: MeshAtlas | null = null;
-  let atlasVersion = knownAtlasVersion ?? 0;
+  const wanted = [...new Set(blocks)];
 
-  for (const block of blocks) {
-    const key = `${atlasVersion}:${block}`;
-    const hit = cache.get(key);
-    if (hit !== undefined) {
-      icons.push({ block, geometry: hit });
-      continue;
-    }
-
-    let geometry: ChunkGeometry | null = null;
-    try {
-      const preview = await buildDocumentPreview(documentFor(block), options);
-      geometry = preview.mesh.chunks[0] ?? null;
-      // The first real build settles the version, and every later key uses it.
-      // Doing this inside the loop rather than before it keeps the cache honest
-      // when a resource pack changes between calls.
-      if (preview.mesh.atlas !== null && preview.mesh.atlasVersion !== knownAtlasVersion) {
-        atlas = preview.mesh.atlas;
-      }
-      atlasVersion = preview.mesh.atlasVersion;
-    } catch {
-      // A block the mesher will not draw is a tile with a placeholder in it,
-      // not a failed request: one bad id must not empty the whole inventory.
-      geometry = null;
-    }
-
-    cache.set(`${atlasVersion}:${block}`, geometry);
-    icons.push({ block, geometry });
+  /*
+   * The fast path, and after a warm-up it is the only one: every block already
+   * meshed against the atlas that is still in force.
+   */
+  if (settled !== null && wanted.every((block) => cache.has(`${settled!.version}:${block}`))) {
+    return {
+      icons: wanted.map((block) => ({
+        block,
+        geometry: cache.get(`${settled!.version}:${block}`) ?? null,
+      })),
+      atlas: knownAtlasVersion === settled.version ? null : settled.atlas,
+      atlasVersion: settled.version,
+    };
   }
 
-  // Oldest-first eviction, which `Map` gives for free by insertion order.
+  await prime(wanted, options);
+
+  const icons: BlockIcon[] = [];
+  let version = settled?.version ?? 0;
+  let atlas = settled?.atlas ?? null;
+  for (const block of wanted) {
+    const built = await meshOne(block, options);
+    if (built === null) {
+      icons.push({ block, geometry: null });
+      continue;
+    }
+    version = built.version;
+    if (built.atlas !== null) atlas = built.atlas;
+    cache.set(`${built.version}:${block}`, built.geometry);
+    icons.push({ block, geometry: built.geometry });
+  }
+  if (atlas !== null) settled = { version, atlas };
+
+  evict();
+  return {
+    icons,
+    // Only when the caller does not already hold it: the pixels are the large
+    // part of this message and re-sending them is most of its cost.
+    atlas: knownAtlasVersion === version ? null : atlas,
+    atlasVersion: version,
+  };
+}
+
+/** Oldest-first eviction, which `Map` gives for free by insertion order. */
+function evict(): void {
   while (cache.size > MAX_CACHED_ICONS) {
     const oldest = cache.keys().next();
     if (oldest.done === true) break;
     cache.delete(oldest.value);
   }
-
-  return { icons, atlas, atlasVersion };
 }
 
 /** Drops every cached icon. Called when the resource pack changes. */
 export function forgetBlockIcons(): void {
   cache.clear();
+  settled = null;
 }

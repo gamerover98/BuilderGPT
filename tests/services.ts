@@ -73,6 +73,7 @@ import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/services/versions.js";
 import { coerceSettings, coerceUi } from "../src/main/services/settings_coerce.js";
 import { discardPrompt } from "../src/main/services/discard_prompt.js";
+import { buildBlockIcons, forgetBlockIcons } from "../src/main/services/block_icons.js";
 import {
   addSnapshot,
   coerceSnapshots,
@@ -328,6 +329,60 @@ try {
     check(
       "editing a block changes the render",
       meshDigest(fromDocument.mesh) !== meshDigest(afterEdit.mesh),
+    );
+
+    /*
+     * Block icons, and the property that was broken: every geometry in one
+     * batch has to address the atlas that comes back with it.
+     *
+     * The baker decodes a texture the first time a block asks for it, and the
+     * atlas version *is* the texture count -- so meshing blocks one after
+     * another produced a geometry per block, each with UVs into a different
+     * layout, and one atlas to draw them all with. All but the last were wrong.
+     *
+     * The referee is a second call. Once everything is decoded the atlas cannot
+     * grow, so a settled first call must produce exactly what the second one
+     * does. Before the fix the first call's UVs were built against atlases that
+     * no longer existed and the two disagreed.
+     */
+    console.log("\n--- block icons ---");
+    forgetBlockIcons();
+    clearBakerCache();
+    const iconBlocks = [
+      "minecraft:stone",
+      "minecraft:oak_planks",
+      "minecraft:glass",
+      "minecraft:oak_stairs",
+      "minecraft:cobblestone",
+      "minecraft:sandstone",
+      "minecraft:bricks",
+      "minecraft:oak_log",
+    ];
+    const iconOptions = { resourcePackPath: null, fallbackResourcePackPath: bundledPack };
+
+    const firstPass = await buildBlockIcons(iconBlocks, iconOptions, null);
+    const secondPass = await buildBlockIcons(iconBlocks, iconOptions, firstPass.atlasVersion);
+
+    equal("every block asked for comes back", firstPass.icons.length, iconBlocks.length);
+    check("the first batch carries its atlas", firstPass.atlas !== null);
+    equal(
+      "a caller that already holds the atlas is not sent it again",
+      secondPass.atlas,
+      null,
+    );
+    equal("the atlas has settled between calls", secondPass.atlasVersion, firstPass.atlasVersion);
+
+    const uvsOf = (result: typeof firstPass): string =>
+      result.icons.map((icon) => (icon.geometry === null ? "-" : [...icon.geometry.uvs].join(","))).join("|");
+    check(
+      "every icon in a batch addresses the atlas that came with it",
+      uvsOf(firstPass) === uvsOf(secondPass),
+      "the first pass meshed against an atlas that was still growing",
+    );
+
+    check(
+      "and they are real geometry, not empty",
+      firstPass.icons.every((icon) => icon.geometry !== null && icon.geometry.indices.length > 0),
     );
 
     // The baker cache is the point of the exercise. Reading the bundled pack is

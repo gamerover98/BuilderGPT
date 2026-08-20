@@ -120,7 +120,7 @@ import {
   useCheckpointDirectory,
 } from "../services/checkpoints.js";
 import { loadAllowedBlocks, traceOf } from "../core.js";
-import { buildBlockIcons } from "../services/block_icons.js";
+import { buildBlockIcons, warmBlockIcons } from "../services/block_icons.js";
 import { listArtifacts } from "../services/artifacts.js";
 import { SchematicFormatError } from "../pipeline/loader.js";
 import { classifyGenerateError, generate } from "../services/generate.js";
@@ -415,6 +415,41 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       }
     },
   );
+
+  /*
+   * Meshes every block once, so the atlas stops growing under the icons.
+   *
+   * Slow on purpose and only ever once: the expensive half is decoding
+   * textures, which the baker then holds. It runs in main, so the window stays
+   * responsive while it does — and the renderer waits for it before drawing a
+   * single icon, because an icon drawn against an atlas that is about to change
+   * is an icon that will have to be thrown away.
+   *
+   * The promise is held rather than the result, so a second caller arriving
+   * mid-warm joins the one in flight instead of starting another.
+   */
+  let warming: Promise<number> | null = null;
+  ipcMain.handle(IPC.blockIconsWarm, async (): Promise<number> => {
+    if (warming === null) {
+      warming = (async () => {
+        const settings = await getSettings();
+        return await warmBlockIcons([...(await loadAllowedBlocks(resourcesDir()))], {
+          resourcePackPath: null,
+          fallbackResourcePackPath: await defaultResourcePackPath(),
+          biomeColor: settings.preview.biomeColor,
+          waterColor: settings.preview.waterColor,
+        });
+      })();
+    }
+    try {
+      return await warming;
+    } catch {
+      // Let it be asked for again: a warm-up that failed leaves the icons
+      // working exactly as they did before it, only slower.
+      warming = null;
+      return 0;
+    }
+  });
 
   ipcMain.handle(IPC.artifactsList, async (): Promise<Artifact[]> => await listArtifacts());
 

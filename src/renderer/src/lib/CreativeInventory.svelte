@@ -15,7 +15,7 @@
    * not something this project's test harness can produce — the same split
    * `build_grid.ts` and `selection_drag.ts` use.
    */
-  import { blockIcons, requestBlockIcons } from "./block_icons.svelte.js";
+  import { blockIcons, iconsReady, requestBlockIcons } from "./block_icons.svelte.js";
   import { mcVersion } from "../../../shared/mc_versions.js";
   import { blockLabel, gridWindow, inventoryBlocks } from "./inventory.js";
   import { t } from "./i18n.svelte.js";
@@ -60,6 +60,8 @@
 
   $effect(() => {
     if (!open) return;
+    // Read, so the warm-up landing re-runs this rather than waiting for a scroll.
+    void iconsReady();
     requestBlockIcons(visible);
   });
 

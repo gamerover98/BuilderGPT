@@ -48,6 +48,15 @@ export const IPC = {
    * most of a second of structured clone for a panel showing sixty.
    */
   blockIcons: "bgpt:blocks:icons",
+  /**
+   * Mesh every block once, so the texture atlas reaches its final size.
+   *
+   * The atlas grows as blocks are meshed and its version *is* the texture
+   * count, so every growth invalidates the UVs of everything drawn before it.
+   * Doing it once up front is what stops the inventory blanking and refilling
+   * as it is scrolled.
+   */
+  blockIconsWarm: "bgpt:blocks:icons:warm",
 
   generate: "bgpt:generate",
   preview: "bgpt:preview",
@@ -1010,6 +1019,8 @@ export interface BgptApi {
   listBlocks(): Promise<string[]>;
   /** Geometry for the blocks the inventory is about to draw. */
   getBlockIcons(req: BlockIconsRequest): Promise<BlockIconsResponse>;
+  /** Settles the atlas for the whole block list. Resolves with its version. */
+  warmBlockIcons(): Promise<number>;
 
   generate(req: GenerateRequest): Promise<GenerateResponse>;
   preview(req: PreviewRequest): Promise<PreviewResponse>;

@@ -206,6 +206,33 @@ export const en = {
   "inspector.emptyTree": "(empty)",
   "inspector.notEditable": "A {type} cannot be edited here",
 
+  "anchor.open": "Anchor",
+  "anchor.openHint": "Create, move or remove WorldEdit's paste anchor",
+  "anchor.title": "WorldEdit anchor",
+  "anchor.infoTitle": "What this is for",
+  "anchor.infoWhat":
+    "WorldEdit and the tools built on it paste a schematic relative to a single cell: its anchor. It is stored in the file's NBT rather than as a block, it is optional, and a schematic without one pastes from its own corner.",
+  "anchor.infoExample":
+    "It is the position the player was standing in when the selection was copied. Copy a 7x4 area while standing in the middle of it and the anchor is that middle cell — paste it back and the build lands around you exactly as it did before.",
+  "anchor.infoPivot":
+    "That makes it the pivot, not just a starting point: //rotate and //flip turn the selection about the anchor, and //paste puts the anchor under you. Move it and everything those commands do moves with it.",
+  "anchor.infoStorage":
+    "It costs no block and is never exported into the build — it lives in the schematic's NBT, and the marker in the viewport is a picture of it.",
+  "anchor.positionTitle": "Position",
+  "anchor.none": "This schematic has no anchor. Give it one, or leave it without.",
+  "anchor.create": "Create",
+  "anchor.move": "Move",
+  "anchor.delete": "Delete",
+  "anchor.atCentre": "Centre of the floor",
+  "anchor.atCorner": "Corner (0, 0, 0)",
+  "anchor.outside":
+    "This anchor is outside the schematic, which is allowed: the player who copied it may have been standing clear of the build.",
+  "anchor.stored": "Stored in the file as Offset [{x}, {y}, {z}] — the anchor's position, negated.",
+  "anchor.viewTitle": "In the viewport",
+  "anchor.showMarker": "Show the anchor marker",
+  "anchor.markerHint":
+    "A wooden axe on every face, outlined in green — WorldEdit's own wand, so it cannot be mistaken for a block you placed.",
+
   "nbt.open": "NBT",
   "nbt.openHint": "View and edit the schematic's NBT",
   "nbt.title": "Schematic NBT",
@@ -458,6 +485,7 @@ export const en = {
   "task.readingNbt": "Reading the schematic's NBT",
   "task.editingSchematicNbt": "Editing the schematic's NBT",
   "task.settingOrigin": "Setting the WorldEdit origin",
+  "task.settingAnchor": "Setting the WorldEdit anchor",
   "task.pasting": "Pasting",
   "task.transforming": "Transforming the selection",
   "task.filling": "Filling the selection",

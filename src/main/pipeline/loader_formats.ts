@@ -347,7 +347,7 @@ export interface DecodedSchematic {
    * Where the schematic sat in the world it was cut from. Preserved so a save
    * can put it back rather than silently re-anchoring it at the origin.
    */
-  readonly offset: readonly [number, number, number];
+  readonly offset: readonly [number, number, number] | null;
   /**
    * WorldEdit's Origin: the world position of the schematic's (0,0,0) corner,
    * or `null` when the file named none. A different vector from `offset` --
@@ -524,7 +524,9 @@ function decodeSponge(
       blocks.BlockEntities ?? payload.BlockEntities ?? payload.TileEntities,
     ),
     entities: readEntities(payload.Entities),
-    offset: vectorOf(payload.Offset) ?? [0, 0, 0],
+    // Optional in the spec, and absent means absent: a schematic with no
+    // anchor must not acquire one at the corner of the build.
+    offset: vectorOf(payload.Offset),
     // `payload` is already the right compound for both versions: v3's is the
     // `Schematic` compound and v2's is the root, which is where each writes it.
     ...readMetadata(payload.Metadata),
@@ -644,15 +646,11 @@ function decodeMcEdit(payload: NbtCompound, table: LegacyBlockTable): DecodedSch
     entities: readEntities(payload.Entities),
     // MCEdit spells the offset as three separate tags -- shorts in some
     // writers, ints in WorldEdit's own. `numberOf` does not care which.
-    offset: [
-      numberOf(payload.WEOffsetX) ?? 0,
-      numberOf(payload.WEOffsetY) ?? 0,
-      numberOf(payload.WEOffsetZ) ?? 0,
-    ],
+    offset: mcEditVector(payload, "WEOffset"),
     // And the Origin as three more. All three or none: two thirds of a position
     // is not a position, and defaulting the missing one to zero would put the
     // build somewhere nobody asked for.
-    worldOrigin: mcEditOrigin(payload),
+    worldOrigin: mcEditVector(payload, "WEOrigin"),
     // MCEdit has no `Metadata` compound at all -- WorldEdit writes its tags
     // straight onto the root, which is where `worldOrigin` just came from.
     metadata: {},
@@ -661,11 +659,20 @@ function decodeMcEdit(payload: NbtCompound, table: LegacyBlockTable): DecodedSch
   };
 }
 
-/** `WEOriginX/Y/Z`, or `null` unless all three are there. */
-function mcEditOrigin(payload: NbtCompound): readonly [number, number, number] | null {
-  const x = numberOf(payload.WEOriginX);
-  const y = numberOf(payload.WEOriginY);
-  const z = numberOf(payload.WEOriginZ);
+/**
+ * `WEOffsetX/Y/Z` or `WEOriginX/Y/Z`, or `null` unless all three are there.
+ *
+ * All three or none, for both: two thirds of a position is not a position, and
+ * defaulting the missing axis to zero would put the anchor somewhere nobody
+ * asked for.
+ */
+function mcEditVector(
+  payload: NbtCompound,
+  prefix: "WEOffset" | "WEOrigin",
+): readonly [number, number, number] | null {
+  const x = numberOf(payload[`${prefix}X`]);
+  const y = numberOf(payload[`${prefix}Y`]);
+  const z = numberOf(payload[`${prefix}Z`]);
   return x === null || y === null || z === null ? null : [x, y, z];
 }
 

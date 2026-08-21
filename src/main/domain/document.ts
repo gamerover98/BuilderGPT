@@ -66,8 +66,22 @@ export interface SchematicDocument {
   /** The container this was read from, and the one a plain save writes back. */
   format: SchematicFormat;
   dataVersion: number | null;
-  /** Where the schematic sat in the world it was cut from. */
-  offset: [number, number, number];
+  /**
+   * WorldEdit's paste anchor, relative to this schematic's minimum corner, or
+   * `null` when the file carries none — the tag is optional in every container
+   * that has it.
+   *
+   * The sign is the thing to keep hold of. WorldEdit stores `min - anchor`, so
+   * the anchor sits at local cell **`-offset`**: a 7x4 selection copied with
+   * the player in the middle writes `[-2, 0, -2]` and the anchor is the cell at
+   * `(2, 0, 2)`. That cell is what the viewport draws and what the panel's
+   * fields hold; the negation lives at the edges, in `anchorOf`/`offsetFor`.
+   *
+   * It is a real point, not a displacement of the content: rotating, flipping
+   * and pasting all turn about it. Nothing else in the document moves when it
+   * does.
+   */
+  offset: [number, number, number] | null;
   /**
    * The world position of this schematic's (0,0,0) corner, or `null` when the
    * file carried none.
@@ -96,6 +110,28 @@ export interface SchematicDocument {
   filePath: string | null;
   /** Monotonic; a cache key, not a dirty flag. See the invariants above. */
   revision: number;
+}
+
+/**
+ * The cell WorldEdit's anchor occupies, from the stored offset — and back.
+ *
+ * Two functions rather than a `-` at each call site, because the sign is the
+ * only hard part of this feature and getting it backwards is invisible: the
+ * marker appears, the file saves, and the paste lands mirrored about the corner.
+ * WorldEdit stores `min - anchor` and the minimum corner is the grid's origin,
+ * so the anchor is at `-offset` and the offset is at `-anchor`. They are the
+ * same negation, which is why one is written in terms of the other.
+ */
+export function anchorOf(
+  offset: readonly [number, number, number] | null,
+): [number, number, number] | null {
+  return offset === null ? null : [-offset[0], -offset[1], -offset[2]];
+}
+
+export function offsetFor(
+  anchor: readonly [number, number, number] | null,
+): [number, number, number] | null {
+  return anchorOf(anchor);
 }
 
 /** The key both `core.ts` and `services/schematic.ts` already use. */
@@ -168,7 +204,10 @@ export function createDocument(options: CreateDocumentOptions): SchematicDocumen
     entities: [],
     format: options.format ?? "sponge3",
     dataVersion: options.dataVersion ?? null,
-    offset: [0, 0, 0],
+    // No anchor until somebody asks for one. `[0,0,0]` is a position like any
+    // other -- the corner of the build -- so defaulting to it would claim a
+    // pivot the user never placed, and write the tag into every file.
+    offset: null,
     worldOrigin: null,
     metadata: {},
     filePath: null,
@@ -211,7 +250,10 @@ export function documentFromLoaded(
     doc.blockEntities.set(posKey(record.pos[0], record.pos[1], record.pos[2]), record);
   }
   doc.entities = [...loaded.entities];
-  doc.offset = [loaded.offset[0], loaded.offset[1], loaded.offset[2]];
+  doc.offset =
+    loaded.offset === null
+      ? null
+      : [loaded.offset[0], loaded.offset[1], loaded.offset[2]];
   doc.worldOrigin =
     loaded.worldOrigin === null
       ? null
@@ -491,7 +533,9 @@ export function resizeDocument(
   // position of the cell the grid now calls (0,0,0), which the shift has just
   // moved by the same amount in the same direction -- so it takes the same
   // correction, and leaving it alone would move the build in the world.
-  doc.offset = [doc.offset[0] - dx, doc.offset[1] - dy, doc.offset[2] - dz];
+  if (doc.offset !== null) {
+    doc.offset = [doc.offset[0] - dx, doc.offset[1] - dy, doc.offset[2] - dz];
+  }
   if (doc.worldOrigin !== null) {
     doc.worldOrigin = [
       doc.worldOrigin[0] - dx,

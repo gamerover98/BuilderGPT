@@ -69,7 +69,7 @@ interface Dimensions {
   readonly width: number;
   readonly height: number;
   readonly length: number;
-  readonly offset: readonly [number, number, number];
+  readonly offset: readonly [number, number, number] | null;
   /** Moves with the shift exactly as `offset` does; `null` stays `null`. */
   readonly worldOrigin: readonly [number, number, number] | null;
 }
@@ -88,7 +88,7 @@ interface Dimensions {
  * a per-position delta would be two records of one thing.
  */
 export interface HeaderState {
-  readonly offset: readonly [number, number, number];
+  readonly offset: readonly [number, number, number] | null;
   readonly worldOrigin: readonly [number, number, number] | null;
   readonly dataVersion: number | null;
   readonly metadata: NbtCompound;
@@ -221,7 +221,7 @@ export interface TransactionScope {
 /** The document's current header, for a caller that wants to change one field. */
 export function readHeader(doc: SchematicDocument): HeaderState {
   return {
-    offset: [...doc.offset] as [number, number, number],
+    offset: doc.offset === null ? null : ([...doc.offset] as [number, number, number]),
     worldOrigin: doc.worldOrigin === null ? null : ([...doc.worldOrigin] as [number, number, number]),
     dataVersion: doc.dataVersion,
     metadata: structuredClone(doc.metadata),
@@ -243,7 +243,7 @@ export function readHeader(doc: SchematicDocument): HeaderState {
  */
 function applyHeader(doc: SchematicDocument, state: HeaderState): boolean {
   const before = JSON.stringify(readHeader(doc));
-  doc.offset = [...state.offset] as [number, number, number];
+  doc.offset = state.offset === null ? null : ([...state.offset] as [number, number, number]);
   doc.worldOrigin =
     state.worldOrigin === null ? null : ([...state.worldOrigin] as [number, number, number]);
   doc.dataVersion = state.dataVersion;
@@ -371,7 +371,7 @@ class Recorder implements TransactionScope {
       width: doc.width,
       height: doc.height,
       length: doc.length,
-      offset: [...doc.offset] as [number, number, number],
+      offset: doc.offset === null ? null : ([...doc.offset] as [number, number, number]),
       worldOrigin:
         doc.worldOrigin === null ? null : ([...doc.worldOrigin] as [number, number, number]),
     };
@@ -417,7 +417,7 @@ class Recorder implements TransactionScope {
         width: doc.width,
         height: doc.height,
         length: doc.length,
-        offset: [...doc.offset] as [number, number, number],
+        offset: doc.offset === null ? null : ([...doc.offset] as [number, number, number]),
         worldOrigin:
           doc.worldOrigin === null ? null : ([...doc.worldOrigin] as [number, number, number]),
       },
@@ -529,7 +529,10 @@ function revertCommand(doc: SchematicDocument, command: Command): void {
   // resize but not necessarily for the inverse of one -- restore what was
   // actually recorded rather than trusting the arithmetic to round-trip. The
   // world origin travels with it for the same reason.
-  doc.offset = [...command.before.offset] as [number, number, number];
+  doc.offset =
+    command.before.offset === null
+      ? null
+      : ([...command.before.offset] as [number, number, number]);
   doc.worldOrigin =
     command.before.worldOrigin === null
       ? null

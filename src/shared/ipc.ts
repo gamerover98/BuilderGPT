@@ -105,6 +105,10 @@ export const IPC = {
   docRegionMesh: "bgpt:doc:region:mesh",
   /** The sun and moon images out of the resource pack. */
   skyTextures: "bgpt:sky:textures",
+  /** The wooden axe, drawn on the cell WorldEdit would paste from. */
+  anchorTexture: "bgpt:anchor:texture",
+  /** WorldEdit's paste anchor: create it, move it, or take it away. */
+  docSetOffset: "bgpt:doc:offset:set",
   docSave: "bgpt:doc:save",
   /**
    * The open schematic's own version history: list, add, go back, throw away.
@@ -550,17 +554,17 @@ export type RegionMeshResponse = Result<RegionMeshSuccess>;
  * `ImageBitmapLoader`, and a decode that cannot happen renders white while
  * reporting success. Nothing to decode, nothing to fail.
  */
-export interface SkyTexture {
+/** Raw pixels out of the resource pack: RGBA8, row-major. */
+export interface PackTexture {
   width: number;
   height: number;
-  /** RGBA8, row-major. */
   pixels: Uint8Array;
 }
 
 /** `null` for either means the pack ships none, and the viewer draws a square. */
 export interface SkyTextures {
-  sun: SkyTexture | null;
-  moon: SkyTexture | null;
+  sun: PackTexture | null;
+  moon: PackTexture | null;
 }
 
 export interface DocumentMeshRequest {
@@ -626,7 +630,12 @@ export interface DocumentState {
   fileName: string | null;
   format: SchematicFormat;
   size: [number, number, number];
-  offset: [number, number, number];
+  /**
+   * WorldEdit's paste anchor as the file stores it, or `null` when the
+   * schematic carries none — the tag is optional. The *cell* it marks is
+   * `-offset`; see `SchematicDocument.offset` for why the negation is real.
+   */
+  offset: [number, number, number] | null;
   /**
    * WorldEdit's Origin: the world position of the schematic's (0,0,0) corner,
    * or `null` when the file named none. A different vector from `offset` --
@@ -1222,6 +1231,14 @@ export interface BgptApi {
   applySchematicNbt(request: ApplyNbtRequest): Promise<EditResponse>;
   /** WorldEdit's Origin; `null` removes it, which is not the same as zero. */
   setWorldOrigin(origin: [number, number, number] | null): Promise<EditResponse>;
+  /**
+   * WorldEdit's paste anchor, as the **cell** it occupies rather than as the
+   * stored offset — the negation lives in main, in one place. `null` removes
+   * it, which is not the same as putting it at (0, 0, 0).
+   */
+  setWorldEditAnchor(anchor: [number, number, number] | null): Promise<EditResponse>;
+  /** The wooden axe the anchor marker is drawn with; `null` if the pack has none. */
+  getAnchorTexture(): Promise<PackTexture | null>;
   /** Turn or reflect the selection. Undoable as one step. */
   transformRegion(request: TransformRequest): Promise<EditResponse>;
   /**

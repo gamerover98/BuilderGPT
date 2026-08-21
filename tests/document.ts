@@ -19,9 +19,11 @@ import { tmpdir } from "os";
 import path from "path";
 
 import {
+  anchorOf,
   compactPalette,
   countBlocks,
   createDocument,
+  offsetFor,
   documentFromLoaded,
   getBlock,
   getBlockEntity,
@@ -226,13 +228,16 @@ console.log("\n--- resize ---");
 
   // Growing downwards: the grid has no negative coordinates, so the content
   // shifts up instead and the world offset compensates.
+  // An anchor to compensate: a document starts without one, since the tag is
+  // optional and `[0,0,0]` is a position like any other.
+  doc.offset = [0, 0, 0];
   const before = [...doc.offset];
   doc.worldOrigin = [201, 92, 3];
   resizeDocument(doc, { width: 2, height: 8, length: 2 }, [0, 2, 0]);
   equal("a shift moves the content", getBlock(doc, 0, 2, 0).namespacedName, "minecraft:stone");
   equal("...leaving air beneath it", getBlock(doc, 0, 0, 0).namespacedName, "minecraft:air");
   equal("...and the block entity with it", getBlockEntity(doc, 1, 3, 1)?.id, "minecraft:barrel");
-  equal("the world offset compensates, so nothing moved in the world", doc.offset[1], before[1] - 2);
+  equal("the world offset compensates, so nothing moved in the world", doc.offset?.[1], before[1] - 2);
   // The Origin is the world position of the cell the grid calls (0,0,0), and
   // the shift has just moved that cell down by two -- so it takes the same
   // correction as the offset, or the build moves in the world.
@@ -243,6 +248,7 @@ console.log("\n--- resize ---");
     const anonymous = createDocument({ width: 1, height: 1, length: 1 });
     resizeDocument(anonymous, { width: 1, height: 2, length: 1 }, [0, 1, 0]);
     equal("a resize invents no Origin", anonymous.worldOrigin, null);
+    equal("...nor an anchor", anonymous.offset, null);
   }
 
   // Shrinking is allowed and lossy, which is the caller's problem -- but it
@@ -250,6 +256,35 @@ console.log("\n--- resize ---");
   resizeDocument(doc, { width: 1, height: 1, length: 1 });
   equal("shrinking drops what falls outside", countBlocks(doc), 0);
   equal("...including block entities", doc.blockEntities.size, 0);
+}
+
+// --- the anchor and the offset are the same thing, negated --------------------
+//
+// WorldEdit stores `min - anchor` and the minimum corner is the grid's origin,
+// so the cell the anchor occupies is `-offset`. Getting the sign backwards is
+// invisible: the marker appears, the file saves, and the paste lands mirrored
+// about the corner. One negation, in one place, checked both ways.
+console.log("\n--- the anchor and the stored offset ---");
+{
+  // The example from WorldEdit's own MCEdit reader: a 7-wide, 4-long selection
+  // copied with the player in the middle writes [-2, 0, -2].
+  equal("the stored offset becomes the cell it marks", anchorOf([-2, 0, -2]), [2, 0, 2]);
+  equal("...and back again", offsetFor([2, 0, 2]), [-2, 0, -2]);
+  equal("an anchor at the corner stores zero", offsetFor([0, 0, 0]), [0, 0, 0]);
+  equal("an anchor outside the build is allowed", anchorOf([3, -1, 3]), [-3, 1, -3]);
+  equal("no anchor stays no anchor", anchorOf(null), null);
+  equal("...in both directions", offsetFor(null), null);
+
+  // Round trip, on values with every sign combination, since a negation applied
+  // to one axis and not another is exactly the mistake this exists to stop.
+  for (const cell of [
+    [0, 0, 0],
+    [2, 0, 2],
+    [-5, 3, 7],
+    [7, -3, -5],
+  ] as [number, number, number][]) {
+    equal(`(${cell.join(", ")}) survives the round trip`, anchorOf(offsetFor(cell)), cell);
+  }
 }
 
 // --- the view the mesher takes ----------------------------------------------

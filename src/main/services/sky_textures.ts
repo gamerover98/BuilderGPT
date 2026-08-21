@@ -4,38 +4,16 @@
  * They live at `textures/environment/`, which is nowhere near the block
  * textures and is never asked for by anything that meshes a block — so this
  * does not go through the baker or the atlas. It is two images, read once,
- * handed to the renderer as pixels.
- *
- * Pixels rather than a PNG for the same reason the atlas is pixels: the
- * renderer's CSP forbids `blob:`, three.js decodes an embedded image through
- * `ImageBitmapLoader`, and a decode that cannot happen fails by rendering white
- * while reporting success. Raw RGBA has nothing to decode.
+ * handed to the renderer as pixels. `pack_reader.ts` owns the reader and says
+ * why they are pixels.
  *
  * A pack that ships neither is not a failure — `null` means the viewer draws
  * plain squares, which is what it did before this existed.
  */
 
-import { ResourcePackTextures } from "../pipeline/model_baker.js";
+import { packTextures, toPackTexture } from "./pack_reader.js";
 import type { RgbaImage } from "../pipeline/types.js";
-import type { SkyTexture } from "../../shared/ipc.js";
-
-/** One reader per pack pair, because opening a 17 MB zip is not free. */
-let cached: { key: string; textures: ResourcePackTextures } | null = null;
-
-async function reader(
-  resourcePackPath: string | null,
-  fallbackResourcePackPath: string | null,
-): Promise<ResourcePackTextures> {
-  const key = `${resourcePackPath ?? ""}\n${fallbackResourcePackPath ?? ""}`;
-  if (cached?.key === key) return cached.textures;
-  const textures = await ResourcePackTextures.create(resourcePackPath, fallbackResourcePackPath);
-  cached = { key, textures };
-  return textures;
-}
-
-function toSkyTexture(image: RgbaImage): SkyTexture {
-  return { width: image.width, height: image.height, pixels: image.data };
-}
+import type { PackTexture } from "../../shared/ipc.js";
 
 /**
  * The full moon out of the phase sheet.
@@ -59,17 +37,40 @@ function fullMoon(sheet: RgbaImage): RgbaImage {
 export async function loadSkyTextures(
   resourcePackPath: string | null,
   fallbackResourcePackPath: string | null,
-): Promise<{ sun: SkyTexture | null; moon: SkyTexture | null }> {
-  const textures = await reader(resourcePackPath, fallbackResourcePackPath);
+): Promise<{ sun: PackTexture | null; moon: PackTexture | null }> {
+  const textures = await packTextures(resourcePackPath, fallbackResourcePackPath);
   const sun = await textures.loadTexture("environment/sun");
   const moonSheet = await textures.loadTexture("environment/moon_phases");
   return {
-    sun: sun === null ? null : toSkyTexture(sun),
-    moon: moonSheet === null ? null : toSkyTexture(fullMoon(moonSheet)),
+    sun: sun === null ? null : toPackTexture(sun),
+    moon: moonSheet === null ? null : toPackTexture(fullMoon(moonSheet)),
   };
 }
 
-/** Dropped when the resource pack changes, like every other cached read. */
-export function forgetSkyTextures(): void {
-  cached = null;
+/**
+ * The wooden axe, which is what WorldEdit's selection wand is.
+ *
+ * It marks the paste anchor in the viewport, on all six faces of the cell the
+ * anchor occupies — the one thing in the scene that is not a block and is not
+ * exported. `item/`, not `block/`: an axe has no block model and no block
+ * texture, and what the game has is the icon it shows you in your hand, exactly
+ * as with the barrier and the structure void.
+ *
+ * The legacy path is tried too, because a pre-1.13 pack spells it
+ * `items/wood_axe` and someone editing a 1.8 schematic is likely to be using
+ * one. `null` means the viewer draws the plain green box without it.
+ */
+export async function loadAnchorTexture(
+  resourcePackPath: string | null,
+  fallbackResourcePackPath: string | null,
+): Promise<PackTexture | null> {
+  const textures = await packTextures(resourcePackPath, fallbackResourcePackPath);
+  for (const name of ["item/wooden_axe", "items/wood_axe"]) {
+    const image = await textures.loadTexture(name);
+    if (image !== null) return toPackTexture(image);
+  }
+  return null;
 }
+
+/** Dropped when the resource pack changes, like every other cached read. */
+export { forgetPackTextures as forgetSkyTextures } from "./pack_reader.js";

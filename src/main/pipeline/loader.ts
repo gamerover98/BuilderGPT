@@ -55,7 +55,7 @@ export interface LoadedStructure extends StructureData {
   /** Mobs and item frames stored with the schematic, verbatim. */
   readonly entities: readonly EntityRecord[];
   /** The schematic's origin in the world it was cut from. */
-  readonly offset: readonly [number, number, number];
+  readonly offset: readonly [number, number, number] | null;
   /** WorldEdit's Origin, or `null` when the file named none. Not `offset`. */
   readonly worldOrigin: readonly [number, number, number] | null;
   /** The file's own `Metadata`, minus the Origin lifted out of it. */

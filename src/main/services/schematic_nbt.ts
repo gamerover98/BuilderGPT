@@ -37,6 +37,7 @@
 
 import {
   documentSize,
+  offsetFor,
   posKey,
   type SchematicDocument,
 } from "../domain/document.js";
@@ -98,6 +99,30 @@ export const MAX_NBT_TEXT = 2_000_000;
 /** Which tags this refuses to let the text change, per format. */
 const STRUCTURAL = ["Width", "Height", "Length", "Version", "Materials", "PaletteMax"];
 
+/**
+ * Tags a document can genuinely be without, so deleting one is an instruction
+ * rather than a slip.
+ *
+ * This is the exception to "every key the read produced must still be there",
+ * and the two are one rule seen from opposite sides: nothing is ever *guessed
+ * at*. Deleting `BlockEntities` cannot mean anything — there is no state
+ * "this schematic has no block-entity list", only one with nothing in it, which
+ * is written `[]` — so it is a slip and is refused. Deleting `Offset` maps
+ * exactly onto a state the document holds: no anchor. So it removes the anchor,
+ * which is the same act as the modal's Delete button.
+ */
+const OPTIONAL = [
+  "Offset",
+  "WEOffsetX",
+  "WEOffsetY",
+  "WEOffsetZ",
+  "WEOriginX",
+  "WEOriginY",
+  "WEOriginZ",
+  "DataVersion",
+  "Metadata",
+];
+
 export interface SchematicNbt {
   /** The header as SNBT. */
   readonly text: string;
@@ -139,9 +164,9 @@ export function schematicNbtTree(doc: SchematicDocument, withLists = true): NbtC
         ? compoundList(mcEditEntries(doc.blockEntities.values()))
         : undefined,
       Entities: withLists ? compoundList(mcEditEntities(doc.entities)) : undefined,
-      WEOffsetX: int(doc.offset[0]),
-      WEOffsetY: int(doc.offset[1]),
-      WEOffsetZ: int(doc.offset[2]),
+      WEOffsetX: doc.offset === null ? undefined : int(doc.offset[0]),
+      WEOffsetY: doc.offset === null ? undefined : int(doc.offset[1]),
+      WEOffsetZ: doc.offset === null ? undefined : int(doc.offset[2]),
       WEOriginX: doc.worldOrigin === null ? undefined : int(doc.worldOrigin[0]),
       WEOriginY: doc.worldOrigin === null ? undefined : int(doc.worldOrigin[1]),
       WEOriginZ: doc.worldOrigin === null ? undefined : int(doc.worldOrigin[2]),
@@ -162,7 +187,8 @@ export function schematicNbtTree(doc: SchematicDocument, withLists = true): NbtC
       Width: short(width),
       Height: short(height),
       Length: short(length),
-      Offset: { type: "intArray", value: [...doc.offset] },
+      Offset:
+        doc.offset === null ? undefined : { type: "intArray", value: [...doc.offset] },
       Metadata: metadata,
       // One key where the file has three. The other two are the schematic.
       Blocks: blockEntities === undefined ? undefined : {
@@ -179,7 +205,8 @@ export function schematicNbtTree(doc: SchematicDocument, withLists = true): NbtC
     Width: short(width),
     Height: short(height),
     Length: short(length),
-    Offset: { type: "intArray", value: [...doc.offset] },
+    Offset:
+        doc.offset === null ? undefined : { type: "intArray", value: [...doc.offset] },
     BlockEntities: blockEntities,
     Entities: entities,
     Metadata: metadata,
@@ -312,9 +339,10 @@ function parseHeader(doc: SchematicDocument, text: string, expected: NbtCompound
   }
   const submitted = root.value as NbtCompound;
 
-  // Every key the read produced, still present. Nothing is guessed at.
+  // Every key the read produced, still present -- unless its absence is itself
+  // a state the document can hold. Nothing is guessed at either way.
   for (const name of Object.keys(expected)) {
-    if (!(name in submitted)) {
+    if (!OPTIONAL.includes(name) && !(name in submitted)) {
       throw new NbtApplyError(`${name} is missing. To empty a list, write it as []`);
     }
   }
@@ -339,33 +367,42 @@ function parseHeader(doc: SchematicDocument, text: string, expected: NbtCompound
     requireCompound(submitted.Blocks, "Blocks");
   }
 
+  /**
+   * One of MCEdit's two triples, present in full or not at all.
+   *
+   * Both are optional, so absence is a real answer -- and a partial trio is
+   * refused rather than filled in, because the reader at the other end falls
+   * back instead of guessing and the build would land somewhere nobody chose.
+   */
+  const mcEditTriple = (prefix: "WEOffset" | "WEOrigin"): [number, number, number] | null => {
+    const axes = [`${prefix}X`, `${prefix}Y`, `${prefix}Z`] as const;
+    const present = axes.filter((axis) => axis in submitted);
+    if (present.length === 0) return null;
+    if (present.length !== 3) {
+      throw new NbtApplyError(
+        `${axes.join(", ")} go together: ${present.join(", ")} alone says nothing`,
+      );
+    }
+    return [
+      requireNumber(submitted[axes[0]], axes[0]),
+      requireNumber(submitted[axes[1]], axes[1]),
+      requireNumber(submitted[axes[2]], axes[2]),
+    ];
+  };
+
+  // Optional in every container, so writing the tag by hand creates the anchor
+  // and deleting it removes one, exactly as the modal's buttons do.
   const offset = mcedit
-    ? ([
-        requireNumber(submitted.WEOffsetX, "WEOffsetX"),
-        requireNumber(submitted.WEOffsetY, "WEOffsetY"),
-        requireNumber(submitted.WEOffsetZ, "WEOffsetZ"),
-      ] as [number, number, number])
-    : requireVector(submitted.Offset, "Offset");
+    ? mcEditTriple("WEOffset")
+    : "Offset" in submitted
+      ? requireVector(submitted.Offset, "Offset")
+      : null;
 
   let worldOrigin: [number, number, number] | null = null;
   let metadata: NbtCompound = {};
 
   if (mcedit) {
-    const axes = ["WEOriginX", "WEOriginY", "WEOriginZ"] as const;
-    const present = axes.filter((axis) => axis in submitted);
-    if (present.length === 3) {
-      worldOrigin = [
-        requireNumber(submitted.WEOriginX, "WEOriginX"),
-        requireNumber(submitted.WEOriginY, "WEOriginY"),
-        requireNumber(submitted.WEOriginZ, "WEOriginZ"),
-      ];
-    } else if (present.length !== 0) {
-      // Two thirds of a position is not a position, and the reader on the other
-      // end would fall back rather than guess -- so say so here instead.
-      throw new NbtApplyError(
-        `WEOriginX, WEOriginY and WEOriginZ go together: ${present.join(", ")} alone says nothing`,
-      );
-    }
+    worldOrigin = mcEditTriple("WEOrigin");
   } else if (sameTag(submitted.Metadata, expected.Metadata)) {
     /*
      * Unchanged, and that has to be said explicitly rather than fallen into.
@@ -503,6 +540,25 @@ export function applyNbt(
       changed += 1;
     }
     return changed;
+  });
+}
+
+/**
+ * WorldEdit's paste anchor, given as the **cell** it occupies.
+ *
+ * The negation between a cell and the stored offset lives in `anchorOf` /
+ * `offsetFor`, and this is the only place the panel can reach it — so the modal
+ * hands over what the user sees in the viewport and never has to know that the
+ * tag holds the opposite sign.
+ */
+export function setWorldEditAnchor(
+  doc: SchematicDocument,
+  history: History,
+  anchor: readonly [number, number, number] | null,
+  label: string,
+): void {
+  runTransaction(doc, history, label, (tx) => {
+    tx.setHeader({ ...readHeader(doc), offset: offsetFor(anchor) });
   });
 }
 

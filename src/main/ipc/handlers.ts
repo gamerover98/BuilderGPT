@@ -54,6 +54,7 @@ import {
   type MoveRegionRequest,
   type RegionMeshResponse,
   type ApplyNbtRequest,
+  type PackTexture,
   type SchematicNbtResponse,
   type SetNbtRequest,
   type SkyTextures,
@@ -104,6 +105,7 @@ import {
   applyNbt,
   NbtApplyError,
   schematicNbtText,
+  setWorldEditAnchor,
   setWorldOrigin,
 } from "../services/schematic_nbt.js";
 import { UnrepresentableBlocksError } from "../services/writers.js";
@@ -138,7 +140,7 @@ import {
 import { loadAllowedBlocks, traceOf } from "../core.js";
 import { buildBlockIcons, warmBlockIcons } from "../services/block_icons.js";
 import { listArtifacts } from "../services/artifacts.js";
-import { loadSkyTextures } from "../services/sky_textures.js";
+import { loadAnchorTexture, loadSkyTextures } from "../services/sky_textures.js";
 import { SchematicFormatError } from "../pipeline/loader.js";
 import { classifyGenerateError, generate } from "../services/generate.js";
 import { fetchOpenCodeModels } from "../services/opencode.js";
@@ -840,6 +842,29 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           "Edit the schematic's NBT",
         );
         return { ok: true, changed, state: shellState(session) };
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
+
+  ipcMain.handle(IPC.anchorTexture, async (): Promise<PackTexture | null> => {
+    try {
+      return await loadAnchorTexture(null, await defaultResourcePackPath());
+    } catch {
+      // A pack that cannot be read means the marker is drawn as the plain green
+      // box, which still says where the anchor is. Not worth a banner.
+      return null;
+    }
+  });
+
+  ipcMain.handle(
+    IPC.docSetOffset,
+    async (_event, anchor: [number, number, number] | null): Promise<EditResponse> => {
+      try {
+        const session = requireSession();
+        setWorldEditAnchor(session.doc, session.history, anchor, "Set the WorldEdit anchor");
+        return { ok: true, changed: 0, state: shellState(session) };
       } catch (err) {
         return failure(err);
       }

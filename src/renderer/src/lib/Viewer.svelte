@@ -21,7 +21,7 @@
     ChunkGeometry,
     MeshAtlas,
     MeshPayload,
-    SkyTexture,
+    PackTexture,
     SkyTextures,
   } from "../../../shared/ipc.js";
   import type { ResolvedTheme } from "../../../shared/settings.js";
@@ -158,6 +158,15 @@ import { isTyping } from "./typing.js";
      * hole in the sky.
      */
     skyTextures: SkyTextures;
+    /**
+     * WorldEdit's paste anchor, as the **cell** it occupies, or `null` when the
+     * schematic carries none. Not a block: it is drawn from the NBT, is never
+     * meshed, and never leaves in a file.
+     */
+    anchor?: [number, number, number] | null;
+    /** The wooden axe it is drawn with; `null` leaves the plain green box. */
+    anchorTexture?: PackTexture | null;
+    showAnchor?: boolean;
     timeOfDay: number;
     shadows: boolean;
     shadowQuality: number;
@@ -273,6 +282,9 @@ import { isTyping } from "./typing.js";
     wireframe,
     sky,
     skyTextures,
+    anchor = null,
+    anchorTexture = null,
+    showAnchor = true,
     timeOfDay,
     shadows,
     shadowQuality,
@@ -1010,6 +1022,82 @@ import { isTyping } from "./typing.js";
 
 
   /**
+   * WorldEdit's paste anchor, drawn as the cell it occupies.
+   *
+   * A cube with the wooden axe on all six faces and a green line round every
+   * face — which is the twelve edges of a cube, so `EdgesGeometry` draws exactly
+   * the perimeters asked for and nothing else. The axe because that is what
+   * WorldEdit's selection wand is; green because the marker has to read as *not
+   * a block* at a glance, and nothing in the palette is that colour.
+   *
+   * It is deliberately not part of the mesh. There is no voxel here, no palette
+   * entry, and nothing to export: the anchor lives in the NBT, and the marker is
+   * a picture of it. That also means it can sit outside the schematic — a player
+   * may well have stood off to one side when they copied — so it is added to
+   * the scene rather than clamped into the grid.
+   */
+  let anchorGroup: THREE.Group | undefined;
+  /** What the group was built from, so it is rebuilt only when one changes. */
+  let anchorBuiltWith: string | null = null;
+
+  function disposeAnchor(): void {
+    if (!anchorGroup) return;
+    scene?.remove(anchorGroup);
+    for (const child of anchorGroup.children) {
+      const mesh = child as THREE.Mesh | THREE.LineSegments;
+      mesh.geometry.dispose();
+      const material = mesh.material as THREE.Material & { map?: THREE.Texture | null };
+      material.map?.dispose();
+      material.dispose();
+    }
+    anchorGroup = undefined;
+    anchorBuiltWith = null;
+  }
+
+  function updateAnchorMarker(): void {
+    if (!scene) return;
+
+    const wanted = showAnchor !== false && anchor !== null && anchor !== undefined;
+    const key = wanted
+      ? `${anchor?.join(",")}|${anchorTexture ? `${anchorTexture.width}x${anchorTexture.height}` : "none"}|${theme}`
+      : null;
+    if (key === anchorBuiltWith) return;
+
+    disposeAnchor();
+    if (!wanted || !anchor) return;
+
+    const group = new THREE.Group();
+    // A hair under a full cell, so it does not z-fight the block it may share a
+    // face with. The green outline is drawn a hair *outside* for the same
+    // reason, in the other direction.
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(0.98, 0.98, 0.98),
+      new THREE.MeshBasicMaterial({
+        map: anchorTexture === null || anchorTexture === undefined ? null : skyImage(anchorTexture),
+        color: anchorTexture ? 0xffffff : 0x4ade80,
+        transparent: true,
+        opacity: anchorTexture ? 1 : 0.35,
+        // Unlit and depth-tested: it is a marker, so it takes no light, but it
+        // is somewhere in the build and must be occluded by what is in front.
+        depthWrite: true,
+      }),
+    );
+    group.add(body);
+
+    const outline = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(1.01, 1.01, 1.01)),
+      new THREE.LineBasicMaterial({ color: 0x4ade80, depthTest: false }),
+    );
+    outline.renderOrder = 999;
+    group.add(outline);
+
+    group.position.set(anchor[0] + 0.5, anchor[1] + 0.5, anchor[2] + 0.5);
+    scene.add(group);
+    anchorGroup = group;
+    anchorBuiltWith = key;
+  }
+
+  /**
    * The dome is built at radius one and scaled to fit the frustum.
    *
    * Its distance is arbitrary now that it is drawn in a pass of its own: it
@@ -1096,7 +1184,7 @@ import { isTyping } from "./typing.js";
      * depth-free like the dome, so nothing in the world can occlude them and
      * nothing about them lands in the depth buffer.
      */
-    const disc = (color: number, size: number, art: SkyTexture | null): THREE.Mesh => {
+    const disc = (color: number, size: number, art: PackTexture | null): THREE.Mesh => {
       const mesh = new THREE.Mesh(
         new THREE.PlaneGeometry(size, size),
         new THREE.MeshBasicMaterial({
@@ -1177,7 +1265,7 @@ import { isTyping } from "./typing.js";
    * square of pixel art, and smoothing it turns a square into a blob — which is
    * the one thing about the vanilla sky everybody recognises.
    */
-  function skyImage(art: SkyTexture): THREE.DataTexture {
+  function skyImage(art: PackTexture): THREE.DataTexture {
     const map = new THREE.DataTexture(
       new Uint8Array(art.pixels),
       art.width,
@@ -2043,6 +2131,18 @@ import { isTyping } from "./typing.js";
     void scene;
     void theme;
     updateSelectionBox();
+  });
+
+  $effect(() => {
+    // Same shape as the box above: read what it is built from, rebuild when any
+    // of it moves. `updateAnchorMarker` compares against what it last built, so
+    // a rerun that changes nothing costs a string comparison.
+    void anchor;
+    void anchorTexture;
+    void showAnchor;
+    void scene;
+    void theme;
+    updateAnchorMarker();
   });
 
   /**

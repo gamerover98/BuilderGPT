@@ -115,6 +115,30 @@ The trim belongs to `saveSession`, not to the writers. **Autosave calls the
 writers directly and must keep the full working box** — a crash snapshot that
 came back trimmed would silently discard the room the user had made to build in.
 
+**The anchor is a cell, and the tag is its negation.** WorldEdit stores
+`min - anchor` and the minimum corner is the grid's origin, so the cell the
+anchor occupies is **`-offset`**: a 7×4 selection copied with the player in the
+middle writes `[-2, 0, -2]`, and the anchor is `(2, 0, 2)`. `anchorOf` and
+`offsetFor` in `domain/document.ts` are the only two places that know, and both
+the modal's fields and the viewport marker are in *cells*. Getting the sign
+backwards is invisible: the marker appears, the file saves, and the paste lands
+mirrored about the corner.
+
+`doc.offset` is therefore `| null`, and a document starts without one. `[0,0,0]`
+is a position like any other — the corner of the build — so defaulting to it
+claims a pivot nobody placed and writes the tag into every file. The generation
+writer used to stamp `Offset: [minX, minY, minZ]`, which was not that tag's
+meaning at all; it writes none now, like the Origin.
+
+**The marker is drawn, never meshed, and never exported.** It occupies a cell in
+the viewport and nothing in the grid: no voxel, no palette entry, no block in
+the file. The wooden axe on all six faces is WorldEdit's own wand, read from
+`textures/item/` by `pack_reader.ts` — the same "textures the mesher never asks
+for" path as the sun and the moon, and pixels for the same CSP reason. The green
+perimeter is `EdgesGeometry` over a cube, whose twelve edges *are* the perimeter
+of every face. It may sit outside the schematic, because the player who copied
+may have been standing clear of the build.
+
 **`Origin` and `Offset` are two different tags, and the app keeps both.**
 `doc.offset` is Sponge's `Offset` / MCEdit's `WEOffset*`: the vector from the
 paste anchor to the schematic's minimum corner. `doc.worldOrigin` is WorldEdit's
@@ -392,10 +416,15 @@ by name if changed**: `Width`, `Height`, `Length`, `Version`, `Materials`. They
 are the first thing anyone opens this to check, so showing beats omitting; and
 refusing beats ignoring, which is the failure this file keeps a list of.
 
-**One rule for applying: every key the read produced must still be there.**
-Delete `Offset` and it is refused by name rather than guessed at as `[0,0,0]`;
-delete `BlockEntities` and it is refused rather than read as "remove every
-chest". To empty a list you write `[]`. The v3 case needs its own check because
+**One rule for applying: every key the read produced must still be there —
+unless its absence is a state the document can hold.** The two halves are one
+rule seen from opposite sides, and the rule is *nothing is ever guessed at*.
+Deleting `BlockEntities` cannot mean anything: there is no "this schematic has
+no block-entity list", only one with nothing in it, which is written `[]`. So it
+is a slip, and it is refused. Deleting `Offset` maps exactly onto a state the
+document holds — no anchor — so it removes the anchor, which is the same act as
+the modal's Delete button. `OPTIONAL` in `schematic_nbt.ts` is that list;
+`Width` is not on it. The v3 case needs its own check because
 that list lives *inside* `Blocks`, which is still present holding nothing — the
 top-level walk cannot see it, and without the nested check the refusal came out
 as "too large to edit", having already deleted the chests.

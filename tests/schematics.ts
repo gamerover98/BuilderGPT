@@ -253,6 +253,8 @@ async function writeMcEdit(
    * to zero would move the build.
    */
   origin: readonly number[] | null = null,
+  /** `WEOffsetX/Y/Z`, same rule, when `withEntities` did not already write them. */
+  offset: readonly number[] | null = null,
 ): Promise<string> {
   const total = WIDTH * HEIGHT * LENGTH;
   const blocks = new Array<number>(total).fill(0);
@@ -288,12 +290,16 @@ async function writeMcEdit(
     value.WEOffsetZ = { type: "short", value: 12 };
   }
 
-  if (origin !== null) {
-    // WorldEdit's own writer uses ints here, where its offsets are sometimes
-    // shorts -- the reader must not care which.
-    const axes = ["WEOriginX", "WEOriginY", "WEOriginZ"];
-    origin.forEach((coordinate, index) => {
-      value[axes[index]] = { type: "int", value: coordinate };
+  // WorldEdit's own writer uses ints here, where its offsets are sometimes
+  // shorts -- the reader must not care which. A short array writes a *partial*
+  // triple, which both readers must refuse rather than fill in.
+  for (const [prefix, values] of [
+    ["WEOrigin", origin],
+    ["WEOffset", offset],
+  ] as const) {
+    if (values === null) continue;
+    values.forEach((coordinate, index) => {
+      value[`${prefix}${"XYZ"[index]}`] = { type: "int", value: coordinate };
     });
   }
 
@@ -552,7 +558,6 @@ try {
     // A file with none of this must not acquire any.
     equal("a schematic without block entities reports none", v2.blockEntities, []);
     equal("...and no entities", v2.entities, []);
-    equal("...and a zero offset", v2.offset, [0, 0, 0]);
   }
 
   // --- the WorldEdit Origin ------------------------------------------------
@@ -610,6 +615,29 @@ try {
       v2o.metadata.WorldEdit === undefined,
     );
     equal("MCEdit has no Metadata compound to carry", mco.metadata, {});
+
+    // The anchor is optional in every container, and a file that names none
+    // must not acquire one. `[0,0,0]` is a position like any other -- the
+    // corner of the build -- so a default would claim a pivot nobody placed.
+    equal("a schematic with no anchor has none", v2.offset, null);
+    equal("...even in MCEdit, which spells it as three tags", (
+      await loadStructure(
+        await writeMcEdit(path.join(workDir, "no-anchor.schematic")),
+        { legacyBlocksPath: LEGACY_BLOCKS },
+      )
+    ).offset, null);
+    equal(
+      "two thirds of an anchor is not an anchor",
+      (
+        await loadStructure(
+          await writeMcEdit(path.join(workDir, "half-anchor.schematic"), false, false, null, [
+            -4, 64,
+          ]),
+          { legacyBlocksPath: LEGACY_BLOCKS },
+        )
+      ).offset,
+      null,
+    );
 
     // A file that named none must not acquire one: zero is a position, and
     // absence is not. `v2` is the app's own writer's output, so its Metadata

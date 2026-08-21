@@ -157,7 +157,13 @@ export class SpongeSchematicWriter implements SchematicWriter {
         Width: { type: "short", value: width },
         Height: { type: "short", value: height },
         Length: { type: "short", value: length },
-        Offset: { type: "intArray", value: [minX, minY, minZ] },
+        // And no `Offset` either, for the same reason and one more. It used to
+        // carry `[minX, minY, minZ]` -- where the sparse content happened to
+        // start -- which is not what that tag means: `Offset` is WorldEdit's
+        // paste anchor, and every block below is already written relative to
+        // that corner, so the number was informational at best and a pivot the
+        // generator never chose at worst. The tag is optional; absence is the
+        // honest answer for a build that was never cut out of a world.
         PaletteMax: { type: "int", value: palette.size },
         Palette: { type: "compound", value: paletteCompound },
         BlockData: { type: "byteArray", value: varints.map(toSignedByte) },

@@ -213,7 +213,7 @@ export function documentState(session: DocumentSession): DocumentState {
     format: doc.format,
     dataVersion: doc.dataVersion,
     size: [doc.width, doc.height, doc.length],
-    offset: [...doc.offset] as [number, number, number],
+    offset: doc.offset === null ? null : ([...doc.offset] as [number, number, number]),
     worldOrigin: doc.worldOrigin === null ? null : ([...doc.worldOrigin] as [number, number, number]),
     blockCount: countBlocks(doc),
     palette: paletteCounts(doc),

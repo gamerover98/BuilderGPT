@@ -45,6 +45,7 @@ import {
 import {
   applyNbt,
   schematicNbtText,
+  setWorldEditAnchor,
   setWorldOrigin,
 } from "../src/main/services/schematic_nbt.js";
 import { parseSnbt, stringifySnbt } from "../src/main/domain/snbt.js";
@@ -61,7 +62,7 @@ import {
   useCheckpointDirectory,
 } from "../src/main/services/checkpoints.js";
 import { isDirty } from "../src/main/domain/history.js";
-import { countBlocks, documentFromLoaded } from "../src/main/domain/document.js";
+import { countBlocks, createDocument, documentFromLoaded } from "../src/main/domain/document.js";
 import { UnrepresentableBlocksError } from "../src/main/services/writers.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor } from "../src/main/services/versions.js";
@@ -673,15 +674,29 @@ console.log("\n--- editing the schematic's NBT ---");
   }
 
   {
-    // Deleting a key is refused rather than guessed at. `Offset` read as
-    // [0,0,0] would move the build in the world without saying so.
+    // Deleting a key is refused rather than guessed at -- unless its absence is
+    // itself a state the document holds. `Width` has no such state, so removing
+    // it is a slip and is named as one.
+    const session = withSign();
+    const done = applying(session, (text) => text.replace(/\n\s*Width: 4s,/, ""));
+    check("deleting Width is refused", !done.ok);
+    check("...as missing, by name", done.message.includes("Width is missing"), done.message);
+    equal("...leaving the document alone", session.doc.width, 4);
+    closeDocument();
+  }
+
+  {
+    // And the other side of the same rule: the anchor is optional, so deleting
+    // its tag means "no anchor" -- the same act as the modal's Delete button --
+    // rather than a slip to refuse or a [0,0,0] to guess at.
     const session = withSign();
     const done = applying(session, (text) =>
       text.replace(/\n\s*Offset: \[I; -4, 64, 12\],/, ""),
     );
-    check("deleting Offset is refused", !done.ok);
-    check("...as missing, by name", done.message.includes("Offset is missing"), done.message);
-    equal("...leaving it where it was", session.doc.offset, [-4, 64, 12]);
+    check("deleting Offset is accepted", done.ok, done.message);
+    equal("...and removes the anchor rather than zeroing it", session.doc.offset, null);
+    undoEdit(session);
+    equal("...undoably", session.doc.offset, [-4, 64, 12]);
     closeDocument();
   }
 
@@ -830,6 +845,95 @@ console.log("\n--- editing the schematic's NBT ---");
       broken = (err as Error).message;
     }
     check("unparseable text is refused with a position", broken.includes("line 1"), broken);
+    closeDocument();
+  }
+
+  {
+    /*
+     * The anchor's own verb, which the modal drives.
+     *
+     * It takes the *cell*, not the stored offset: the negation lives in main so
+     * that the number the user types is the one the marker is drawn at. And it
+     * is optional in a way the rest of the header is not -- a document starts
+     * without one, and deleting it is a thing you can do.
+     */
+    const session = withSign();
+    // `withSign` seeds one, so that the NBT tests above have a tag to edit.
+    // This one is about not having one, which is how a document starts.
+    session.doc.offset = null;
+    const blocksBefore = countBlocks(session.doc);
+    const paletteBefore = session.doc.palette.length;
+
+    equal(
+      "a document starts with no anchor at all",
+      createDocument({ width: 1, height: 1, length: 1 }).offset,
+      null,
+    );
+
+    setWorldEditAnchor(session.doc, session.history, [2, 0, 2], "Set the anchor");
+    equal("the anchor verb stores the negated cell", session.doc.offset, [-2, 0, -2]);
+
+    // The whole point of it not being a block: it occupies a cell in the
+    // viewport and nothing in the grid, so nothing is exported and no palette
+    // entry appears for it.
+    equal("...and places no block", countBlocks(session.doc), blocksBefore);
+    equal("...and adds nothing to the palette", session.doc.palette.length, paletteBefore);
+
+    setWorldEditAnchor(session.doc, session.history, [0, 0, 0], "Move the anchor");
+    equal("an anchor at the corner stores zero, which is not absence", session.doc.offset, [0, 0, 0]);
+
+    setWorldEditAnchor(session.doc, session.history, null, "Delete the anchor");
+    equal("...and null really removes it", session.doc.offset, null);
+
+    undoEdit(session);
+    equal("deleting it is undoable", session.doc.offset, [0, 0, 0]);
+    undoEdit(session);
+    equal("...as is moving it", session.doc.offset, [-2, 0, -2]);
+    undoEdit(session);
+    equal("...and creating it", session.doc.offset, null);
+    closeDocument();
+  }
+
+  {
+    // The anchor and the NBT panel are two views of one tag, so the text has to
+    // show what the verb just wrote.
+    const session = withSign();
+    setWorldEditAnchor(session.doc, session.history, [2, 0, 2], "Set the anchor");
+    const read = schematicNbtText(session.doc);
+    check("the NBT panel shows the anchor the verb set", read.text.includes("Offset: [I; -2, 0, -2]"), read.text);
+
+    setWorldEditAnchor(session.doc, session.history, null, "Delete the anchor");
+    check(
+      "...and shows no Offset tag at all once it is gone",
+      !schematicNbtText(session.doc).text.includes("Offset"),
+    );
+    closeDocument();
+  }
+
+  {
+    // Optional means the text can create one too: typing the tag in is the same
+    // act as pressing Create, and deleting it is the same act as Delete.
+    const session = withSign();
+    session.doc.offset = null;
+    const read = schematicNbtText(session.doc);
+    applyNbt(
+      session.doc,
+      session.history,
+      read.text.replace("Version: 3,", "Version: 3,\n  Offset: [I; -2, 0, -2],"),
+      read.revision,
+      "Edit the NBT",
+    );
+    equal("writing the Offset tag by hand creates the anchor", session.doc.offset, [-2, 0, -2]);
+
+    const withAnchor = schematicNbtText(session.doc);
+    applyNbt(
+      session.doc,
+      session.history,
+      withAnchor.text.replace(/\n\s*Offset: \[I; -2, 0, -2\],/, ""),
+      withAnchor.revision,
+      "Edit the NBT",
+    );
+    equal("...and deleting it removes it", session.doc.offset, null);
     closeDocument();
   }
 

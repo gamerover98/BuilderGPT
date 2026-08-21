@@ -50,6 +50,7 @@ import {
   type RegionMeshResponse,
   type SkyTextures,
   type ApplyNbtRequest,
+  type PackTexture,
   type SchematicNbtResponse,
   type SetNbtRequest,
   type TransformRequest,
@@ -123,6 +124,9 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docMove, request) as Promise<EditResponse>,
   regionMesh: (region) => ipcRenderer.invoke(IPC.docRegionMesh, region) as Promise<RegionMeshResponse>,
   getSkyTextures: () => ipcRenderer.invoke(IPC.skyTextures) as Promise<SkyTextures>,
+  getAnchorTexture: () => ipcRenderer.invoke(IPC.anchorTexture) as Promise<PackTexture | null>,
+  setWorldEditAnchor: (anchor: [number, number, number] | null) =>
+    ipcRenderer.invoke(IPC.docSetOffset, anchor) as Promise<EditResponse>,
   saveDocument: (request: SaveRequest) =>
     ipcRenderer.invoke(IPC.docSave, request) as Promise<SaveResponse>,
   /**

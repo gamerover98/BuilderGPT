@@ -17,6 +17,7 @@
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
   import DocumentBar from "./lib/DocumentBar.svelte";
   import InspectorPanel from "./lib/InspectorPanel.svelte";
+  import AnchorModal from "./lib/AnchorModal.svelte";
   import NbtModal from "./lib/NbtModal.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
   import SelectionTools from "./lib/SelectionTools.svelte";
@@ -57,6 +58,7 @@ import VersionList from "./lib/VersionList.svelte";
     type BlockInspection,
     type ChatEntry,
   type ChunkGeometry,
+  type PackTexture,
   type SkyTextures,
     type ProjectNotes,
     type ChatState,
@@ -1041,6 +1043,9 @@ import VersionList from "./lib/VersionList.svelte";
         // while the app is open, and a pack that ships neither is a sky of
         // plain squares rather than an error.
         skyTextures = await api().getSkyTextures();
+        // And the wooden axe the anchor marker is drawn with, for the same
+        // reason and out of the same pack.
+        anchorTexture = await api().getAnchorTexture();
         // Asked once, at startup, before the user has done anything they could
         // lose by answering it.
         const found = await api().peekRecovery();
@@ -1280,6 +1285,17 @@ import VersionList from "./lib/VersionList.svelte";
    * a stale read is refused rather than putting an old entity list back over an
    * undo that happened underneath it.
    */
+  /**
+   * WorldEdit's paste anchor.
+   *
+   * The *cell* comes from `docState.worldOrigin`'s neighbour, `docState.offset`,
+   * negated — but the negation is main's, so this only ever holds what main
+   * hands over. `anchorTexture` is the wooden axe, fetched once: it is a
+   * property of the resource pack, not of the document.
+   */
+  let anchorOpen = $state(false);
+  let anchorTexture = $state<PackTexture | null>(null);
+
   let nbtOpen = $state(false);
   let nbtText = $state("");
   let nbtEditable = $state(true);
@@ -2199,6 +2215,26 @@ import VersionList from "./lib/VersionList.svelte";
     );
   }
 
+  /**
+   * The cell WorldEdit would paste from, out of the offset the file stores.
+   *
+   * The negation is main's rule (`anchorOf`), and this mirrors it for the one
+   * thing the renderer has to do with it: draw a box. Wrong here and the marker
+   * appears mirrored about the corner, which looks plausible and is not.
+   */
+  const worldEditAnchor = $derived.by((): [number, number, number] | null => {
+    const offset = docState?.offset ?? null;
+    return offset === null ? null : [-offset[0], -offset[1], -offset[2]];
+  });
+
+  async function changeWorldEditAnchor(
+    next: [number, number, number] | null,
+  ): Promise<void> {
+    await runDocument(t("task.settingAnchor"), () => api().setWorldEditAnchor(forIpc(next)));
+    // The NBT panel shows the same tag, so it is stale the moment this lands.
+    if (nbtOpen) await refreshSchematicNbt();
+  }
+
   /** Fetches the schematic's NBT afresh. Called on open and on Revert. */
   async function refreshSchematicNbt(): Promise<void> {
     if (!bridgeAvailable) return;
@@ -2814,6 +2850,19 @@ import VersionList from "./lib/VersionList.svelte";
   onclose={() => (nbtOpen = false)}
 />
 
+<AnchorModal
+  open={anchorOpen}
+  anchor={worldEditAnchor}
+  offset={docState?.offset ?? null}
+  size={docState?.size ?? [1, 1, 1]}
+  visible={settings.preview.showWorldEditOffset}
+  {busy}
+  onset={(next) => void changeWorldEditAnchor(next)}
+  onclear={() => void changeWorldEditAnchor(null)}
+  onvisibility={(showWorldEditOffset) => void patchPreview({ showWorldEditOffset })}
+  onclose={() => (anchorOpen = false)}
+/>
+
 {#if startingUp}
   <StartupScreen steps={startupSteps} />
 {/if}
@@ -2860,11 +2909,20 @@ import VersionList from "./lib/VersionList.svelte";
     </div>
 
     <!--
-      A text button rather than an icon: there is no glyph for "the file's NBT"
-      that anyone would read correctly, and the bar already mixes both. It sits
-      before the gear, which carries the auto margin, so it lands at the
-      trailing edge beside it.
+      Text buttons rather than icons: there is no glyph for "the file's NBT" or
+      "WorldEdit's paste anchor" that anyone would read correctly, and the bar
+      already mixes both. They sit before the gear, which carries the auto
+      margin, so they land at the trailing edge beside it.
     -->
+    <button
+      class="nbt-open"
+      disabled={docState === null}
+      onclick={() => (anchorOpen = true)}
+      title={t("anchor.openHint")}
+    >
+      {t("anchor.open")}
+    </button>
+
     <button
       class="nbt-open"
       disabled={docState === null}
@@ -3210,6 +3268,9 @@ import VersionList from "./lib/VersionList.svelte";
       wireframe={settings.preview.wireframe}
       sky={settings.preview.sky}
       {skyTextures}
+      anchor={worldEditAnchor}
+      {anchorTexture}
+      showAnchor={settings.preview.showWorldEditOffset}
       timeOfDay={clockTicks}
       shadows={settings.preview.shadows}
       shadowQuality={settings.preview.shadowQuality}

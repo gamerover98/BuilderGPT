@@ -148,11 +148,14 @@ export function cropToContent(doc: SchematicDocument): CroppedDocument | null {
       // The schematic's world origin moves the *opposite* way to its content,
       // so pasting the file back into the world it came from lands the blocks
       // where they were. Same reasoning as `resizeDocument`'s shift.
-      offset: [
-        doc.offset[0] + bounds.minX,
-        doc.offset[1] + bounds.minY,
-        doc.offset[2] + bounds.minZ,
-      ],
+      offset:
+        doc.offset === null
+          ? null
+          : ([
+              doc.offset[0] + bounds.minX,
+              doc.offset[1] + bounds.minY,
+              doc.offset[2] + bounds.minZ,
+            ] as [number, number, number]),
       // And the WorldEdit Origin is the world position of the corner cell, which
       // the trim has just moved to what used to be `bounds.min` -- so it takes
       // the same correction. An Origin typed against a deliberately roomy

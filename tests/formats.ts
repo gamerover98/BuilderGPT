@@ -471,6 +471,41 @@ try {
     equal("...with no block entities invented", reloaded.blockEntities.size, 0);
   }
 
+  // --- the anchor is optional, in every container ---------------------------
+  //
+  // A schematic without one must write no tag at all. `[0,0,0]` is a position
+  // like any other — the corner of the build — so a default would claim a pivot
+  // nobody placed, and every tool downstream would honour it.
+  console.log("\n--- an optional anchor ---");
+  for (const format of ["sponge2", "sponge3", "mcedit"] as const) {
+    const doc = format === "mcedit" ? legacySafeDocument() : sampleDocument(format);
+    doc.offset = null;
+
+    const filePath = path.join(workDir, `no-anchor-${format}.${extensionFor(format)}`);
+    await saveDocument(doc, filePath, { legacyBlocksPath: LEGACY_BLOCKS });
+
+    const { parsed } = await parseNbt(await readFile(filePath));
+    const root = parsed.value as unknown as NbtCompound;
+    const payload =
+      format === "sponge3" ? (root.Schematic as { value: NbtCompound }).value : root;
+
+    for (const tag of format === "mcedit"
+      ? ["WEOffsetX", "WEOffsetY", "WEOffsetZ"]
+      : ["Offset"]) {
+      check(`${format}: ${tag} is absent, not zero`, !(tag in payload), Object.keys(payload).join());
+    }
+
+    const reloaded = documentFromLoaded(await loadStructure(filePath, {
+      legacyBlocksPath: LEGACY_BLOCKS,
+    }), filePath);
+    equal(`${format}: and it comes back with no anchor`, reloaded.offset, null);
+
+    // The marker is not a block: a document with an anchor and one without have
+    // the same grid, the same count, and the same palette in the file.
+    const anchored = format === "mcedit" ? legacySafeDocument() : sampleDocument(format);
+    equal(`${format}: an anchor changes no blocks`, countBlocks(anchored), countBlocks(doc));
+  }
+
   // --- the NBT panel shows what the file will contain -----------------------
   //
   // The panel builds its own tree rather than sharing the writer's, because the
@@ -636,7 +671,7 @@ try {
         [3, 2, 4],
       );
       equal("...and keeps every block", countBlocks(reloaded), 3 * 2 * 4);
-      equal("...and its shifted offset", [...reloaded.offset], [104, 66, -11]);
+      equal("...and its shifted offset", reloaded.offset, [104, 66, -11]);
     }
   }
 

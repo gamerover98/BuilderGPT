@@ -317,7 +317,8 @@ function buildSponge(doc: SchematicDocument, version: 2 | 3, dataVersion: number
             Width: short(width),
             Height: short(height),
             Length: short(length),
-            Offset: { type: "intArray", value: [...doc.offset] },
+            Offset:
+        doc.offset === null ? undefined : { type: "intArray", value: [...doc.offset] },
             Metadata: metadata,
             Blocks: {
               type: "compound",
@@ -343,7 +344,8 @@ function buildSponge(doc: SchematicDocument, version: 2 | 3, dataVersion: number
       Width: short(width),
       Height: short(height),
       Length: short(length),
-      Offset: { type: "intArray", value: [...doc.offset] },
+      Offset:
+        doc.offset === null ? undefined : { type: "intArray", value: [...doc.offset] },
       PaletteMax: int(palette.entries.length),
       Palette: { type: "compound", value: paletteCompound },
       BlockData: blockData,
@@ -546,9 +548,9 @@ function buildMcEdit(
       // checks, so it threw out of the buffer writer with a message naming
       // neither the tag nor the document. The reader is unaffected either way,
       // since `numberOf` takes whichever it finds.
-      WEOffsetX: int(doc.offset[0]),
-      WEOffsetY: int(doc.offset[1]),
-      WEOffsetZ: int(doc.offset[2]),
+      WEOffsetX: doc.offset === null ? undefined : int(doc.offset[0]),
+      WEOffsetY: doc.offset === null ? undefined : int(doc.offset[1]),
+      WEOffsetZ: doc.offset === null ? undefined : int(doc.offset[2]),
       // The Origin, or nothing at all: `compound()` drops undefined, so the
       // three tags vanish together, which is what WorldEdit's reader needs --
       // it takes the trio or falls back, and two thirds of one is worse than

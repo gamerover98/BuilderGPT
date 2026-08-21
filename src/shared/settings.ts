@@ -169,6 +169,14 @@ export interface PreviewSettings {
    * viewer, so changing it rebuilds the mesh.
    */
   showMarkers: boolean;
+  /**
+   * Draw WorldEdit's paste anchor as a marker in the viewport.
+   *
+   * Applied by the viewer, not the mesher: the anchor is not a block and never
+   * reaches the atlas, so turning it off is a visibility toggle rather than a
+   * rebuild. It also has nothing to hide when the schematic carries no anchor.
+   */
+  showWorldEditOffset: boolean;
 }
 
 /** component.py:319-328 slider/checkbox defaults, verbatim. */
@@ -197,6 +205,7 @@ export const DEFAULT_PREVIEW_SETTINGS: PreviewSettings = {
   waterColor: DEFAULT_WATER_COLOR,
   flySpeed: 12,
   showMarkers: true,
+  showWorldEditOffset: true,
 };
 
 /** Slider bounds from component.py:319-328, reused by the renderer's inputs. */

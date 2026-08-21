@@ -42,6 +42,14 @@ import {
   transformRegion,
   undoEdit,
 } from "../src/main/services/session.js";
+import {
+  applyNbt,
+  schematicNbtText,
+  setWorldOrigin,
+} from "../src/main/services/schematic_nbt.js";
+import { parseSnbt, stringifySnbt } from "../src/main/domain/snbt.js";
+import type { NbtCompound } from "../src/main/pipeline/types.js";
+import type { DocumentSession } from "../src/main/services/session.js";
 import { clearBakerCache } from "../src/main/services/preview.js";
 import { loadStructure } from "../src/main/pipeline/loader.js";
 import {
@@ -569,6 +577,273 @@ console.log("\n--- editing block entity data ---");
   }
   check("a block with no block entity is refused by name", missing);
   closeDocument();
+}
+
+// --- the schematic's own NBT, as text ------------------------------------------
+//
+// The panel shows the root compound the file would carry and writes back what
+// comes home. Everything below is a way of getting that wrong: a structural tag
+// changed, a key deleted, two chests in one cell, a chest outside the grid, and
+// an Apply built against a document that has since moved.
+console.log("\n--- editing the schematic's NBT ---");
+{
+  const withSign = (): DocumentSession => {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    setBlock(session.doc, 1, 0, 1, { namespacedName: "minecraft:oak_sign", properties: {} });
+    setBlockEntity(session.doc, 1, 0, 1, {
+      id: "minecraft:oak_sign",
+      pos: [1, 0, 1],
+      nbt: { Text1: { type: "string", value: "before" } },
+    });
+    session.doc.offset = [-4, 64, 12];
+    session.doc.worldOrigin = [201, 92, 3];
+    session.history.undoStack.length = 0;
+    session.history.redoStack.length = 0;
+    session.history.savedDepth = 0;
+    return session;
+  };
+
+  /** Applies `edit` to the current text and returns what main said about it. */
+  const applying = (
+    session: DocumentSession,
+    edit: (text: string) => string,
+  ): { ok: boolean; message: string } => {
+    const read = schematicNbtText(session.doc);
+    try {
+      applyNbt(session.doc, session.history, edit(read.text), read.revision, "Edit the NBT");
+      return { ok: true, message: "" };
+    } catch (err) {
+      return { ok: false, message: (err as Error).message };
+    }
+  };
+
+  {
+    const session = withSign();
+    const read = schematicNbtText(session.doc);
+    check("the text is offered for editing", read.editable);
+    check("...naming what it left out", read.omitted.includes("Blocks.Palette"), read.omitted.join());
+    check("...and holds the Origin", read.text.includes("Origin: [I; 201, 92, 3]"), read.text);
+    check("...and the sign's text", read.text.includes("before"));
+
+    // The round trip on its own: applying the text unchanged changes nothing,
+    // which is the baseline every failure below is measured against.
+    const same = applying(session, (text) => text);
+    check("applying it unchanged is accepted", same.ok, same.message);
+    equal("...and records nothing to undo", session.history.undoStack.length, 0);
+    closeDocument();
+  }
+
+  {
+    const session = withSign();
+    const done = applying(session, (text) => text.replace('"before"', '"after"'));
+    check("editing the sign's text through the NBT is accepted", done.ok, done.message);
+    equal(
+      "...and the block entity really changed",
+      session.doc.blockEntities.get("1,0,1")?.nbt.Text1,
+      { type: "string", value: "after" },
+    );
+    equal("...as exactly one undo step", session.history.undoStack.length, 1);
+    undoEdit(session);
+    equal(
+      "...which one CTRL+Z puts back",
+      session.doc.blockEntities.get("1,0,1")?.nbt.Text1,
+      { type: "string", value: "before" },
+    );
+    closeDocument();
+  }
+
+  {
+    const session = withSign();
+    const done = applying(session, (text) => text.replace("Origin: [I; 201, 92, 3]", "Origin: [I; 1, 2, 3]"));
+    check("moving the Origin through the text is accepted", done.ok, done.message);
+    equal("...and the document has it", session.doc.worldOrigin, [1, 2, 3]);
+    closeDocument();
+  }
+
+  {
+    // A structural tag is shown so it can be read, and refused so it cannot be
+    // used to claim the schematic is a size it is not.
+    const session = withSign();
+    const done = applying(session, (text) => text.replace("Width: 4s", "Width: 40s"));
+    check("changing Width is refused", !done.ok);
+    check("...by name", done.message.includes("Width"), done.message);
+    equal("...leaving the document alone", session.doc.width, 4);
+    equal("...and nothing on the undo stack", session.history.undoStack.length, 0);
+    closeDocument();
+  }
+
+  {
+    // Deleting a key is refused rather than guessed at. `Offset` read as
+    // [0,0,0] would move the build in the world without saying so.
+    const session = withSign();
+    const done = applying(session, (text) =>
+      text.replace(/\n\s*Offset: \[I; -4, 64, 12\],/, ""),
+    );
+    check("deleting Offset is refused", !done.ok);
+    check("...as missing, by name", done.message.includes("Offset is missing"), done.message);
+    equal("...leaving it where it was", session.doc.offset, [-4, 64, 12]);
+    closeDocument();
+  }
+
+  /*
+   * The cases below reshape the block-entity list, which is nested three deep
+   * and formatted over many lines -- so they go through the parser rather than
+   * through a regex over the text. A test that edits SNBT with a regex is a
+   * test that starts failing when the indentation changes.
+   */
+  const editingEntries = (
+    session: DocumentSession,
+    edit: (entries: NbtCompound[]) => NbtCompound[],
+  ): { ok: boolean; message: string } => {
+    const read = schematicNbtText(session.doc);
+    const root = parseSnbt(read.text).value as NbtCompound;
+    const blocks = (root.Blocks as { value: NbtCompound }).value;
+    const list = blocks.BlockEntities as { value: { type: string; value: NbtCompound[] } };
+    blocks.BlockEntities = {
+      type: "list",
+      value: { type: "compound", value: edit(list.value.value) },
+    };
+    try {
+      applyNbt(
+        session.doc,
+        session.history,
+        stringifySnbt({ type: "compound", value: root }),
+        read.revision,
+        "Edit the NBT",
+      );
+      return { ok: true, message: "" };
+    } catch (err) {
+      return { ok: false, message: (err as Error).message };
+    }
+  };
+
+  {
+    const session = withSign();
+    const done = editingEntries(session, ([entry]) => [
+      { ...entry, Pos: { type: "intArray", value: [1, 0, 40] } },
+    ]);
+    check("a block entity outside the grid is refused", !done.ok);
+    check("...naming where it was", done.message.includes("(1, 0, 40)"), done.message);
+    equal("...leaving the sign where it is", session.doc.blockEntities.size, 1);
+    closeDocument();
+  }
+
+  {
+    // Two entries in one cell have one destination and cannot both reach it;
+    // the map they are written into would silently keep the second.
+    const session = withSign();
+    const done = editingEntries(session, ([entry]) => [entry, entry]);
+    check("two block entities in one cell are refused", !done.ok);
+    check("...naming the cell", done.message.includes("(1, 0, 1)"), done.message);
+    closeDocument();
+  }
+
+  {
+    // An entry with no id cannot be placed anywhere. `readBlockEntities` drops
+    // one of these without a word, which is right for a file somebody else
+    // wrote and wrong for a line somebody just typed -- so the count going in
+    // is compared with the count coming out.
+    const session = withSign();
+    const done = editingEntries(session, ([entry]) => {
+      const { Id: _dropped, ...rest } = entry;
+      return [rest];
+    });
+    check("a block entity with no id is refused", !done.ok, done.message);
+    equal("...leaving the sign in place", session.doc.blockEntities.size, 1);
+    closeDocument();
+  }
+
+  {
+    // Writing the list as [] really does empty it -- that is the documented way
+    // to remove every entry, and the only thing an absent key does not mean.
+    const session = withSign();
+    const done = editingEntries(session, () => []);
+    check("an empty list is accepted", done.ok, done.message);
+    equal("...and the sign is gone", session.doc.blockEntities.size, 0);
+    undoEdit(session);
+    equal("...undoably", session.doc.blockEntities.size, 1);
+    closeDocument();
+  }
+
+  {
+    // And the same rule protects the list from a slip: an absent
+    // `BlockEntities` is a missing key, not an instruction to empty it.
+    const session = withSign();
+    const read = schematicNbtText(session.doc);
+    const root = parseSnbt(read.text).value as NbtCompound;
+    delete (root.Blocks as { value: NbtCompound }).value.BlockEntities;
+    let refusal = "";
+    try {
+      applyNbt(
+        session.doc,
+        session.history,
+        stringifySnbt({ type: "compound", value: root }),
+        read.revision,
+        "Edit the NBT",
+      );
+    } catch (err) {
+      refusal = (err as Error).message;
+    }
+    // Named, and named as *missing* -- v3 keeps this list inside `Blocks`,
+    // which is still present holding nothing, so the top-level walk cannot see
+    // it and an earlier version of this reported "too large to edit" instead.
+    check(
+      "deleting the block entity list is refused by name",
+      refusal.includes("BlockEntities is missing"),
+      refusal,
+    );
+    equal("...leaving the sign in place", session.doc.blockEntities.size, 1);
+    closeDocument();
+  }
+
+  {
+    // The optimistic lock. The panel reads once, on open; without this an Apply
+    // would put the entity list back over an undo that happened underneath it.
+    const session = withSign();
+    const read = schematicNbtText(session.doc);
+    applyEdit(session, { kind: "setBlock", x: 3, y: 3, z: 3, block: stone });
+    let stale = "";
+    try {
+      applyNbt(session.doc, session.history, read.text, read.revision, "Edit the NBT");
+    } catch (err) {
+      stale = (err as Error).message;
+    }
+    check("an Apply built against a stale read is refused", stale !== "");
+    check("...saying the schematic moved", stale.includes("changed while this was open"), stale);
+    closeDocument();
+  }
+
+  {
+    // Malformed text is the parser's job, and its message has to survive the
+    // trip: a position is the whole value of the error.
+    const session = withSign();
+    let broken = "";
+    try {
+      applyNbt(
+        session.doc,
+        session.history,
+        "{Width: 4s,",
+        session.doc.revision,
+        "Edit the NBT",
+      );
+    } catch (err) {
+      broken = (err as Error).message;
+    }
+    check("unparseable text is refused with a position", broken.includes("line 1"), broken);
+    closeDocument();
+  }
+
+  {
+    // The Origin's own verb: three fields and a way back to "not set".
+    const session = withSign();
+    setWorldOrigin(session.doc, session.history, [10, 20, 30], "Set the origin");
+    equal("the origin verb writes it", session.doc.worldOrigin, [10, 20, 30]);
+    setWorldOrigin(session.doc, session.history, null, "Clear the origin");
+    equal("...and null removes it, which is not zero", session.doc.worldOrigin, null);
+    undoEdit(session);
+    equal("...undoably", session.doc.worldOrigin, [10, 20, 30]);
+    closeDocument();
+  }
 }
 
 // --- rotating and mirroring ----------------------------------------------------

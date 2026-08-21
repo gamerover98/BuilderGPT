@@ -373,6 +373,56 @@ to build something showed the message and then nothing, for as long as the model
 took. The same `onProgress` events are pushed into the chat's live steps, matched
 by request id because previews emit progress too.
 
+**The NBT panel shows what the file would contain, and reads it back with the
+loader's own decoders.** `services/schematic_nbt.ts` builds the root compound
+*as this document's format would write it* — so an MCEdit document shows
+`TileEntities` with a lowercase `id` and separate `x`/`y`/`z` ints, and a Sponge
+v3 one shows `BlockEntities` with `Id`, `Pos` and a nested `Data`, inside
+`Blocks` where the file keeps them. Reading the text back goes through
+`readBlockEntities`/`readEntities` from `loader_formats.ts`, so there is no
+second parser to disagree with the first.
+
+It builds its own tree rather than sharing the writer's, which is welded to the
+block payload — so `tests/formats.ts` saves a real file, reads it back, strips
+the omitted tags and requires what is left to equal the panel's tree, for all
+three formats. That tripwire is what makes the duplication safe.
+
+Omitted: `Palette`, `PaletteMax`, the varints, `AddBlocks`. Shown and **refused
+by name if changed**: `Width`, `Height`, `Length`, `Version`, `Materials`. They
+are the first thing anyone opens this to check, so showing beats omitting; and
+refusing beats ignoring, which is the failure this file keeps a list of.
+
+**One rule for applying: every key the read produced must still be there.**
+Delete `Offset` and it is refused by name rather than guessed at as `[0,0,0]`;
+delete `BlockEntities` and it is refused rather than read as "remove every
+chest". To empty a list you write `[]`. The v3 case needs its own check because
+that list lives *inside* `Blocks`, which is still present holding nothing — the
+top-level walk cannot see it, and without the nested check the refusal came out
+as "too large to edit", having already deleted the chests.
+
+Two more that are easy to get wrong:
+
+- **The cap is decided by one function, `offerable`.** Both the read and the
+  apply ask it, because a panel that offers an edit which is then refused is
+  worse than one that never offered. Past `MAX_NBT_ENTRIES` or `MAX_NBT_TEXT`
+  the lists are left out and the panel is read-only — not a second mode where a
+  missing key means "leave alone".
+- **`Metadata` that came back unchanged leaves the bag alone.** The tree the
+  panel showed was built by `spongeMetadata`, which stamps the app's `Name` onto
+  a document carrying none — so reading it back naively adopts the stamp, and
+  Apply with nothing edited dirties the document and leaves a step on the undo
+  stack. What the file would contain is identical either way.
+
+`revision` is an optimistic lock, carried out on the read and back on the apply.
+The text is fetched once, when the panel opens; without the check an Apply would
+put the old entity list back over an undo that happened underneath it.
+
+The panel is a modal rather than a `ToolWindow` because that window is a fixed
+232px and this holds a schematic's whole block-entity list. It releases the
+pointer lock on open, like the creative inventory, and it deliberately does
+**not** copy `ChatComposer`'s Enter/Shift+Enter split: a newline is the one key
+a text editor cannot give up.
+
 **MCEdit output is lossy, and says which way.** A block with no legacy
 equivalent fails the save by name; a block whose exact state the format cannot
 carry is written as the base block and reported through `degraded`. Both

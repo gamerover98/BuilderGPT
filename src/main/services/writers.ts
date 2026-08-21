@@ -186,9 +186,9 @@ function forEachCellYzx(
 // NBT helpers
 // ---------------------------------------------------------------------------
 
-const str = (value: string): NbtTag => ({ type: "string", value });
-const int = (value: number): NbtTag => ({ type: "int", value });
-const short = (value: number): NbtTag => ({ type: "short", value });
+export const str = (value: string): NbtTag => ({ type: "string", value });
+export const int = (value: number): NbtTag => ({ type: "int", value });
+export const short = (value: number): NbtTag => ({ type: "short", value });
 
 /**
  * A list of compounds, or `undefined` when there is nothing to write.
@@ -197,7 +197,7 @@ const short = (value: number): NbtTag => ({ type: "short", value });
  * declare an element type it has no elements of, and readers disagree about
  * what belongs there. A missing tag is unambiguous.
  */
-function compoundList(entries: NbtCompound[]): NbtTag | undefined {
+export function compoundList(entries: NbtCompound[]): NbtTag | undefined {
   if (entries.length === 0) {
     return undefined;
   }
@@ -205,7 +205,7 @@ function compoundList(entries: NbtCompound[]): NbtTag | undefined {
 }
 
 /** Drops the keys whose value is `undefined`, so optional tags simply vanish. */
-function compound(fields: Record<string, NbtTag | undefined>): Record<string, NbtTag> {
+export function compound(fields: Record<string, NbtTag | undefined>): Record<string, NbtTag> {
   const out: Record<string, NbtTag> = {};
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined) {
@@ -219,7 +219,7 @@ function compound(fields: Record<string, NbtTag | undefined>): Record<string, Nb
 // Sponge v2 and v3
 // ---------------------------------------------------------------------------
 
-function spongeBlockEntities(
+export function spongeBlockEntities(
   records: Iterable<BlockEntityRecord>,
   version: 2 | 3,
 ): NbtCompound[] {
@@ -240,7 +240,7 @@ function spongeBlockEntities(
   return out;
 }
 
-function spongeEntities(records: readonly EntityRecord[], version: 2 | 3): NbtCompound[] {
+export function spongeEntities(records: readonly EntityRecord[], version: 2 | 3): NbtCompound[] {
   return records.map((record) => {
     const identity: NbtCompound = {
       Id: str(record.id),
@@ -268,7 +268,7 @@ function spongeEntities(records: readonly EntityRecord[], version: 2 | 3): NbtCo
  * A null origin writes no tag at all rather than `[I;0,0,0]`, which would tell
  * every tool downstream to paste the build at the world origin.
  */
-function spongeMetadata(doc: SchematicDocument): NbtCompound {
+export function spongeMetadata(doc: SchematicDocument): NbtCompound {
   const out: NbtCompound = { Name: str("Schematic AI Studio"), ...doc.metadata };
   if (doc.worldOrigin === null) {
     return out;
@@ -424,7 +424,7 @@ export function resetReverseLegacyCacheForTests(): void {
   cachedReverse = null;
 }
 
-function mcEditEntries(
+export function mcEditEntries(
   records: Iterable<BlockEntityRecord>,
 ): NbtCompound[] {
   const out: NbtCompound[] = [];
@@ -442,6 +442,18 @@ function mcEditEntries(
     });
   }
   return out;
+}
+
+/** MCEdit's `Entities`: a bare `id` with the namespace dropped, and a Pos list. */
+export function mcEditEntities(records: readonly EntityRecord[]): NbtCompound[] {
+  return records.map((record) => ({
+    id: str(record.id.replace(/^[^:]*:/, "")),
+    Pos: {
+      type: "list",
+      value: { type: "double", value: [record.pos[0], record.pos[1], record.pos[2]] },
+    },
+    ...record.nbt,
+  }));
 }
 
 function buildMcEdit(
@@ -527,16 +539,7 @@ function buildMcEdit(
           ? undefined
           : { type: "byteArray", value: addBlocks.map(toSignedByte) },
       TileEntities: compoundList(mcEditEntries(doc.blockEntities.values())),
-      Entities: compoundList(
-        doc.entities.map((record) => ({
-          id: str(record.id.replace(/^[^:]*:/, "")),
-          Pos: {
-            type: "list",
-            value: { type: "double", value: [record.pos[0], record.pos[1], record.pos[2]] },
-          },
-          ...record.nbt,
-        })),
-      ),
+      Entities: compoundList(mcEditEntities(doc.entities)),
       // Ints, not shorts, because WorldEdit's own writer uses ints -- and
       // because a short cannot hold the coordinate. A build cut from past
       // +-32767 on any axis failed the save outright: `prismarine-nbt` range

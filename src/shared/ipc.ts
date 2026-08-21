@@ -87,6 +87,11 @@ export const IPC = {
   docInspect: "bgpt:doc:inspect",
   /** Write one NBT leaf of a block entity. */
   docSetNbt: "bgpt:doc:nbt:set",
+  /** The whole schematic's NBT as SNBT text, and the text back again. */
+  docNbtRead: "bgpt:doc:nbt:read",
+  docNbtApply: "bgpt:doc:nbt:apply",
+  /** WorldEdit's Origin, on its own, for the panel's three number fields. */
+  docSetOrigin: "bgpt:doc:origin:set",
   /** Turn or reflect the selection, block states with it. */
   docTransform: "bgpt:doc:transform",
   /** Copy the selection out; cut also clears it. */
@@ -756,6 +761,28 @@ export interface EditSuccess {
   state: DocumentState;
 }
 
+/** The schematic's own NBT, as the panel shows it. */
+export interface SchematicNbtText {
+  /** The root compound as SNBT, minus the block payload. */
+  text: string;
+  /**
+   * False when the schematic is too large to offer as text: the two entry
+   * lists are absent and Apply is refused, rather than the panel silently
+   * accepting an edit that could only describe half the document.
+   */
+  editable: boolean;
+  /** Tag names deliberately left out, so the panel can say which. */
+  omitted: string[];
+  /** Handed back on apply, so an edit built against a stale read is refused. */
+  revision: number;
+}
+
+export interface ApplyNbtRequest {
+  text: string;
+  /** The `revision` the text was read at. */
+  revision: number;
+}
+
 /** What a brand-new schematic should be. */
 export interface NewDocumentRequest {
   width: number;
@@ -1120,6 +1147,7 @@ export type DocumentStateResponse = Result<{
 export type DocumentMeshResponse = Result<DocumentMesh>;
 export type EditResponse = Result<EditSuccess>;
 export type InspectResponse = Result<BlockInspection>;
+export type SchematicNbtResponse = Result<SchematicNbtText>;
 export type SaveResponse = Result<SaveSuccess>;
 
 export interface Artifact {
@@ -1188,6 +1216,12 @@ export interface BgptApi {
   inspectBlock(x: number, y: number, z: number): Promise<InspectResponse>;
   /** Write one NBT leaf. Undoable like any other edit. */
   setNbtValue(request: SetNbtRequest): Promise<EditResponse>;
+  /** The whole schematic's NBT, as the file would spell it, in SNBT. */
+  readSchematicNbt(): Promise<SchematicNbtResponse>;
+  /** Edited SNBT back onto the document, as one undoable step. */
+  applySchematicNbt(request: ApplyNbtRequest): Promise<EditResponse>;
+  /** WorldEdit's Origin; `null` removes it, which is not the same as zero. */
+  setWorldOrigin(origin: [number, number, number] | null): Promise<EditResponse>;
   /** Turn or reflect the selection. Undoable as one step. */
   transformRegion(request: TransformRequest): Promise<EditResponse>;
   /**

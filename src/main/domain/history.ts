@@ -229,15 +229,31 @@ export function readHeader(doc: SchematicDocument): HeaderState {
   };
 }
 
-/** Writes a whole header onto the document. Copies, so the stack keeps its own. */
-function applyHeader(doc: SchematicDocument, state: HeaderState): void {
+/**
+ * Writes a whole header onto the document, and says whether anything moved.
+ *
+ * Copies, so the stack keeps its own. The comparison is against `readHeader`
+ * on both sides rather than against the argument, so a caller that assembled
+ * the same values in a different key order still counts as no change.
+ *
+ * `revision` is bumped only when something did move. It is a mesh cache key,
+ * and bumping it for an Apply that changed nothing would also invalidate the
+ * `revision` the NBT panel is holding -- so pressing Apply twice would have the
+ * second press refused as stale.
+ */
+function applyHeader(doc: SchematicDocument, state: HeaderState): boolean {
+  const before = JSON.stringify(readHeader(doc));
   doc.offset = [...state.offset] as [number, number, number];
   doc.worldOrigin =
     state.worldOrigin === null ? null : ([...state.worldOrigin] as [number, number, number]);
   doc.dataVersion = state.dataVersion;
   doc.metadata = structuredClone(state.metadata) as NbtCompound;
   doc.entities = state.entities.map((entity) => ({ ...entity, nbt: structuredClone(entity.nbt) }));
+  if (before === JSON.stringify(readHeader(doc))) {
+    return false;
+  }
   doc.revision += 1;
+  return true;
 }
 
 class Recorder implements TransactionScope {
@@ -419,7 +435,12 @@ class Recorder implements TransactionScope {
   setHeader(next: HeaderState): void {
     this.flush();
     const before = readHeader(this.doc);
-    applyHeader(this.doc, next);
+    if (!applyHeader(this.doc, next)) {
+      // Nothing moved, so nothing is recorded -- the same rule `runTransaction`
+      // applies to a body that changes no voxels. Applying the panel's text
+      // unedited must not leave a step on the stack for the user to undo.
+      return;
+    }
     this.commands.push({ kind: "header", before, after: readHeader(this.doc) });
   }
 

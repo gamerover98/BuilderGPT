@@ -17,6 +17,7 @@
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
   import DocumentBar from "./lib/DocumentBar.svelte";
   import InspectorPanel from "./lib/InspectorPanel.svelte";
+  import NbtModal from "./lib/NbtModal.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
   import SelectionTools from "./lib/SelectionTools.svelte";
     import ToolWindow from "./lib/ToolWindow.svelte";
@@ -1270,6 +1271,21 @@ import VersionList from "./lib/VersionList.svelte";
 
   let paletteOpen = $state(false);
   let settingsOpen = $state(false);
+
+  /**
+   * The schematic's own NBT, as text.
+   *
+   * The text is main's and is fetched once, when the panel opens — `nbtRevision`
+   * is what it was read at, and goes back with an Apply so an edit built against
+   * a stale read is refused rather than putting an old entity list back over an
+   * undo that happened underneath it.
+   */
+  let nbtOpen = $state(false);
+  let nbtText = $state("");
+  let nbtEditable = $state(true);
+  let nbtOmitted = $state<string[]>([]);
+  let nbtRevision = $state(0);
+  let nbtError = $state("");
   /**
    * The half-written chat message.
    *
@@ -2183,6 +2199,65 @@ import VersionList from "./lib/VersionList.svelte";
     );
   }
 
+  /** Fetches the schematic's NBT afresh. Called on open and on Revert. */
+  async function refreshSchematicNbt(): Promise<void> {
+    if (!bridgeAvailable) return;
+    try {
+      const response = await api().readSchematicNbt();
+      if (!response.ok) {
+        nbtError = response.message;
+        return;
+      }
+      nbtText = response.text;
+      nbtEditable = response.editable;
+      nbtOmitted = response.omitted;
+      nbtRevision = response.revision;
+      nbtError = "";
+    } catch (err) {
+      failed(err, t("task.readingNbt"));
+    }
+  }
+
+  async function openNbtPanel(): Promise<void> {
+    if (!docState) return;
+    nbtError = "";
+    await refreshSchematicNbt();
+    nbtOpen = true;
+  }
+
+  async function applySchematicNbt(text: string): Promise<void> {
+    const revision = nbtRevision;
+    nbtError = "";
+    const response = await api()
+      .applySchematicNbt({ text, revision })
+      .catch((err: unknown) => {
+        failed(err, t("task.editingSchematicNbt"));
+        return null;
+      });
+    if (response === null) return;
+    if (!response.ok) {
+      // Main's own wording, shown as it arrived: it names a line and a column,
+      // or a tag, and rephrasing it here could only lose that.
+      nbtError = response.message;
+      return;
+    }
+    docState = response.state;
+    busy = true;
+    try {
+      await refreshDocument();
+    } finally {
+      busy = false;
+    }
+    // The document moved, so the revision the panel is holding is stale.
+    await refreshSchematicNbt();
+  }
+
+  async function changeWorldOrigin(origin: [number, number, number] | null): Promise<void> {
+    nbtError = "";
+    await runDocument(t("task.settingOrigin"), () => api().setWorldOrigin(forIpc(origin)));
+    await refreshSchematicNbt();
+  }
+
   async function copySelection(cut: boolean): Promise<void> {
     if (!selection) return;
     const region = selection;
@@ -2725,6 +2800,20 @@ import VersionList from "./lib/VersionList.svelte";
   onclearkey={clearKey}
 />
 
+<NbtModal
+  open={nbtOpen}
+  text={nbtText}
+  editable={nbtEditable}
+  omitted={nbtOmitted}
+  origin={docState?.worldOrigin ?? null}
+  {busy}
+  error={nbtError}
+  onapply={(text) => void applySchematicNbt(text)}
+  onrevert={() => void refreshSchematicNbt()}
+  onorigin={(origin) => void changeWorldOrigin(origin)}
+  onclose={() => (nbtOpen = false)}
+/>
+
 {#if startingUp}
   <StartupScreen steps={startupSteps} />
 {/if}
@@ -2769,6 +2858,21 @@ import VersionList from "./lib/VersionList.svelte";
         {t("viewport.creative")}
       </button>
     </div>
+
+    <!--
+      A text button rather than an icon: there is no glyph for "the file's NBT"
+      that anyone would read correctly, and the bar already mixes both. It sits
+      before the gear, which carries the auto margin, so it lands at the
+      trailing edge beside it.
+    -->
+    <button
+      class="nbt-open"
+      disabled={docState === null}
+      onclick={() => void openNbtPanel()}
+      title={t("nbt.openHint")}
+    >
+      {t("nbt.open")}
+    </button>
 
     <button
       class="icon gear"
@@ -3327,6 +3431,13 @@ import VersionList from "./lib/VersionList.svelte";
   .gear {
     margin-left: auto;
     font-size: 18px;
+  }
+
+  /* Sized like the camera-mode buttons beside it rather than like a `.icon`,
+     which is a 28px square and would crop the word. */
+  .nbt-open {
+    padding: 4px 10px;
+    font-size: 12px;
   }
 
   .camera-modes {

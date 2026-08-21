@@ -13,10 +13,18 @@
  * came back as a v2 file with an empty one.
  */
 
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, readFile, rm } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { fileURLToPath } from "url";
+
+import { parse as parseNbt } from "prismarine-nbt";
+
+import {
+  omittedTags,
+  schematicNbtTree,
+} from "../src/main/services/schematic_nbt.js";
+import type { NbtCompound } from "../src/main/pipeline/types.js";
 
 import {
   countBlocks,
@@ -162,6 +170,31 @@ function sampleDocument(format: SchematicDocument["format"]): SchematicDocument 
       pos: [1.5, 0, 2.5],
       nbt: { Invisible: { type: "byte", value: 1 } },
     },
+  ];
+  return doc;
+}
+
+/**
+ * The same idea as `sampleDocument`, in blocks the pre-1.13 table knows.
+ *
+ * MCEdit has no oak sign and refuses the whole save over it, which is the
+ * behaviour the format section tests deliberately -- so anything that wants an
+ * MCEdit file of its own needs a document that can become one.
+ */
+function legacySafeDocument(): SchematicDocument {
+  const doc = createDocument({ width: 4, height: 2, length: 3, format: "mcedit" });
+  setBlock(doc, 0, 0, 0, block("minecraft:stone"));
+  setBlock(doc, 1, 0, 0, block("minecraft:oak_planks"));
+  setBlock(doc, 2, 0, 1, block("minecraft:chest"));
+  doc.offset = [-8, 32, 5];
+  doc.worldOrigin = [201, 92, 3];
+  setBlockEntity(doc, 2, 0, 1, {
+    id: "minecraft:chest",
+    pos: [2, 0, 1],
+    nbt: { Lock: { type: "string", value: "key" } },
+  });
+  doc.entities = [
+    { id: "minecraft:armor_stand", pos: [1.5, 0, 2.5], nbt: { Invisible: { type: "byte", value: 1 } } },
   ];
   return doc;
 }
@@ -436,6 +469,48 @@ try {
     equal("an all-air document round trips", countBlocks(reloaded), 0);
     equal("...at the right size", [reloaded.width, reloaded.height, reloaded.length], [1, 1, 1]);
     equal("...with no block entities invented", reloaded.blockEntities.size, 0);
+  }
+
+  // --- the NBT panel shows what the file will contain -----------------------
+  //
+  // The panel builds its own tree rather than sharing the writer's, because the
+  // writer's is welded to the block payload. That is a drift risk and this is
+  // the tripwire for it: save the document, read the *real file* back, strip
+  // the tags the panel deliberately omits, and require what is left to be
+  // exactly what the panel would have shown. A tag that appears in one and not
+  // the other fails here rather than in front of a user.
+  console.log("\n--- the panel's tree is the file's tree ---");
+  for (const format of ["sponge2", "sponge3", "mcedit"] as const) {
+    // MCEdit cannot carry an oak sign at all, so that case gets a document the
+    // legacy table knows every block of. Everything else about it is the same.
+    const doc = format === "mcedit" ? legacySafeDocument() : sampleDocument(format);
+    const filePath = path.join(workDir, `panel-${format}.${extensionFor(format)}`);
+    await saveDocument(doc, filePath, { legacyBlocksPath: LEGACY_BLOCKS });
+
+    const { parsed } = await parseNbt(await readFile(filePath));
+    const root = parsed.value as unknown as NbtCompound;
+    // v3 puts everything one level down, under an anonymous root.
+    const fromFile: NbtCompound = {
+      ...(format === "sponge3" ? (root.Schematic as { value: NbtCompound }).value : root),
+    };
+
+    // Strip what the panel says it leaves out. The dotted names are inside
+    // `Blocks`, which itself survives holding only what the panel keeps.
+    for (const name of omittedTags(format)) {
+      if (!name.includes(".")) delete fromFile[name];
+    }
+    if (format === "sponge3") {
+      const blocks = { ...(fromFile.Blocks as { value: NbtCompound }).value };
+      delete blocks.Palette;
+      delete blocks.Data;
+      fromFile.Blocks = { type: "compound", value: blocks };
+    }
+
+    equal(
+      `${format}: the panel shows exactly the file's own tags`,
+      schematicNbtTree(doc, true),
+      fromFile,
+    );
   }
 
   // --- cropping to the content ---------------------------------------------

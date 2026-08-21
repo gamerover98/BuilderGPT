@@ -206,6 +206,22 @@ export const en = {
   "inspector.emptyTree": "(empty)",
   "inspector.notEditable": "A {type} cannot be edited here",
 
+  "nbt.open": "NBT",
+  "nbt.openHint": "View and edit the schematic's NBT",
+  "nbt.title": "Schematic NBT",
+  "nbt.originTitle": "WorldEdit origin",
+  "nbt.originHint":
+    "Where this schematic's corner sat in the world, so WorldEdit and the tools that read it can paste it back exactly. Saving trims the schematic to its blocks, so an origin set against empty space moves with them.",
+  "nbt.originUnset": "not set",
+  "nbt.originSet": "Set",
+  "nbt.originClear": "Clear",
+  "nbt.omittedHint":
+    "The palette and the block data are left out ({tags}): they are the schematic itself, and are rewritten from the grid every time it is saved.",
+  "nbt.readOnly":
+    "This schematic carries too many block entities to edit as text, so it is shown read-only.",
+  "nbt.apply": "Apply",
+  "nbt.revert": "Revert",
+
   "chat.legend": "Ask the AI",
   "chat.you": "You",
   "chat.ai": "AI",
@@ -439,6 +455,9 @@ export const en = {
   "task.breakingBlock": "Breaking a block",
   "task.changingBlockState": "Changing a block state",
   "task.editingNbt": "Editing block entity data",
+  "task.readingNbt": "Reading the schematic's NBT",
+  "task.editingSchematicNbt": "Editing the schematic's NBT",
+  "task.settingOrigin": "Setting the WorldEdit origin",
   "task.pasting": "Pasting",
   "task.transforming": "Transforming the selection",
   "task.filling": "Filling the selection",

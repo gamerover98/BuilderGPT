@@ -53,6 +53,8 @@ import {
   type DocumentMeshRequest,
   type MoveRegionRequest,
   type RegionMeshResponse,
+  type ApplyNbtRequest,
+  type SchematicNbtResponse,
   type SetNbtRequest,
   type SkyTextures,
   type StartupProgressEvent,
@@ -97,6 +99,13 @@ import {
   undoEdit,
 } from "../services/session.js";
 import { NbtEditError } from "../domain/nbt_edit.js";
+import { SnbtError } from "../domain/snbt.js";
+import {
+  applyNbt,
+  NbtApplyError,
+  schematicNbtText,
+  setWorldOrigin,
+} from "../services/schematic_nbt.js";
 import { UnrepresentableBlocksError } from "../services/writers.js";
 import { AgentCancelledError, runAgent } from "../agent/agent.js";
 import {
@@ -660,6 +669,11 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       // and it is theirs to fix — not an io-error.
       return { ok: false, kind: "invalid-input", message: err.message };
     }
+    if (err instanceof SnbtError || err instanceof NbtApplyError) {
+      // Both already name a line and column, or a tag. An error that says
+      // where it is is not an io-error.
+      return { ok: false, kind: "invalid-input", message: err.message };
+    }
     return {
       ok: false,
       kind: "io-error",
@@ -802,6 +816,48 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       return failure(err);
     }
   });
+
+  ipcMain.handle(IPC.docNbtRead, async (): Promise<SchematicNbtResponse> => {
+    try {
+      const session = requireSession();
+      const { text, editable, omitted, revision } = schematicNbtText(session.doc);
+      return { ok: true, text, editable, omitted: [...omitted], revision };
+    } catch (err) {
+      return failure(err);
+    }
+  });
+
+  ipcMain.handle(
+    IPC.docNbtApply,
+    async (_event, request: ApplyNbtRequest): Promise<EditResponse> => {
+      try {
+        const session = requireSession();
+        const changed = applyNbt(
+          session.doc,
+          session.history,
+          request.text,
+          request.revision,
+          "Edit the schematic's NBT",
+        );
+        return { ok: true, changed, state: shellState(session) };
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC.docSetOrigin,
+    async (_event, origin: [number, number, number] | null): Promise<EditResponse> => {
+      try {
+        const session = requireSession();
+        setWorldOrigin(session.doc, session.history, origin, "Set the WorldEdit origin");
+        return { ok: true, changed: 0, state: shellState(session) };
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
 
   ipcMain.handle(IPC.docMove, async (_event, request: MoveRegionRequest): Promise<EditResponse> => {
     try {

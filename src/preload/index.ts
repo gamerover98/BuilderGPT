@@ -49,6 +49,8 @@ import {
   type MoveRegionRequest,
   type RegionMeshResponse,
   type SkyTextures,
+  type ApplyNbtRequest,
+  type SchematicNbtResponse,
   type SetNbtRequest,
   type TransformRequest,
 } from "../shared/ipc.js";
@@ -105,6 +107,12 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docInspect, { x, y, z }) as Promise<InspectResponse>,
   setNbtValue: (request: SetNbtRequest) =>
     ipcRenderer.invoke(IPC.docSetNbt, request) as Promise<EditResponse>,
+  readSchematicNbt: () =>
+    ipcRenderer.invoke(IPC.docNbtRead) as Promise<SchematicNbtResponse>,
+  applySchematicNbt: (request: ApplyNbtRequest) =>
+    ipcRenderer.invoke(IPC.docNbtApply, request) as Promise<EditResponse>,
+  setWorldOrigin: (origin: [number, number, number] | null) =>
+    ipcRenderer.invoke(IPC.docSetOrigin, origin) as Promise<EditResponse>,
   transformRegion: (request: TransformRequest) =>
     ipcRenderer.invoke(IPC.docTransform, request) as Promise<EditResponse>,
   copyRegion: (region) => ipcRenderer.invoke(IPC.docCopy, region) as Promise<ClipboardResponse>,

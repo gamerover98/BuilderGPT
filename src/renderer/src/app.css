@@ -51,6 +51,11 @@
   color-scheme: dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px;
+
+  /* Not a colour, so it is defined once here and never redefined per theme.
+     `TraceView` has been asking for this token since it was written and always
+     falling through to its own inline fallback. */
+  --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
 }
 
 :root[data-theme="light"] {

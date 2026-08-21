@@ -67,6 +67,7 @@ import { openedAge } from "../src/renderer/src/lib/recent_age.js";
 import { PREVIEW_SETTING_RANGES } from "../src/shared/settings.js";
 import { normalizeTicks, skyAt, skyDistance } from "../src/renderer/src/lib/sky.js";
 import { fitShadow } from "../src/renderer/src/lib/shadow_fit.js";
+import { anchorKey, mirrorAnchor } from "../src/renderer/src/lib/anchor_draft.js";
 import {
   isSpuriousLook,
   LOCK_SETTLE_MS,
@@ -1168,6 +1169,53 @@ console.log("\n--- creative inventory ---");
 
   equal("a label loses its namespace and its underscores", blockLabel("minecraft:oak_planks"), "oak planks");
   equal("...and its block states", blockLabel("minecraft:oak_stairs[facing=north]"), "oak stairs");
+}
+
+// --- the anchor modal does not fight the fields ------------------------------
+//
+// The panel edits a value main owns, so it has to mirror it in -- and the naive
+// way to do that wipes whatever is half-typed. `anchor` arrives from a
+// `$derived` that builds a fresh array whenever `docState` is reassigned, which
+// is after every edit anywhere in the app, so its *identity* churns constantly
+// while its value sits still. Mirroring on identity means the fields snap back
+// mid-edit, and Move then sends the value that was already there -- an anchor
+// that will not move, and a button that looks broken.
+console.log("\n--- mirroring the anchor into the fields ---");
+{
+  const cell: [number, number, number] = [2, 0, 2];
+
+  equal("a first arrival fills the fields", mirrorAnchor(cell, null), ["2", "0", "2"]);
+
+  // The one that matters: same value, different array, already mirrored.
+  check(
+    "the same anchor arriving again leaves them alone",
+    mirrorAnchor([2, 0, 2], anchorKey(cell)) === null,
+  );
+  check(
+    "...however many times it arrives",
+    mirrorAnchor([...cell] as [number, number, number], anchorKey(cell)) === null,
+  );
+
+  equal(
+    "a genuinely different anchor does fill them",
+    mirrorAnchor([1, 0, 1], anchorKey(cell)),
+    ["1", "0", "1"],
+  );
+  equal("...and one axis is enough", mirrorAnchor([2, 0, 3], anchorKey(cell)), ["2", "0", "3"]);
+
+  // Clearing empties them; an already-empty panel is left alone.
+  equal(
+    "removing the anchor empties the fields",
+    mirrorAnchor(null, anchorKey(cell)),
+    ["", "", ""],
+  );
+  check("...and stays empty", mirrorAnchor(null, anchorKey(null)) === null);
+
+  // An anchor outside the build is legal, so negatives have to survive as text.
+  equal("a negative coordinate survives", mirrorAnchor([-5, 3, -7], null), ["-5", "3", "-7"]);
+  // And "no anchor" is not the same key as "anchor at the corner", or deleting
+  // one while the other was showing would leave the old numbers in the fields.
+  check("no anchor and a zero anchor are different keys", anchorKey([0, 0, 0]) !== anchorKey(null));
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

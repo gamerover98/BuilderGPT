@@ -1294,6 +1294,7 @@ import VersionList from "./lib/VersionList.svelte";
    * property of the resource pack, not of the document.
    */
   let anchorOpen = $state(false);
+  let anchorError = $state("");
   let anchorTexture = $state<PackTexture | null>(null);
 
   let nbtOpen = $state(false);
@@ -2227,12 +2228,34 @@ import VersionList from "./lib/VersionList.svelte";
     return offset === null ? null : [-offset[0], -offset[1], -offset[2]];
   });
 
+  /**
+   * Sets, moves or removes the anchor, reporting into the modal.
+   *
+   * Deliberately not through `runDocument`: that puts a failure in the app's
+   * status banner, which sits *behind* the modal's scrim — so a refusal, or a
+   * channel the main process does not answer, would look exactly like a button
+   * that does nothing.
+   */
   async function changeWorldEditAnchor(
     next: [number, number, number] | null,
   ): Promise<void> {
-    await runDocument(t("task.settingAnchor"), () => api().setWorldEditAnchor(forIpc(next)));
-    // The NBT panel shows the same tag, so it is stale the moment this lands.
-    if (nbtOpen) await refreshSchematicNbt();
+    anchorError = "";
+    busy = true;
+    try {
+      const response = await api().setWorldEditAnchor(forIpc(next));
+      if (!response.ok) {
+        anchorError = response.message;
+        return;
+      }
+      docState = response.state;
+      await refreshDocument();
+      // The NBT panel shows the same tag, so it is stale the moment this lands.
+      if (nbtOpen) await refreshSchematicNbt();
+    } catch (err) {
+      anchorError = err instanceof Error ? err.message : String(err);
+    } finally {
+      busy = false;
+    }
   }
 
   /** Fetches the schematic's NBT afresh. Called on open and on Revert. */
@@ -2857,10 +2880,14 @@ import VersionList from "./lib/VersionList.svelte";
   size={docState?.size ?? [1, 1, 1]}
   visible={settings.preview.showWorldEditOffset}
   {busy}
+  error={anchorError}
   onset={(next) => void changeWorldEditAnchor(next)}
   onclear={() => void changeWorldEditAnchor(null)}
   onvisibility={(showWorldEditOffset) => void patchPreview({ showWorldEditOffset })}
-  onclose={() => (anchorOpen = false)}
+  onclose={() => {
+    anchorOpen = false;
+    anchorError = "";
+  }}
 />
 
 {#if startingUp}

@@ -62,7 +62,7 @@ import {
   useCheckpointDirectory,
 } from "../src/main/services/checkpoints.js";
 import { isDirty } from "../src/main/domain/history.js";
-import { countBlocks, createDocument, documentFromLoaded } from "../src/main/domain/document.js";
+import { anchorOf, countBlocks, createDocument, documentFromLoaded } from "../src/main/domain/document.js";
 import { UnrepresentableBlocksError } from "../src/main/services/writers.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { dataVersionFor } from "../src/main/services/versions.js";
@@ -1425,6 +1425,46 @@ console.log("\n--- crop on save ---");
   const empty = await saveSession(session, { filePath: target, format: "sponge3" });
   equal("an all-air document reports no trim", empty.cropped, null);
 
+  closeDocument();
+}
+
+// --- the anchor reaches the file ------------------------------------------
+//
+// The whole chain the modal drives, end to end: set it, save it, read the file
+// back off disk. Everything up to `doc.offset` was covered; nothing checked
+// that a save actually carried it, in every format, through the crop that
+// happens on the way out.
+console.log("\n--- the anchor survives a save ---");
+for (const format of ["sponge3", "sponge2", "mcedit"] as const) {
+  const session = newDocument({ width: 16, height: 16, length: 16 }, format);
+  applyEdit(session, {
+    kind: "fill",
+    region: { minX: 4, minY: 2, minZ: 4, maxX: 6, maxY: 3, maxZ: 6 },
+    block: { namespacedName: "minecraft:stone", properties: {} },
+  });
+  setWorldEditAnchor(session.doc, session.history, [5, 2, 5], "Set the anchor");
+
+  const target = path.join(workDir, `anchored.${format === "mcedit" ? "schematic" : "schem"}`);
+  const saved = await saveSession(session, {
+    filePath: target,
+    format,
+    legacyBlocksPath: LEGACY_BLOCKS,
+  });
+
+  const reloaded = documentFromLoaded(
+    await loadStructure(saved.filePath, { legacyBlocksPath: LEGACY_BLOCKS }),
+    saved.filePath,
+  );
+
+  /*
+   * The crop is what makes this worth its own check. Saving trims to content,
+   * so the corner the anchor is measured from moves from (0,0,0) to (4,2,4) --
+   * and the anchor has to move with it or the build pastes off by the padding
+   * the user happened to have around it. Cell (5,2,5) in the roomy box is cell
+   * (1,0,1) in the trimmed one.
+   */
+  equal(`${format}: the file was trimmed`, saved.cropped, { from: [16, 16, 16], to: [3, 2, 3] });
+  equal(`${format}: the anchor is in the file`, anchorOf(reloaded.offset), [1, 0, 1]);
   closeDocument();
 }
 

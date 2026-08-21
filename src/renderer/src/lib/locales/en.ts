@@ -485,7 +485,6 @@ export const en = {
   "task.readingNbt": "Reading the schematic's NBT",
   "task.editingSchematicNbt": "Editing the schematic's NBT",
   "task.settingOrigin": "Setting the WorldEdit origin",
-  "task.settingAnchor": "Setting the WorldEdit anchor",
   "task.pasting": "Pasting",
   "task.transforming": "Transforming the selection",
   "task.filling": "Filling the selection",

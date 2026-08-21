@@ -11,6 +11,7 @@
    * they need it, and the difference between a schematic that pastes where it
    * should and one that lands three blocks off is entirely inside it.
    */
+  import { anchorKey, mirrorAnchor } from "./anchor_draft.js";
   import { t } from "./i18n.svelte.js";
 
   interface Props {
@@ -24,23 +25,49 @@
     /** Whether the marker is drawn in the viewport. */
     visible: boolean;
     busy: boolean;
+    /**
+     * Main's wording for whatever went wrong, shown *inside* the modal.
+     *
+     * The app's status banner is behind the scrim, so a failure reported there
+     * is a failure nobody can see: the button appears to do nothing at all.
+     */
+    error: string;
     onset: (anchor: [number, number, number]) => void;
     onclear: () => void;
     onvisibility: (visible: boolean) => void;
     onclose: () => void;
   }
 
-  const { open, anchor, offset, size, visible, busy, onset, onclear, onvisibility, onclose }:
-    Props = $props();
+  const {
+    open,
+    anchor,
+    offset,
+    size,
+    visible,
+    busy,
+    error,
+    onset,
+    onclear,
+    onvisibility,
+    onclose,
+  }: Props = $props();
 
   let dialog = $state<HTMLDivElement | undefined>(undefined);
   let draft = $state<[string, string, string]>(["", "", ""]);
 
-  // Main owns it; this mirrors whatever comes back, including after a Clear.
+  /**
+   * Main owns the anchor; this mirrors whatever comes back, including a Clear.
+   *
+   * The decision is `mirrorAnchor`'s, and it is keyed on the value rather than
+   * on the prop's identity — see that module for what mirroring on identity
+   * does to anything half-typed.
+   */
+  let mirrored = $state<string | null>(null);
   $effect(() => {
-    draft = anchor === null
-      ? ["", "", ""]
-      : [String(anchor[0]), String(anchor[1]), String(anchor[2])];
+    const next = mirrorAnchor(anchor, mirrored);
+    if (next === null) return;
+    mirrored = anchorKey(anchor);
+    draft = next;
   });
 
   // A typing surface over the viewport: in flight the canvas holds the pointer,
@@ -171,6 +198,10 @@
             <p class="hint stored">
               {t("anchor.stored", { x: offset[0], y: offset[1], z: offset[2] })}
             </p>
+          {/if}
+
+          {#if error}
+            <p class="error" role="alert">{error}</p>
           {/if}
         </section>
 
@@ -315,5 +346,15 @@
 
   .stored {
     font-family: var(--mono);
+  }
+
+  .error {
+    margin: 8px 0 0;
+    padding: 7px 10px;
+    border-left: 2px solid var(--danger);
+    border-radius: 0 6px 6px 0;
+    background: var(--bg-input);
+    color: var(--text);
+    font-size: 12px;
   }
 </style>

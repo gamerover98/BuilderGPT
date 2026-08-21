@@ -326,6 +326,9 @@ export const en = {
   "preview.shadowsHint":
     "The most expensive thing in the viewport: a second pass over the geometry from the light’s point of view.",
   "preview.shadowQuality": "Shadow detail",
+  "preview.smoothLighting": "Smooth lighting",
+  "preview.smoothLightingHint":
+    "Blends the light across each face instead of lighting it flat. Baked into the mesh, so changing it rebuilds.",
   "preview.blockLight": "Light from blocks",
   "preview.blockLightHint":
     "Torches, lanterns and lava light what is around them. Baked into the mesh, so changing it rebuilds.",

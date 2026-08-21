@@ -56,6 +56,7 @@ import VersionList from "./lib/VersionList.svelte";
     type BlockInspection,
     type ChatEntry,
   type ChunkGeometry,
+  type SkyTextures,
     type ProjectNotes,
     type ChatState,
     type ConversationSummary,
@@ -421,6 +422,9 @@ import VersionList from "./lib/VersionList.svelte";
    * what a fresh window opens on; this is what is on screen.
    */
   let clockTicks = $state(DEFAULT_PREVIEW_SETTINGS.timeOfDay);
+
+  /** The pack's own sun and moon, or nulls until they have been read. */
+  let skyTextures = $state<SkyTextures>({ sun: null, moon: null });
 
   /**
    * The daylight cycle, which is a timer and not an animation frame.
@@ -1021,6 +1025,10 @@ import VersionList from "./lib/VersionList.svelte";
 
         step("recent", "running");
         recentDocuments = await api().listRecentDocuments();
+        // The sun and the moon, out of the pack. Read once: they never change
+        // while the app is open, and a pack that ships neither is a sky of
+        // plain squares rather than an error.
+        skyTextures = await api().getSkyTextures();
         // Asked once, at startup, before the user has done anything they could
         // lose by answering it.
         const found = await api().peekRecovery();
@@ -1610,6 +1618,7 @@ import VersionList from "./lib/VersionList.svelte";
       // finally means occlusion.
       patch.blockLight !== undefined ||
       patch.ambientOcclusion !== undefined ||
+      patch.smoothLighting !== undefined ||
       // The markers are turned back into air by the mesher, not hidden by the
       // viewer, so this one rebuilds too — see `hideMarkers`.
       patch.showMarkers !== undefined;
@@ -3085,6 +3094,7 @@ import VersionList from "./lib/VersionList.svelte";
       showGrid={settings.preview.showGrid}
       wireframe={settings.preview.wireframe}
       sky={settings.preview.sky}
+      {skyTextures}
       timeOfDay={clockTicks}
       shadows={settings.preview.shadows}
       shadowQuality={settings.preview.shadowQuality}

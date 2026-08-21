@@ -17,7 +17,13 @@
    * with depthWrite off, same 1.6·maxDim framing, same R-to-reset.
    */
   import { onMount, untrack } from "svelte";
-  import type { ChunkGeometry, MeshAtlas, MeshPayload } from "../../../shared/ipc.js";
+  import type {
+    ChunkGeometry,
+    MeshAtlas,
+    MeshPayload,
+    SkyTexture,
+    SkyTextures,
+  } from "../../../shared/ipc.js";
   import type { ResolvedTheme } from "../../../shared/settings.js";
   import { t } from "./i18n.svelte.js";
   import {
@@ -38,6 +44,7 @@ import {
 } from "./selection_drag.js";
   import { isSpuriousLook } from "./look_filter.js";
   import { skyAt } from "./sky.js";
+  import { fitShadow } from "./shadow_fit.js";
   import type { Face, PlacementLook } from "../../../shared/block_orientation.js";
 import { isTyping } from "./typing.js";
   import * as THREE from "three";
@@ -143,6 +150,14 @@ import { isTyping } from "./typing.js";
      * the vertices — see `MeshPayload`.
      */
     sky: boolean;
+    /**
+     * The pack's sun and moon, as pixels.
+     *
+     * Nulls are ordinary: a pack that ships neither gets the plain squares this
+     * drew before, which is the right shape with the wrong art rather than a
+     * hole in the sky.
+     */
+    skyTextures: SkyTextures;
     timeOfDay: number;
     shadows: boolean;
     shadowQuality: number;
@@ -254,6 +269,7 @@ import { isTyping } from "./typing.js";
     showGrid,
     wireframe,
     sky,
+    skyTextures,
     timeOfDay,
     shadows,
     shadowQuality,
@@ -987,8 +1003,23 @@ import { isTyping } from "./typing.js";
    * Its own shader rather than a texture, because the two colours change with
    * the hour and re-uploading a gradient every frame to say so would be absurd.
    */
+  /**
+   * Which images the sky was built with.
+   *
+   * They arrive during startup, after the first sky has already been drawn, so
+   * without this the squares stay plain until something else happens to tear
+   * the dome down. Identity is enough: the images are read once and never
+   * replaced in place.
+   */
+  let skyArt: SkyTextures | null = null;
+
   function buildSky(): void {
-    if (!scene || skyDome) return;
+    if (!scene) return;
+    if (skyDome && skyArt === skyTextures) return;
+    // The art changed -- which in practice means it arrived. Rebuild rather
+    // than reach into the materials: it is two quads, once, at startup.
+    if (skyDome) disposeSky();
+    skyArt = skyTextures;
     const material = new THREE.ShaderMaterial({
       side: THREE.BackSide,
       depthWrite: false,
@@ -1026,11 +1057,14 @@ import { isTyping } from "./typing.js";
      * depth-free like the dome, so nothing in the world can occlude them and
      * nothing about them lands in the depth buffer.
      */
-    const disc = (color: number, size: number): THREE.Mesh => {
+    const disc = (color: number, size: number, art: SkyTexture | null): THREE.Mesh => {
       const mesh = new THREE.Mesh(
         new THREE.PlaneGeometry(size, size),
         new THREE.MeshBasicMaterial({
-          color,
+          // White under a texture, so the pack's own colours come through
+          // untouched; the fallback colour is only for a pack that ships none.
+          color: art === null ? color : 0xffffff,
+          map: art === null ? null : skyImage(art),
           transparent: true,
           depthWrite: false,
           depthTest: false,
@@ -1042,8 +1076,8 @@ import { isTyping } from "./typing.js";
       scene?.add(mesh);
       return mesh;
     };
-    sunDisc = disc(0xfff4d6, 340);
-    moonDisc = disc(0xe8ecff, 260);
+    sunDisc = disc(0xfff4d6, 340, skyTextures.sun);
+    moonDisc = disc(0xe8ecff, 260, skyTextures.moon);
 
     /*
      * Stars, scattered over the upper half of the dome and faded in by the
@@ -1080,12 +1114,35 @@ import { isTyping } from "./typing.js";
     scene.add(stars);
   }
 
+  /**
+   * One of the pack's environment images as a texture.
+   *
+   * `NearestFilter` and no mipmaps, exactly as the atlas is: the sun is a 32px
+   * square of pixel art, and smoothing it turns a square into a blob — which is
+   * the one thing about the vanilla sky everybody recognises.
+   */
+  function skyImage(art: SkyTexture): THREE.DataTexture {
+    const map = new THREE.DataTexture(
+      new Uint8Array(art.pixels),
+      art.width,
+      art.height,
+      THREE.RGBAFormat,
+    );
+    map.magFilter = THREE.NearestFilter;
+    map.minFilter = THREE.NearestFilter;
+    map.generateMipmaps = false;
+    map.colorSpace = THREE.SRGBColorSpace;
+    map.needsUpdate = true;
+    return map;
+  }
+
   function disposeSky(): void {
     for (const object of [skyDome, sunDisc, moonDisc, stars]) {
       if (!object) continue;
       scene?.remove(object);
       object.geometry.dispose();
       const material = object.material as THREE.Material;
+      (material as THREE.MeshBasicMaterial).map?.dispose();
       material.dispose();
     }
     skyDome = undefined;
@@ -1115,6 +1172,7 @@ import { isTyping } from "./typing.js";
       }
       if (ambient) ambient.intensity = 0.9;
       if (scene) scene.background = themeColor("--viewport-bg", 0x0b0f14);
+      placeShadow();
       return;
     }
 
@@ -1162,6 +1220,8 @@ import { isTyping } from "./typing.js";
     // set would paint over nothing but would be a second answer to the same
     // question, and the first one to be wrong after a theme change.
     if (scene) scene.background = null;
+    // Last, because it reads where the light ended up.
+    placeShadow();
   }
 
   function setSunFromAngles(az: number, el: number): void {
@@ -1741,43 +1801,81 @@ import { isTyping } from "./typing.js";
     void timeOfDay;
     void sunAzimuth;
     void sunElevation;
+    // A different document is a different box for the shadow camera.
+    void documentSize;
     if (!scene) return;
+    // Reading them here is what rebuilds the sky when they arrive: they are
+    // fetched during startup, and the first sky is drawn before they land.
+    void skyTextures;
     if (sky) buildSky();
     else disposeSky();
     applySky();
   });
 
   /*
-   * Shadows, which are the most expensive thing in here by a distance: a whole
-   * extra pass over the geometry from the light's point of view.
+   * Shadows: the most expensive thing in here by a distance, a whole extra
+   * pass over the geometry from the light's point of view.
    *
-   * The shadow camera is a fixed box rather than one fitted to the structure.
-   * Fitting it would be better and is a change to make deliberately: it has to
-   * follow the *light*, not the model, and a box that moves with the sun makes
-   * the shadow edges crawl as it does.
+   * This effect owns only the settings that change the *map* -- whether there
+   * is one and how big. Where the camera points is `placeShadow`, called from
+   * the sky effect, because it follows the light and the light follows the
+   * hour.
    */
   $effect(() => {
     if (!renderer || !sun) return;
     renderer.shadowMap.enabled = shadows;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     sun.castShadow = shadows;
-    const extent = 220;
     sun.shadow.mapSize.set(shadowQuality, shadowQuality);
-    sun.shadow.camera.left = -extent;
-    sun.shadow.camera.right = extent;
-    sun.shadow.camera.top = extent;
-    sun.shadow.camera.bottom = -extent;
-    sun.shadow.camera.near = 1;
-    sun.shadow.camera.far = 4000;
-    // Without this a face lit at a grazing angle shadows itself in stripes,
+    // Without these a face lit at a grazing angle shadows itself in stripes,
     // which on a flat wall of blocks is the whole wall.
     sun.shadow.bias = -0.0006;
     sun.shadow.normalBias = 0.05;
-    sun.shadow.camera.updateProjectionMatrix();
+    // The map is sized at allocation, so an existing one has to go for a new
+    // resolution to take.
     sun.shadow.map?.dispose();
     sun.shadow.map = null;
+    placeShadow();
     if (loaded) applyWireframe(loaded, wireframe);
   });
+
+  /**
+   * Aims the shadow camera at the structure, from wherever the light is.
+   *
+   * The box is fitted to the document rather than fixed: a shadow map has a
+   * pixel budget, and every metre of box big enough for the largest schematic
+   * is pixels not spent on the house actually casting the shadow.
+   *
+   * The arithmetic -- including the texel snap that stops the edges crawling as
+   * the sun moves -- is `shadow_fit.ts`, where it can be read and tested. This
+   * is only where it is applied.
+   */
+  function placeShadow(): void {
+    if (!sun || !scene) return;
+    const [width, height, length] = documentSize ?? [64, 64, 64];
+    // The light's direction is where it *is*, since it always looks at the
+    // structure; `applySky` has already put it there.
+    const fit = fitShadow({
+      center: { x: width / 2, y: height / 2, z: length / 2 },
+      size: { x: width, y: height, z: length },
+      direction: { x: sun.position.x, y: sun.position.y, z: sun.position.z },
+      mapSize: shadowQuality,
+    });
+    sun.position.set(fit.position.x, fit.position.y, fit.position.z);
+    sun.target.position.set(fit.target.x, fit.target.y, fit.target.z);
+    // A light's target is a plain Object3D and only has a world matrix once it
+    // is in the scene; left out, three.js aims every shadow at the origin.
+    if (sun.target.parent === null) scene.add(sun.target);
+    sun.target.updateMatrixWorld();
+    const camera = sun.shadow.camera;
+    camera.left = -fit.radius;
+    camera.right = fit.radius;
+    camera.top = fit.radius;
+    camera.bottom = -fit.radius;
+    camera.near = fit.near;
+    camera.far = fit.far;
+    camera.updateProjectionMatrix();
+  }
 
   $effect(() => {
     if (grid) grid.visible = showGrid;

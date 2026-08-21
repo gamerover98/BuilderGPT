@@ -999,6 +999,13 @@ flood fill over the voxel grid — the renderer has neither, it receives geometr
 `preview.ambientOcclusion` used to nudge the intensity of two lights, which is a
 different thing wearing the same name.
 
+Smooth lighting reads the **same four cells** the occlusion does — the one the
+face looks into, the two beside it and the diagonal — so it costs the lookups
+and nothing else once occlusion is on. Solid cells are skipped rather than
+counted as dark: averaging a wall's own unlit interior into the vertex beside it
+would put a dark seam along every corner in the build, which is what occlusion
+already says, more honestly.
+
 Every vertex carries **three** numbers, riding the colour attribute: block
 light, sky light, occlusion. Three and not one brightness, because only the sky
 half moves with the hour. Folded together in main, the sun would re-mesh the
@@ -1032,6 +1039,33 @@ packed to a byte per cell and compared exactly as the voxels are. Same rule as
 ever: dirtiness is *observed*, not announced — a caller that had to remember to
 say "and the light reached this far" would forget, and the chunk that stayed
 dark would be a bug nobody could reproduce.
+
+**The sun and the moon come out of the resource pack, as pixels.** They live
+at `textures/environment/`, nowhere near the block textures and never asked for
+by anything that meshes — so `services/sky_textures.ts` reads them directly and
+they never touch the baker or the atlas. Pixels rather than a PNG for the same
+reason the atlas is pixels: the CSP forbids `blob:`, three.js decodes an
+embedded image through `ImageBitmapLoader`, and a decode that cannot happen
+renders white while reporting success.
+
+`moon_phases.png` is eight phases in a four-by-two grid and only the first is
+used: drawing the sheet whole puts a strip of eight moons in the sky, and a
+schematic has no date for a phase to track. A pack shipping neither is not a
+failure — `null` means the viewer draws the plain squares it drew before.
+
+**The shadow camera is fitted to the document, and there is deliberately no
+texel snapping.** The fit is the real win: a shadow map has a fixed pixel
+budget, so a box sized for the largest schematic anyone might open spends nearly
+all of it on empty air when the schematic is a house.
+
+The snap was written and then removed, which is worth recording so it is not
+"added back" as an oversight. Quantising the camera to the texel grid fixes
+crawl caused by the box **translating**, and this box does not translate — it is
+centred on a document that does not move. What moves the shadow edges here is
+the light *rotating*, and snapping a rotating frame does not touch that, because
+the texel grid rotates with it. It would have been complexity that reads as a
+fix. If the box ever starts following the camera rather than the document, it is
+the first thing to add back.
 
 **The sky is the viewer's alone, and `sky.ts` is the part that is testable.**
 The dome, the two squares and the stars are geometry with no relationship to the

@@ -511,6 +511,14 @@ export interface DocumentPreviewOptions {
   blockLight?: boolean;
   /** Whether corners are darkened by what is buried in them. Default true. */
   occlusion?: boolean;
+  /**
+   * Whether a vertex averages the light of the four cells around it. Default
+   * true.
+   *
+   * The game's "smooth lighting". Off is flat, per-face light, which is what
+   * vanilla looks like with the setting off.
+   */
+  smoothLighting?: boolean;
 
   /*
    * Both are part of the mesh cache key, for the same reason the two tints
@@ -602,6 +610,7 @@ export async function buildDocumentPreview(
   const shading = {
     light: options.blockLight === false ? null : computeLight(structure),
     occlusion: options.occlusion !== false,
+    smooth: options.smoothLighting !== false,
   };
 
   const chunked = await buildChunkedMesh(

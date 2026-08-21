@@ -65,6 +65,7 @@ import { HOSTILE_CASES } from "./markdown_cases.js";
 import { missingKeys, translate, translatePlural } from "../src/renderer/src/lib/i18n_core.js";
 import { openedAge } from "../src/renderer/src/lib/recent_age.js";
 import { normalizeTicks, skyAt } from "../src/renderer/src/lib/sky.js";
+import { fitShadow } from "../src/renderer/src/lib/shadow_fit.js";
 import {
   isSpuriousLook,
   LOCK_SETTLE_MS,
@@ -768,6 +769,87 @@ console.log("\n--- sky ---");
     "...but moves where the low sun comes from",
     Math.abs(morning.sunDirection[2]) > Math.abs(skyAt(1000, 0).sunDirection[2]),
   );
+}
+
+// --- where the shadow camera goes ---------------------------------------------
+//
+// Two properties, and the second is the one nobody thinks of. The box has to
+// cover the build -- a shadow map has a fixed pixel budget, and a box sized for
+// the largest possible schematic spends it all on empty air. And it has to move
+// in whole texels: slide it half a texel and every receiver lands on a
+// different depth sample, so the edge of every shadow shimmers as the sun
+// moves. Along a straight wall, which is what a schematic is made of, that is
+// the only thing you can see.
+console.log("\n--- shadow fit ---");
+{
+  const box = { center: { x: 32, y: 16, z: 32 }, size: { x: 64, y: 32, z: 64 } };
+  const noon = fitShadow({ ...box, direction: { x: 0, y: 1, z: 0 }, mapSize: 2048 });
+
+  check("the box covers the whole diagonal", noon.radius >= Math.hypot(64, 32, 64) / 2 - 1e-6);
+  check("...and not a great deal more", noon.radius < Math.hypot(64, 32, 64));
+  check("the light is above what it lights", noon.position.y > noon.target.y);
+  check("the near plane is in front of it", noon.near > 0);
+  check("...and the far plane past it", noon.far > noon.near + noon.radius);
+
+  // A one-block document must not get a box smaller than the depth bias, or
+  // every surface shadows itself.
+  const tiny = fitShadow({
+    center: { x: 0.5, y: 0.5, z: 0.5 },
+    size: { x: 1, y: 1, z: 1 },
+    direction: { x: 0, y: 1, z: 0 },
+    mapSize: 1024,
+  });
+  check("a one-block document still gets a usable box", tiny.radius >= 8);
+
+  /*
+   * The camera aims at the document and stays there as the sun goes round.
+   * Only the position moves, which is what keeps the shadow of a wall attached
+   * to the wall.
+   *
+   * There is no texel snapping to check, and that is deliberate -- see the note
+   * at the top of `shadow_fit.ts`. Snapping fixes crawl from a box that
+   * *translates*, and this box is centred on a document that does not move.
+   */
+  const evening = fitShadow({ ...box, direction: { x: 0.8, y: 0.6, z: 0 }, mapSize: 2048 });
+  equal("the camera keeps aiming at the document", evening.target, box.center);
+  check(
+    "...and only the light moves round it",
+    Math.abs(evening.position.x - noon.position.x) > 1,
+  );
+  check(
+    "the light stays the same distance out",
+    Math.abs(
+      Math.hypot(
+        evening.position.x - box.center.x,
+        evening.position.y - box.center.y,
+        evening.position.z - box.center.z,
+      ) -
+        Math.hypot(
+          noon.position.x - box.center.x,
+          noon.position.y - box.center.y,
+          noon.position.z - box.center.z,
+        ),
+    ) < 1e-6,
+  );
+
+  // A direction pointing straight along the axis the perpendicular is picked
+  // from would give a zero vector, and every shadow would land at the origin.
+  for (const direction of [
+    { x: 0, y: 1, z: 0 },
+    { x: 0, y: -1, z: 0 },
+    { x: 1, y: 0, z: 0 },
+    { x: 0, y: 0, z: 1 },
+    { x: 0, y: 0, z: 0 },
+  ]) {
+    const fit = fitShadow({ ...box, direction, mapSize: 1024 });
+    check(
+      `a light pointing (${direction.x}, ${direction.y}, ${direction.z}) still has a place`,
+      Number.isFinite(fit.position.x) &&
+        Number.isFinite(fit.position.y) &&
+        Number.isFinite(fit.position.z) &&
+        Number.isFinite(fit.target.x),
+    );
+  }
 }
 
 // --- how long ago a schematic was opened ----------------------------------

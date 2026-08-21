@@ -71,6 +71,7 @@ import {
 } from "../src/main/services/preview.js";
 import { createDocument, documentFromLoaded, setBlock } from "../src/main/domain/document.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
+import { loadSkyTextures } from "../src/main/services/sky_textures.js";
 import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/services/versions.js";
 import { coerceSettings, coerceUi } from "../src/main/services/settings_coerce.js";
 import { discardPrompt } from "../src/main/services/discard_prompt.js";
@@ -405,6 +406,36 @@ try {
      * picture, slowly. So the referee is a counter, and it is exact -- "once",
      * not "not too many", because there is no reason for a second.
      */
+    /*
+     * The sun and the moon, which come from the pack and from nowhere near the
+     * blocks -- `textures/environment/`, never asked for by anything that
+     * meshes. The check that matters is that the moon is *cropped*: the file is
+     * eight phases in a four-by-two grid, and drawing the sheet whole would put
+     * a strip of eight moons in the sky.
+     */
+    console.log("\n--- the sun and the moon ---");
+    {
+      const art = await loadSkyTextures(null, bundledPack);
+      check("the pack has a sun", art.sun !== null);
+      check("...and a moon", art.moon !== null);
+      if (art.sun && art.moon) {
+        check("the sun is square", art.sun.width === art.sun.height);
+        check(
+          "the sun's pixels are RGBA and all there",
+          art.sun.pixels.length === art.sun.width * art.sun.height * 4,
+        );
+        check(
+          "the moon is one phase, not the sheet",
+          art.moon.width === art.moon.height,
+          `${art.moon.width}x${art.moon.height}`,
+        );
+        check(
+          "...and its pixels match its size",
+          art.moon.pixels.length === art.moon.width * art.moon.height * 4,
+        );
+      }
+    }
+
     console.log("\n--- and it packs the atlas once ---");
     forgetBlockIcons();
     clearBakerCache();

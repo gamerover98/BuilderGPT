@@ -98,6 +98,8 @@ export const IPC = {
   docMove: "bgpt:doc:move",
   /** A region's contents as standalone geometry, for the move preview. */
   docRegionMesh: "bgpt:doc:region:mesh",
+  /** The sun and moon images out of the resource pack. */
+  skyTextures: "bgpt:sky:textures",
   docSave: "bgpt:doc:save",
   /**
    * The open schematic's own version history: list, add, go back, throw away.
@@ -534,6 +536,27 @@ export interface RegionMeshSuccess {
 }
 
 export type RegionMeshResponse = Result<RegionMeshSuccess>;
+
+/**
+ * One image out of the pack, as pixels.
+ *
+ * Pixels and not a PNG for the same reason the atlas is: the renderer's CSP
+ * forbids `blob:`, three.js decodes an embedded image through
+ * `ImageBitmapLoader`, and a decode that cannot happen renders white while
+ * reporting success. Nothing to decode, nothing to fail.
+ */
+export interface SkyTexture {
+  width: number;
+  height: number;
+  /** RGBA8, row-major. */
+  pixels: Uint8Array;
+}
+
+/** `null` for either means the pack ships none, and the viewer draws a square. */
+export interface SkyTextures {
+  sun: SkyTexture | null;
+  moon: SkyTexture | null;
+}
 
 export interface DocumentMeshRequest {
   settings: PreviewSettings;
@@ -1143,6 +1166,7 @@ export interface BgptApi {
   getDocumentMesh(request: DocumentMeshRequest): Promise<DocumentMeshResponse>;
   moveRegion(request: MoveRegionRequest): Promise<EditResponse>;
   regionMesh(region: RegionSpec): Promise<RegionMeshResponse>;
+  getSkyTextures(): Promise<SkyTextures>;
   applyEdit(request: EditRequest): Promise<EditResponse>;
   undo(): Promise<EditResponse>;
   redo(): Promise<EditResponse>;

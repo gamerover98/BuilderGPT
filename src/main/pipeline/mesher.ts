@@ -39,6 +39,18 @@ import {
 export interface Shading {
   readonly light: LightGrid | null;
   readonly occlusion: boolean;
+  /**
+   * Whether a vertex takes the average of the four cells that meet at it
+   * rather than the one in front of its face.
+   *
+   * This is the game's "smooth lighting" and it is the same four cells the
+   * occlusion already reads, so it costs the lookups and nothing else. Off is
+   * flat, per-face light -- which is what vanilla looks like with the setting
+   * off, and is perfectly readable; what it loses is the gradient across a
+   * floor as a torch's light falls away, which is most of what makes a lit
+   * room look lit.
+   */
+  readonly smooth: boolean;
 }
 
 /**
@@ -190,7 +202,9 @@ export async function culledFaces(
     const out = new Float32Array(12);
     for (let v = 0; v < 4; v += 1) {
       let occlusion = 1;
-      if (axis !== -1 && shading.occlusion) {
+      let vertexBlock = block;
+      let vertexSky = sky;
+      if (axis !== -1) {
         const local = [
           face.positions[v * 3] - 0.5,
           face.positions[v * 3 + 1] - 0.5,
@@ -201,16 +215,69 @@ export async function culledFaces(
         const t2 = (axis + 2) % 3;
         const s1 = local[t1] >= 0 ? 1 : -1;
         const s2 = local[t2] >= 0 ? 1 : -1;
-        const cell = (a: number, b: number): boolean => {
+        /*
+         * The four cells that meet at this corner, on the *outside* of the
+         * face: the one it looks into, the two beside it, and the diagonal.
+         * They are what both halves below read -- occlusion asks whether they
+         * are solid and smooth lighting averages how bright they are, which is
+         * why the two settings cost the same lookups.
+         */
+        const corner = (a: number, b: number): [number, number, number] => {
           const at = [x + step[0], y + step[1], z + step[2]];
           at[t1] += a;
           at[t2] += b;
-          return solidAt(at[0], at[1], at[2]);
+          return [at[0], at[1], at[2]];
         };
-        occlusion = OCCLUSION_LEVELS[cornerOcclusion(cell(s1, 0), cell(0, s2), cell(s1, s2))];
+        const cells: [number, number, number][] = [
+          corner(0, 0),
+          corner(s1, 0),
+          corner(0, s2),
+          corner(s1, s2),
+        ];
+
+        if (shading.occlusion) {
+          occlusion =
+            OCCLUSION_LEVELS[
+              cornerOcclusion(
+                solidAt(...cells[1]),
+                solidAt(...cells[2]),
+                solidAt(...cells[3]),
+              )
+            ];
+        }
+
+        if (shading.smooth && lighting) {
+          /*
+           * Solid cells are skipped rather than counted as dark. A torch on a
+           * floor lights the wall beside it, and averaging in the wall's own
+           * unlit interior would put a dark seam along every corner in the
+           * build -- which is exactly what occlusion is already there to say,
+           * more honestly.
+           */
+          let blockSum = 0;
+          let skySum = 0;
+          let counted = 0;
+          for (const [cx, cy, cz] of cells) {
+            if (!inside(cx, cy, cz)) {
+              // Outside the grid is open sky, the same answer `lightAt` gives.
+              skySum += MAX_LIGHT;
+              counted += 1;
+              continue;
+            }
+            const index = flatIndex(cx, cy, cz);
+            if (opaqueEntry[voxels[index]] === true) continue;
+            blockSum += lighting.block[index];
+            skySum += lighting.sky[index];
+            counted += 1;
+          }
+          if (counted > 0) {
+            vertexBlock = blockSum / counted / MAX_LIGHT;
+            vertexSky = skySum / counted / MAX_LIGHT;
+          }
+        }
       }
-      out[v * 3] = block;
-      out[v * 3 + 1] = sky;
+      out[v * 3] = vertexBlock;
+      out[v * 3 + 1] = vertexSky;
       out[v * 3 + 2] = occlusion;
     }
     return out;

@@ -48,6 +48,7 @@ import {
   type PasteRequest,
   type MoveRegionRequest,
   type RegionMeshResponse,
+  type SkyTextures,
   type SetNbtRequest,
   type TransformRequest,
 } from "../shared/ipc.js";
@@ -113,6 +114,7 @@ const api: BgptApi = {
   moveRegion: (request: MoveRegionRequest) =>
     ipcRenderer.invoke(IPC.docMove, request) as Promise<EditResponse>,
   regionMesh: (region) => ipcRenderer.invoke(IPC.docRegionMesh, region) as Promise<RegionMeshResponse>,
+  getSkyTextures: () => ipcRenderer.invoke(IPC.skyTextures) as Promise<SkyTextures>,
   saveDocument: (request: SaveRequest) =>
     ipcRenderer.invoke(IPC.docSave, request) as Promise<SaveResponse>,
   /**

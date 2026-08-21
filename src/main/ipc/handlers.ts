@@ -54,6 +54,7 @@ import {
   type MoveRegionRequest,
   type RegionMeshResponse,
   type SetNbtRequest,
+  type SkyTextures,
   type StartupProgressEvent,
   type TransformRequest,
 } from "../../shared/ipc.js";
@@ -128,6 +129,7 @@ import {
 import { loadAllowedBlocks, traceOf } from "../core.js";
 import { buildBlockIcons, warmBlockIcons } from "../services/block_icons.js";
 import { listArtifacts } from "../services/artifacts.js";
+import { loadSkyTextures } from "../services/sky_textures.js";
 import { SchematicFormatError } from "../pipeline/loader.js";
 import { classifyGenerateError, generate } from "../services/generate.js";
 import { fetchOpenCodeModels } from "../services/opencode.js";
@@ -755,6 +757,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
             waterColor: settings.waterColor,
             blockLight: settings.blockLight,
             occlusion: settings.ambientOcclusion,
+            smoothLighting: settings.smoothLighting,
           },
           // What the window says it already has. Main decides what to send
           // from it; it is never a request for anything in particular.
@@ -828,6 +831,16 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       }
     },
   );
+
+  ipcMain.handle(IPC.skyTextures, async (): Promise<SkyTextures> => {
+    try {
+      return await loadSkyTextures(null, await defaultResourcePackPath());
+    } catch {
+      // A pack that cannot be read is a sky drawn with plain squares, which is
+      // what it was before the pack was asked. Not worth a banner.
+      return { sun: null, moon: null };
+    }
+  });
 
   ipcMain.handle(IPC.docTransform, async (_event, request: TransformRequest): Promise<EditResponse> => {
     try {

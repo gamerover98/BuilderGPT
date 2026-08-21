@@ -91,6 +91,14 @@ export interface PreviewSettings {
    */
   blockLight: boolean;
   /**
+   * Whether a vertex takes the average of the light around it.
+   *
+   * The game's "smooth lighting", and the mesher's like the other two: off is
+   * flat, per-face light. It costs the same lookups occlusion already makes,
+   * so it is nearly free once that is on.
+   */
+  smoothLighting: boolean;
+  /**
    * The sky: a gradient, a square sun and moon, and stars.
    *
    * The viewer's own, and free to change: nothing about it touches geometry.
@@ -157,6 +165,7 @@ export const DEFAULT_PREVIEW_SETTINGS: PreviewSettings = {
   wireframe: false,
   ambientOcclusion: true,
   blockLight: true,
+  smoothLighting: true,
   sky: true,
   // Mid-morning: the sun is up and off to one side, so a build has a lit face
   // and a shaded one. Noon is flatter and reads worse.

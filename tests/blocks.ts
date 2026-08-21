@@ -1017,6 +1017,84 @@ console.log("\n--- lighting ---");
   );
 }
 
+// --- smooth lighting ----------------------------------------------------------
+//
+// A vertex takes the average of the four cells that meet at it, which is the
+// same four the occlusion reads -- so the two settings cost the same lookups.
+// What it buys is the gradient across a floor as a torch's light falls away,
+// which is most of what makes a lit room look lit.
+console.log("\n--- smooth lighting ---");
+{
+  const size = { x: 16, y: 4, z: 16 };
+  const palette: PaletteEntry[] = [
+    { namespacedName: "minecraft:air", properties: {} },
+    { namespacedName: "minecraft:stone", properties: {} },
+    { namespacedName: "minecraft:glowstone", properties: {} },
+  ];
+  const voxels = new Int32Array(size.x * size.y * size.z);
+  const at = (x: number, y: number, z: number): number => x * size.y * size.z + y * size.z + z;
+  // A floor with one glowstone in it: the light falls away across the floor,
+  // which is exactly the gradient this is for.
+  for (let x = 0; x < size.x; x += 1) {
+    for (let z = 0; z < size.z; z += 1) voxels[at(x, 0, z)] = 1;
+  }
+  voxels[at(2, 0, 2)] = 2;
+  const struct: StructureData = {
+    palette,
+    voxels,
+    bounds: { minX: 0, minY: 0, minZ: 0, maxX: size.x - 1, maxY: size.y - 1, maxZ: size.z - 1 },
+  };
+  const light = computeLight(struct);
+
+  const topFaces = async (smooth: boolean): Promise<number[]> => {
+    const faces = await culledFaces(struct, baker, undefined, {
+      light,
+      occlusion: false,
+      smooth,
+    });
+    // Only the tops, and only their block-light channel.
+    return faces
+      .filter((face) => face.normal[1] > 0.9 && face.shade !== undefined)
+      .flatMap((face) => [face.shade![0], face.shade![3], face.shade![6], face.shade![9]]);
+  };
+
+  const flat = await topFaces(false);
+  const smooth = await topFaces(true);
+  check("there are faces to shade", flat.length > 0);
+
+  // Flat lighting gives one value per face, so its four vertices agree.
+  const flatFaceIsUniform = (values: number[]): boolean => {
+    for (let i = 0; i < values.length; i += 4) {
+      if (new Set(values.slice(i, i + 4)).size !== 1) return false;
+    }
+    return true;
+  };
+  check("flat lighting is flat across a face", flatFaceIsUniform(flat));
+  check(
+    "...and smooth lighting is not",
+    !flatFaceIsUniform(smooth),
+    "every face still came out uniform",
+  );
+
+  // And it is still *light*: the brightest vertex is next to the glowstone and
+  // the far corner is dark either way.
+  check("the lit end is bright", Math.max(...smooth) > 0.5);
+  check("...and the far end is not", Math.min(...smooth) < 0.2);
+  // The two settings are separate, and asking for one must not deliver the
+  // other: with occlusion off every vertex's third channel is untouched.
+  const withoutOcclusion = await culledFaces(struct, baker, undefined, {
+    light,
+    occlusion: false,
+    smooth: true,
+  });
+  check(
+    "occlusion stays out of it when it is off",
+    withoutOcclusion
+      .filter((face) => face.shade !== undefined)
+      .every((face) => [2, 5, 8, 11].every((i) => face.shade![i] === 1)),
+  );
+}
+
 // --- how buried a corner is ---------------------------------------------------
 console.log("\n--- ambient occlusion ---");
 {

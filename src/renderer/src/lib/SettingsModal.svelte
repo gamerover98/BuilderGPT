@@ -386,6 +386,17 @@
           <label class="check">
             <input
               type="checkbox"
+              checked={preview.smoothLighting}
+              onchange={(event) =>
+                onpreviewchange({ smoothLighting: event.currentTarget.checked })}
+            />
+            {t("preview.smoothLighting")}
+          </label>
+          <p class="hint">{t("preview.smoothLightingHint")}</p>
+
+          <label class="check">
+            <input
+              type="checkbox"
               checked={preview.ambientOcclusion}
               onchange={(event) =>
                 onpreviewchange({ ambientOcclusion: event.currentTarget.checked })}

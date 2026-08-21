@@ -997,9 +997,18 @@ console.log("\n--- lighting ---");
     equal("...and stops at a wall of stone", walled.block[at(5, 2, 4)], 0);
   }
 
-  // A furnace that is not burning is not a light. `placementState` writes
-  // `lit=false` on a placed one, so reading the name alone would light a
-  // village by its cold furnaces.
+  /*
+   * A furnace that is not burning is not a light, and the two defaults differ:
+   * a bare `minecraft:campfire` is burning and a bare `minecraft:furnace` is
+   * not. One rule for both would either light a village by its cold furnaces or
+   * put out every campfire in it.
+   *
+   * This is also where pre-1.13 lands. In 1.8.8-1.12.2 a lit block is a
+   * different ID:DATA -- furnace 61 against lit furnace 62, redstone lamp 123
+   * against 124 -- and `legacy_blocks.json` has already turned that into
+   * `lit=true` by the time anything gets here. The property is the right key
+   * for both eras and there is nothing legacy left to special-case.
+   */
   equal(
     "an unlit furnace emits nothing",
     blockEmission({ namespacedName: "minecraft:furnace", properties: { lit: "false" } }),
@@ -1010,6 +1019,60 @@ console.log("\n--- lighting ---");
     blockEmission({ namespacedName: "minecraft:furnace", properties: { lit: "true" } }),
     13,
   );
+  equal(
+    "...and one with nothing said about it is cold, as the game has it",
+    blockEmission({ namespacedName: "minecraft:furnace", properties: {} }),
+    0,
+  );
+  equal(
+    "a campfire is the other way round: lit unless it says otherwise",
+    blockEmission({ namespacedName: "minecraft:campfire", properties: {} }),
+    15,
+  );
+  equal(
+    "...and out when it does",
+    blockEmission({ namespacedName: "minecraft:campfire", properties: { lit: "false" } }),
+    0,
+  );
+
+  // What a legacy `.schematic` actually arrives as, through the flattening
+  // table: id 124 and id 74 are the *lit* blocks and carry the property.
+  equal(
+    "a legacy lit redstone lamp glows",
+    blockEmission({ namespacedName: "minecraft:redstone_lamp", properties: { lit: "true" } }),
+    15,
+  );
+  equal(
+    "...and the unlit one it shares a name with does not",
+    blockEmission({ namespacedName: "minecraft:redstone_lamp", properties: { lit: "false" } }),
+    0,
+  );
+  equal(
+    "a lit redstone ore glows a little",
+    blockEmission({ namespacedName: "minecraft:redstone_ore", properties: { lit: "true" } }),
+    9,
+  );
+
+  /*
+   * The one block whose level is in its state rather than in its name, which
+   * is the whole of what it is for.
+   */
+  equal(
+    "a light block emits its level",
+    blockEmission({ namespacedName: "minecraft:light", properties: { level: "7" } }),
+    7,
+  );
+  equal(
+    "...zero included",
+    blockEmission({ namespacedName: "minecraft:light", properties: { level: "0" } }),
+    0,
+  );
+  equal(
+    "...and a nonsense level does not become NaN light",
+    blockEmission({ namespacedName: "minecraft:light", properties: { level: "banana" } }),
+    MAX_LIGHT,
+  );
+
   equal(
     "a block nobody listed emits nothing",
     blockEmission({ namespacedName: "minecraft:stone", properties: {} }),

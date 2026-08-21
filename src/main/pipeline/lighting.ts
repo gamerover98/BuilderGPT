@@ -73,6 +73,8 @@ const EMISSION: Record<string, number> = {
   verdant_froglight: 15,
   pearlescent_froglight: 15,
   end_gateway: 15,
+  fire: 15,
+  end_portal: 15,
   // 14
   torch: 14,
   wall_torch: 14,
@@ -89,10 +91,16 @@ const EMISSION: Record<string, number> = {
   soul_lantern: 10,
   soul_campfire: 10,
   crying_obsidian: 10,
+  soul_fire: 10,
+  // 9
+  redstone_ore: 9,
+  deepslate_redstone_ore: 9,
   // 7
   enchanting_table: 7,
   ender_chest: 7,
   glow_lichen: 7,
+  redstone_torch: 7,
+  redstone_wall_torch: 7,
   // 6
   sculk_catalyst: 6,
   // 5
@@ -105,23 +113,62 @@ const EMISSION: Record<string, number> = {
   small_amethyst_bud: 1,
   brown_mushroom: 1,
   sculk_sensor: 1,
+  brewing_stand: 1,
+  dragon_egg: 1,
 };
 
-/** Blocks whose emission is conditional on burning. */
-const NEEDS_LIT = new Set([
+/**
+ * Blocks that glow only while `lit`, and what a bare one is.
+ *
+ * The two lists exist because the game's defaults differ: a bare
+ * `minecraft:campfire` is burning and a bare `minecraft:furnace` is not, so one
+ * rule for both would either light every cold furnace in a village or put out
+ * every campfire.
+ *
+ * **This is also where pre-1.13 lands.** In 1.8.8–1.12.2 a lit block is a
+ * different `ID:DATA` entirely — a furnace is 61 and a burning one is 62, a
+ * redstone lamp 123 and a lit one 124 — and the loader has already turned that
+ * into `lit=true` through `legacy_blocks.json` by the time anything gets here.
+ * So the property is the right key for both eras, and there is nothing legacy
+ * to special-case: `62:2` arrives as `furnace[facing=north,lit=true]`.
+ */
+const LIT_DEFAULT_OFF: ReadonlySet<string> = new Set([
   "furnace",
   "blast_furnace",
   "smoker",
+  "redstone_lamp",
+  "redstone_ore",
+  "deepslate_redstone_ore",
+]);
+
+const LIT_DEFAULT_ON: ReadonlySet<string> = new Set([
   "campfire",
   "soul_campfire",
-  "redstone_lamp",
+  "redstone_torch",
+  "redstone_wall_torch",
 ]);
+
+/**
+ * `minecraft:light`, whose whole purpose is a level you choose.
+ *
+ * The one block where the number is in the state rather than in the name, and
+ * the reason this reads `level` at all. It draws nothing — see
+ * `block_shapes.ts` — and lights everything.
+ */
+function lightBlockLevel(entry: PaletteEntry): number {
+  const level = Number.parseInt(entry.properties.level ?? "15", 10);
+  if (!Number.isFinite(level)) return MAX_LIGHT;
+  return Math.max(0, Math.min(MAX_LIGHT, level));
+}
 
 export function blockEmission(entry: PaletteEntry): number {
   const name = entry.namespacedName.split(":").pop() ?? entry.namespacedName;
+  if (name === "light") return lightBlockLevel(entry);
+
   const level = EMISSION[name];
   if (level === undefined) return 0;
-  if (NEEDS_LIT.has(name) && entry.properties.lit === "false") return 0;
+  if (LIT_DEFAULT_OFF.has(name) && entry.properties.lit !== "true") return 0;
+  if (LIT_DEFAULT_ON.has(name) && entry.properties.lit === "false") return 0;
   return level;
 }
 

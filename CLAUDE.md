@@ -1017,6 +1017,28 @@ own use of it — a plain multiply into the diffuse — is then replaced in
 `onBeforeCompile`. These are not colours; left as colours a lit wall turns
 green.
 
+**The two channels are used differently, and that asymmetry is the feature.**
+Sky light *dims the albedo*, so the sun still lights a surface and the shadow
+map still darkens it. Block light is added to `totalEmissiveRadiance` instead,
+because as a multiply it could only ever stop a surface being dark — never make
+it brighter than the scene's own lights already had it. A torch in a sealed room
+at night therefore lit nothing at all: the ambient there is near zero, and near
+zero times anything is near zero. Emissive is added after the lighting pass and
+owes nothing to `uDaylight`, which is what lets a torch light a room the sun
+cannot reach and keep it lit after dark.
+
+**A block that glows only while `lit` has two possible defaults, and they
+differ.** A bare `minecraft:campfire` is burning; a bare `minecraft:furnace` is
+not. One rule for both either lights a village by its cold furnaces or puts out
+every campfire in it, so `lighting.ts` keeps two sets.
+
+That is also where pre-1.13 lands, and there is nothing further to do about it:
+in 1.8.8–1.12.2 a lit block is a different `ID:DATA` — furnace 61 against lit
+furnace 62, redstone lamp 123 against 124 — and `legacy_blocks.json` has already
+turned that into `lit=true` by the time the light pass sees it. `minecraft:light`
+is the one block whose level is in its *state* rather than its name, which is
+why `blockEmission` reads `level` at all.
+
 The floor of `0.06` in that shader is deliberate: fully unlit is black, a block
 in a sealed room would be a hole in the picture, and this is an editor where
 "you cannot see what you are working on" is a bug however faithful it is. The
@@ -1052,6 +1074,13 @@ renders white while reporting success.
 used: drawing the sheet whole puts a strip of eight moons in the sky, and a
 schematic has no date for a phase to track. A pack shipping neither is not a
 failure — `null` means the viewer draws the plain squares it drew before.
+
+**They are drawn with additive blending, and that is not a style choice.**
+`environment/sun.png` is a *palette* PNG with no transparency chunk at all:
+every pixel is opaque and everything around the sun is solid black. Blended
+normally it draws exactly that — a black square with a sun in the middle. The
+game renders the sky bodies additively, where black contributes nothing, and
+that is what makes the file make sense.
 
 **The shadow camera is fitted to the document, and there is deliberately no
 texel snapping.** The fit is the real win: a shadow map has a fixed pixel

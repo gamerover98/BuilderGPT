@@ -1105,6 +1105,18 @@ import { isTyping } from "./typing.js";
           color: art === null ? color : 0xffffff,
           map: art === null ? null : skyImage(art),
           transparent: true,
+          /*
+           * Additive, which is not a stylistic choice -- it is the only way
+           * these images are readable.
+           *
+           * `environment/sun.png` is a *palette* PNG with no transparency chunk
+           * at all: every pixel is opaque and the area around the sun is solid
+           * black. Blended normally that is exactly what it draws -- a black
+           * square with a sun in the middle of it. The game renders the sky
+           * bodies additively, where black contributes nothing, and that is
+           * what makes the file make sense.
+           */
+          blending: THREE.AdditiveBlending,
           depthWrite: false,
           depthTest: false,
           side: THREE.DoubleSide,
@@ -2170,11 +2182,31 @@ import { isTyping } from "./typing.js";
         .replace(
           "#include <color_fragment>",
           `
+          vec3 albedo = diffuseColor.rgb;
           float blockLight = vColor.r;
           float skyLight = vColor.g * uDaylight;
           float occlusion = vColor.b;
-          float lit = max(blockLight, skyLight);
-          diffuseColor.rgb *= max(0.06, lit) * occlusion;
+
+          /*
+           * The sky half dims the surface, so the sun still lights it and the
+           * shadow map still darkens it.
+           */
+          diffuseColor.rgb = albedo * max(0.06, skyLight) * occlusion;
+
+          /*
+           * The block half is *light*, and adding it is the whole point.
+           *
+           * As a multiply on the albedo it could only ever stop a surface being
+           * dark -- never make it brighter than whatever the scene's own lights
+           * gave it. So a torch in a sealed room at night lit nothing: the
+           * ambient there is near zero, and near zero times anything is near
+           * zero. That is what "the torches do not light the area" was.
+           *
+           * Emissive is added after the lighting pass, which is what lets a
+           * torch light a room the sun cannot reach -- and, being independent
+           * of uDaylight, lets it stay lit when the sun goes down.
+           */
+          totalEmissiveRadiance += albedo * blockLight * occlusion * 0.9;
           `,
         );
     };

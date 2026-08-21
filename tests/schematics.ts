@@ -174,6 +174,22 @@ async function writeSpongeV3(filePath: string, withEntities = false): Promise<st
     blocks.BlockEntities = spongeV3BlockEntities();
     schematic.Entities = entities();
     schematic.Offset = { type: "intArray", value: [-4, 64, 12] };
+    // A file as WorldEdit actually writes one: the Origin the loader lifts out
+    // into `worldOrigin`, and two neighbours in the same compound that must
+    // survive the lift rather than being replaced by it.
+    schematic.Metadata = {
+      type: "compound",
+      value: {
+        Name: { type: "string", value: "carried from the file" },
+        WorldEdit: {
+          type: "compound",
+          value: {
+            Origin: { type: "intArray", value: [201, 92, 3] },
+            EditingPlatform: { type: "string", value: "intellectualsites:bukkit" },
+          },
+        },
+      },
+    };
   }
   schematic.Blocks = { type: "compound", value: blocks };
 
@@ -205,6 +221,18 @@ async function writeSpongeV2(filePath: string): Promise<string> {
       BlockData: { type: "byteArray", value: data },
       BlockEntities: spongeV2BlockEntities(),
       Entities: entities(),
+      // An Origin and nothing else in the WorldEdit compound: once the loader
+      // has lifted it out there is nothing left, and the bag must come back
+      // without the sub-compound rather than carrying an empty one.
+      Metadata: {
+        type: "compound",
+        value: {
+          WorldEdit: {
+            type: "compound",
+            value: { Origin: { type: "intArray", value: [7, 8, 9] } },
+          },
+        },
+      },
     },
   });
 }
@@ -218,6 +246,13 @@ async function writeMcEdit(
   filePath: string,
   withAddBlocks = false,
   withEntities = false,
+  /**
+   * `WEOriginX/Y/Z`, as many of them as this array has entries. A short array
+   * writes a *partial* origin, which is the case worth checking: two thirds of
+   * a position is not a position, and a reader that defaulted the missing axis
+   * to zero would move the build.
+   */
+  origin: readonly number[] | null = null,
 ): Promise<string> {
   const total = WIDTH * HEIGHT * LENGTH;
   const blocks = new Array<number>(total).fill(0);
@@ -247,10 +282,19 @@ async function writeMcEdit(
   if (withEntities) {
     value.TileEntities = mcEditTileEntities();
     value.Entities = entities();
-    // MCEdit spells the origin as three separate shorts, not an int array.
+    // MCEdit spells the offset as three separate shorts, not an int array.
     value.WEOffsetX = { type: "short", value: -4 };
     value.WEOffsetY = { type: "short", value: 64 };
     value.WEOffsetZ = { type: "short", value: 12 };
+  }
+
+  if (origin !== null) {
+    // WorldEdit's own writer uses ints here, where its offsets are sometimes
+    // shorts -- the reader must not care which.
+    const axes = ["WEOriginX", "WEOriginY", "WEOriginZ"];
+    origin.forEach((coordinate, index) => {
+      value[axes[index]] = { type: "int", value: coordinate };
+    });
   }
 
   return await writeNbtGz(filePath, { type: "compound", name: "Schematic", value });
@@ -430,7 +474,12 @@ try {
   {
     const v2ePath = await writeSpongeV2(path.join(workDir, "entities-v2.schem"));
     const v3ePath = await writeSpongeV3(path.join(workDir, "entities-v3.schem"), true);
-    const mcePath = await writeMcEdit(path.join(workDir, "entities-mcedit.schematic"), false, true);
+    const mcePath = await writeMcEdit(
+      path.join(workDir, "entities-mcedit.schematic"),
+      false,
+      true,
+      [201, 92, 3],
+    );
 
     const v2e = await loadStructure(v2ePath);
     const v3e = await loadStructure(v3ePath);
@@ -504,6 +553,73 @@ try {
     equal("a schematic without block entities reports none", v2.blockEntities, []);
     equal("...and no entities", v2.entities, []);
     equal("...and a zero offset", v2.offset, [0, 0, 0]);
+  }
+
+  // --- the WorldEdit Origin ------------------------------------------------
+  //
+  // A different vector from the offset above, and the app reads neither the
+  // Sponge `Metadata` compound nor MCEdit's `WEOrigin*` before this. The
+  // interesting half is not the number, it is what the lift leaves behind:
+  // `Origin` comes out into a typed field because it has to move when the
+  // content moves, and every other tag in that compound has to stay put.
+  console.log("\n--- the WorldEdit Origin ---");
+  {
+    const v2ePath = await writeSpongeV2(path.join(workDir, "origin-v2.schem"));
+    const v3ePath = await writeSpongeV3(path.join(workDir, "origin-v3.schem"), true);
+    const mcePath = await writeMcEdit(
+      path.join(workDir, "origin-mcedit.schematic"),
+      false,
+      true,
+      [201, 92, 3],
+    );
+    const partialPath = await writeMcEdit(
+      path.join(workDir, "origin-partial.schematic"),
+      false,
+      true,
+      [201, 92],
+    );
+
+    const v2o = await loadStructure(v2ePath);
+    const v3o = await loadStructure(v3ePath);
+    const mco = await loadStructure(mcePath, { legacyBlocksPath: LEGACY_BLOCKS });
+    const partial = await loadStructure(partialPath, { legacyBlocksPath: LEGACY_BLOCKS });
+
+    equal("v2 Origin, out of Metadata.WorldEdit", v2o.worldOrigin, [7, 8, 9]);
+    equal("v3 Origin, out of Metadata.WorldEdit", v3o.worldOrigin, [201, 92, 3]);
+    equal("MCEdit Origin, from its three separate ints", mco.worldOrigin, [201, 92, 3]);
+    equal("two thirds of an origin is not an origin", partial.worldOrigin, null);
+
+    // It is a different tag from the offset, and both survive the same file.
+    equal("...and the offset beside it is untouched", mco.offset, [-4, 64, 12]);
+
+    equal(
+      "the lift takes the Origin and nothing else",
+      v3o.metadata.WorldEdit,
+      {
+        type: "compound",
+        value: { EditingPlatform: { type: "string", value: "intellectualsites:bukkit" } },
+      },
+    );
+    equal(
+      "...and the file's own name survives to override the app's",
+      v3o.metadata.Name,
+      { type: "string", value: "carried from the file" },
+    );
+    check(
+      "a WorldEdit compound the lift emptied is dropped, not left as {}",
+      v2o.metadata.WorldEdit === undefined,
+    );
+    equal("MCEdit has no Metadata compound to carry", mco.metadata, {});
+
+    // A file that named none must not acquire one: zero is a position, and
+    // absence is not. `v2` is the app's own writer's output, so its Metadata
+    // holds the `Name` that writer stamps and no WorldEdit compound at all.
+    equal("a schematic with no Origin has none", v2.worldOrigin, null);
+    equal(
+      "...and a bag holding exactly what the file held",
+      v2.metadata,
+      { Name: { type: "string", value: "Schematic AI Studio" } },
+    );
   }
 
   // --- unrecognised container ----------------------------------------------

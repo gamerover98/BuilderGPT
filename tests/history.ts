@@ -27,6 +27,7 @@ import {
   markHistorySaved,
   nextUndoId,
   nextUndoLabel,
+  readHeader,
   redo,
   runTransaction,
   summarizeTransaction,
@@ -202,6 +203,89 @@ console.log("\n--- resize ---");
   equal("the write after it applied too", getBlock(doc, 0, 7, 0).namespacedName, "minecraft:glass");
   undo(doc, history);
   equal("undoing across a resize restores everything", snapshot(doc), mixed);
+}
+
+// --- the header: everything about a schematic that is not a block -----------
+//
+// Where it sat in the world, what wrote it, the file's own metadata, and the
+// entities inside it. None of these are voxels, so none of them were on the
+// undo stack at all until the NBT panel needed to change them.
+console.log("\n--- the header ---");
+{
+  const doc = createDocument({ width: 2, height: 2, length: 2 });
+  const history = createHistory();
+  doc.offset = [-4, 64, 12];
+  doc.worldOrigin = [201, 92, 3];
+  doc.metadata = { Author: { type: "string", value: "gamerover98" } };
+
+  const before = readHeader(doc);
+  runTransaction(doc, history, "edit the NBT", (tx) =>
+    tx.setHeader({
+      offset: [1, 2, 3],
+      worldOrigin: [500, 70, -300],
+      dataVersion: 3700,
+      metadata: { Name: { type: "string", value: "renamed" } },
+      entities: [{ id: "minecraft:armor_stand", pos: [0.5, 0, 0.5], nbt: {} }],
+    }),
+  );
+
+  equal("the offset changed", doc.offset, [1, 2, 3]);
+  equal("...and the Origin", doc.worldOrigin, [500, 70, -300]);
+  equal("...and the DataVersion", doc.dataVersion, 3700);
+  equal("...and the metadata bag, wholesale", doc.metadata, {
+    Name: { type: "string", value: "renamed" },
+  });
+  equal("...and the entity list", doc.entities.length, 1);
+
+  // A header edit moves no voxels, so `changed` is zero -- and it must land on
+  // the stack anyway, or the one edit nobody can undo is the one that moved the
+  // whole build in the world.
+  check("a header-only transaction is undoable", canUndo(history));
+  check("...and makes the document dirty", isDirty(history));
+
+  undo(doc, history);
+  equal("undo puts all five back", readHeader(doc), before);
+  redo(doc, history);
+  equal("redo puts all five forward again", doc.worldOrigin, [500, 70, -300]);
+  equal("...including the entities", doc.entities.length, 1);
+
+  // The stack keeps its own copy: writing through the document afterwards must
+  // not reach into what the undo entry recorded.
+  undo(doc, history);
+  doc.metadata.Author = { type: "string", value: "someone else" };
+  doc.entities.push({ id: "minecraft:pig", pos: [0, 0, 0], nbt: {} });
+  redo(doc, history);
+  undo(doc, history);
+  equal("...so a later mutation cannot reach back into it", readHeader(doc), before);
+}
+
+// --- a resize carries the world position with it ----------------------------
+//
+// `resizeDocument` recomputes both from the shift, which is right forwards and
+// not necessarily backwards -- so the command records them and the revert puts
+// back what it recorded.
+console.log("\n--- resize and the world position ---");
+{
+  const doc = createDocument({ width: 2, height: 2, length: 2 });
+  const history = createHistory();
+  doc.offset = [-4, 64, 12];
+  doc.worldOrigin = [201, 92, 3];
+
+  runTransaction(doc, history, "grow downwards", (tx) =>
+    tx.resize({ width: 2, height: 4, length: 2 }, [0, 2, 0]),
+  );
+  equal("the shift moved the offset", doc.offset, [-4, 62, 12]);
+  equal("...and the Origin with it", doc.worldOrigin, [201, 90, 3]);
+
+  undo(doc, history);
+  equal("undo restores the offset", doc.offset, [-4, 64, 12]);
+  equal("...and the Origin", doc.worldOrigin, [201, 92, 3]);
+
+  redo(doc, history);
+  equal("redo re-derives both from the shift", [doc.offset, doc.worldOrigin], [
+    [-4, 62, 12],
+    [201, 90, 3],
+  ]);
 }
 
 // --- summarising a transaction -----------------------------------------------

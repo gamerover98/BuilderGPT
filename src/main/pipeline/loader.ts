@@ -56,6 +56,10 @@ export interface LoadedStructure extends StructureData {
   readonly entities: readonly EntityRecord[];
   /** The schematic's origin in the world it was cut from. */
   readonly offset: readonly [number, number, number];
+  /** WorldEdit's Origin, or `null` when the file named none. Not `offset`. */
+  readonly worldOrigin: readonly [number, number, number] | null;
+  /** The file's own `Metadata`, minus the Origin lifted out of it. */
+  readonly metadata: NbtCompound;
   /** The file's declared `DataVersion`; `null` for MCEdit, which has none. */
   readonly dataVersion: number | null;
 }
@@ -130,6 +134,8 @@ export async function loadStructure(
     blockEntities: decoded.blockEntities,
     entities: decoded.entities,
     offset: decoded.offset,
+    worldOrigin: decoded.worldOrigin,
+    metadata: decoded.metadata,
     dataVersion: decoded.dataVersion,
   };
 }

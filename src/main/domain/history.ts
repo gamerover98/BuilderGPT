@@ -37,6 +37,8 @@
 import {
   paletteEntryCacheKey,
   type BlockEntityRecord,
+  type EntityRecord,
+  type NbtCompound,
   type PaletteEntry,
 } from "../pipeline/types.js";
 import {
@@ -68,6 +70,29 @@ interface Dimensions {
   readonly height: number;
   readonly length: number;
   readonly offset: readonly [number, number, number];
+  /** Moves with the shift exactly as `offset` does; `null` stays `null`. */
+  readonly worldOrigin: readonly [number, number, number] | null;
+}
+
+/**
+ * Everything about a schematic that is not a block: where it sat in the world,
+ * what version wrote it, the file's own metadata, and the entities inside it.
+ *
+ * One whole state rather than a patch of changed fields. A partial merge is one
+ * more place for a field added later to be silently dropped -- the failure
+ * `coerceSettings` exists to prevent -- and these are small enough that copying
+ * all five costs nothing worth trading for.
+ *
+ * Block entities are deliberately *not* here: they already have `BlockEntityDelta`
+ * and `setBlockEntity`, which key on position, and a whole-map snapshot beside
+ * a per-position delta would be two records of one thing.
+ */
+export interface HeaderState {
+  readonly offset: readonly [number, number, number];
+  readonly worldOrigin: readonly [number, number, number] | null;
+  readonly dataVersion: number | null;
+  readonly metadata: NbtCompound;
+  readonly entities: readonly EntityRecord[];
 }
 
 export type Command =
@@ -88,6 +113,11 @@ export type Command =
        */
       readonly dropped: readonly BlockDelta[];
       readonly droppedEntities: readonly BlockEntityRecord[];
+    }
+  | {
+      readonly kind: "header";
+      readonly before: HeaderState;
+      readonly after: HeaderState;
     };
 
 export interface Transaction {
@@ -182,8 +212,32 @@ export interface TransactionScope {
     size: { width: number; height: number; length: number },
     shift?: readonly [number, number, number],
   ): void;
+  /** Replaces everything about the schematic that is not a block. */
+  setHeader(next: HeaderState): void;
   /** Voxels changed so far. */
   readonly changed: number;
+}
+
+/** The document's current header, for a caller that wants to change one field. */
+export function readHeader(doc: SchematicDocument): HeaderState {
+  return {
+    offset: [...doc.offset] as [number, number, number],
+    worldOrigin: doc.worldOrigin === null ? null : ([...doc.worldOrigin] as [number, number, number]),
+    dataVersion: doc.dataVersion,
+    metadata: structuredClone(doc.metadata),
+    entities: doc.entities.map((entity) => ({ ...entity, nbt: structuredClone(entity.nbt) })),
+  };
+}
+
+/** Writes a whole header onto the document. Copies, so the stack keeps its own. */
+function applyHeader(doc: SchematicDocument, state: HeaderState): void {
+  doc.offset = [...state.offset] as [number, number, number];
+  doc.worldOrigin =
+    state.worldOrigin === null ? null : ([...state.worldOrigin] as [number, number, number]);
+  doc.dataVersion = state.dataVersion;
+  doc.metadata = structuredClone(state.metadata) as NbtCompound;
+  doc.entities = state.entities.map((entity) => ({ ...entity, nbt: structuredClone(entity.nbt) }));
+  doc.revision += 1;
 }
 
 class Recorder implements TransactionScope {
@@ -302,6 +356,8 @@ class Recorder implements TransactionScope {
       height: doc.height,
       length: doc.length,
       offset: [...doc.offset] as [number, number, number],
+      worldOrigin:
+        doc.worldOrigin === null ? null : ([...doc.worldOrigin] as [number, number, number]),
     };
 
     // Everything the new box will not contain, captured before it is lost.
@@ -346,11 +402,25 @@ class Recorder implements TransactionScope {
         height: doc.height,
         length: doc.length,
         offset: [...doc.offset] as [number, number, number],
+        worldOrigin:
+          doc.worldOrigin === null ? null : ([...doc.worldOrigin] as [number, number, number]),
       },
       shift: [dx, dy, dz],
       dropped,
       droppedEntities,
     });
+  }
+
+  /**
+   * Flushed first, like a resize, for a narrower version of the same reason:
+   * this command replaces the entity list wholesale, and a block delta either
+   * side of it must not end up inside the same command as the replacement.
+   */
+  setHeader(next: HeaderState): void {
+    this.flush();
+    const before = readHeader(this.doc);
+    applyHeader(this.doc, next);
+    this.commands.push({ kind: "header", before, after: readHeader(this.doc) });
   }
 
   get changed(): number {
@@ -383,6 +453,15 @@ function applyCommand(doc: SchematicDocument, command: Command): void {
     doc.revision += 1;
     return;
   }
+
+  if (command.kind === "header") {
+    applyHeader(doc, command.after);
+    return;
+  }
+
+  // The offset and the world origin are left to `resizeDocument` here, unlike
+  // in the revert below: redoing a resize re-derives them from the shift, which
+  // is exactly how they got their recorded values the first time.
   resizeDocument(
     doc,
     { width: command.after.width, height: command.after.height, length: command.after.length },
@@ -406,6 +485,11 @@ function revertCommand(doc: SchematicDocument, command: Command): void {
     return;
   }
 
+  if (command.kind === "header") {
+    applyHeader(doc, command.before);
+    return;
+  }
+
   // Undo the resize by resizing back with the inverse shift, then restore
   // whatever the shrink threw away. The order matters: the dropped deltas are
   // indexed in the old frame, which only exists again after the resize back.
@@ -422,8 +506,13 @@ function revertCommand(doc: SchematicDocument, command: Command): void {
   }
   // `resizeDocument` recomputes the offset from the shift, which is right for a
   // resize but not necessarily for the inverse of one -- restore what was
-  // actually recorded rather than trusting the arithmetic to round-trip.
+  // actually recorded rather than trusting the arithmetic to round-trip. The
+  // world origin travels with it for the same reason.
   doc.offset = [...command.before.offset] as [number, number, number];
+  doc.worldOrigin =
+    command.before.worldOrigin === null
+      ? null
+      : ([...command.before.worldOrigin] as [number, number, number]);
   doc.revision += 1;
 }
 
@@ -581,11 +670,13 @@ export function summarizeTransaction(
   for (const command of transaction.commands) {
     if (command.kind === "blocks") {
       walk(command.blocks);
-    } else {
+    } else if (command.kind === "resize") {
       // A shrink destroys everything outside the new box. Those voxels are the
       // most destructive thing an edit can do and appear nowhere else.
       walk(command.dropped);
     }
+    // A header command moves no voxels, so it contributes nothing to a tally
+    // counted by block type. It is still a transaction on the stack.
   }
 
   const ranked = (counts: Map<string, number>): BlockTally[] =>

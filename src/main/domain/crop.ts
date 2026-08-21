@@ -153,6 +153,18 @@ export function cropToContent(doc: SchematicDocument): CroppedDocument | null {
         doc.offset[1] + bounds.minY,
         doc.offset[2] + bounds.minZ,
       ],
+      // And the WorldEdit Origin is the world position of the corner cell, which
+      // the trim has just moved to what used to be `bounds.min` -- so it takes
+      // the same correction. An Origin typed against a deliberately roomy
+      // editing box therefore comes back shifted, which is the point of it.
+      worldOrigin:
+        doc.worldOrigin === null
+          ? null
+          : ([
+              doc.worldOrigin[0] + bounds.minX,
+              doc.worldOrigin[1] + bounds.minY,
+              doc.worldOrigin[2] + bounds.minZ,
+            ] as [number, number, number]),
     },
     summary: { from: documentSize(doc), to: [width, height, length] },
   };

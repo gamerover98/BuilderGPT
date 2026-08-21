@@ -255,6 +255,36 @@ function spongeEntities(records: readonly EntityRecord[], version: 2 | 3): NbtCo
   });
 }
 
+/**
+ * The `Metadata` compound: what the file arrived with, plus the Origin.
+ *
+ * Two orderings, and both are load-bearing. `Name` goes in *first*, so it is a
+ * default that a schematic which arrived named overrides rather than a stamp
+ * that overwrites it. `Origin` goes in *last* and is merged into whatever
+ * `WorldEdit` sub-compound survived the load, so `Platforms` and
+ * `EditingPlatform` come back out beside it instead of being replaced by a
+ * sub-compound this app invented.
+ *
+ * A null origin writes no tag at all rather than `[I;0,0,0]`, which would tell
+ * every tool downstream to paste the build at the world origin.
+ */
+function spongeMetadata(doc: SchematicDocument): NbtCompound {
+  const out: NbtCompound = { Name: str("Schematic AI Studio"), ...doc.metadata };
+  if (doc.worldOrigin === null) {
+    return out;
+  }
+  const carried = out.WorldEdit;
+  const existing =
+    carried && carried.type === "compound" && carried.value !== null && typeof carried.value === "object"
+      ? (carried.value as NbtCompound)
+      : {};
+  out.WorldEdit = {
+    type: "compound",
+    value: { ...existing, Origin: { type: "intArray", value: [...doc.worldOrigin] } },
+  };
+  return out;
+}
+
 function buildSponge(doc: SchematicDocument, version: 2 | 3, dataVersion: number | null): unknown {
   const [width, height, length] = documentSize(doc);
   const palette = buildLocalPalette(doc);
@@ -270,10 +300,7 @@ function buildSponge(doc: SchematicDocument, version: 2 | 3, dataVersion: number
   const blockEntities = compoundList(spongeBlockEntities(doc.blockEntities.values(), version));
   const entities = compoundList(spongeEntities(doc.entities, version));
   const blockData: NbtTag = { type: "byteArray", value: varints.map(toSignedByte) };
-  const metadata: NbtTag = {
-    type: "compound",
-    value: { Name: str("Schematic AI Studio") },
-  };
+  const metadata: NbtTag = { type: "compound", value: spongeMetadata(doc) };
 
   if (version === 3) {
     // v3 moves the palette and block data into a `Blocks` compound, renames
@@ -510,9 +537,22 @@ function buildMcEdit(
           ...record.nbt,
         })),
       ),
-      WEOffsetX: short(doc.offset[0]),
-      WEOffsetY: short(doc.offset[1]),
-      WEOffsetZ: short(doc.offset[2]),
+      // Ints, not shorts, because WorldEdit's own writer uses ints -- and
+      // because a short cannot hold the coordinate. A build cut from past
+      // +-32767 on any axis failed the save outright: `prismarine-nbt` range
+      // checks, so it threw out of the buffer writer with a message naming
+      // neither the tag nor the document. The reader is unaffected either way,
+      // since `numberOf` takes whichever it finds.
+      WEOffsetX: int(doc.offset[0]),
+      WEOffsetY: int(doc.offset[1]),
+      WEOffsetZ: int(doc.offset[2]),
+      // The Origin, or nothing at all: `compound()` drops undefined, so the
+      // three tags vanish together, which is what WorldEdit's reader needs --
+      // it takes the trio or falls back, and two thirds of one is worse than
+      // none.
+      WEOriginX: doc.worldOrigin === null ? undefined : int(doc.worldOrigin[0]),
+      WEOriginY: doc.worldOrigin === null ? undefined : int(doc.worldOrigin[1]),
+      WEOriginZ: doc.worldOrigin === null ? undefined : int(doc.worldOrigin[2]),
     }),
   };
 

@@ -161,6 +161,11 @@ export class SpongeSchematicWriter implements SchematicWriter {
         PaletteMax: { type: "int", value: palette.size },
         Palette: { type: "compound", value: paletteCompound },
         BlockData: { type: "byteArray", value: varints.map(toSignedByte) },
+        // No `WorldEdit.Origin` here, deliberately: a schematic built from a
+        // sentence was never cut out of a world, so it has no position to
+        // record and inventing one would send it somewhere on paste. The
+        // document writer in `writers.ts` carries an Origin when the file it
+        // loaded had one; this path has no file behind it.
         Metadata: {
           type: "compound",
           value: {

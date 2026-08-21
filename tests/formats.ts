@@ -123,6 +123,18 @@ function sampleDocument(format: SchematicDocument["format"]): SchematicDocument 
   setBlock(doc, 2, 0, 2, block("minecraft:chest"));
   setBlock(doc, 3, 0, 2, block("minecraft:oak_sign"));
   doc.offset = [-12, 64, 7];
+  // A different vector from the offset, deliberately: a writer that confused
+  // the two would still round-trip if they held the same numbers.
+  doc.worldOrigin = [201, 92, 3];
+  // Two tags the app has no opinion about, which must come back untouched --
+  // one beside the Origin inside `WorldEdit`, one at the top of the bag.
+  doc.metadata = {
+    Author: { type: "string", value: "gamerover98" },
+    WorldEdit: {
+      type: "compound",
+      value: { EditingPlatform: { type: "string", value: "intellectualsites:bukkit" } },
+    },
+  };
 
   setBlockEntity(doc, 2, 0, 2, {
     id: "minecraft:chest",
@@ -179,6 +191,21 @@ try {
     equal("every voxel survives", grid(reloaded), grid(original));
     equal("the block count agrees", countBlocks(reloaded), countBlocks(original));
     equal("the world offset survives", reloaded.offset, original.offset);
+    equal("the WorldEdit Origin survives beside it", reloaded.worldOrigin, original.worldOrigin);
+    equal(
+      "...and the metadata the app has no opinion about",
+      reloaded.metadata,
+      {
+        // The app's own Name is a default, so a document that carried none
+        // acquires it; everything the file held is over the top of it.
+        Name: { type: "string", value: "Schematic AI Studio" },
+        Author: { type: "string", value: "gamerover98" },
+        WorldEdit: {
+          type: "compound",
+          value: { EditingPlatform: { type: "string", value: "intellectualsites:bukkit" } },
+        },
+      },
+    );
     equal("the DataVersion survives", reloaded.dataVersion, original.dataVersion);
 
     equal("both block entities come back", reloaded.blockEntities.size, 2);
@@ -246,7 +273,12 @@ try {
     setBlock(doc, 1, 0, 0, block("minecraft:oak_planks"));
     setBlock(doc, 3, 1, 2, block("minecraft:glass"));
     setBlock(doc, 2, 0, 1, block("minecraft:chest"));
-    doc.offset = [-8, 32, 5];
+    // Past a short on two axes. WorldEdit writes these as ints and this app
+    // wrote shorts, so before the fix saving a build cut from the far end of a
+    // world did not wrap -- it threw, out of `prismarine-nbt`'s buffer writer,
+    // naming neither the tag nor the file.
+    doc.offset = [-40000, 32, 70000];
+    doc.worldOrigin = [201, 92, 3];
     setBlockEntity(doc, 2, 0, 1, {
       id: "minecraft:chest",
       pos: [2, 0, 1],
@@ -290,7 +322,12 @@ try {
       !result.degraded.includes("minecraft:stone"),
       JSON.stringify(result.degraded),
     );
-    equal("the WorldEdit offset survives its three shorts", reloaded.offset, [-8, 32, 5]);
+    equal(
+      "the WorldEdit offset survives its three ints, past a short on two axes",
+      reloaded.offset,
+      [-40000, 32, 70000],
+    );
+    equal("the WorldEdit Origin survives its own three", reloaded.worldOrigin, [201, 92, 3]);
     equal("the chest survives", getBlockEntity(reloaded, 2, 0, 1)?.id, "minecraft:chest");
     equal(
       "...with its payload",
@@ -410,6 +447,7 @@ try {
     const padded = () => {
       const doc = createDocument({ width: 16, height: 16, length: 16, format: "sponge3" });
       doc.offset = [100, 64, -20];
+      doc.worldOrigin = [500, 70, -300];
       for (let x = 4; x <= 6; x += 1) {
         for (let y = 2; y <= 3; y += 1) {
           for (let z = 9; z <= 12; z += 1) {
@@ -448,6 +486,18 @@ try {
      * backwards is silent -- the schematic looks right and pastes 4 blocks off.
      */
     equal("the world offset follows the trim", cropped?.doc.offset, [104, 66, -11]);
+    // The Origin is the world position of the corner cell, and the trim has
+    // just moved that corner to what used to be (4, 2, 9) -- so it takes the
+    // same correction. An Origin left where it was would paste the build into
+    // the padding it no longer has.
+    equal("...and so does the WorldEdit Origin", cropped?.doc.worldOrigin, [504, 72, -291]);
+
+    // A document that never had one must not acquire one on the way out.
+    {
+      const unpositioned = padded();
+      unpositioned.worldOrigin = null;
+      equal("a document with no Origin still has none after a trim", cropToContent(unpositioned)?.doc.worldOrigin, null);
+    }
 
     // The invariant this whole design exists for: a voxel index means nothing
     // except against the dimensions it was recorded under, so saving must not

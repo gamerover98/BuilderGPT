@@ -622,6 +622,12 @@ export interface DocumentState {
   format: SchematicFormat;
   size: [number, number, number];
   offset: [number, number, number];
+  /**
+   * WorldEdit's Origin: the world position of the schematic's (0,0,0) corner,
+   * or `null` when the file named none. A different vector from `offset` --
+   * see `SchematicDocument.worldOrigin`.
+   */
+  worldOrigin: [number, number, number] | null;
   blockCount: number;
   /** Most common first, capped — enough to show, not the whole palette. */
   palette: PaletteCount[];

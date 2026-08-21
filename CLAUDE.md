@@ -115,6 +115,67 @@ The trim belongs to `saveSession`, not to the writers. **Autosave calls the
 writers directly and must keep the full working box** — a crash snapshot that
 came back trimmed would silently discard the room the user had made to build in.
 
+**`Origin` and `Offset` are two different tags, and the app keeps both.**
+`doc.offset` is Sponge's `Offset` / MCEdit's `WEOffset*`: the vector from the
+paste anchor to the schematic's minimum corner. `doc.worldOrigin` is WorldEdit's
+**Origin**: the absolute world position of that corner, spelled
+`Metadata.WorldEdit.Origin` as an int array in Sponge and `WEOriginX/Y/Z` as
+three ints in MCEdit. WorldEdit's own reader recovers the anchor as
+`Origin - Offset`, so neither is derivable from the other and a file carries
+both.
+
+The Origin is `null` when the file named none, and then no tag is written at
+all. Absence and zero are different answers here: a missing `Offset` means "no
+displacement" and zero says that exactly, while a missing Origin means "nobody
+said" — writing `[I;0,0,0]` would tell every tool downstream to paste the build
+at the world origin. MCEdit's three tags are therefore written as a trio or not
+at all; two thirds of a position is not a position.
+
+`WEOffset*` are `int()`, because WorldEdit's are and because a `short` cannot
+hold the coordinate: a build cut from past ±32767 on any axis did not wrap, it
+*threw*, out of `prismarine-nbt`'s buffer writer with a message naming neither
+the tag nor the file. Reading is unaffected either way — `numberOf` takes
+whichever it finds.
+
+**The Origin moves with the content, exactly as the offset does.** It is the
+world position of the cell the grid calls `(0,0,0)`, so anything that moves that
+cell moves it: `cropToContent` adds `bounds.min` and `resizeDocument` subtracts
+the shift, both `null`-guarded, both the same arithmetic as `offset`.
+`history.ts`'s `Dimensions` carries it beside the offset so a resize can be
+undone. The visible consequence is worth knowing before it is reported as a bug:
+saving crops to content, so an Origin typed against a deliberately roomy editing
+box comes back shifted — which is the whole point of it.
+
+**The file's own `Metadata` survives, minus the one field the app owns.**
+`doc.metadata` is Sponge's `Metadata` compound as loaded, and the loader lifts
+`WorldEdit.Origin` *out* of it into the typed field — because that one has to
+move when the content moves, and a second copy sitting in an opaque compound
+would go stale on the first crop. Everything else is kept verbatim, for the same
+reason a block entity's unrecognised NBT is: before this, opening a WorldEdit
+file and saving it destroyed its `Platforms`, `EditingPlatform`, `Author` and
+`Date` without a word.
+
+Two orderings in `spongeMetadata` decide it, and both are load-bearing. The
+app's own `Name` goes in **first**, so it is a default a file that arrived named
+overrides rather than a stamp that overwrites it. The Origin goes in **last**,
+merged into whatever `WorldEdit` sub-compound survived the load, so `Platforms`
+comes back out beside it instead of being replaced by one this app invented. A
+sub-compound the lift emptied is dropped rather than written as `{}`.
+
+MCEdit has no `Metadata` compound — WorldEdit puts its tags straight on the
+root — so the bag is empty there and a Sponge → MCEdit save cannot carry it.
+
+**`Command` has a third kind, and it is everything that is not a block.**
+`header` carries `offset`, `worldOrigin`, `dataVersion`, `metadata` and
+`entities`, as one whole state rather than a patch: a partial merge is one more
+place for a field added later to be silently dropped, which is the failure
+`coerceSettings` exists to prevent. Block entities are deliberately *not* in it —
+they already have `BlockEntityDelta` and `setBlockEntity`, which key on position,
+and a whole-map snapshot beside a per-position delta would be two records of one
+thing. It moves no voxels, so it contributes nothing to `summarizeTransaction`'s
+tally and still lands on the undo stack: the one edit nobody could undo would
+otherwise be the one that moved the whole build in the world.
+
 **A conversation belongs to a schematic, and the rule is written out.** It used
 to hang off `DocumentSession`, which made it die with the document for free —
 and that was the whole appeal until it had to be *kept*. `services/conversation.ts`

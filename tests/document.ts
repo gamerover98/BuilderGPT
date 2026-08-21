@@ -227,11 +227,23 @@ console.log("\n--- resize ---");
   // Growing downwards: the grid has no negative coordinates, so the content
   // shifts up instead and the world offset compensates.
   const before = [...doc.offset];
+  doc.worldOrigin = [201, 92, 3];
   resizeDocument(doc, { width: 2, height: 8, length: 2 }, [0, 2, 0]);
   equal("a shift moves the content", getBlock(doc, 0, 2, 0).namespacedName, "minecraft:stone");
   equal("...leaving air beneath it", getBlock(doc, 0, 0, 0).namespacedName, "minecraft:air");
   equal("...and the block entity with it", getBlockEntity(doc, 1, 3, 1)?.id, "minecraft:barrel");
   equal("the world offset compensates, so nothing moved in the world", doc.offset[1], before[1] - 2);
+  // The Origin is the world position of the cell the grid calls (0,0,0), and
+  // the shift has just moved that cell down by two -- so it takes the same
+  // correction as the offset, or the build moves in the world.
+  equal("...and the WorldEdit Origin compensates with it", doc.worldOrigin, [201, 90, 3]);
+
+  // A document that never had one must not acquire one from a resize.
+  {
+    const anonymous = createDocument({ width: 1, height: 1, length: 1 });
+    resizeDocument(anonymous, { width: 1, height: 2, length: 1 }, [0, 1, 0]);
+    equal("a resize invents no Origin", anonymous.worldOrigin, null);
+  }
 
   // Shrinking is allowed and lossy, which is the caller's problem -- but it
   // must not strand a block entity at a position that no longer exists.

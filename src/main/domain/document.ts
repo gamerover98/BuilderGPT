@@ -40,6 +40,7 @@ import {
   paletteEntryIsAir,
   type BlockEntityRecord,
   type EntityRecord,
+  type NbtCompound,
   type PaletteEntry,
   type StructureBounds,
   type StructureData,
@@ -67,6 +68,30 @@ export interface SchematicDocument {
   dataVersion: number | null;
   /** Where the schematic sat in the world it was cut from. */
   offset: [number, number, number];
+  /**
+   * The world position of this schematic's (0,0,0) corner, or `null` when the
+   * file carried none.
+   *
+   * WorldEdit's Origin, and *not* the same vector as `offset`: that one is the
+   * displacement from the paste anchor to this corner, and WorldEdit recovers
+   * the anchor as `Origin - Offset`. Neither can be derived from the other, so
+   * both are kept.
+   *
+   * `null` rather than `[0, 0, 0]` because absence and zero are different
+   * answers. A missing `Offset` means "no displacement" and zero says that
+   * exactly; a missing Origin means "nobody said", and writing zero would tell
+   * every tool downstream to paste at the world origin.
+   */
+  worldOrigin: [number, number, number] | null;
+  /**
+   * The file's own `Metadata` compound, minus the Origin above.
+   *
+   * Kept verbatim for the same reason a block entity's unrecognised NBT is:
+   * a WorldEdit file carries `Platforms`, `EditingPlatform`, `Author` and
+   * `Date` in here, and dropping them on save loses information this app never
+   * had a reason to destroy. MCEdit has no such compound, so it is empty there.
+   */
+  metadata: NbtCompound;
   /** `null` until it has been saved somewhere. */
   filePath: string | null;
   /** Monotonic; a cache key, not a dirty flag. See the invariants above. */
@@ -144,6 +169,8 @@ export function createDocument(options: CreateDocumentOptions): SchematicDocumen
     format: options.format ?? "sponge3",
     dataVersion: options.dataVersion ?? null,
     offset: [0, 0, 0],
+    worldOrigin: null,
+    metadata: {},
     filePath: null,
     revision: 0,
   };
@@ -185,6 +212,11 @@ export function documentFromLoaded(
   }
   doc.entities = [...loaded.entities];
   doc.offset = [loaded.offset[0], loaded.offset[1], loaded.offset[2]];
+  doc.worldOrigin =
+    loaded.worldOrigin === null
+      ? null
+      : [loaded.worldOrigin[0], loaded.worldOrigin[1], loaded.worldOrigin[2]];
+  doc.metadata = { ...loaded.metadata };
   doc.filePath = filePath;
   // Freshly loaded is not modified, whatever the remapping above did.
   doc.revision = 0;
@@ -455,8 +487,18 @@ export function resizeDocument(
     pos: [entity.pos[0] + dx, entity.pos[1] + dy, entity.pos[2] + dz] as const,
   }));
   // The schematic's world origin moves the opposite way, so the content stays
-  // where it was in the world it came from.
+  // where it was in the world it came from. The WorldEdit Origin is the world
+  // position of the cell the grid now calls (0,0,0), which the shift has just
+  // moved by the same amount in the same direction -- so it takes the same
+  // correction, and leaving it alone would move the build in the world.
   doc.offset = [doc.offset[0] - dx, doc.offset[1] - dy, doc.offset[2] - dz];
+  if (doc.worldOrigin !== null) {
+    doc.worldOrigin = [
+      doc.worldOrigin[0] - dx,
+      doc.worldOrigin[1] - dy,
+      doc.worldOrigin[2] - dz,
+    ];
+  }
   doc.revision += 1;
 }
 

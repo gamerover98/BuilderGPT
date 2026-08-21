@@ -348,8 +348,63 @@ export interface DecodedSchematic {
    * can put it back rather than silently re-anchoring it at the origin.
    */
   readonly offset: readonly [number, number, number];
+  /**
+   * WorldEdit's Origin: the world position of the schematic's (0,0,0) corner,
+   * or `null` when the file named none. A different vector from `offset` --
+   * see `SchematicDocument.worldOrigin`.
+   */
+  readonly worldOrigin: readonly [number, number, number] | null;
+  /** The file's own `Metadata` compound, minus the Origin lifted out above. */
+  readonly metadata: NbtCompound;
   /** The Minecraft `DataVersion` the file declares, or `null` for MCEdit. */
   readonly dataVersion: number | null;
+}
+
+/**
+ * The `Metadata` compound and WorldEdit's Origin, separated.
+ *
+ * The Origin is lifted *out* of the bag rather than left in it because the app
+ * owns that one field: it has to move when the content moves, and a copy of it
+ * sitting in an opaque compound would go stale on the first crop. Everything
+ * else is kept exactly as found, `Platforms` and `EditingPlatform` included --
+ * a `WorldEdit` sub-compound survives with a hole in it rather than being
+ * replaced by one this app invented.
+ *
+ * The sub-compound is dropped when the Origin was all it held: an empty
+ * `WorldEdit: {}` is noise in a file and noise in the NBT panel.
+ */
+function readMetadata(tag: NbtTag | undefined): {
+  metadata: NbtCompound;
+  worldOrigin: readonly [number, number, number] | null;
+} {
+  if (!tag || tag.type !== "compound" || tag.value === null || typeof tag.value !== "object") {
+    return { metadata: {}, worldOrigin: null };
+  }
+  const metadata: NbtCompound = { ...(tag.value as NbtCompound) };
+
+  const worldEditTag = metadata.WorldEdit;
+  if (
+    !worldEditTag ||
+    worldEditTag.type !== "compound" ||
+    worldEditTag.value === null ||
+    typeof worldEditTag.value !== "object"
+  ) {
+    return { metadata, worldOrigin: null };
+  }
+
+  const worldEdit: NbtCompound = { ...(worldEditTag.value as NbtCompound) };
+  const worldOrigin = vectorOf(worldEdit.Origin);
+  if (worldOrigin === null) {
+    return { metadata, worldOrigin: null };
+  }
+
+  delete worldEdit.Origin;
+  if (Object.keys(worldEdit).length === 0) {
+    delete metadata.WorldEdit;
+  } else {
+    metadata.WorldEdit = { type: "compound", value: worldEdit };
+  }
+  return { metadata, worldOrigin };
 }
 
 /**
@@ -470,6 +525,9 @@ function decodeSponge(
     ),
     entities: readEntities(payload.Entities),
     offset: vectorOf(payload.Offset) ?? [0, 0, 0],
+    // `payload` is already the right compound for both versions: v3's is the
+    // `Schematic` compound and v2's is the root, which is where each writes it.
+    ...readMetadata(payload.Metadata),
     dataVersion: numberOf(payload.DataVersion),
   };
 }
@@ -584,15 +642,31 @@ function decodeMcEdit(payload: NbtCompound, table: LegacyBlockTable): DecodedSch
     // untranslated one that still round-trips.
     blockEntities: readBlockEntities(payload.TileEntities),
     entities: readEntities(payload.Entities),
-    // MCEdit spells the offset as three separate shorts.
+    // MCEdit spells the offset as three separate tags -- shorts in some
+    // writers, ints in WorldEdit's own. `numberOf` does not care which.
     offset: [
       numberOf(payload.WEOffsetX) ?? 0,
       numberOf(payload.WEOffsetY) ?? 0,
       numberOf(payload.WEOffsetZ) ?? 0,
     ],
+    // And the Origin as three more. All three or none: two thirds of a position
+    // is not a position, and defaulting the missing one to zero would put the
+    // build somewhere nobody asked for.
+    worldOrigin: mcEditOrigin(payload),
+    // MCEdit has no `Metadata` compound at all -- WorldEdit writes its tags
+    // straight onto the root, which is where `worldOrigin` just came from.
+    metadata: {},
     // Legacy files predate DataVersion entirely.
     dataVersion: null,
   };
+}
+
+/** `WEOriginX/Y/Z`, or `null` unless all three are there. */
+function mcEditOrigin(payload: NbtCompound): readonly [number, number, number] | null {
+  const x = numberOf(payload.WEOriginX);
+  const y = numberOf(payload.WEOriginY);
+  const z = numberOf(payload.WEOriginZ);
+  return x === null || y === null || z === null ? null : [x, y, z];
 }
 
 // --- entry point -----------------------------------------------------------

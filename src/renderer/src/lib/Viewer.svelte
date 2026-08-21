@@ -43,7 +43,7 @@ import {
   type Side,
 } from "./selection_drag.js";
   import { isSpuriousLook } from "./look_filter.js";
-  import { skyAt } from "./sky.js";
+  import { skyAt, skyDistance } from "./sky.js";
   import { fitShadow } from "./shadow_fit.js";
   import type { Face, PlacementLook } from "../../../shared/block_orientation.js";
 import { isTyping } from "./typing.js";
@@ -161,6 +161,9 @@ import { isTyping } from "./typing.js";
     timeOfDay: number;
     shadows: boolean;
     shadowQuality: number;
+    /** A virtual floor at y=0, and its colour (empty follows the theme). */
+    ground: boolean;
+    groundColor: string;
     /** Drawn as a wire box; `null` hides it. */
     selection?: Region | null;
     /**
@@ -273,6 +276,8 @@ import { isTyping } from "./typing.js";
     timeOfDay,
     shadows,
     shadowQuality,
+    ground,
+    groundColor,
     selection = null,
     onpick,
     cameraMode = "orbit",
@@ -395,7 +400,26 @@ import { isTyping } from "./typing.js";
   let sun: THREE.DirectionalLight | undefined;
   let ambient: THREE.HemisphereLight | undefined;
   let grid: THREE.GridHelper | undefined;
-  /** The sky dome, the two bodies on it, and the stars. */
+  /**
+   * The sky, in a scene of its own.
+   *
+   * Not in the main scene, and that is the fix for two separate faults. The
+   * dome was a sphere of radius 3000 while `camera.far` defaults to **512**, so
+   * it fell entirely outside the frustum and was clipped away -- leaving the
+   * renderer's clear colour, which is black. And the sun and moon are
+   * transparent, so three.js draws them in the transparent pass, which is
+   * *after* every opaque thing: with depth testing off they would have painted
+   * over the schematic.
+   *
+   * A separate pass answers both. The sky is drawn first, the depth buffer is
+   * cleared, and the world is drawn on top -- so nothing in the sky can occlude
+   * anything, whatever its distance, and the dome's radius only has to sit
+   * inside the frustum rather than beyond the build.
+   */
+  let skyScene: THREE.Scene | undefined;
+  let skyGroup: THREE.Group | undefined;
+  /** The virtual floor, which is not a block and is never saved. */
+  let groundPlane: THREE.Mesh | undefined;
   let skyDome: THREE.Mesh | undefined;
   let sunDisc: THREE.Mesh | undefined;
   let moonDisc: THREE.Mesh | undefined;
@@ -986,14 +1010,26 @@ import { isTyping } from "./typing.js";
 
 
   /**
-   * How far out the sky sits.
+   * The dome is built at radius one and scaled to fit the frustum.
    *
-   * Inside the camera's far plane at its smallest setting, because a dome the
-   * camera clips through is a dome that vanishes when someone lowers the draw
-   * distance — and the dome does not need to be far away, only further than
-   * anything anyone builds.
+   * Its distance is arbitrary now that it is drawn in a pass of its own: it
+   * only has to be somewhere between the near and far planes, and the scale
+   * follows `camera.far` so lowering the draw distance can never clip it away.
+   * That is exactly what it did at a fixed 3000 against a default far of 512.
    */
-  const SKY_RADIUS = 3000;
+  const SKY_RADIUS = 1;
+
+  /**
+   * How far out the sky sits for the camera as it is now.
+   *
+   * A fraction of the far plane, so lowering the draw distance can never clip
+   * it away — which is exactly what a fixed radius of 3000 did against a
+   * default far of 512: the whole dome fell outside the frustum, nothing was
+   * drawn, and the viewport showed the clear colour. Black, with no sky in it.
+   */
+  function skyScale(): number {
+    return skyDistance(camera?.near ?? 0.1, camera?.far ?? 2048);
+  }
 
   /**
    * The dome, painted by a two-colour vertical gradient.
@@ -1020,6 +1056,9 @@ import { isTyping } from "./typing.js";
     // than reach into the materials: it is two quads, once, at startup.
     if (skyDome) disposeSky();
     skyArt = skyTextures;
+    skyScene = new THREE.Scene();
+    skyGroup = new THREE.Group();
+    skyScene.add(skyGroup);
     const material = new THREE.ShaderMaterial({
       side: THREE.BackSide,
       depthWrite: false,
@@ -1050,7 +1089,7 @@ import { isTyping } from "./typing.js";
     skyDome = new THREE.Mesh(new THREE.SphereGeometry(SKY_RADIUS, 24, 16), material);
     skyDome.renderOrder = -1000;
     skyDome.frustumCulled = false;
-    scene.add(skyDome);
+    skyGroup.add(skyDome);
 
     /*
      * The sun and the moon: squares, because that is what they are. Unlit and
@@ -1073,11 +1112,14 @@ import { isTyping } from "./typing.js";
       );
       mesh.renderOrder = -999;
       mesh.frustumCulled = false;
-      scene?.add(mesh);
+      skyGroup?.add(mesh);
       return mesh;
     };
-    sunDisc = disc(0xfff4d6, 340, skyTextures.sun);
-    moonDisc = disc(0xe8ecff, 260, skyTextures.moon);
+    // Sizes are fractions of the dome now that it is a unit sphere; these are
+    // the ratios the fixed numbers came out to, and the sun is the larger of
+    // the two exactly as it is in the game.
+    sunDisc = disc(0xfff4d6, 0.115, skyTextures.sun);
+    moonDisc = disc(0xe8ecff, 0.088, skyTextures.moon);
 
     /*
      * Stars, scattered over the upper half of the dome and faded in by the
@@ -1101,7 +1143,9 @@ import { isTyping } from "./typing.js";
       starGeometry,
       new THREE.PointsMaterial({
         color: 0xffffff,
-        size: 12,
+        // In world units on a unit sphere, so they stay the same apparent
+        // size however far out the dome has been scaled.
+        size: 0.004,
         sizeAttenuation: true,
         transparent: true,
         opacity: 0,
@@ -1111,7 +1155,7 @@ import { isTyping } from "./typing.js";
     );
     stars.renderOrder = -998;
     stars.frustumCulled = false;
-    scene.add(stars);
+    skyGroup.add(stars);
   }
 
   /**
@@ -1139,7 +1183,7 @@ import { isTyping } from "./typing.js";
   function disposeSky(): void {
     for (const object of [skyDome, sunDisc, moonDisc, stars]) {
       if (!object) continue;
-      scene?.remove(object);
+      skyGroup?.remove(object);
       object.geometry.dispose();
       const material = object.material as THREE.Material;
       (material as THREE.MeshBasicMaterial).map?.dispose();
@@ -1149,6 +1193,8 @@ import { isTyping } from "./typing.js";
     sunDisc = undefined;
     moonDisc = undefined;
     stars = undefined;
+    skyGroup = undefined;
+    skyScene = undefined;
   }
 
   /**
@@ -1213,6 +1259,7 @@ import { isTyping } from "./typing.js";
       moonDisc.position.set(-dx, -dy, -dz).multiplyScalar(SKY_RADIUS * 0.94);
       moonDisc.lookAt(0, 0, 0);
     }
+
     if (stars) {
       (stars.material as THREE.PointsMaterial).opacity = state.starOpacity;
     }
@@ -1223,6 +1270,62 @@ import { isTyping } from "./typing.js";
     // Last, because it reads where the light ended up.
     placeShadow();
   }
+
+  /**
+   * The virtual floor at y=0.
+   *
+   * Wide enough to reach the horizon rather than actually infinite -- a plane
+   * with no bounds cannot be frustum-culled or depth-sorted, and ten thousand
+   * blocks is past anything anyone will fly to.
+   *
+   * It receives shadows and casts none: it is not part of the build, and a
+   * floor that shadowed itself would put a seam across the world. It sits a
+   * hair below zero so the build grid, which is already at -0.01, still reads
+   * on top of it.
+   */
+  function applyGround(): void {
+    if (!scene) return;
+    if (!ground) {
+      if (groundPlane) {
+        scene.remove(groundPlane);
+        groundPlane.geometry.dispose();
+        (groundPlane.material as THREE.Material).dispose();
+        groundPlane = undefined;
+      }
+      return;
+    }
+    if (!groundPlane) {
+      const geometry = new THREE.PlaneGeometry(20000, 20000);
+      geometry.rotateX(-Math.PI / 2);
+      groundPlane = new THREE.Mesh(
+        geometry,
+        new THREE.MeshLambertMaterial({ color: 0xffffff }),
+      );
+      groundPlane.position.y = -0.02;
+      groundPlane.receiveShadow = true;
+      groundPlane.castShadow = false;
+      // Nothing raycasts it -- picking asks the loaded model and the build grid
+      // is arithmetic -- but saying so costs nothing and documents the intent.
+      groundPlane.raycast = () => {};
+      scene.add(groundPlane);
+    }
+    const material = groundPlane.material as THREE.MeshLambertMaterial;
+    // An empty colour means "follow the theme", which is why the setting is a
+    // string: a stored hex would stay dark after switching to the light theme
+    // with nothing on screen to say why.
+    if (groundColor.trim() === "") {
+      material.color.set(themeColor("--viewport-ground", 0x161d27));
+    } else {
+      material.color.set(groundColor);
+    }
+  }
+
+  $effect(() => {
+    void ground;
+    void groundColor;
+    void theme;
+    applyGround();
+  });
 
   function setSunFromAngles(az: number, el: number): void {
     if (!sun) return;
@@ -1373,7 +1476,46 @@ import { isTyping } from "./typing.js";
         updateHover(performance.now());
         updateBuildGrid(performance.now());
         if (renderer && scene && camera) {
-          renderer.render(scene, camera);
+          /*
+           * The sky first, then the depth buffer cleared, then the world.
+           *
+           * Two renders rather than one scene, because the sky has to be behind
+           * everything at every distance: the sun and the moon are transparent,
+           * and three.js draws transparent objects after every opaque one, so
+           * in a single scene they would paint over the schematic however their
+           * depth test was set.
+           *
+           * The dome rides with the camera, which is also what makes it a sky
+           * rather than a sphere you can fly out of.
+           */
+          if (skyScene && skyGroup && sky) {
+            /*
+             * Position and scale every frame rather than in an effect: both
+             * follow the camera -- one its place, the other its far plane --
+             * and the far plane moves with a setting this component does not
+             * own the writes to.
+             */
+            skyGroup.position.copy(camera.position);
+            const reach = skyScale();
+            skyGroup.scale.setScalar(reach);
+            if (stars) {
+              /*
+               * Point size is a material property in *world* units, so scaling
+               * the group does not touch it. Left at its unit-sphere value the
+               * stars come out a hundredth of a pixel across, which is to say
+               * a night sky with no stars in it.
+               */
+              (stars.material as THREE.PointsMaterial).size = reach * 0.004;
+            }
+            renderer.autoClear = true;
+            renderer.render(skyScene, camera);
+            renderer.autoClear = false;
+            renderer.clearDepth();
+            renderer.render(scene, camera);
+            renderer.autoClear = true;
+          } else {
+            renderer.render(scene, camera);
+          }
         }
       };
       animate();

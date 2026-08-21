@@ -1067,6 +1067,31 @@ the texel grid rotates with it. It would have been complexity that reads as a
 fix. If the box ever starts following the camera rather than the document, it is
 the first thing to add back.
 
+**The sky is drawn in a pass of its own, and both halves of that are a fix.**
+It was a sphere of radius 3000 in the main scene while `maxDrawDistance` — and
+so `camera.far` — defaults to **512**: every vertex outside the frustum, clipped,
+nothing drawn, and the viewport showing the renderer's clear colour. Black, with
+no sky in it. `skyDistance` therefore derives the dome's radius from the near and
+far planes and **clamps** — the clamp is the guarantee, and `tests/ui.ts` fails
+three checks without it.
+
+The separate pass is the other half. The sun and the moon are transparent, and
+three.js draws transparent objects *after* every opaque one, so in a single
+scene they would have painted over the schematic however their depth test was
+set. Sky, then `clearDepth()`, then the world: nothing in the sky can occlude
+anything, whatever its distance. The dome rides with the camera, which is also
+what stops it being a sphere you can fly out of.
+
+With the sky off there is no second pass and `scene.background` is the theme
+colour again, exactly as before any of this.
+
+**The virtual floor is not a block.** A plane at y=0, twenty thousand across,
+receiving shadows and casting none. It exists because a build with nothing under
+it floats, and because a shadow with nothing to fall on is invisible — which
+made the shadow setting look broken. `groundColor` is a string and `""` means
+"follow the theme": a stored hex would stay dark after switching to the light
+theme with nothing on screen to say why, so there is a button back to it.
+
 **The sky is the viewer's alone, and `sky.ts` is the part that is testable.**
 The dome, the two squares and the stars are geometry with no relationship to the
 schematic; what needed writing down is the set of curves through a

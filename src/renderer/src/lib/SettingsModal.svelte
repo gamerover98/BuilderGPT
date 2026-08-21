@@ -111,6 +111,22 @@
     return `${hh}:${mm}`;
   }
 
+  /**
+   * What the theme's floor colour is right now, for the picker to start from.
+   *
+   * An `<input type="color">` has no empty value -- it always shows *some*
+   * colour -- so with the setting empty it has to show the one actually being
+   * drawn, or opening Settings would suggest the floor is black.
+   */
+  const themeGround = $derived.by(() => {
+    void open;
+    if (typeof document === "undefined") return "#161d27";
+    const value = getComputedStyle(document.documentElement)
+      .getPropertyValue("--viewport-ground")
+      .trim();
+    return value === "" ? "#161d27" : value;
+  });
+
   const CATEGORIES: readonly { id: Category; key: string }[] = [
     { id: "appearance", key: "settings.appearance" },
     { id: "schematic", key: "settings.schematic" },
@@ -370,6 +386,48 @@
           {/if}
 
           <!--
+            The floor. Nothing to do with the schematic -- it is not a block and
+            is never saved -- but a build with nothing under it floats, and
+            every shadow it casts falls into nothing and is invisible.
+          -->
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={preview.ground}
+              onchange={(event) => onpreviewchange({ ground: event.currentTarget.checked })}
+            />
+            {t("preview.ground")}
+          </label>
+          <p class="hint">{t("preview.groundHint")}</p>
+
+          {#if preview.ground}
+            <div class="field">
+              <label for="ground-color">{t("preview.groundColor")}</label>
+              <div class="pick-row">
+                <input
+                  id="ground-color"
+                  class="swatch"
+                  type="color"
+                  value={preview.groundColor === "" ? themeGround : preview.groundColor}
+                  oninput={(event) => onpreviewchange({ groundColor: event.currentTarget.value })}
+                />
+                <!--
+                  Empty is not a colour, it is "whichever the theme says" -- so
+                  there has to be a way back to it once a colour has been
+                  picked, or the light theme keeps a dark floor for ever with
+                  nothing on screen to say why.
+                -->
+                <button
+                  onclick={() => onpreviewchange({ groundColor: "" })}
+                  disabled={preview.groundColor === ""}
+                >
+                  {t("preview.groundFollowTheme")}
+                </button>
+              </div>
+            </div>
+          {/if}
+
+          <!--
             The two that reach the mesher rather than the viewer, which is why
             they say so: turning either on or off rebuilds the mesh.
           -->
@@ -405,34 +463,12 @@
           </label>
           <p class="hint">{t("preview.ambientOcclusionHint")}</p>
         {:else if category === "viewport"}
-          <div class="field">
-            <label for="sun-az">
-              {t("preview.sunAzimuth", { value: preview.sunAzimuthDeg.toFixed(0) })}
-            </label>
-            <input
-              id="sun-az"
-              type="range"
-              min={PREVIEW_SETTING_RANGES.sunAzimuthDeg.min}
-              max={PREVIEW_SETTING_RANGES.sunAzimuthDeg.max}
-              step={PREVIEW_SETTING_RANGES.sunAzimuthDeg.step}
-              value={preview.sunAzimuthDeg}
-              oninput={(event) => onpreviewchange({ sunAzimuthDeg: num(event) })}
-            />
-          </div>
-          <div class="field">
-            <label for="sun-el">
-              {t("preview.sunElevation", { value: preview.sunElevationDeg.toFixed(0) })}
-            </label>
-            <input
-              id="sun-el"
-              type="range"
-              min={PREVIEW_SETTING_RANGES.sunElevationDeg.min}
-              max={PREVIEW_SETTING_RANGES.sunElevationDeg.max}
-              step={PREVIEW_SETTING_RANGES.sunElevationDeg.step}
-              value={preview.sunElevationDeg}
-              oninput={(event) => onpreviewchange({ sunElevationDeg: num(event) })}
-            />
-          </div>
+          <!--
+            No sun here. Where the light is belongs to Sky & light, which is the
+            only place that can also say what it is a function of: with the sky
+            on that is the hour, and these two sliders would be a second answer
+            to the same question.
+          -->
           <div class="field">
             <label for="fly-speed">
               {t("preview.flySpeed", { value: preview.flySpeed.toFixed(0) })}

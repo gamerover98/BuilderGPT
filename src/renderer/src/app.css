@@ -41,6 +41,9 @@
   --shadow: rgb(0 0 0 / 45%);
   --overlay-bg: rgb(10 14 20 / 65%);
   --viewport-bg: #0b0f14;
+  /* The virtual floor under a build: a shade off the background, so the
+     horizon reads as a horizon rather than as nothing. */
+  --viewport-ground: #161d27;
   --grid-major: #516079;
   --grid-minor: #202937;
   --selection: #6ea8fe;
@@ -69,6 +72,7 @@
   --shadow: rgb(20 30 45 / 18%);
   --overlay-bg: rgb(255 255 255 / 82%);
   --viewport-bg: #e7ecf4;
+  --viewport-ground: #d3dae6;
   --grid-major: #97a5ba;
   --grid-minor: #c4cedc;
   --selection: #1f5fd0;
@@ -96,6 +100,7 @@
     --shadow: rgb(20 30 45 / 18%);
     --overlay-bg: rgb(255 255 255 / 82%);
     --viewport-bg: #e7ecf4;
+  --viewport-ground: #d3dae6;
     --grid-major: #97a5ba;
     --grid-minor: #c4cedc;
     --selection: #1f5fd0;

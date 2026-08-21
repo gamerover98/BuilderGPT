@@ -326,6 +326,11 @@ export const en = {
   "preview.shadowsHint":
     "The most expensive thing in the viewport: a second pass over the geometry from the light’s point of view.",
   "preview.shadowQuality": "Shadow detail",
+  "preview.ground": "Virtual floor",
+  "preview.groundHint":
+    "A plane at height zero for the build to stand on and cast shadows onto. Not part of the schematic and never saved.",
+  "preview.groundColor": "Floor colour",
+  "preview.groundFollowTheme": "Follow theme",
   "preview.smoothLighting": "Smooth lighting",
   "preview.smoothLightingHint":
     "Blends the light across each face instead of lighting it flat. Baked into the mesh, so changing it rebuilds.",

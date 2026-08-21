@@ -64,7 +64,8 @@ import { isSafeHref } from "../src/renderer/src/lib/markdown_policy.js";
 import { HOSTILE_CASES } from "./markdown_cases.js";
 import { missingKeys, translate, translatePlural } from "../src/renderer/src/lib/i18n_core.js";
 import { openedAge } from "../src/renderer/src/lib/recent_age.js";
-import { normalizeTicks, skyAt } from "../src/renderer/src/lib/sky.js";
+import { PREVIEW_SETTING_RANGES } from "../src/shared/settings.js";
+import { normalizeTicks, skyAt, skyDistance } from "../src/renderer/src/lib/sky.js";
 import { fitShadow } from "../src/renderer/src/lib/shadow_fit.js";
 import {
   isSpuriousLook,
@@ -754,6 +755,32 @@ console.log("\n--- sky ---");
   // without pretending it is daytime.
   check("the moon is weaker than the sun", midnight.lightIntensity < noon.lightIntensity);
   check("...but not nothing", midnight.lightIntensity > 0);
+
+  /*
+   * The dome has to be inside the frustum, and this is the check that would
+   * have caught a black sky.
+   *
+   * It was a sphere of radius 3000 while the draw-distance setting defaults to
+   * 512: every vertex outside the far plane, clipped, nothing drawn, and the
+   * viewport showing the renderer's clear colour. Every draw distance the
+   * slider offers has to work, which is why this is a function and not a
+   * constant.
+   */
+  for (const far of [
+    PREVIEW_SETTING_RANGES.maxDrawDistance.min,
+    512,
+    PREVIEW_SETTING_RANGES.maxDrawDistance.max,
+  ]) {
+    const distance = skyDistance(0.1, far);
+    check(`the sky is nearer than the far plane at ${far}`, distance < far, String(distance));
+    check(`...and further than the near plane at ${far}`, distance > 0.1, String(distance));
+  }
+  // A frustum with no room for a margin still has to put it somewhere inside.
+  const pinched = skyDistance(10, 12);
+  check("a pinched frustum still fits the sky in it", pinched > 10 && pinched < 12, String(pinched));
+  // And nonsense planes do not produce a NaN scale, which would take the whole
+  // sky out of the scene rather than merely misplace it.
+  check("a zero far plane still answers", Number.isFinite(skyDistance(0, 0)));
 
   // The clock wraps, and midnight-to-dawn has no seam in it.
   equal("a day later is the same sky", skyAt(24000).daylight, dawn.daylight);

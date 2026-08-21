@@ -3098,6 +3098,8 @@ import VersionList from "./lib/VersionList.svelte";
       timeOfDay={clockTicks}
       shadows={settings.preview.shadows}
       shadowQuality={settings.preview.shadowQuality}
+      ground={settings.preview.ground}
+      groundColor={settings.preview.groundColor}
       theme={resolvedTheme}
     />
 

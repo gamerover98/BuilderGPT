@@ -129,6 +129,23 @@ export interface PreviewSettings {
   /** Shadow map resolution, in pixels along one side. */
   shadowQuality: number;
   /**
+   * A virtual floor at y=0, wide enough to reach the horizon.
+   *
+   * Nothing to do with the schematic: it is not a block and is never saved. It
+   * is there so a build has ground under it and something for its shadow to
+   * fall on -- without it a house at the origin floats in the sky, and every
+   * shadow it casts falls into nothing and is invisible.
+   */
+  ground: boolean;
+  /**
+   * `#rrggbb` for that floor, or empty to follow the theme.
+   *
+   * Empty rather than a colour as the default, and that distinction is the
+   * whole reason this is a string: a stored `#161d27` would stay dark after
+   * switching to the light theme, and nothing on screen would say why.
+   */
+  groundColor: string;
+  /**
    * `#rrggbb` multiplied into the greyscale textures Minecraft tints per
    * biome. Unlike every other field here this one is consumed by the *mesher*,
    * not the viewer, so changing it rebuilds the GLB rather than applying live.
@@ -174,6 +191,8 @@ export const DEFAULT_PREVIEW_SETTINGS: PreviewSettings = {
   daylightSpeed: 60,
   shadows: false,
   shadowQuality: 2048,
+  ground: true,
+  groundColor: "",
   biomeColor: DEFAULT_BIOME_COLOR,
   waterColor: DEFAULT_WATER_COLOR,
   flySpeed: 12,

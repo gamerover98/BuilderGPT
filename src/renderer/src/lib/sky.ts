@@ -51,6 +51,38 @@ export interface SkyState {
 
 export const TICKS_PER_DAY = 24000;
 
+/**
+ * How far out the sky dome sits, for a camera with these clipping planes.
+ *
+ * A fraction of the far plane rather than a fixed distance, and that is not a
+ * refinement — it is the whole of a bug. The dome was a sphere of radius 3000
+ * while the draw-distance setting defaults to **512**, so every vertex of it
+ * fell outside the frustum and was clipped: nothing was drawn, the viewport
+ * showed the renderer's clear colour, and the sky was simply black.
+ *
+ * The answer has to hold for every draw distance the slider offers, which is
+ * what makes it worth a function and a test rather than a constant. Strictly
+ * inside both planes: touching either is the same failure by a hair.
+ */
+export function skyDistance(near: number, far: number): number {
+  const safeFar = far > 0 ? far : 2048;
+  const safeNear = near > 0 && near < safeFar ? near : safeFar / 1000;
+
+  // Where it would like to be: far enough that nothing is behind it, close
+  // enough that the depth range is not spent reaching it.
+  const wanted = safeFar * 0.4;
+  // Where it is allowed to be. Both margins are what makes the answer *strictly*
+  // inside: a dome exactly on a clipping plane is clipped by a rounding error,
+  // which is the same black viewport arrived at more slowly.
+  const nearest = safeNear * 2;
+  const furthest = safeFar * 0.9;
+  if (nearest >= furthest) {
+    // A frustum too thin for any margin still gets a dome inside it.
+    return (safeNear + safeFar) / 2;
+  }
+  return Math.min(furthest, Math.max(nearest, wanted));
+}
+
 /** Wraps a tick count into one day, negatives included. */
 export function normalizeTicks(ticks: number): number {
   const wrapped = ticks % TICKS_PER_DAY;

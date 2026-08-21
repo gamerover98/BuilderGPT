@@ -489,10 +489,24 @@ try {
     const payload =
       format === "sponge3" ? (root.Schematic as { value: NbtCompound }).value : root;
 
-    for (const tag of format === "mcedit"
-      ? ["WEOffsetX", "WEOffsetY", "WEOffsetZ"]
-      : ["Offset"]) {
-      check(`${format}: ${tag} is absent, not zero`, !(tag in payload), Object.keys(payload).join());
+    /*
+     * Where the anchor would have been, per container. The three are genuinely
+     * different places, and v2 is the one that catches people out: its `Offset`
+     * tag is the world corner, and the anchor displacement lives in
+     * `Metadata.WEOffsetX/Y/Z` — so checking `Offset` there would test nothing.
+     */
+    const metadata = (payload.Metadata as { value?: NbtCompound } | undefined)?.value ?? {};
+    const where: Record<string, NbtCompound> =
+      format === "sponge2" ? { WEOffsetX: metadata, WEOffsetY: metadata, WEOffsetZ: metadata }
+      : format === "mcedit" ? { WEOffsetX: payload, WEOffsetY: payload, WEOffsetZ: payload }
+      : { Offset: payload };
+
+    for (const [tag, holder] of Object.entries(where)) {
+      check(
+        `${format}: ${tag} is absent, not zero`,
+        !(tag in holder),
+        Object.keys(holder).join(),
+      );
     }
 
     const reloaded = documentFromLoaded(await loadStructure(filePath, {
@@ -504,6 +518,74 @@ try {
     // the same grid, the same count, and the same palette in the file.
     const anchored = format === "mcedit" ? legacySafeDocument() : sampleDocument(format);
     equal(`${format}: an anchor changes no blocks`, countBlocks(anchored), countBlocks(doc));
+  }
+
+  // --- v2 and v3 mean different things by "Offset" --------------------------
+  //
+  // The one real incompatibility between the two Sponge versions, and it is
+  // silent in both directions: a file written with them swapped loads, looks
+  // right, and pastes somewhere else entirely. From WorldEdit's own writer,
+  // `Offset` in v2 is `min` — the world corner — with the anchor displacement
+  // in `Metadata.WEOffsetX/Y/Z`; v3's spec says `Offset` is "the relative
+  // offset of the schematic from the paster", and puts the corner in
+  // `Metadata.WorldEdit.Origin`.
+  console.log("\n--- Offset means two different things ---");
+  {
+    const anchorDisplacement: [number, number, number] = [-2, 0, -2];
+    const worldCorner: [number, number, number] = [201, 92, 3];
+
+    for (const format of ["sponge2", "sponge3"] as const) {
+      const doc = sampleDocument(format);
+      doc.offset = anchorDisplacement;
+      doc.worldOrigin = worldCorner;
+
+      const filePath = path.join(workDir, `versions-${format}.schem`);
+      await saveDocument(doc, filePath, { legacyBlocksPath: LEGACY_BLOCKS });
+      const { parsed } = await parseNbt(await readFile(filePath));
+      const root = parsed.value as unknown as NbtCompound;
+      const payload =
+        format === "sponge3" ? (root.Schematic as { value: NbtCompound }).value : root;
+      const metadata = (payload.Metadata as { value: NbtCompound }).value;
+
+      if (format === "sponge3") {
+        equal("v3 puts the displacement in Offset", payload.Offset, {
+          type: "intArray",
+          value: anchorDisplacement,
+        });
+        equal("...and the corner in Metadata.WorldEdit.Origin", (
+          metadata.WorldEdit as { value: NbtCompound }
+        ).value.Origin, { type: "intArray", value: worldCorner });
+        check("...and writes no WEOffset* at all", !("WEOffsetX" in metadata));
+      } else {
+        equal("v2 puts the corner in Offset", payload.Offset, {
+          type: "intArray",
+          value: worldCorner,
+        });
+        equal("...and the displacement in Metadata.WEOffsetX", metadata.WEOffsetX, {
+          type: "int",
+          value: -2,
+        });
+        equal("...WEOffsetY", metadata.WEOffsetY, { type: "int", value: 0 });
+        equal("...WEOffsetZ", metadata.WEOffsetZ, { type: "int", value: -2 });
+      }
+
+      // And both come back as the same two vectors, which is what makes saving
+      // a v3 document as v2 (or the reverse) safe.
+      const reloaded = documentFromLoaded(await loadStructure(filePath), filePath);
+      equal(`${format}: the displacement round-trips`, reloaded.offset, anchorDisplacement);
+      equal(`${format}: the corner round-trips`, reloaded.worldOrigin, worldCorner);
+    }
+
+    // The conversion the split exists to make safe: open as one version, save
+    // as the other, and both vectors still mean what they meant.
+    const doc = sampleDocument("sponge3");
+    doc.offset = anchorDisplacement;
+    doc.worldOrigin = worldCorner;
+    const asV2 = path.join(workDir, "v3-saved-as-v2.schem");
+    await saveDocument(doc, asV2, { format: "sponge2", legacyBlocksPath: LEGACY_BLOCKS });
+    const converted = documentFromLoaded(await loadStructure(asV2), asV2);
+    equal("a v3 document saved as v2 keeps its anchor", converted.offset, anchorDisplacement);
+    equal("...and its corner", converted.worldOrigin, worldCorner);
   }
 
   // --- the NBT panel shows what the file will contain -----------------------

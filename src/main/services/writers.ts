@@ -268,8 +268,21 @@ export function spongeEntities(records: readonly EntityRecord[], version: 2 | 3)
  * A null origin writes no tag at all rather than `[I;0,0,0]`, which would tell
  * every tool downstream to paste the build at the world origin.
  */
-export function spongeMetadata(doc: SchematicDocument): NbtCompound {
+export function spongeMetadata(doc: SchematicDocument, version: 2 | 3): NbtCompound {
   const out: NbtCompound = { Name: str("Schematic AI Studio"), ...doc.metadata };
+
+  if (version === 2) {
+    // v2 keeps the anchor displacement here and the corner in `Offset`. See
+    // `spongeVectors` in `loader_formats.ts` for the table; writing v3's
+    // arrangement into a v2 file is the silent kind of wrong.
+    if (doc.offset !== null) {
+      out.WEOffsetX = int(doc.offset[0]);
+      out.WEOffsetY = int(doc.offset[1]);
+      out.WEOffsetZ = int(doc.offset[2]);
+    }
+    return out;
+  }
+
   if (doc.worldOrigin === null) {
     return out;
   }
@@ -300,7 +313,15 @@ function buildSponge(doc: SchematicDocument, version: 2 | 3, dataVersion: number
   const blockEntities = compoundList(spongeBlockEntities(doc.blockEntities.values(), version));
   const entities = compoundList(spongeEntities(doc.entities, version));
   const blockData: NbtTag = { type: "byteArray", value: varints.map(toSignedByte) };
-  const metadata: NbtTag = { type: "compound", value: spongeMetadata(doc) };
+  const metadata: NbtTag = { type: "compound", value: spongeMetadata(doc, version) };
+  /**
+   * What goes in `Offset`, which is not the same vector in the two versions:
+   * v3 wants the displacement from the paste anchor, v2 wants the world corner.
+   * The table is in `spongeVectors` (`loader_formats.ts`).
+   */
+  const declared = version === 3 ? doc.offset : doc.worldOrigin;
+  const offsetTag: NbtTag | undefined =
+    declared === null ? undefined : { type: "intArray", value: [...declared] };
 
   if (version === 3) {
     // v3 moves the palette and block data into a `Blocks` compound, renames
@@ -317,8 +338,7 @@ function buildSponge(doc: SchematicDocument, version: 2 | 3, dataVersion: number
             Width: short(width),
             Height: short(height),
             Length: short(length),
-            Offset:
-        doc.offset === null ? undefined : { type: "intArray", value: [...doc.offset] },
+            Offset: offsetTag,
             Metadata: metadata,
             Blocks: {
               type: "compound",
@@ -344,8 +364,7 @@ function buildSponge(doc: SchematicDocument, version: 2 | 3, dataVersion: number
       Width: short(width),
       Height: short(height),
       Length: short(length),
-      Offset:
-        doc.offset === null ? undefined : { type: "intArray", value: [...doc.offset] },
+      Offset: offsetTag,
       PaletteMax: int(palette.entries.length),
       Palette: { type: "compound", value: paletteCompound },
       BlockData: blockData,

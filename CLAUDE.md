@@ -140,13 +140,35 @@ of every face. It may sit outside the schematic, because the player who copied
 may have been standing clear of the build.
 
 **`Origin` and `Offset` are two different tags, and the app keeps both.**
-`doc.offset` is Sponge's `Offset` / MCEdit's `WEOffset*`: the vector from the
-paste anchor to the schematic's minimum corner. `doc.worldOrigin` is WorldEdit's
-**Origin**: the absolute world position of that corner, spelled
-`Metadata.WorldEdit.Origin` as an int array in Sponge and `WEOriginX/Y/Z` as
-three ints in MCEdit. WorldEdit's own reader recovers the anchor as
-`Origin - Offset`, so neither is derivable from the other and a file carries
-both.
+`doc.offset` is the vector from the paste anchor to the schematic's minimum
+corner; `doc.worldOrigin` is the absolute world position of that corner.
+WorldEdit's own readers recover the anchor as `Origin - Offset`, so neither is
+derivable from the other and a file carries both.
+
+**Sponge v2 and v3 both spell a tag `Offset` and do not mean the same vector by
+it.** This is the one real incompatibility between the two, it is silent in both
+directions — a file written with them swapped loads, looks right and pastes
+somewhere else — and it is the shape of a bug this codebase already shipped once.
+`spongeVectors` in `loader_formats.ts` holds the table, and the writer, the NBT
+panel and the loader all read it from there:
+
+| | `Offset` | in `Metadata` |
+|---|---|---|
+| Sponge **v2** | the minimum corner (`worldOrigin`) | `WEOffsetX/Y/Z`: the anchor vector (`offset`) |
+| Sponge **v3** | the anchor vector (`offset`) | `WorldEdit.Origin`: the minimum corner (`worldOrigin`) |
+| MCEdit | — | `WEOriginX/Y/Z` and `WEOffsetX/Y/Z`, at the root |
+
+Verified against WorldEdit's `SpongeSchematicWriter` (`schematic.put("Offset",
+min)` beside `metadata.put("WEOffsetX", offset)`, where `offset =
+min.subtract(origin)`) and its reader (`origin = min.subtract(offset)`), and
+against the v3 specification, which says `Offset` is "the relative offset of the
+schematic **from the paster**". So v2 is structurally MCEdit's arrangement under
+different names, and v3 is the odd one out.
+
+`readMetadata` lifts `WEOffsetX/Y/Z` **for v2 only**. In a v3 file those keys are
+something another tool left behind, v3's own reader ignores them, and reading
+them as an anchor would contradict `Offset` — so there they stay in the bag as
+unknown metadata, like `Platforms`.
 
 The Origin is `null` when the file named none, and then no tag is written at
 all. Absence and zero are different answers here: a missing `Offset` means "no

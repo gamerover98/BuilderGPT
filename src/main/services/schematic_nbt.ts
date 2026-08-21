@@ -51,6 +51,7 @@ import { parseSnbt, stringifySnbt } from "../domain/snbt.js";
 import {
   readBlockEntities,
   readEntities,
+  readMetadata,
   type SchematicFormat,
 } from "../pipeline/loader_formats.js";
 import type {
@@ -174,7 +175,13 @@ export function schematicNbtTree(doc: SchematicDocument, withLists = true): NbtC
   }
 
   const version = doc.format === "sponge3" ? 3 : 2;
-  const metadata: NbtTag = { type: "compound", value: spongeMetadata(doc) };
+  const metadata: NbtTag = { type: "compound", value: spongeMetadata(doc, version) };
+  // v3's `Offset` is the displacement from the anchor; v2's is the world
+  // corner, and v2 keeps the displacement in `Metadata.WEOffset*`. The table is
+  // in `spongeVectors` (`loader_formats.ts`).
+  const declared = version === 3 ? doc.offset : doc.worldOrigin;
+  const offsetTag: NbtTag | undefined =
+    declared === null ? undefined : { type: "intArray", value: [...declared] };
   const blockEntities = withLists
     ? compoundList(spongeBlockEntities(doc.blockEntities.values(), version))
     : undefined;
@@ -187,8 +194,7 @@ export function schematicNbtTree(doc: SchematicDocument, withLists = true): NbtC
       Width: short(width),
       Height: short(height),
       Length: short(length),
-      Offset:
-        doc.offset === null ? undefined : { type: "intArray", value: [...doc.offset] },
+      Offset: offsetTag,
       Metadata: metadata,
       // One key where the file has three. The other two are the schematic.
       Blocks: blockEntities === undefined ? undefined : {
@@ -205,8 +211,7 @@ export function schematicNbtTree(doc: SchematicDocument, withLists = true): NbtC
     Width: short(width),
     Height: short(height),
     Length: short(length),
-    Offset:
-        doc.offset === null ? undefined : { type: "intArray", value: [...doc.offset] },
+    Offset: offsetTag,
     BlockEntities: blockEntities,
     Entities: entities,
     Metadata: metadata,
@@ -390,45 +395,47 @@ function parseHeader(doc: SchematicDocument, text: string, expected: NbtCompound
     ];
   };
 
-  // Optional in every container, so writing the tag by hand creates the anchor
+  // Optional in every container, so writing a tag by hand creates the anchor
   // and deleting it removes one, exactly as the modal's buttons do.
-  const offset = mcedit
-    ? mcEditTriple("WEOffset")
-    : "Offset" in submitted
-      ? requireVector(submitted.Offset, "Offset")
-      : null;
-
-  let worldOrigin: [number, number, number] | null = null;
-  let metadata: NbtCompound = {};
+  let offset: readonly [number, number, number] | null;
+  let worldOrigin: readonly [number, number, number] | null;
+  let metadata: NbtCompound;
 
   if (mcedit) {
+    offset = mcEditTriple("WEOffset");
     worldOrigin = mcEditTriple("WEOrigin");
-  } else if (sameTag(submitted.Metadata, expected.Metadata)) {
+    metadata = {};
+  } else {
     /*
-     * Unchanged, and that has to be said explicitly rather than fallen into.
-     * The tree the panel showed was built by `spongeMetadata`, which stamps the
-     * app's own `Name` onto a document that carries none -- so reading it back
-     * naively would adopt the stamp, and pressing Apply having edited nothing
-     * would leave a step on the undo stack and a dirty document. What the file
-     * would contain is unchanged either way; the bag is left exactly as it is.
+     * The lift goes through the loader's own `readMetadata`, so the panel and
+     * the file agree about where each vector lives -- which matters more here
+     * than anywhere else, because v2 and v3 disagree: v3's `Offset` is the
+     * displacement from the anchor and v2's is the world corner, with v2
+     * keeping the displacement in `Metadata.WEOffset*`.
      */
-    metadata = doc.metadata;
-    worldOrigin = doc.worldOrigin;
-  } else if ("Metadata" in submitted) {
-    metadata = { ...requireCompound(submitted.Metadata, "Metadata") };
-    const carried = metadata.WorldEdit;
-    if (carried !== undefined) {
-      const worldEdit = { ...requireCompound(carried, "Metadata.WorldEdit") };
-      if (worldEdit.Origin !== undefined) {
-        worldOrigin = requireVector(worldEdit.Origin, "Metadata.WorldEdit.Origin");
-        delete worldEdit.Origin;
-      }
-      if (Object.keys(worldEdit).length === 0) {
-        delete metadata.WorldEdit;
-      } else {
-        metadata.WorldEdit = { type: "compound", value: worldEdit };
-      }
+    const lifted = readMetadata(submitted.Metadata, doc.format);
+    const declared = "Offset" in submitted ? requireVector(submitted.Offset, "Offset") : null;
+    if (doc.format === "sponge3") {
+      offset = declared;
+      worldOrigin = lifted.worldOrigin;
+    } else {
+      offset = lifted.weOffset;
+      worldOrigin = declared;
     }
+
+    /*
+     * The bag alone gets a shortcut, and it has to be said explicitly rather
+     * than fallen into. The tree the panel showed was built by
+     * `spongeMetadata`, which stamps the app's own `Name` onto a document that
+     * carries none -- so reading it back naively adopts the stamp, and pressing
+     * Apply having edited nothing leaves a step on the undo stack and a dirty
+     * document. What the file would contain is unchanged either way.
+     *
+     * Only the bag: the vectors above are read from the submitted text whatever
+     * happens, or an edit to v2's `WEOffset*` would be thrown away by the very
+     * shortcut that exists to preserve an unedited one.
+     */
+    metadata = sameTag(submitted.Metadata, expected.Metadata) ? doc.metadata : lifted.metadata;
   }
 
   // Block entities and entities, through the loader's own decoders.

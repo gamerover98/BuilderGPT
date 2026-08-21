@@ -361,26 +361,49 @@ export interface DecodedSchematic {
 }
 
 /**
- * The `Metadata` compound and WorldEdit's Origin, separated.
+ * The `Metadata` compound, with the two vectors the app owns lifted out of it.
  *
- * The Origin is lifted *out* of the bag rather than left in it because the app
- * owns that one field: it has to move when the content moves, and a copy of it
- * sitting in an opaque compound would go stale on the first crop. Everything
- * else is kept exactly as found, `Platforms` and `EditingPlatform` included --
- * a `WorldEdit` sub-compound survives with a hole in it rather than being
- * replaced by one this app invented.
+ * They are lifted rather than left in the bag because the app *moves* them: both
+ * follow the content through a crop and a resize, and a second copy sitting in
+ * an opaque compound would go stale on the first one. Everything else is kept
+ * exactly as found -- `Platforms`, `EditingPlatform`, `Author` -- and a
+ * `WorldEdit` sub-compound survives with a hole in it rather than being replaced
+ * by one this app invented. The sub-compound is dropped when the Origin was all
+ * it held: an empty `WorldEdit: {}` is noise in a file and in the NBT panel.
  *
- * The sub-compound is dropped when the Origin was all it held: an empty
- * `WorldEdit: {}` is noise in a file and noise in the NBT panel.
+ * **`WEOffsetX/Y/Z` are lifted for v2 only**, because only v2 keeps the paste
+ * displacement there. In a v3 file those keys are something another tool left
+ * behind and v3's own reader ignores them, so they stay in the bag as unknown
+ * metadata rather than being read as an anchor that would contradict `Offset`.
  */
-function readMetadata(tag: NbtTag | undefined): {
+export function readMetadata(
+  tag: NbtTag | undefined,
+  format: SchematicFormat,
+): {
   metadata: NbtCompound;
   worldOrigin: readonly [number, number, number] | null;
+  /** v2's `Metadata.WEOffsetX/Y/Z`: the vector from the paste anchor. */
+  weOffset: readonly [number, number, number] | null;
 } {
   if (!tag || tag.type !== "compound" || tag.value === null || typeof tag.value !== "object") {
-    return { metadata: {}, worldOrigin: null };
+    return { metadata: {}, worldOrigin: null, weOffset: null };
   }
   const metadata: NbtCompound = { ...(tag.value as NbtCompound) };
+
+  let weOffset: readonly [number, number, number] | null = null;
+  if (format === "sponge2") {
+    const x = numberOf(metadata.WEOffsetX);
+    const y = numberOf(metadata.WEOffsetY);
+    const z = numberOf(metadata.WEOffsetZ);
+    // All three or none, as everywhere else: two thirds of a displacement is
+    // not a displacement, and WorldEdit's own reader requires the trio.
+    if (x !== null && y !== null && z !== null) {
+      weOffset = [x, y, z];
+      delete metadata.WEOffsetX;
+      delete metadata.WEOffsetY;
+      delete metadata.WEOffsetZ;
+    }
+  }
 
   const worldEditTag = metadata.WorldEdit;
   if (
@@ -389,13 +412,13 @@ function readMetadata(tag: NbtTag | undefined): {
     worldEditTag.value === null ||
     typeof worldEditTag.value !== "object"
   ) {
-    return { metadata, worldOrigin: null };
+    return { metadata, worldOrigin: null, weOffset };
   }
 
   const worldEdit: NbtCompound = { ...(worldEditTag.value as NbtCompound) };
   const worldOrigin = vectorOf(worldEdit.Origin);
   if (worldOrigin === null) {
-    return { metadata, worldOrigin: null };
+    return { metadata, worldOrigin: null, weOffset };
   }
 
   delete worldEdit.Origin;
@@ -404,7 +427,7 @@ function readMetadata(tag: NbtTag | undefined): {
   } else {
     metadata.WorldEdit = { type: "compound", value: worldEdit };
   }
-  return { metadata, worldOrigin };
+  return { metadata, worldOrigin, weOffset };
 }
 
 /**
@@ -524,13 +547,54 @@ function decodeSponge(
       blocks.BlockEntities ?? payload.BlockEntities ?? payload.TileEntities,
     ),
     entities: readEntities(payload.Entities),
-    // Optional in the spec, and absent means absent: a schematic with no
-    // anchor must not acquire one at the corner of the build.
-    offset: vectorOf(payload.Offset),
     // `payload` is already the right compound for both versions: v3's is the
     // `Schematic` compound and v2's is the root, which is where each writes it.
-    ...readMetadata(payload.Metadata),
+    ...spongeVectors(format, payload),
     dataVersion: numberOf(payload.DataVersion),
+  };
+}
+
+/**
+ * The anchor displacement and the world corner, which v2 and v3 spell in
+ * opposite places.
+ *
+ * This is the one real incompatibility between the two versions and it is
+ * silent both ways -- a file written with them swapped loads, looks right, and
+ * pastes somewhere else. From WorldEdit's own writers and readers:
+ *
+ * | | v2 | v3 |
+ * |---|---|---|
+ * | `Offset` | the minimum corner, in world coordinates | the vector from the paste anchor |
+ * | `Metadata` | `WEOffsetX/Y/Z`: the vector from the anchor | `WorldEdit.Origin`: the minimum corner |
+ *
+ * v2's reader then computes the anchor as `Offset - WEOffset`, which is the
+ * same arithmetic MCEdit uses with `WEOrigin* - WEOffset*`. v3's spec puts it
+ * plainly instead: "the relative offset of the schematic **from the paster**".
+ *
+ * Both are optional, and absent stays absent: a schematic with no anchor must
+ * not acquire one at the corner of the build.
+ */
+function spongeVectors(
+  format: "sponge2" | "sponge3",
+  payload: NbtCompound,
+): {
+  offset: readonly [number, number, number] | null;
+  worldOrigin: readonly [number, number, number] | null;
+  metadata: NbtCompound;
+} {
+  const { metadata, worldOrigin, weOffset } = readMetadata(payload.Metadata, format);
+  const declared = vectorOf(payload.Offset);
+
+  if (format === "sponge3") {
+    return { offset: declared, worldOrigin, metadata };
+  }
+  return {
+    offset: weOffset,
+    // `Offset` is v2's own spelling for the corner. The v3-style key is
+    // accepted as a fallback because a file written by one of the tools that
+    // stamps both is still a file somebody wants to open.
+    worldOrigin: declared ?? worldOrigin,
+    metadata,
   };
 }
 

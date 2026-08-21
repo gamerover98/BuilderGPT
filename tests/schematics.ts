@@ -221,12 +221,17 @@ async function writeSpongeV2(filePath: string): Promise<string> {
       BlockData: { type: "byteArray", value: data },
       BlockEntities: spongeV2BlockEntities(),
       Entities: entities(),
-      // An Origin and nothing else in the WorldEdit compound: once the loader
-      // has lifted it out there is nothing left, and the bag must come back
-      // without the sub-compound rather than carrying an empty one.
       Metadata: {
         type: "compound",
         value: {
+          // v2 keeps the anchor displacement in the metadata and the world
+          // corner in `Offset` — the opposite of v3. See `spongeVectors`.
+          WEOffsetX: { type: "int", value: -2 },
+          WEOffsetY: { type: "int", value: 0 },
+          WEOffsetZ: { type: "int", value: -2 },
+          // A WorldEdit compound holding only an Origin: once the loader has
+          // lifted that out there is nothing left, and the bag must come back
+          // without the sub-compound rather than carrying an empty one.
           WorldEdit: {
             type: "compound",
             value: { Origin: { type: "intArray", value: [7, 8, 9] } },
@@ -549,9 +554,16 @@ try {
       );
     }
 
-    equal("v2 offset", v2e.offset, [-4, 64, 12]);
-    equal("v3 offset", v3e.offset, [-4, 64, 12]);
+    /*
+     * The anchor displacement, which the three containers put in three places.
+     * v2 and v3 are the trap: both spell a tag `Offset` and they do not mean
+     * the same vector by it, so a reader that treats them alike loads every v2
+     * file with its anchor at the wrong end of the schematic.
+     */
+    equal("v2 offset, out of Metadata.WEOffset*", v2e.offset, [-2, 0, -2]);
+    equal("v3 offset, out of the Offset tag", v3e.offset, [-4, 64, 12]);
     equal("MCEdit offset, from its three separate shorts", mce.offset, [-4, 64, 12]);
+    equal("...and v2's Offset tag is the world corner instead", v2e.worldOrigin, [-4, 64, 12]);
     equal("v2 DataVersion", v2e.dataVersion, dataVersionFor("JE_1_20_4"));
     equal("MCEdit has no DataVersion", mce.dataVersion, null);
 
@@ -589,7 +601,9 @@ try {
     const mco = await loadStructure(mcePath, { legacyBlocksPath: LEGACY_BLOCKS });
     const partial = await loadStructure(partialPath, { legacyBlocksPath: LEGACY_BLOCKS });
 
-    equal("v2 Origin, out of Metadata.WorldEdit", v2o.worldOrigin, [7, 8, 9]);
+    // v2's own spelling for the corner is the `Offset` tag, and it wins over a
+    // v3-style `Metadata.WorldEdit.Origin` that another tool left beside it.
+    equal("v2 Origin, out of the Offset tag", v2o.worldOrigin, [-4, 64, 12]);
     equal("v3 Origin, out of Metadata.WorldEdit", v3o.worldOrigin, [201, 92, 3]);
     equal("MCEdit Origin, from its three separate ints", mco.worldOrigin, [201, 92, 3]);
     equal("two thirds of an origin is not an origin", partial.worldOrigin, null);

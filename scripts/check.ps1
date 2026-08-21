@@ -13,6 +13,7 @@
       * blocks      — block geometry: shapes, culling, texture orientation
       * chunks      — incremental meshing: incremental output equals a rebuild
       * document    — the mutable schematic document: palette, resize, revision
+      * snbt        — Minecraft's text form of NBT, parsed and written back exactly
       * history     — transactions, undo/redo, and the N-edits-N-undos property
       * formats     — writing a document back out, round-tripped through the reader
       * session     — the open document as the IPC handlers drive it
@@ -44,6 +45,7 @@ $steps = @(
     @{ Name = 'blocks';     Script = 'smoke:blocks' }
     @{ Name = 'chunks';     Script = 'smoke:chunks' }
     @{ Name = 'document';   Script = 'smoke:document' }
+    @{ Name = 'snbt';       Script = 'smoke:snbt' }
     @{ Name = 'history';    Script = 'smoke:history' }
     @{ Name = 'formats';    Script = 'smoke:formats' }
     @{ Name = 'session';    Script = 'smoke:session' }

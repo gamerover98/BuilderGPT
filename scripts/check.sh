@@ -10,6 +10,7 @@
 #   blocks      block geometry: shapes, culling, texture orientation
 #   chunks      incremental meshing: incremental output equals a rebuild
 #   document    the mutable schematic document: palette, resize, revision
+#   snbt        Minecraft's text form of NBT, parsed and written back exactly
 #   history     transactions, undo/redo, and the N-edits-N-undos property
 #   formats     writing a document back out, round-tripped through the reader
 #   session     the open document as the IPC handlers drive it
@@ -33,8 +34,8 @@ set +e
 
 install_dependencies_if_missing
 
-STEP_NAMES=(typecheck hello smoke sandbox services schematics blocks chunks document history formats session agent autosave ui)
-STEP_SCRIPTS=(typecheck smoke:hello smoke smoke:sandbox smoke:services smoke:schematics smoke:blocks smoke:chunks smoke:document smoke:history smoke:formats smoke:session smoke:agent smoke:autosave smoke:ui)
+STEP_NAMES=(typecheck hello smoke sandbox services schematics blocks chunks document snbt history formats session agent autosave ui)
+STEP_SCRIPTS=(typecheck smoke:hello smoke smoke:sandbox smoke:services smoke:schematics smoke:blocks smoke:chunks smoke:document smoke:snbt smoke:history smoke:formats smoke:session smoke:agent smoke:autosave smoke:ui)
 STEP_RESULTS=()
 
 # ASCII only, to stay readable in terminals that are not UTF-8.

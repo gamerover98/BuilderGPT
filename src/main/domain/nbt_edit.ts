@@ -75,7 +75,7 @@ export class NbtEditError extends Error {
  * not survive a double past 2^53 — and a chest's `UUID` or a spawner's
  * `LastSpawn` lives well past that. Going through `BigInt` keeps every bit.
  */
-function longToText(value: unknown): string {
+export function longToText(value: unknown): string {
   if (Array.isArray(value) && value.length === 2) {
     const [high, low] = value as [number, number];
     return ((BigInt(high | 0) << 32n) | (BigInt(low >>> 0) & 0xffffffffn)).toString();
@@ -83,7 +83,7 @@ function longToText(value: unknown): string {
   return String(value);
 }
 
-function textToLong(text: string): [number, number] {
+export function textToLong(text: string): [number, number] {
   const wide = BigInt(text);
   const masked = BigInt.asUintN(64, wide);
   return [Number(BigInt.asIntN(32, masked >> 32n)), Number(BigInt.asIntN(32, masked & 0xffffffffn))];

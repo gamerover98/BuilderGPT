@@ -1599,6 +1599,45 @@ console.log("\n--- what a trace costs on disk ---");
   check("the original is not modified", long.length === MAX_STORED_TRACE_TEXT * 3);
 }
 
+// --- opening a document points the conversation at it -----------------------
+//
+// A conversation is stored under the *file path*, so every way of putting a
+// file on screen has to say which file that is. There are two, and only one of
+// them was doing it: a schematic restored from the previous session's autosave
+// came back with an empty chat, while the same file opened from the recents
+// came back with its history. The difference was one missing call.
+//
+// Restoring a *version* or a *checkpoint* deliberately does not adopt anything:
+// those replace the document with another state of the same file, and the
+// subject has not moved. So this names the two handlers rather than every
+// `adoptDocument` in the file — the rule is about opening, not about adopting.
+console.log("\n--- recovering is opening ---");
+{
+  const source = readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "main", "ipc", "handlers.ts"),
+    "utf8",
+  );
+
+  /** The body of one `ipcMain.handle(IPC.x, ...)` registration. */
+  const bodyOf = (channel: string): string => {
+    const at = source.indexOf(`IPC.${channel}`);
+    if (at === -1) return "";
+    // To the next registration, which is where this one stops mattering.
+    const next = source.indexOf("ipcMain.handle(", at + 1);
+    return source.slice(at, next === -1 ? source.length : next);
+  };
+
+  for (const channel of ["docOpen", "docRecoveryResolve"]) {
+    const body = bodyOf(channel);
+    check(`${channel} is registered`, body !== "");
+    check(
+      `...and points the conversation at the file it opened`,
+      /adoptSubject\(/.test(body),
+      `${channel} puts a document on screen without saying which conversation it belongs to`,
+    );
+  }
+}
+
 // --- every declared channel is actually served ------------------------------
 //
 // `shared/ipc.ts` is a list of verbs and `handlers.ts` is where they are

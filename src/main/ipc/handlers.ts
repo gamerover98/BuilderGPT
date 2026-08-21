@@ -1063,7 +1063,24 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           return { ok: false, kind: "io-error", message: "The recovered file could not be read." };
         }
         adoptDocument(session.doc, session.history);
-        return { ok: true, state: shellState(requireSession()) };
+        /*
+         * Recovering is opening, so the conversation follows the file.
+         *
+         * This was missing, and the symptom was precise: a schematic restored
+         * at launch came back with an empty chat, while the *same file* opened
+         * from File > Open Recent came back with its history. A recovered
+         * document carries its original path -- see `restoreAutosave` -- and
+         * that path is the key the conversation is stored under, so there is
+         * nothing else to look it up by and nothing else to do.
+         *
+         * The two other `adoptDocument` calls in this file deliberately do not
+         * do this: going back to a version or a checkpoint replaces the
+         * document with another state of the *same* file, and the subject has
+         * not moved.
+         */
+        await adoptSubject(session.doc.filePath);
+        forgetCheckpointMemo();
+        return { ok: true, state: shellState(requireSession()), chat: conversationState() };
       } catch (err) {
         return failure(err);
       }

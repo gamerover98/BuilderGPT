@@ -125,6 +125,19 @@ agent has no memory of. `runAgent` therefore takes `history` and returns
 a value the tests can see instead of something inferred from what the model was
 sent.
 
+**Recovering is opening, and every way of putting a file on screen has to say
+so.** A conversation is stored under the file *path*, so a document that arrives
+without `adoptSubject` arrives without its history — which is exactly what the
+crash-recovery prompt did: the restored schematic came back with an empty chat
+while the same file opened from the recents came back with everything. The
+renderer made it worse by clearing on purpose, on reasoning that expired when
+the transcript stopped living on the `DocumentSession`.
+
+Restoring a **version** or a **checkpoint** deliberately does *not* adopt: those
+replace the document with another state of the same file, and the subject has
+not moved. So `tests/services.ts` names the two handlers that open a file rather
+than walking every `adoptDocument` — the rule is about opening, not adopting.
+
 The subject rule has one case that looks like a bug and is not: opening a file
 the conversation has **no subject** for is an *adoption*, not a reset. That is
 the chat that built something with nothing open — the generator writes the file

@@ -867,10 +867,21 @@ import VersionList from "./lib/VersionList.svelte";
       if (restore && response.state) {
         // Recovered work is a structure the camera has not seen either.
         framingEpoch += 1;
-        // ...and a session whose conversation did not survive the crash.
-        chat = [];
         liveTrace = [];
         remembered = 0;
+        /*
+         * The conversation comes back with it.
+         *
+         * This used to clear, on the reasoning that a crashed session's chat
+         * did not survive it -- true when the transcript hung off the
+         * `DocumentSession` and died with it. It is stored per file path now,
+         * and a recovered document carries its original path, so the history is
+         * on disk and this was throwing it away. The same file opened from the
+         * recents came back with its chat, which is what made the difference
+         * visible.
+         */
+        if (response.chat) adoptChat(response.chat);
+        await refreshConversations();
         await refreshDocument();
         status = {
           tone: "ok",

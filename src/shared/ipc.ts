@@ -1101,6 +1101,15 @@ export type DocumentStateResponse = Result<{
   state: DocumentState | null;
   /** Present when a document was just opened and had notes recorded. */
   project?: ProjectNotes | null;
+  /**
+   * The conversation the newly open document brought with it.
+   *
+   * Carried on the response rather than fetched afterwards only where the
+   * renderer has no other reason to ask — recovery, which is an open the user
+   * did not initiate. `docOpen` still calls `chatState` itself, because it has
+   * a list of conversations to refresh at the same moment anyway.
+   */
+  chat?: ChatState;
 }>;
 export type DocumentMeshResponse = Result<DocumentMesh>;
 export type EditResponse = Result<EditSuccess>;

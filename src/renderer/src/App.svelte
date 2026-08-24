@@ -1011,8 +1011,12 @@ import VersionsModal from "./lib/VersionsModal.svelte";
         sidebarCollapsed = settings.ui.sidebarCollapsed;
         toolWindowX = settings.ui.toolWindowX;
         toolWindowY = settings.ui.toolWindowY;
+        toolWindowW = settings.ui.toolWindowW;
+        toolWindowH = settings.ui.toolWindowH;
         inspectorWindowX = settings.ui.inspectorWindowX;
         inspectorWindowY = settings.ui.inspectorWindowY;
+        inspectorWindowW = settings.ui.inspectorWindowW;
+        inspectorWindowH = settings.ui.inspectorWindowH;
         clockTicks = settings.preview.timeOfDay;
         hotbar = [...settings.ui.hotbar];
         hotbarSlot = settings.ui.hotbarSlot;
@@ -1323,6 +1327,8 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   /** Mirrored locally so a drag repaints at pointer speed, like the sidebar. */
   let toolWindowX = $state(DEFAULT_UI_SETTINGS.toolWindowX);
   let toolWindowY = $state(DEFAULT_UI_SETTINGS.toolWindowY);
+  let toolWindowW = $state(DEFAULT_UI_SETTINGS.toolWindowW);
+  let toolWindowH = $state(DEFAULT_UI_SETTINGS.toolWindowH);
 
   /**
    * The inspector, which used to be the sidebar's third tab.
@@ -1334,6 +1340,8 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   let inspectorOpen = $state(true);
   let inspectorWindowX = $state(DEFAULT_UI_SETTINGS.inspectorWindowX);
   let inspectorWindowY = $state(DEFAULT_UI_SETTINGS.inspectorWindowY);
+  let inspectorWindowW = $state(DEFAULT_UI_SETTINGS.inspectorWindowW);
+  let inspectorWindowH = $state(DEFAULT_UI_SETTINGS.inspectorWindowH);
 
   /**
    * The version history, which used to be the first thing in the Generate tab.
@@ -3178,16 +3186,16 @@ import VersionsModal from "./lib/VersionsModal.svelte";
     <!--
       The way back to the tools, and the reason "close" can mean close.
       Top-left, which is where the window itself opens, so the panel appears
-      more or less from under the button that summoned it.
+      more or less from under the button that summoned it -- but below the
+      HUD line, which it used to sit on top of.
     -->
     {#if docState && !toolsOpen && selection !== null}
       <button
-        class="icon reopen-tools"
+        class="reopen-tools"
         onclick={() => (toolsOpen = true)}
         title={t("command.showTools")}
-        aria-label={t("command.showTools")}
       >
-        &#x2317;
+        {t("selection.legend")}
       </button>
     {/if}
 
@@ -3204,6 +3212,8 @@ import VersionsModal from "./lib/VersionsModal.svelte";
         title={t("selection.legend")}
         x={toolWindowX}
         y={toolWindowY}
+        width={toolWindowW}
+        height={toolWindowH}
         closeLabel={t("common.close")}
         onmove={(x, y) => {
           toolWindowX = x;
@@ -3213,6 +3223,15 @@ import VersionsModal from "./lib/VersionsModal.svelte";
           toolWindowX = x;
           toolWindowY = y;
           void patchUi({ toolWindowX: x, toolWindowY: y });
+        }}
+        onresize={(w, h) => {
+          toolWindowW = w;
+          toolWindowH = h;
+        }}
+        onresizecommit={(w, h) => {
+          toolWindowW = w;
+          toolWindowH = h;
+          void patchUi({ toolWindowW: w, toolWindowH: h });
         }}
         onclose={() => (toolsOpen = false)}
       >
@@ -3253,6 +3272,8 @@ import VersionsModal from "./lib/VersionsModal.svelte";
         title={t("inspector.title")}
         x={inspectorWindowX}
         y={inspectorWindowY}
+        width={inspectorWindowW}
+        height={inspectorWindowH}
         closeLabel={t("common.close")}
         onmove={(x, y) => {
           inspectorWindowX = x;
@@ -3262,6 +3283,15 @@ import VersionsModal from "./lib/VersionsModal.svelte";
           inspectorWindowX = x;
           inspectorWindowY = y;
           void patchUi({ inspectorWindowX: x, inspectorWindowY: y });
+        }}
+        onresize={(w, h) => {
+          inspectorWindowW = w;
+          inspectorWindowH = h;
+        }}
+        onresizecommit={(w, h) => {
+          inspectorWindowW = w;
+          inspectorWindowH = h;
+          void patchUi({ inspectorWindowW: w, inspectorWindowH: h });
         }}
         onclose={() => (inspectorOpen = false)}
       >
@@ -3451,12 +3481,21 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   /*
    * Where the tool window lives, so the two read as the same object: the
    * button is what the panel collapses into.
+   *
+   * Below the viewport's HUD line, not on it. Both were at `top: 16px;
+   * left: 16px` in the same containing block, and this one carries a
+   * `z-index` while the HUD does not -- so a 26px glyph painted straight over
+   * the text telling you how to fly. It is named rather than glyphed for the
+   * same reason: there is no icon for "the selection tools" anyone reads
+   * correctly, and this is the only thing that brings them back.
    */
   .reopen-tools {
     position: absolute;
-    top: 16px;
+    top: 64px;
     left: 16px;
     z-index: 3;
+    padding: 5px 12px;
+    font-size: 12px;
   }
 
   /* Against the edge the panel will slide back in from. */

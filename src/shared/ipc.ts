@@ -643,7 +643,7 @@ export interface DocumentState {
    */
   worldOrigin: [number, number, number] | null;
   blockCount: number;
-  /** Most common first, capped — enough to show, not the whole palette. */
+  /** Every block in the document, most common first. Air is not one. */
   palette: PaletteCount[];
   dirty: boolean;
   canUndo: boolean;

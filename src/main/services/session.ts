@@ -196,12 +196,22 @@ export function adoptDocument(doc: SchematicDocument, history?: History): Docume
 // State for the renderer
 // ---------------------------------------------------------------------------
 
-/** The most common blocks first, so the UI can show a meaningful few. */
-function paletteCounts(doc: SchematicDocument, limit = 64): PaletteCount[] {
+/**
+ * Every block in the document, most common first.
+ *
+ * It was capped at 64, silently, while the panel showing it capped at 8 and
+ * said "…and N more" -- so past 64 distinct states that sentence *understated*
+ * the palette, which is worse than either cap alone. A schematic's materials
+ * list is one of the few things worth being complete: it is how you find the
+ * one stray block you did not mean to place.
+ *
+ * The cost is already paid. `paletteHistogram` walks every voxel and runs on
+ * every state push either way; dropping the `.slice` adds payload, not work.
+ */
+function paletteCounts(doc: SchematicDocument): PaletteCount[] {
   return [...paletteHistogram(doc).entries()]
     .filter(([block]) => !block.startsWith("minecraft:air"))
     .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
-    .slice(0, limit)
     .map(([block, count]) => ({ block, count }));
 }
 

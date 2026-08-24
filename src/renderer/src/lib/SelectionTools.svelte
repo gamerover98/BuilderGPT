@@ -108,9 +108,6 @@
     onselectall,
   }: Props = $props();
 
-  /** As many as fit without the window becoming a list with tools attached. */
-  const MAX_MATERIALS = 8;
-
   /** A palette key is `name[a=b,c=d]`; the base name is enough to type back. */
   function baseName(entry: string): string {
     return entry.split("[")[0];
@@ -156,7 +153,7 @@
     <div class="group">
       <label for="tool-materials">{t("doc.materials")}</label>
       <ul id="tool-materials" class="palette">
-        {#each palette.slice(0, MAX_MATERIALS) as entry (entry.block)}
+        {#each palette as entry (entry.block)}
           <li>
             <button
               class="link"
@@ -169,9 +166,6 @@
           </li>
         {/each}
       </ul>
-      {#if palette.length > MAX_MATERIALS}
-        <p class="hint">{t("doc.moreMaterials", { count: palette.length - MAX_MATERIALS })}</p>
-      {/if}
     </div>
   {/if}
 
@@ -414,15 +408,21 @@
   }
 
   /*
-   * Scrolls inside itself rather than growing the window. Eight rows is what
-   * fits beside the tools; a palette of forty would otherwise push Fill and
-   * Replace off the bottom of a floating panel that has nowhere to grow.
+   * Scrolls inside itself rather than growing the window, and the whole palette
+   * is in it now.
+   *
+   * It used to show eight and say "…and N more", over a `DocumentState` that
+   * had already been cut to 64 without saying anything -- so on any schematic
+   * with more distinct states than that, the sentence understated the palette.
+   * "The window has nowhere to grow" was the reason for the cap, and the window
+   * can be resized now, so the height is a share of it: drag the panel taller
+   * and the list gets taller with it.
    */
   .palette {
     list-style: none;
     margin: 0;
     padding: 0;
-    max-height: 132px;
+    max-height: max(132px, 22vh);
     overflow-y: auto;
     font-size: 11px;
   }

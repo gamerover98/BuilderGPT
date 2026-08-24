@@ -1611,5 +1611,45 @@ console.log("\n--- breaking never grows ---");
   equal("...and the document is the size it was", documentSize(session.doc), [4, 4, 4]);
 }
 
+// --- the materials list is the whole palette -------------------------------
+//
+// It was cut to 64 here, silently, while the panel showing it cut to 8 and
+// said "…and N more" -- so past 64 distinct states that sentence *understated*
+// the palette, which is worse than either cap on its own. A materials list is
+// one of the few things worth being complete: it is how the one stray block
+// nobody meant to place gets found.
+console.log("\n--- every material is reported ---");
+{
+  const session = newDocument({ width: 16, height: 4, length: 16 });
+
+  // Comfortably past the old cap, and past it in *states* rather than blocks:
+  // `oak_log[axis=x]` and `oak_log[axis=y]` are two entries and one material,
+  // which is exactly the case that makes a schematic's palette long.
+  const wanted = 100;
+  for (let i = 0; i < wanted; i += 1) {
+    applyEdit(session, {
+      kind: "setBlock",
+      x: i % 16,
+      y: Math.floor(i / 16),
+      z: 0,
+      block: { namespacedName: "minecraft:oak_log", properties: { axis: "y", variant: String(i) } },
+    });
+  }
+
+  const { palette } = documentState(session);
+  equal("every distinct state is listed", palette.length, wanted);
+  check(
+    "...most common first",
+    palette.every((entry, index) => index === 0 || palette[index - 1].count >= entry.count),
+    palette.slice(0, 3).map((entry) => entry.count).join(","),
+  );
+  // Air is every empty cell in the document, so listing it would put one entry
+  // at the top with a count larger than the build.
+  check(
+    "and air is not a material",
+    palette.every((entry) => !entry.block.startsWith("minecraft:air")),
+  );
+}
+
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

@@ -19,7 +19,13 @@ import { readdirSync, readFileSync, statSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { clampToBounds, isWithinBounds, placePopover } from "../src/renderer/src/lib/floating.js";
+import {
+  clampPanelSize,
+  clampToBounds,
+  isWithinBounds,
+  placePopover,
+} from "../src/renderer/src/lib/floating.js";
+import { PANEL_SIZE } from "../src/shared/settings.js";
 import { hoverSource, outlineCentre } from "../src/renderer/src/lib/block_hover.js";
 import {
   blockLabel,
@@ -258,7 +264,7 @@ console.log("\n--- catalogue coverage ---");
 console.log("\n--- floating panel bounds ---");
 {
   // A 232px panel in an 800x600 pane, keeping 24px reachable.
-  const bounds = { paneWidth: 800, paneHeight: 600, panelWidth: 232, margin: 24 };
+  const bounds = { paneWidth: 800, paneHeight: 600, panelWidth: 232, panelHeight: 420, margin: 24 };
 
   equal("a position already inside is left alone", clampToBounds({ x: 100, y: 80 }, bounds), {
     x: 100,
@@ -297,7 +303,7 @@ console.log("\n--- floating panel bounds ---");
   // parked in the far corner. This is the decision it makes; its trigger runs
   // in the rendering steps and cannot be driven from a hidden page.
   const parked = { x: 776, y: 576 };
-  const shrunk = { paneWidth: 133, paneHeight: 396, panelWidth: 232, margin: 24 };
+  const shrunk = { paneWidth: 133, paneHeight: 396, panelWidth: 232, panelHeight: 300, margin: 24 };
   check("a parked panel falls outside a shrunken pane", !isWithinBounds(parked, shrunk));
   equal("...and is pulled back to the new corner", clampToBounds(parked, shrunk), {
     x: 109,
@@ -309,12 +315,81 @@ console.log("\n--- floating panel bounds ---");
     paneWidth: 10,
     paneHeight: 10,
     panelWidth: 232,
+    panelHeight: 160,
     margin: 24,
   }), { x: 0, y: 0 });
 
   equal("fractional positions are rounded", clampToBounds({ x: 10.4, y: 10.6 }, bounds), {
     x: 10,
     y: 11,
+  });
+
+  /*
+   * `panelHeight` joined `panelWidth` when these panels became resizable, and
+   * it changes exactly one rule: a panel *taller than the pane* may go above
+   * zero, far enough to bring its bottom edge -- and the resize corner that
+   * lives there -- back into reach. Without it such a panel is pinned at the
+   * top with no way to make itself smaller, which is a window you cannot
+   * recover from.
+   */
+  const tall = { paneWidth: 800, paneHeight: 300, panelWidth: 232, panelHeight: 500, margin: 24 };
+  equal("a panel taller than the pane may hang off the top", clampToBounds({ x: 40, y: -5000 }, tall), {
+    x: 40,
+    y: -200,
+  });
+  equal("...and no further than its bottom edge", clampToBounds({ x: 40, y: -180 }, tall), {
+    x: 40,
+    y: -180,
+  });
+  // One that fits keeps the old rule exactly: the title bar never leaves.
+  equal("a panel that fits still cannot go above zero", clampToBounds({ x: 40, y: -5000 }, bounds), {
+    x: 40,
+    y: 0,
+  });
+}
+
+// --- how big a floating panel may be ---------------------------------------
+//
+// The tool window was a hard-coded 232px. That is what sent the version
+// history off to a modal, and what left the inspector rendering
+// `Items[0].tag.display.Name` in a column narrower than the path.
+console.log("\n--- floating panel size ---");
+{
+  const pane = { width: 900, height: 700 };
+
+  equal("a size that fits is kept", clampPanelSize({ width: 400, height: 300 }, pane), {
+    width: 400,
+    height: 300,
+  });
+
+  // The minimum exists because a panel dragged to nothing cannot be dragged
+  // back: the corner that resizes it would have no room to exist in.
+  equal("...and one dragged to nothing stops at the minimum", clampPanelSize({ width: 0, height: 0 }, pane), {
+    width: PANEL_SIZE.minWidth,
+    height: PANEL_SIZE.minHeight,
+  });
+
+  // The maximum is the pane, because these hover over the thing they edit.
+  equal("a panel cannot outgrow its pane", clampPanelSize({ width: 5000, height: 5000 }, pane), {
+    width: 900,
+    height: 700,
+  });
+
+  /*
+   * The order of the two clamps, which is the part worth pinning. In a pane
+   * smaller than the minimum, taking the pane last would collapse the panel to
+   * something with no resize corner and no way out. Taking the minimum last
+   * overflows instead: an unusable window you can see and drag beats a usable
+   * one you cannot reach.
+   */
+  equal("a pane smaller than the minimum overflows rather than collapsing", clampPanelSize(
+    { width: 300, height: 300 },
+    { width: 100, height: 100 },
+  ), { width: PANEL_SIZE.minWidth, height: PANEL_SIZE.minHeight });
+
+  equal("fractional sizes are rounded", clampPanelSize({ width: 400.4, height: 300.6 }, pane), {
+    width: 400,
+    height: 301,
   });
 }
 

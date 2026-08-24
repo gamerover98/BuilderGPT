@@ -10,14 +10,32 @@
  * the part that decides is checked even when the part that triggers cannot be.
  */
 
+import { PANEL_SIZE } from "../../../shared/settings.js";
+
 export interface Bounds {
   /** The area the panel must stay reachable within. */
   paneWidth: number;
   paneHeight: number;
-  /** The panel's own width; its height is not constrained from the bottom. */
+  /** The panel's own size. */
   panelWidth: number;
+  panelHeight: number;
   /** How much of the panel must remain on screen at each edge. */
   margin: number;
+}
+
+
+/** The size to use, given what the pane can actually hold. */
+export function clampPanelSize(
+  size: { width: number; height: number },
+  pane: { width: number; height: number },
+): { width: number; height: number } {
+  // `Math.max` against the minimum last, so a pane smaller than the minimum
+  // gives a panel that overflows rather than one that has collapsed: an
+  // unusable window you can see beats a usable one you cannot.
+  return {
+    width: Math.round(Math.max(PANEL_SIZE.minWidth, Math.min(size.width, pane.width))),
+    height: Math.round(Math.max(PANEL_SIZE.minHeight, Math.min(size.height, pane.height))),
+  };
 }
 
 export interface Point {
@@ -39,14 +57,23 @@ export interface Point {
  *   could not be dragged back.
  * - Right and bottom: at most `paneWidth/Height - margin`, so a corner always
  *   protrudes.
+ *
+ * `panelHeight` joined `panelWidth` when the panels became resizable, and only
+ * the top rule uses it: a panel taller than the pane would otherwise be pinned
+ * at `y = 0` with its bottom edge -- and its resize handle -- unreachable, so
+ * it is allowed to hang off the top far enough to grab that corner. The title
+ * bar stays reachable in every case a panel that fits can produce.
  */
 export function clampToBounds(point: Point, bounds: Bounds): Point {
   const minX = bounds.margin - bounds.panelWidth;
   const maxX = Math.max(0, bounds.paneWidth - bounds.margin);
+  // Only a panel too tall for the pane may go above zero, and only far enough
+  // to bring its bottom edge back into reach.
+  const minY = Math.min(0, bounds.paneHeight - bounds.panelHeight);
   const maxY = Math.max(0, bounds.paneHeight - bounds.margin);
   return {
     x: Math.round(Math.min(Math.max(point.x, minX), maxX)),
-    y: Math.round(Math.min(Math.max(point.y, 0), maxY)),
+    y: Math.round(Math.min(Math.max(point.y, minY), maxY)),
   };
 }
 

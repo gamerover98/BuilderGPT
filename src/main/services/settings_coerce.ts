@@ -28,6 +28,7 @@ import {
   type Settings,
   type Theme,
   type UiSettings,
+  PANEL_SIZE,
 } from "../../shared/settings.js";
 
 function isProvider(value: unknown): value is Provider {
@@ -64,8 +65,22 @@ export function coerceUi(raw: unknown): UiSettings {
     // resize -- the same two-stage arrangement `sidebarWidth` uses.
     toolWindowX: coordinate(source.toolWindowX, DEFAULT_UI_SETTINGS.toolWindowX),
     toolWindowY: coordinate(source.toolWindowY, DEFAULT_UI_SETTINGS.toolWindowY),
+    // Sizes get the floor, not the ceiling: the pane a panel has to fit in is
+    // the renderer's to measure, and it clamps again on every drag.
+    toolWindowW: extent(source.toolWindowW, DEFAULT_UI_SETTINGS.toolWindowW, PANEL_SIZE.minWidth),
+    toolWindowH: extent(source.toolWindowH, DEFAULT_UI_SETTINGS.toolWindowH, PANEL_SIZE.minHeight),
     inspectorWindowX: coordinate(source.inspectorWindowX, DEFAULT_UI_SETTINGS.inspectorWindowX),
     inspectorWindowY: coordinate(source.inspectorWindowY, DEFAULT_UI_SETTINGS.inspectorWindowY),
+    inspectorWindowW: extent(
+      source.inspectorWindowW,
+      DEFAULT_UI_SETTINGS.inspectorWindowW,
+      PANEL_SIZE.minWidth,
+    ),
+    inspectorWindowH: extent(
+      source.inspectorWindowH,
+      DEFAULT_UI_SETTINGS.inspectorWindowH,
+      PANEL_SIZE.minHeight,
+    ),
     hotbar: hotbar(source.hotbar),
     // Wrapped rather than clamped, so a stored index from a build with a
     // different slot count lands somewhere reachable instead of always on 0.
@@ -101,6 +116,12 @@ function hotbar(raw: unknown): string[] {
 
 function isAir(block: string): boolean {
   return block.split("[")[0].replace(/^minecraft:/, "") === "air";
+}
+
+/** A stored panel dimension: a number, at least the minimum, or the default. */
+function extent(raw: unknown, fallback: number, minimum: number): number {
+  const value = Number(raw);
+  return Number.isFinite(value) ? Math.max(minimum, Math.round(value)) : fallback;
 }
 
 function coordinate(raw: unknown, fallback: number): number {

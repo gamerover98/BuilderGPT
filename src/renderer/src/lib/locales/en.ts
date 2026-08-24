@@ -119,7 +119,6 @@ export const en = {
   "doc.notSaved": "Not saved yet",
   "doc.materials": "Materials",
   "doc.useAsBlock": "Make {block} the current block",
-  "doc.moreMaterials": "…and {count} more",
 
   // The New / Save As dialog. `doc.version` comes before `doc.format` on
   // screen for the reason the component explains: the version decides which
@@ -196,6 +195,7 @@ export const en = {
   "selection.replaceHint": "Replace within the selection",
 
   "inspector.empty": "Click a block in the viewport to see what it is.",
+  "toolwindow.resize": "Resize this panel",
   "inspector.title": "Inspector",
   "inspector.at": "at ({x}, {y}, {z})",
   "inspector.blockStates": "Block states",

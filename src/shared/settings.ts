@@ -279,6 +279,13 @@ export interface UiSettings {
   toolWindowX: number;
   toolWindowY: number;
   /**
+   * And how big it is. The panel was a hard-coded 232px, which is what sent
+   * the version history off to a modal and what left the inspector showing
+   * `Items[0].tag.display.Name` three characters at a time.
+   */
+  toolWindowW: number;
+  toolWindowH: number;
+  /**
    * The inspector's own floating window.
    *
    * A separate pair rather than one shared position, because both windows can
@@ -286,6 +293,8 @@ export interface UiSettings {
    */
   inspectorWindowX: number;
   inspectorWindowY: number;
+  inspectorWindowW: number;
+  inspectorWindowH: number;
   /**
    * The nine blocks on the creative hotbar, and which one is held.
    *
@@ -346,17 +355,38 @@ export const DEFAULT_HOTBAR: readonly string[] = [
  */
 export const SIDEBAR_WIDTH = { min: 320, max: 720, minViewport: 360 } as const;
 
+/**
+ * What a resizable floating panel may become, in CSS pixels.
+ *
+ * A minimum because a panel dragged to nothing cannot be dragged back -- the
+ * resize handle would have no room to exist in. A maximum because these hover
+ * over the viewport they are used to edit, and one grown past the window is a
+ * panel that hides the thing it acts on.
+ *
+ * Clamped twice, the way `SIDEBAR_WIDTH` is: once on the stored value, which
+ * main can check without seeing a window, and again against the live pane on
+ * every move, which only the renderer can do.
+ */
+export const PANEL_SIZE = { minWidth: 232, minHeight: 160 } as const;
+
 export const DEFAULT_UI_SETTINGS: UiSettings = {
   sidebarWidth: 420,
   sidebarCollapsed: false,
   theme: "system",
   language: "en",
+  // Below the viewport's HUD line rather than on top of it: both were at 16,
+  // in the same containing block, so the panel opened over the text telling
+  // you how to fly.
   toolWindowX: 16,
-  toolWindowY: 16,
+  toolWindowY: 64,
+  toolWindowW: 232,
+  toolWindowH: 420,
   // Below the tool window rather than beside it: the viewport is wider than it
   // is tall, and two panels down the same edge leave the middle clear.
   inspectorWindowX: 16,
-  inspectorWindowY: 320,
+  inspectorWindowY: 500,
+  inspectorWindowW: 300,
+  inspectorWindowH: 320,
   hotbar: [...DEFAULT_HOTBAR],
   hotbarSlot: 0,
 };

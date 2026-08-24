@@ -66,8 +66,6 @@ export function coerceUi(raw: unknown): UiSettings {
     toolWindowY: coordinate(source.toolWindowY, DEFAULT_UI_SETTINGS.toolWindowY),
     inspectorWindowX: coordinate(source.inspectorWindowX, DEFAULT_UI_SETTINGS.inspectorWindowX),
     inspectorWindowY: coordinate(source.inspectorWindowY, DEFAULT_UI_SETTINGS.inspectorWindowY),
-    versionsWindowX: coordinate(source.versionsWindowX, DEFAULT_UI_SETTINGS.versionsWindowX),
-    versionsWindowY: coordinate(source.versionsWindowY, DEFAULT_UI_SETTINGS.versionsWindowY),
     hotbar: hotbar(source.hotbar),
     // Wrapped rather than clamped, so a stored index from a build with a
     // different slot count lands somewhere reachable instead of always on 0.

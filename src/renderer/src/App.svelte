@@ -26,7 +26,7 @@
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
 import StartScreen from "./lib/StartScreen.svelte";
 import StartupScreen, { type StartupStep } from "./lib/StartupScreen.svelte";
-import VersionList from "./lib/VersionList.svelte";
+import VersionsModal from "./lib/VersionsModal.svelte";
   import Viewer, { type CameraMode, type PickedBlock } from "./lib/Viewer.svelte";
   import { api, bridgeAvailable, forIpc, bridgeMissingMessage } from "./lib/bridge.svelte.js";
   import { applyTraceEvent } from "./lib/trace.js";
@@ -1014,8 +1014,6 @@ import VersionList from "./lib/VersionList.svelte";
         inspectorWindowX = settings.ui.inspectorWindowX;
         inspectorWindowY = settings.ui.inspectorWindowY;
         clockTicks = settings.preview.timeOfDay;
-        versionsWindowX = settings.ui.versionsWindowX;
-        versionsWindowY = settings.ui.versionsWindowY;
         hotbar = [...settings.ui.hotbar];
         hotbarSlot = settings.ui.hotbarSlot;
         keyStatus = await api().getKeyStatus();
@@ -1347,8 +1345,6 @@ import VersionList from "./lib/VersionList.svelte";
    * closed.
    */
   let versionsOpen = $state(false);
-  let versionsWindowX = $state(DEFAULT_UI_SETTINGS.versionsWindowX);
-  let versionsWindowY = $state(DEFAULT_UI_SETTINGS.versionsWindowY);
 
   /**
    * Fetches OpenCode's model list when the provider calls for it.
@@ -2874,6 +2870,17 @@ import VersionList from "./lib/VersionList.svelte";
   onclose={() => (nbtOpen = false)}
 />
 
+<VersionsModal
+  open={docState !== null && versionsOpen}
+  versions={documentVersions}
+  {busy}
+  saved={docState?.filePath != null}
+  onsave={() => void saveVersion("manual", "")}
+  onrestore={(id) => void restoreVersion(id)}
+  ondelete={(id) => void deleteVersion(id)}
+  onclose={() => (versionsOpen = false)}
+/>
+
 <AnchorModal
   open={anchorOpen}
   anchor={worldEditAnchor}
@@ -3244,33 +3251,6 @@ import VersionList from "./lib/VersionList.svelte";
       inspector, and it was a sidebar tab for the same bad reason: it arrived
       when there was a drawer to put things in.
     -->
-    {#if docState && versionsOpen}
-      <ToolWindow
-        title={t("versions.legend")}
-        x={versionsWindowX}
-        y={versionsWindowY}
-        closeLabel={t("common.close")}
-        onmove={(x, y) => {
-          versionsWindowX = x;
-          versionsWindowY = y;
-        }}
-        oncommit={(x, y) => {
-          versionsWindowX = x;
-          versionsWindowY = y;
-          void patchUi({ versionsWindowX: x, versionsWindowY: y });
-        }}
-        onclose={() => (versionsOpen = false)}
-      >
-        <VersionList
-          versions={documentVersions}
-          {busy}
-          saved={docState?.filePath != null}
-          onsave={() => void saveVersion("manual", "")}
-          onrestore={(id) => void restoreVersion(id)}
-          ondelete={(id) => void deleteVersion(id)}
-        />
-      </ToolWindow>
-    {/if}
 
     <Viewer
       {mesh}

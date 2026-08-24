@@ -287,17 +287,6 @@ export interface UiSettings {
   inspectorWindowX: number;
   inspectorWindowY: number;
   /**
-   * The version history's own floating window.
-   *
-   * It was a sidebar tab, alongside the generator form and a list of every
-   * file the generator had ever produced -- three things about three different
-   * subjects sharing one drawer, which is why the drawer never had a name that
-   * described it. This is the same kind of thing as the inspector: a reflection
-   * of the open document, wanted for a moment and then dismissed.
-   */
-  versionsWindowX: number;
-  versionsWindowY: number;
-  /**
    * The nine blocks on the creative hotbar, and which one is held.
    *
    * Persisted because a hotbar you have to refill every launch is not a hotbar.
@@ -368,10 +357,6 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   // is tall, and two panels down the same edge leave the middle clear.
   inspectorWindowX: 16,
   inspectorWindowY: 320,
-  // Further down again, and only ever open on purpose: nothing summons this
-  // one the way clicking a block summons the inspector.
-  versionsWindowX: 16,
-  versionsWindowY: 560,
   hotbar: [...DEFAULT_HOTBAR],
   hotbarSlot: 0,
 };

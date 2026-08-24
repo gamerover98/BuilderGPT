@@ -41,9 +41,12 @@
   let confirming = $state<string | null>(null);
 </script>
 
-<fieldset>
-  <legend>{t("versions.legend")}</legend>
-
+<!--
+  No `<fieldset>` and no legend: this lives inside `VersionsModal`, whose header
+  already says what it is. It carried both while it was a floating tool window,
+  which drew a second border and a second copy of the same heading inside the
+  first — exactly what `InspectorPanel` renounced its own chrome to avoid.
+-->
   {#if !saved}
     <p class="hint">{t("versions.unsaved")}</p>
   {:else}
@@ -103,7 +106,6 @@
       <p class="hint">{t("versions.note")}</p>
     {/if}
   {/if}
-</fieldset>
 
 <style>
   ul {

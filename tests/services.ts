@@ -1185,8 +1185,6 @@ console.log("\n--- settings coercion ---");
     toolWindowY: 96,
     inspectorWindowX: 300,
     inspectorWindowY: 480,
-    versionsWindowX: 360,
-    versionsWindowY: 640,
     // Nine entries, none of them the default, so a `coerceUi` that quietly
     // substituted the default hotbar would not survive the comparison.
     hotbar: [

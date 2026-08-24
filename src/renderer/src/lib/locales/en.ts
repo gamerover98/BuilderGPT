@@ -104,7 +104,11 @@ export const en = {
   "start.generated": "Generated",
   "start.reveal": "Show in folder",
   "start.dropHint": "You can also drop a .schem or .schematic file anywhere on this view.",
-  "start.chatHint": "Or describe what you want in the chat: with nothing open, a message builds the schematic instead of editing one.",
+  "start.chatHint":
+    "Or close this and describe what you want in the chat: with nothing open, a message builds the schematic instead of editing one.",
+  "start.reopen": "Start",
+  "start.reopenHint": "Bring back New, Open and the recent schematics",
+  "start.reopen.keywords": "start welcome new open recent home",
   "doc.openedJustNow": "just now",
   "doc.openedMinutes": "{count}m ago",
   "doc.openedHours": "{count}h ago",

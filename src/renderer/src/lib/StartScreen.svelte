@@ -17,12 +17,21 @@
    * chat goes to the *generator* and builds the schematic the rest of the
    * conversation then edits — a real capability that is completely invisible
    * until someone tries it by accident.
+   *
+   * It blocks the window while it is up, which it did not: it was a card over a
+   * live viewport, with the camera buttons, the gear and the whole sidebar
+   * still taking clicks on a document that was not there. Blocking is why it
+   * also has to be *dismissable* — the generator is reached by typing into the
+   * chat with nothing open, so a screen that covered the chat and could not be
+   * put away would not be polish, it would delete the feature it advertises.
    */
   import type { Artifact, RecentDocument } from "../../../shared/ipc.js";
   import { ageLabel } from "./age_label.js";
   import { t } from "./i18n.svelte.js";
 
   interface Props {
+    /** Dismissing it reveals the app in the state it has always had. */
+    ondismiss: () => void;
     recent: readonly RecentDocument[];
     /**
      * Every file the generator has ever written, newest first.
@@ -42,6 +51,7 @@
   }
 
   const {
+    ondismiss,
     recent,
     artifacts,
     busy,
@@ -68,6 +78,15 @@
       .slice(0, 4),
   );
 
+  let dialog = $state<HTMLDivElement | undefined>(undefined);
+
+  // Focus so Escape reaches the wrapper, and release the pointer lock: this
+  // can appear over a canvas that was still flying when the document closed.
+  $effect(() => {
+    document.exitPointerLock();
+    dialog?.focus();
+  });
+
   function fileName(filePath: string): string {
     return filePath.split(/[\\/]/).pop() ?? filePath;
   }
@@ -79,8 +98,34 @@
   }
 </script>
 
-<div class="start" role="region" aria-label={t("start.title")}>
-  <div class="card">
+<!--
+  A scrim, not an overlay. Escape and a backdrop click dismiss it, like every
+  other modal here; unlike them it is what the window shows when there is
+  nothing to show, so it comes back from the document bar and from Ctrl+K.
+-->
+<div
+  class="start"
+  role="presentation"
+  onkeydown={(event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      ondismiss();
+    }
+  }}
+  onclick={(event) => {
+    if (event.target === event.currentTarget) ondismiss();
+  }}
+>
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div
+    class="card"
+    role="dialog"
+    aria-modal="true"
+    aria-label={t("start.title")}
+    tabindex="-1"
+    bind:this={dialog}
+  >
+    <button class="icon close" onclick={ondismiss} aria-label={t("common.close")}>&#x00d7;</button>
     <h2>{t("start.title")}</h2>
     <p class="lead">{t("start.lead")}</p>
 
@@ -150,24 +195,34 @@
 
 <style>
   /*
-   * Centred over the canvas, and transparent to the pointer everywhere the
-   * card is not. The viewport as a whole is the drag-and-drop target, and a
-   * full-bleed overlay that swallowed `dragover` would break dropping a file
-   * on the one screen where dropping a file is the obvious thing to do.
+   * `fixed`, so it covers the window rather than the viewport section it is
+   * mounted in: the camera buttons, the gear and the sidebar all acted on a
+   * document that was not there.
+   *
+   * Dropping a file still works, and that is worth stating because it is the
+   * thing a full-bleed cover here is supposed to break. The handlers are on
+   * `section.preview`, this stays a DOM child of it whatever `fixed` does to
+   * its painting, and drag events bubble — and `App.svelte` counts enters
+   * against leaves precisely because children fire them, so one more child
+   * changes nothing.
+   *
+   * `z-index: 100` is the modal tier, shared with every other scrim.
    */
   .start {
-    position: absolute;
+    position: fixed;
     inset: 0;
-    z-index: 2;
+    z-index: 100;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 24px;
-    pointer-events: none;
+    background: var(--scrim);
+    backdrop-filter: blur(2px);
   }
 
   .card {
-    pointer-events: auto;
+    position: relative;
+    outline: none;
     width: min(420px, 100%);
     max-height: 100%;
     overflow-y: auto;
@@ -176,6 +231,12 @@
     border-radius: 12px;
     background: var(--bg-panel);
     box-shadow: 0 16px 48px var(--shadow);
+  }
+
+  .close {
+    position: absolute;
+    top: 10px;
+    right: 12px;
   }
 
   h2 {

@@ -1027,8 +1027,19 @@ console.log("\n--- application menu ---");
     equal(`${label} is off with nothing open`, at(fileMenu(empty), label)?.enabled, false);
     equal(`${label} is on with a document`, at(fileMenu(open), label)?.enabled, true);
   }
-  equal("Undo is off with nothing open", at(editMenu(empty), "Undo")?.enabled, false);
+  /*
+   * No Edit menu at all with nothing open, rather than one holding two greyed
+   * rows. Both were already disabled, which is the honest answer to "can I
+   * undo" and the wrong shape of answer: with no document there is nothing the
+   * menu could ever offer, so it was a heading existing only to be dead. The
+   * File menu keeps its disabled rows because it has live ones beside them.
+   */
+  equal("there is no Edit menu with nothing open", at(menuModel(empty), "Edit"), undefined);
+  equal("...and there is one with a document", at(menuModel(open), "Edit")?.label, "Edit");
+  equal("Undo is on with a document", at(editMenu(open), "Undo")?.enabled, true);
   equal("Redo is on with a document", at(editMenu(open), "Redo")?.enabled, true);
+  // The File menu is never conditional: it is the only way to get a document.
+  equal("File is there either way", at(menuModel(empty), "File")?.label, "File");
 
   /*
    * No accelerator on Undo/Redo, and this is the check that keeps it that way.

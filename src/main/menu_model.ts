@@ -127,7 +127,7 @@ export function menuModel(state: MenuState): MenuItemModel[] {
   const recents = state.recents.slice(0, MAX_RECENT_MENU_ITEMS);
   const labels = recentLabels(recents);
 
-  return [
+  const menus: MenuItemModel[] = [
     {
       label: "File",
       submenu: [
@@ -170,7 +170,23 @@ export function menuModel(state: MenuState): MenuItemModel[] {
         { role: "quit", label: "Exit" },
       ],
     },
-    {
+  ];
+
+  /*
+   * No Edit menu at all with nothing open, rather than one holding two dead
+   * rows.
+   *
+   * Both were already `enabled: false`, which is the honest answer to "can I
+   * undo" and the wrong shape of answer: with no document there is nothing the
+   * menu could ever offer, so it was a heading that existed only to be greyed
+   * out. The File menu keeps its dead rows because it has live ones beside
+   * them; this one has nothing to be beside.
+   *
+   * `menuSignature` already carries `hasDocument`, so the bar is rebuilt when
+   * one is opened or closed and nothing else needs to know.
+   */
+  if (state.hasDocument) {
+    menus.push({
       label: "Edit",
       submenu: [
         /*
@@ -184,11 +200,13 @@ export function menuModel(state: MenuState): MenuItemModel[] {
          * two keys, behind `isTyping`; these rows exist to be *found*, and the
          * buttons in the document bar do the work.
          */
-        { command: "undo", label: "Undo", enabled: state.hasDocument },
-        { command: "redo", label: "Redo", enabled: state.hasDocument },
+        { command: "undo", label: "Undo", enabled: true },
+        { command: "redo", label: "Redo", enabled: true },
       ],
-    },
-  ];
+    });
+  }
+
+  return menus;
 }
 
 /**

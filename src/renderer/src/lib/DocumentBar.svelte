@@ -43,9 +43,30 @@
      * window with no way back is a feature you delete by accident.
      */
     onversions: () => void;
+    /**
+     * Brings the start screen back after it has been dismissed.
+     *
+     * It blocks the window now, so it has to be dismissable — the generator is
+     * reached by typing into the chat with nothing open, and a screen covering
+     * the chat that could not be put away would delete the path it advertises.
+     * This is the way back, and `startvisible` is what stops it offering to
+     * summon something already on screen.
+     */
+    onstart: () => void;
+    startvisible: boolean;
   }
 
-  const { doc, busy, canundo, canredo, onundo, onredo, onversions }: Props = $props();
+  const {
+    doc,
+    busy,
+    canundo,
+    canredo,
+    onundo,
+    onredo,
+    onversions,
+    onstart,
+    startvisible,
+  }: Props = $props();
 
   /**
    * The version the file will be stamped with, when it carries one at all.
@@ -73,6 +94,11 @@
 
 {#if doc === null}
   <h1>{t("app.title")}</h1>
+  {#if !startvisible}
+    <button class="start-again" onclick={onstart} title={t("start.reopenHint")}>
+      {t("start.reopen")}
+    </button>
+  {/if}
 {:else}
   <div class="identity" title={doc.filePath ?? t("doc.notSaved")}>
     <strong class:dirty={doc.dirty}>
@@ -103,6 +129,12 @@
 {/if}
 
 <style>
+  .start-again {
+    margin-left: 12px;
+    padding: 3px 10px;
+    font-size: 12px;
+  }
+
   h1 {
     flex: 1 1 auto;
     min-width: 0;

@@ -1347,6 +1347,21 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   let versionsOpen = $state(false);
 
   /**
+   * Whether the start screen has been put away for now.
+   *
+   * It blocks the window, so it must be dismissable: with nothing open a chat
+   * message goes to the *generator*, and a screen covering the chat that could
+   * not be closed would delete the path it exists to advertise.
+   */
+  let startDismissed = $state(false);
+
+  /**
+   * `recovery` keeps precedence, as it always did -- that one is a question
+   * about work that may be lost, and it must not be behind anything.
+   */
+  const startVisible = $derived(docState === null && recovery === null && !startDismissed);
+
+  /**
    * Fetches OpenCode's model list when the provider calls for it.
    *
    * Lives here rather than in the picker because the answer can rewrite
@@ -1583,6 +1598,17 @@ import VersionsModal from "./lib/VersionsModal.svelte";
       keywords: t("command.showVersions.keywords"),
       enabled: docState !== null,
       run: () => (versionsOpen = !versionsOpen),
+    },
+    {
+      id: "show-start",
+      title: t("start.reopen"),
+      group: t("group.view"),
+      keywords: t("start.reopen.keywords"),
+      // Only when it is dismissable and dismissed: it blocks the window, so
+      // offering to summon one already on screen would be a command that does
+      // nothing, and offering it over a document would take the document away.
+      enabled: docState === null && startDismissed,
+      run: () => (startDismissed = false),
     },
     {
       id: "settings",
@@ -2925,6 +2951,8 @@ import VersionsModal from "./lib/VersionsModal.svelte";
       onundo={() => void undoAnything()}
       onredo={() => void redoAnything()}
       onversions={() => (versionsOpen = !versionsOpen)}
+      onstart={() => (startDismissed = false)}
+      startvisible={startVisible}
     />
 
     <div class="camera-modes" role="group" aria-label={t("viewport.cameraMode")}>
@@ -3084,12 +3112,13 @@ import VersionsModal from "./lib/VersionsModal.svelte";
     -->
     <!--
       Nothing open: say so, and offer the two things that fix it. Above the
-      canvas rather than instead of it -- the scene keeps its floor, and the
-      card is the only part that takes the pointer, so a file can still be
-      dropped anywhere around it.
+      canvas rather than instead of it -- the scene keeps its floor. It covers
+      the window now, and dropping a file still works: the handlers are on this
+      section, the card stays a DOM child of it, and drag events bubble.
     -->
-    {#if docState === null && recovery === null}
+    {#if startVisible}
       <StartScreen
+        ondismiss={() => (startDismissed = true)}
         recent={recentDocuments}
         {artifacts}
         {busy}

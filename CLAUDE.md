@@ -88,6 +88,22 @@ before it would index the old shape. The grid has no negative coordinates, so
 reaching below the origin moves the *content* up and the region with it; that
 sign is the part that fails silently.
 
+**A single placed block grows it too, and for a while it did not.** That
+asymmetry was invisible from either side: `document.setBlock` refuses an
+out-of-bounds write by returning `null`, so a block placed past the edge came
+back `changed: 0` and read as a click that had missed. In flight that *is* how
+you build outwards — right-click the outer face of an edge block — so the one
+gesture with no answer was the one that mode exists for, while the same act
+done by dragging a selection and filling it worked. One editor, two answers,
+depending on which door you came in by. `applyEdit`'s `setBlock` arm now takes
+the same path as `fill`, including the volume guard.
+
+**Breaking never grows.** A break is `setBlock` with air, and growing to make
+room for air is a resize and nothing else — the same reason `replace` does not.
+Nothing sends a break from outside the box today, because a break comes from a
+pick and the block therefore exists; the guard exists so that stays true, and
+`tests/session.ts` fails without it.
+
 **`replace` deliberately does not grow.** It rewrites blocks that are already
 there and there are none outside the box, so growing first would add air and
 then replace nothing in it — a resize the user did not ask for and would have
@@ -327,9 +343,9 @@ mistake: declaring a verb, bridging it through preload, calling it from the
 renderer, and never registering it.
 
 **The agent's only way to change the schematic's size is `resize_document`.**
-Growth-on-fill (`growthToInclude`) belongs to `applyEdit`, which is the UI's
-path; every agent tool goes through `normalizeRegion` and is trimmed to the
-current box. That asymmetry is deliberate — a fill with one bad coordinate
+`growthToInclude` belongs to `applyEdit`, which is the UI's path — a fill into a
+dragged selection, or a block placed past the edge; every agent tool goes
+through `normalizeRegion` and is trimmed to the current box. That asymmetry is deliberate — a fill with one bad coordinate
 should not silently resize the document — but for a long time it left the agent
 with *no* way to make room, so "put a roof on this" against a build that already
 reached the ceiling had no correct answer and the model settled for rewriting
@@ -495,6 +511,26 @@ directions count: a state-less `minecraft:chest` comes back as
 `chest[facing=north,type=single]`, because the metadata nibble has to say which
 way it faces. The rule is simply "the exact state did not match".
 
+**The outline follows the pointer in orbit, not only the crosshair in flight.**
+In flight the crosshair *is* the pointer, so "what am I about to click" answered
+itself and the outline was flight's alone. In orbit there was no answer: you
+clicked a block to inspect it, or Shift-clicked to select it, and nothing said
+which block the ray had found until after the click. The pick was already being
+computed — it simply was not drawn.
+
+`block_hover.ts` decides, and is a plain module for the reason `selection_drag.ts`
+and `floating.ts` are: this runs from `requestAnimationFrame`, which belongs to
+the rendering steps, and the harness here is frequently not compositing. Two
+suppressions in it are the part worth knowing, and both are about not promising
+a click that does something else: the outline yields over a selection **face
+handle**, where the cursor has already become a resize cursor and the press
+drags the face, and it yields **while a face is being dragged**.
+
+Its colour is `--selection`, like the wire box, the plates and the build-grid
+patch. It was a hardcoded black — the only colour in `Viewer.svelte` not taken
+from the theme, and therefore the only one that stayed put when the window went
+light.
+
 **Block picking steps a *hair* inwards from the hit face**, not half a block.
 The mesh is one fused geometry with no per-block identity, so the owning block
 is found by moving `1e-3` along `-normal` from the hit point and flooring. Half
@@ -522,12 +558,15 @@ distrust; the fix is to stop it holding them.
 
 Where the three went, and why each destination is the honest one:
 
-- the **version history** to a floating window over the canvas, because it is a
-  reflection of the open document, exactly like the inspector. It differs from
-  the tools and the inspector in one way that decides its default: nothing
+- the **version history** to a modal, after a spell as a floating window over
+  the canvas. That was right about its nature — a reflection of the open
+  document, exactly like the inspector — and wrong about its size: a
+  `ToolWindow` was a fixed 232px and a row here reads `manual · 64×32×64 ·
+  12,048 blocks` with a Restore beside it, so every row ellipsised. It differs
+  from the tools and the inspector in the way that decides its default: nothing
   *summons* it — a selection brings the tools back and a click brings the
   inspector back — so it starts closed and has a button in the document bar. A
-  floating panel with no way back is a feature you delete by accident.
+  panel with no way back is a feature you delete by accident.
 - the **generated files** to the start screen beside the recents. Their only two
   verbs are "open this" and "show me where it is", which are that screen's whole
   job, and it is the one place a generated `.mcfunction` is admitted to exist —
@@ -549,9 +588,33 @@ would happily send a message that could only come back as an error; the guard
 moved to the send button, which is now the only control that can start either.
 
 The start screen is a sibling of the viewer, not part of it: `Viewer.svelte`
-receives geometry and has no business knowing what a recent document is. Only
-its card takes the pointer — a full-bleed overlay would swallow `dragover` on
-the one screen where dropping a file is the obvious move.
+receives geometry and has no business knowing what a recent document is.
+
+**It blocks the window, and it can be dismissed. Both halves are the rule.** It
+used to be a card over a live app — `pointer-events: none` on the container with
+`auto` on the card alone — so the camera buttons, the gear and the whole sidebar
+took clicks aimed at a document that was not there. It is a scrim now, on the
+modal tier, with the skeleton every other modal has.
+
+Dropping a file still works, and the reasoning that once argued against a
+full-bleed cover is the reasoning that makes it safe: the handlers are on
+`section.preview`, the card stays a DOM child of it whatever `position: fixed`
+does to its painting, drag events bubble, and `App.svelte` counts enters against
+leaves *because* children fire them — so one more child changes nothing.
+
+Dismissable because **with nothing open a chat message goes to the generator**.
+That is how a schematic gets built from a sentence, and this screen is the only
+place that says so; a screen covering the chat that could not be put away would
+delete the path it advertises. So Escape, the backdrop and a close button put it
+away, and it comes back from the document bar and from Ctrl+K — the same rule as
+the version history, for the same reason.
+
+**And with nothing open there is no Edit menu at all**, rather than one holding
+two permanently greyed rows. Both were already disabled, which is the honest
+answer to "can I undo" and the wrong *shape* of answer: with no document there is
+nothing that menu could ever offer. The File menu keeps its disabled rows because
+it has live ones beside them; this one has nothing to be beside. `menuSignature`
+already carries `hasDocument`, so the bar rebuilds on open and close by itself.
 
 **"Nothing open" stays a real state.** It is tempting to create an untitled
 document at launch so the build grid always has a target, and it would silently
@@ -565,6 +628,34 @@ visible only inside the sidebar's second tab — so the app could tell you there
 was unsaved work, but only while you were looking away from what you were
 building. The title is main's (`windowTitle` in `menu_model.ts`), with the dirty
 marker leading, because a taskbar button truncates from the right.
+
+**A floating panel is resizable, and its size is two settings per window.**
+`ToolWindow` was `width: 232px` in CSS with no size props at all — the number
+that sent the version history off to a modal, and that leaves the inspector
+rendering `Items[0].tag.display.Name` in a column narrower than the path. The
+handle is `SidebarSplitter`'s shape, which its drag code was already a fork of:
+a live callback per move, one commit at the end, arrow keys, and the ARIA
+separator contract.
+
+`Bounds` carries `panelHeight` for exactly one rule: a panel **taller than the
+pane** may hang off the top, far enough to bring the resize corner back into
+reach. Pinned at `y = 0` it could never be made smaller again. A panel that fits
+still cannot go above zero, because the first thing to disappear upwards is the
+title bar.
+
+`PANEL_SIZE` is in `shared/settings.ts` beside `SIDEBAR_WIDTH` rather than in
+`floating.ts`, because `coerceUi` needs it and main must not import out of the
+renderer. The order of `clampPanelSize`'s two clamps is load-bearing and named
+in the checks: the **minimum is applied last**, so a pane smaller than it yields
+a panel that overflows rather than one that has collapsed — an unusable window
+you can see and drag beats a usable one you cannot reach.
+
+**The materials list is the whole palette.** It showed eight and said "…and N
+more", over a `DocumentState` main had already cut to 64 without a word — so
+past 64 distinct states that sentence *understated* the palette, which is worse
+than either cap alone. Both are gone, and the cost was already paid:
+`paletteHistogram` walks every voxel on every state push either way, so dropping
+the `.slice` adds payload, not work.
 
 **A Svelte prop may not be called `state`.** A local binding of that name makes
 every `$state(...)` in the same component parse as a store subscription to it

@@ -227,7 +227,8 @@ export const en = {
   "anchor.atCorner": "Corner (0, 0, 0)",
   "anchor.outside":
     "This anchor is outside the schematic, which is allowed: the player who copied it may have been standing clear of the build.",
-  "anchor.stored": "Stored in the file as Offset [{x}, {y}, {z}] — the anchor's position, negated.",
+  "anchor.stored":
+    "In this file it is stored as {tag} = [{x}, {y}, {z}] — the anchor's position, negated.",
   "anchor.viewTitle": "In the viewport",
   "anchor.showMarker": "Show the anchor marker",
   "anchor.markerHint":
@@ -242,6 +243,8 @@ export const en = {
   "nbt.originUnset": "not set",
   "nbt.originSet": "Set",
   "nbt.originClear": "Clear",
+  "nbt.whereHint":
+    "In this container the paste anchor is {anchor} and the origin is {origin}. The two are different vectors and each format spells them differently, so the tag you want may not be the one you expect.",
   "nbt.omittedHint":
     "The palette and the block data are left out ({tags}): they are the schematic itself, and are rewritten from the grid every time it is saved.",
   "nbt.readOnly":

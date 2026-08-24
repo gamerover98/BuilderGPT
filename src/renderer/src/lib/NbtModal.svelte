@@ -11,6 +11,12 @@
    * came back -- the parsing, the validation and the line numbers are all on the
    * other side of the bridge, where the document is.
    */
+  import {
+    anchorLocation,
+    originLocation,
+    tagPathLabel,
+    type SchematicFormat,
+  } from "../../../shared/schematic.js";
   import { t } from "./i18n.svelte.js";
 
   interface Props {
@@ -23,6 +29,8 @@
     omitted: string[];
     /** WorldEdit's Origin, or `null` when the file names none. */
     origin: [number, number, number] | null;
+    /** The container, which decides where in this text the two vectors land. */
+    format: SchematicFormat;
     busy: boolean;
     /** Main's wording for whatever went wrong, shown as it arrived. */
     error: string;
@@ -38,6 +46,7 @@
     editable,
     omitted,
     origin,
+    format,
     busy,
     error,
     onapply,
@@ -72,6 +81,18 @@
       dialog?.focus();
     }
   });
+
+  /*
+   * Where the two WorldEdit vectors are in the text below.
+   *
+   * Worth a line of its own because the answer is not guessable and differs
+   * per container: v3 puts the anchor at the top level as `Offset` and leaves
+   * `Metadata` holding only the Origin, so someone who set an anchor and then
+   * went looking for a `WE*` key in `Metadata` — which is where WorldEdit's
+   * *MCEdit* files keep it — finds nothing and concludes it was never written.
+   */
+  const anchorAt = $derived(tagPathLabel(anchorLocation(format)));
+  const originAt = $derived(tagPathLabel(originLocation(format)));
 
   const dirty = $derived(draft !== text);
   const originComplete = $derived(
@@ -144,6 +165,7 @@
             {t("nbt.originClear")}
           </button>
         </div>
+        <p class="hint">{t("nbt.whereHint", { anchor: anchorAt, origin: originAt })}</p>
       </section>
 
       <section class="text">

@@ -170,6 +170,20 @@ something another tool left behind, v3's own reader ignores them, and reading
 them as an anchor would contradict `Offset` — so there they stay in the bag as
 unknown metadata, like `Platforms`.
 
+**And the panel that sets the anchor has to name the tag, per format.** It said
+`Offset` for every container, which is true only of v3. In a v2 file that tag
+holds the world corner and the anchor is off in `Metadata.WEOffsetX/Y/Z`; in a
+v3 file `Metadata` carries the *Origin* and nothing anchor-shaped at all. So
+someone who set an anchor, looked where the app told them, and found either the
+wrong vector or no `WE*` key would conclude the anchor had never been written —
+correctly, from a false sentence, while the file on disk was right the whole
+time. `anchorLocation`/`originLocation`/`tagPathLabel` in `shared/schematic.ts`
+are the answer, and they are in `shared/` for the reason
+`openCodeModelRequiresKey` is: the renderer must name the tag and may not import
+out of `main/`. That makes them a second copy of `spongeVectors`' table, so
+`tests/formats.ts` saves a real file and walks the path they name — the vector
+has to be exactly there, in all three formats, or the check fails.
+
 The Origin is `null` when the file named none, and then no tag is written at
 all. Absence and zero are different answers here: a missing `Offset` means "no
 displacement" and zero says that exactly, while a missing Origin means "nobody

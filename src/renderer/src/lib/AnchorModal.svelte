@@ -11,6 +11,11 @@
    * they need it, and the difference between a schematic that pastes where it
    * should and one that lands three blocks off is entirely inside it.
    */
+  import {
+    anchorLocation,
+    tagPathLabel,
+    type SchematicFormat,
+  } from "../../../shared/schematic.js";
   import { anchorKey, mirrorAnchor } from "./anchor_draft.js";
   import { t } from "./i18n.svelte.js";
 
@@ -20,6 +25,14 @@
     anchor: [number, number, number] | null;
     /** What the file actually stores, shown so the negation is not a secret. */
     offset: [number, number, number] | null;
+    /**
+     * The open document's container, because it decides *which tag* the anchor
+     * is written to — and that is the whole of what this panel got wrong.
+     * Saying "Offset" for a Sponge v2 file names a tag holding the world
+     * corner, so looking there and finding the wrong number is the correct
+     * conclusion from a false statement.
+     */
+    format: SchematicFormat;
     /** The schematic's size, for the centre preset and the inside/outside note. */
     size: [number, number, number];
     /** Whether the marker is drawn in the viewport. */
@@ -42,6 +55,7 @@
     open,
     anchor,
     offset,
+    format,
     size,
     visible,
     busy,
@@ -115,6 +129,9 @@
       onclose();
     }
   }
+
+  /** `Offset`, `Metadata.WEOffsetX/Y/Z`, … — whichever this file will use. */
+  const storedAt = $derived(tagPathLabel(anchorLocation(format)));
 
   function preset(next: [number, number, number]): void {
     draft = [String(next[0]), String(next[1]), String(next[2])];
@@ -196,7 +213,12 @@
 
           {#if offset !== null}
             <p class="hint stored">
-              {t("anchor.stored", { x: offset[0], y: offset[1], z: offset[2] })}
+              {t("anchor.stored", {
+                tag: storedAt,
+                x: offset[0],
+                y: offset[1],
+                z: offset[2],
+              })}
             </p>
           {/if}
 

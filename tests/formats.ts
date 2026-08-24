@@ -48,6 +48,12 @@ import {
 import { dataVersionFor } from "../src/main/services/versions.js";
 import { dataVersionFor as _unusedDataVersionFor, VERSION_NAMES } from "../src/main/services/versions.js";
 import {
+  anchorLocation,
+  originLocation,
+  tagPathLabel,
+  type TagLocation,
+} from "../src/shared/schematic.js";
+import {
   dataVersionOf,
   eraOf,
   formatsFor,
@@ -832,6 +838,94 @@ console.log("\n--- eras ---");
     "the generator's table is exactly the flat era",
     [...VERSION_NAMES].sort(),
     MC_VERSION_NAMES.filter((name) => eraOf(name) === "flat").sort(),
+  );
+}
+
+
+// --- the app can say where it put them --------------------------------------
+//
+// `shared/schematic.ts` names the tag each vector is written to, because the
+// anchor panel has to tell you where to look and the renderer may not import
+// out of `main/`. That makes it a second copy of `spongeVectors`' table, and a
+// second copy is a thing that drifts -- so this walks the path it names into a
+// file the writers actually produced and requires the vector to be exactly
+// there.
+//
+// The failure it exists for is not hypothetical: the panel said "Offset" for
+// every container. In a v2 file that tag holds the *world corner*, so someone
+// who set an anchor, looked where the app told them, and found a different
+// vector would report the anchor as never written -- and be reasoning correctly
+// from a false sentence.
+console.log("\n--- the tag the panel names is the tag the file uses ---");
+{
+  /** Walks a `TagLocation` into a parsed root and returns the three numbers. */
+  function vectorAt(payload: NbtCompound, location: TagLocation): number[] | null {
+    let here: NbtCompound = payload;
+    for (const step of location.path) {
+      const next = (here[step] as { value?: NbtCompound } | undefined)?.value;
+      if (!next) return null;
+      here = next;
+    }
+    if (location.kind === "triple") {
+      const parts = ["X", "Y", "Z"].map((axis) => here[`${location.tag}${axis}`]);
+      if (parts.some((part) => part === undefined)) return null;
+      return parts.map((part) => Number((part as { value: unknown }).value));
+    }
+    const raw = (here[location.tag] as { value?: unknown } | undefined)?.value;
+    return Array.isArray(raw) ? raw.map(Number) : null;
+  }
+
+  for (const format of ["sponge2", "sponge3", "mcedit"] as const) {
+    const doc = format === "mcedit" ? legacySafeDocument() : sampleDocument(format);
+    const filePath = path.join(workDir, `located-${format}.${extensionFor(format)}`);
+    await saveDocument(doc, filePath, { legacyBlocksPath: LEGACY_BLOCKS });
+
+    const { parsed } = await parseNbt(await readFile(filePath));
+    const root = parsed.value as unknown as NbtCompound;
+    const payload =
+      format === "sponge3" ? (root.Schematic as { value: NbtCompound }).value : root;
+
+    equal(
+      `${format}: the anchor is at ${tagPathLabel(anchorLocation(format))}`,
+      vectorAt(payload, anchorLocation(format)),
+      [...doc.offset!],
+    );
+    equal(
+      `${format}: the origin is at ${tagPathLabel(originLocation(format))}`,
+      vectorAt(payload, originLocation(format)),
+      [...doc.worldOrigin!],
+    );
+
+    /*
+     * And the two locations are distinct in every format, which is the whole
+     * reason there are two functions. A table that collapsed them would pass
+     * both checks above only if the writers had collapsed them too -- but it
+     * would still be wrong the moment the vectors differ, which is why
+     * `sampleDocument` gives them different values.
+     */
+    check(
+      `${format}: and they are not the same place`,
+      tagPathLabel(anchorLocation(format)) !== tagPathLabel(originLocation(format)),
+      tagPathLabel(anchorLocation(format)),
+    );
+  }
+
+  // Read as a person reads it, since that is the only thing it is for.
+  equal("v3 keeps the anchor at the top level", tagPathLabel(anchorLocation("sponge3")), "Offset");
+  equal(
+    "...and v2 does not, whatever its `Offset` tag suggests",
+    tagPathLabel(anchorLocation("sponge2")),
+    "Metadata.WEOffsetX/Y/Z",
+  );
+  equal(
+    "MCEdit keeps both at the root",
+    [tagPathLabel(anchorLocation("mcedit")), tagPathLabel(originLocation("mcedit"))],
+    ["WEOffsetX/Y/Z", "WEOriginX/Y/Z"],
+  );
+  equal(
+    "and v3's origin is the one that is nested",
+    tagPathLabel(originLocation("sponge3")),
+    "Metadata.WorldEdit.Origin",
   );
 }
 

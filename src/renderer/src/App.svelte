@@ -2865,6 +2865,7 @@ import VersionList from "./lib/VersionList.svelte";
   editable={nbtEditable}
   omitted={nbtOmitted}
   origin={docState?.worldOrigin ?? null}
+  format={docState?.format ?? "sponge3"}
   {busy}
   error={nbtError}
   onapply={(text) => void applySchematicNbt(text)}
@@ -2877,6 +2878,7 @@ import VersionList from "./lib/VersionList.svelte";
   open={anchorOpen}
   anchor={worldEditAnchor}
   offset={docState?.offset ?? null}
+  format={docState?.format ?? "sponge3"}
   size={docState?.size ?? [1, 1, 1]}
   visible={settings.preview.showWorldEditOffset}
   {busy}

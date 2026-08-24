@@ -20,6 +20,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import { clampToBounds, isWithinBounds, placePopover } from "../src/renderer/src/lib/floating.js";
+import { hoverSource, outlineCentre } from "../src/renderer/src/lib/block_hover.js";
 import {
   blockLabel,
   gridWindow,
@@ -1216,6 +1217,103 @@ console.log("\n--- mirroring the anchor into the fields ---");
   // And "no anchor" is not the same key as "anchor at the corner", or deleting
   // one while the other was showing would leave the old numbers in the fields.
   check("no anchor and a zero anchor are different keys", anchorKey([0, 0, 0]) !== anchorKey(null));
+}
+
+// --- what the pointer is about to hit ---------------------------------------
+//
+// The block outline was flight's alone, because in flight the crosshair *is*
+// the pointer. In orbit there was no answer at all: you clicked a block to
+// inspect it, or Shift-clicked to select it, and nothing said which block the
+// ray was on until the click had already landed. The pick was being computed
+// either way -- it simply was not drawn.
+//
+// The rule is `hoverSource`'s and is driven here rather than in the component
+// because the outline is refreshed from `requestAnimationFrame`, which the
+// Browser pane here often does not run at all.
+console.log("\n--- the block under the pointer ---");
+{
+  const base = {
+    cameraMode: "orbit",
+    flying: false,
+    loaded: true,
+    pointer: { x: 120, y: 80 },
+    overHandle: false,
+    dragging: false,
+  } as const;
+
+  equal("orbit casts from the pointer", hoverSource(base), {
+    kind: "pointer",
+    x: 120,
+    y: 80,
+  });
+
+  // Flight keeps the crosshair it always had, and only once the canvas holds
+  // the pointer: before the lock, the click means "capture", not "build here".
+  equal(
+    "flight casts from the crosshair",
+    hoverSource({ ...base, cameraMode: "fly", flying: true }),
+    { kind: "crosshair" },
+  );
+  equal(
+    "...but not before the pointer is locked",
+    hoverSource({ ...base, cameraMode: "fly", flying: false }),
+    { kind: "none" },
+  );
+
+  // The pointer leaving the canvas nulls `pointerAt`, and a stale outline left
+  // behind would claim the ray is still somewhere it is not.
+  equal(
+    "a pointer that has left the canvas outlines nothing",
+    hoverSource({ ...base, pointer: null }),
+    { kind: "none" },
+  );
+
+  // Nothing to raycast: the empty document, where the only thing under the
+  // pointer is the build grid and the build grid is not a block.
+  equal("an empty document outlines nothing", hoverSource({ ...base, loaded: false }), {
+    kind: "none",
+  });
+  equal(
+    "...in flight either",
+    hoverSource({ ...base, cameraMode: "fly", flying: true, loaded: false }),
+    { kind: "none" },
+  );
+
+  /*
+   * The two that are easy to get wrong, and both are about promising a click
+   * that does something else. Over a selection face handle the cursor has
+   * already become a resize cursor and the press drags the face; during a drag
+   * the face is already moving. Outlining the block underneath either would be
+   * a lie about what the button does.
+   */
+  equal(
+    "a face handle takes the hover",
+    hoverSource({ ...base, overHandle: true }),
+    { kind: "none" },
+  );
+  equal("and a face drag keeps it", hoverSource({ ...base, dragging: true }), { kind: "none" });
+
+  // Neither of those is flight's business: there are no handles under a
+  // crosshair, and a gesture in orbit must not reach across the mode switch.
+  equal(
+    "flight ignores both",
+    hoverSource({
+      ...base,
+      cameraMode: "fly",
+      flying: true,
+      overHandle: true,
+      dragging: true,
+    }),
+    { kind: "crosshair" },
+  );
+
+  // A cell spans [x, x+1]. Getting this wrong draws the box over the block's
+  // corner, which reads as a rendering glitch rather than as arithmetic.
+  equal("the outline sits at the cell's centre", outlineCentre({ x: 3, y: 0, z: -2 }), {
+    x: 3.5,
+    y: 0.5,
+    z: -1.5,
+  });
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

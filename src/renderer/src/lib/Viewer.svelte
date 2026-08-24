@@ -26,6 +26,7 @@
   } from "../../../shared/ipc.js";
   import type { ResolvedTheme } from "../../../shared/settings.js";
   import { t } from "./i18n.svelte.js";
+  import { hoverSource, outlineCentre } from "./block_hover.js";
   import {
   cellFade,
   cellUnderRay,
@@ -327,8 +328,9 @@ import { isTyping } from "./typing.js";
   let textureVersion = -1;
   let material: THREE.MeshStandardMaterial | undefined;
 
-  /** The block outline under the crosshair; see `updateCrosshairHighlight`. */
+  /** The block outline under the pointer or the crosshair; see `updateBlockHighlight`. */
   let highlight: THREE.LineSegments | undefined;
+  let highlightMaterial: THREE.LineBasicMaterial | undefined;
   let lastHighlightAt = 0;
   const HIGHLIGHT_INTERVAL_MS = 50;
 
@@ -638,11 +640,11 @@ import { isTyping } from "./typing.js";
   }
 
   /**
-   * The outline around the block the crosshair is on, as the game draws it.
+   * The outline around the block being aimed at, as the game draws it.
    *
-   * One unit cube, moved rather than rebuilt — this runs on a timer while
-   * flying, and allocating an EdgesGeometry per update would litter the heap
-   * for no reason.
+   * One unit cube, moved rather than rebuilt — this runs on a timer whenever
+   * the pointer moves, and allocating an EdgesGeometry per update would litter
+   * the heap for no reason.
    *
    * It is a *cell* outline, not the block's own silhouette: the mesh is fused
    * and carries no per-block shape, so the renderer cannot know that a slab is
@@ -656,12 +658,22 @@ import { isTyping } from "./typing.js";
       // 1.002 for the same reason the game expands its own outline: a box
       // exactly coincident with the block's faces z-fights with them.
       const geometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.002, 1.002, 1.002));
-      const material = new THREE.LineBasicMaterial({
-        color: 0x000000,
+      /*
+       * `--selection`, the same token the wire box, the face plates and the
+       * build-grid patch read. It was a hardcoded black -- the only colour in
+       * this file not taken from the theme, and so the only one that stayed
+       * put when the window went light.
+       */
+      highlightMaterial = new THREE.LineBasicMaterial({
+        color: themeColor("--selection", 0x6ea8fe),
         transparent: true,
-        opacity: 0.55,
+        opacity: 0.85,
+        depthTest: false,
       });
-      highlight = new THREE.LineSegments(geometry, material);
+      highlight = new THREE.LineSegments(geometry, highlightMaterial);
+      // Above the build-grid patch, below the selection box: this says where
+      // the pointer is, and the selection says what is committed.
+      highlight.renderOrder = 997;
       highlight.visible = false;
       scene.add(highlight);
     }
@@ -669,17 +681,33 @@ import { isTyping } from "./typing.js";
   }
 
   /**
-   * Points the outline at whatever the crosshair is on.
+   * Points the outline at whatever is being aimed at, in either camera mode.
+   *
+   * Which ray that is, and whether there is one at all, is `hoverSource`'s --
+   * see `block_hover.ts` for why the decision does not live here. In flight it
+   * is the crosshair, as it always was. In orbit it is the pointer, which is
+   * the point: clicking a block to inspect it, or Shift-clicking to select it,
+   * gave no sign of which block until after the click had happened.
    *
    * Throttled: raycasting a fused mesh of a large schematic is a linear scan
-   * over its triangles, and the camera moves every frame in flight, so doing
-   * this per frame would spend the frame budget on it. Twenty times a second
-   * is under the threshold where the outline feels like it lags the view.
+   * over its triangles, and both the camera in flight and the pointer in orbit
+   * move every frame, so doing this per frame would spend the frame budget on
+   * it. Twenty times a second is under the threshold where the outline feels
+   * like it lags the view.
    */
-  function updateCrosshairHighlight(now: number): void {
+  function updateBlockHighlight(now: number): void {
     const box = ensureHighlight();
     if (!box) return;
-    if (cameraMode !== "fly" || !flying || !loaded) {
+
+    const source = hoverSource({
+      cameraMode,
+      flying,
+      loaded: loaded !== undefined,
+      pointer: pointerAt,
+      overHandle: hovered !== null,
+      dragging: dragged !== null,
+    });
+    if (source.kind === "none") {
       box.visible = false;
       return;
     }
@@ -688,13 +716,14 @@ import { isTyping } from "./typing.js";
     }
     lastHighlightAt = now;
 
-    const target = pickAtCrosshair();
+    const target =
+      source.kind === "crosshair" ? pickAtCrosshair() : pickBlockAt(source.x, source.y);
     if (target === null) {
       box.visible = false;
       return;
     }
-    // A cell spans [x, x+1], so its centre is half a block along each axis.
-    box.position.set(target.x + 0.5, target.y + 0.5, target.z + 0.5);
+    const centre = outlineCentre(target);
+    box.position.set(centre.x, centre.y, centre.z);
     box.visible = true;
   }
 
@@ -1572,7 +1601,7 @@ import { isTyping } from "./typing.js";
         } else {
           controls?.update();
         }
-        updateCrosshairHighlight(performance.now());
+        updateBlockHighlight(performance.now());
         updateHover(performance.now());
         updateBuildGrid(performance.now());
         if (renderer && scene && camera) {
@@ -2187,6 +2216,10 @@ import { isTyping } from "./typing.js";
     if (!scene) return;
     // Only when there is no dome: with the sky on, the background is the sky.
     if (!sky) scene.background = themeColor("--viewport-bg", 0x0b0f14);
+    // The hover outline is a `THREE.Color` like the rest of them, so it
+    // inherits nothing and has to be told. It may not exist yet -- it is
+    // built on first use, not at mount.
+    highlightMaterial?.color.copy(themeColor("--selection", 0x6ea8fe));
     buildGrid();
   });
 

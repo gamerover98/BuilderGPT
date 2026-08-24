@@ -29,7 +29,9 @@
   import { hoverSource, outlineCentre } from "./block_hover.js";
   import {
   cellFade,
+  cellRegion,
   cellUnderRay,
+  placementNeeds,
   regionBetween,
   visibleCells,
   type GridCell,
@@ -949,6 +951,12 @@ import { isTyping } from "./typing.js";
    * Only near the cursor, which is the difference between a usable aid and a
    * permanent lattice in front of the model — and the reason this is not simply
    * the existing `GridHelper` made bigger.
+   *
+   * A cell outside the schematic is drawn in a different colour, because
+   * clicking it now resizes the document. The grid has always reached hundreds
+   * of blocks past the edge (`MAX_GRID_REACH`) and every cell looked the same,
+   * so the one that would change the document's size was indistinguishable
+   * from the one that would not.
    */
   function updateBuildGridMesh(): void {
     if (!scene) return;
@@ -961,13 +969,19 @@ import { isTyping } from "./typing.js";
     if (gridCell === null || cameraMode !== "orbit") return;
 
     const centre = gridCell;
-    const base = themeColor("--selection", 0x6ea8fe);
+    const inside = themeColor("--selection", 0x6ea8fe);
+    const beyond = themeColor("--warn", 0xffc857);
+    const box = documentSize
+      ? { width: documentSize[0], height: documentSize[1], length: documentSize[2] }
+      : null;
     const positions: number[] = [];
     const colours: number[] = [];
 
     for (const cell of visibleCells(centre, GRID_RADIUS)) {
       const fade = cellFade(cell, centre, GRID_RADIUS);
       if (fade <= 0) continue;
+      const base =
+        box !== null && placementNeeds(cellRegion(cell), box) === "grows" ? beyond : inside;
       // Two of the four edges per cell: the neighbours draw the others, so the
       // shared ones are not drawn twice with two different fades.
       const y = 0.002; // a hair above the plane, or it z-fights with the floor

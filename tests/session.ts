@@ -13,7 +13,7 @@ import { tmpdir } from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { getBlock, setBlock, setBlockEntity } from "../src/main/domain/document.js";
+import { documentSize, getBlock, setBlock, setBlockEntity } from "../src/main/domain/document.js";
 import {
   applyEdit,
   closeDocument,
@@ -1540,6 +1540,75 @@ console.log("\n--- checkpoints ---");
   check("...and is gone once removed", !(await checkpointExists(before!)));
 
   closeDocument();
+}
+
+// --- placing a block outside the box --------------------------------------
+//
+// It could not be done, in either camera mode, and the failure was silent:
+// `document.setBlock` refuses an out-of-bounds write by returning `null`, so
+// the answer was `changed: 0` and a click that looked like it had missed. In
+// flight that is the ordinary way to build outwards -- right-click the outer
+// face of an edge block -- while the same act performed by dragging a
+// selection and filling it grew the document happily. One editor, two answers.
+console.log("\n--- a placed block grows the document ---");
+{
+  const stone = { namespacedName: "minecraft:stone", properties: {} };
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  applyEdit(session, { kind: "setBlock", x: 0, y: 0, z: 0, block: stone });
+
+  // Past the far side: the box extends and nothing already in it moves, so
+  // every coordinate the user has been told is still the coordinate they mean.
+  const changed = applyEdit(session, { kind: "setBlock", x: 6, y: 0, z: 0, block: stone });
+  equal("the block was written", changed, 1);
+  equal("...and the document grew to hold it", documentSize(session.doc), [7, 4, 4]);
+  equal("...without moving what was there", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:stone");
+  equal("...and the new block is where it was asked for", getBlock(session.doc, 6, 0, 0).namespacedName, "minecraft:stone");
+
+  // One undo step, because the resize and the write are one transaction. Two
+  // would leave a document that had grown for a block that is no longer in it.
+  undoEdit(session);
+  equal("undo takes back the size too", documentSize(session.doc), [4, 4, 4]);
+  equal("...and the block with it", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:stone");
+}
+
+console.log("\n--- ...and below the origin it moves the content up ---");
+{
+  const stone = { namespacedName: "minecraft:stone", properties: {} };
+  const oak = { namespacedName: "minecraft:oak_planks", properties: {} };
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  applyEdit(session, { kind: "setBlock", x: 0, y: 0, z: 0, block: stone });
+
+  /*
+   * The grid has no negative index, so making room underneath is expressed as
+   * moving the content up -- `grow.ts`'s arithmetic, and the answer a fill
+   * dragged under the floor has always given. The alternative was refusing,
+   * which would have left the two gestures disagreeing about what the editor
+   * is.
+   */
+  applyEdit(session, { kind: "setBlock", x: 0, y: -2, z: 0, block: oak });
+  equal("the document grew downwards", documentSize(session.doc), [4, 6, 4]);
+  equal("the old content moved up by the shift", getBlock(session.doc, 0, 2, 0).namespacedName, "minecraft:stone");
+  equal("...and the new block landed at the new floor", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:oak_planks");
+
+  undoEdit(session);
+  equal("undo puts the origin back", documentSize(session.doc), [4, 4, 4]);
+  equal("...and the content with it", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:stone");
+}
+
+console.log("\n--- breaking never grows ---");
+{
+  const stone = { namespacedName: "minecraft:stone", properties: {} };
+  const air = { namespacedName: "minecraft:air", properties: {} };
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  applyEdit(session, { kind: "setBlock", x: 0, y: 0, z: 0, block: stone });
+
+  // Growing to make room for air is a resize and nothing else -- the same
+  // reason `replace` does not grow. Nothing sends a break from outside the box
+  // today, because a break comes from a pick and the block therefore exists;
+  // this is here so that stays true.
+  const changed = applyEdit(session, { kind: "setBlock", x: 9, y: 9, z: 9, block: air });
+  equal("air outside the box changes nothing", changed, 0);
+  equal("...and the document is the size it was", documentSize(session.doc), [4, 4, 4]);
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

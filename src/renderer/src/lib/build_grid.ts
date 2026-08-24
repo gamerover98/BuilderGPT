@@ -139,25 +139,46 @@ export function cellFade(cell: Cell, centre: Cell, radius: number): number {
 }
 
 /**
- * What placing into this region would need from the document.
+ * What placing into this region would cost the document.
  *
- * `"fits"` when it is already inside the box. `"grows"` when it reaches past
- * the far side, which a fill handles: `domain/grow.ts` extends the document to
- * suit, in the same transaction, so growing and filling are one undo step.
- * `"blocked"` when it reaches below the origin — the grid has no negative
- * coordinates, and growing that way moves the *content* instead, which is a
- * different operation and not one a stray drag should trigger.
+ * `"fits"` when it is already inside the box; `"grows"` when it is not, in any
+ * direction. `domain/grow.ts` extends the document to suit in the same
+ * transaction, so growing and placing are one undo step.
+ *
+ * There used to be a third answer, `"blocked"`, for a region reaching below the
+ * origin — on the reasoning that the grid has no negative index, so growing
+ * that way moves the *content* instead and a stray drag should not trigger it.
+ * The reasoning is sound and the conclusion was wrong for this app: a fill
+ * dragged under the floor has always moved the content up, and refusing the
+ * same act to a single click meant the two gestures disagreed about what the
+ * editor is. `grow.ts` is the one arithmetic and this reports it, nothing more.
+ *
+ * It reports rather than decides. Main grows on its own and does not consult
+ * this; what it is for is saying so *before* the click, because a build-grid
+ * cell that will resize the document should not look identical to one that
+ * will not.
  */
-export function placementNeeds(region: Region, size: BoxSize): "fits" | "grows" | "blocked" {
-  if (region.minX < 0 || region.minY < 0 || region.minZ < 0) return "blocked";
-  if (
+export function placementNeeds(region: Region, size: BoxSize): "fits" | "grows" {
+  const outside =
+    region.minX < 0 ||
+    region.minY < 0 ||
+    region.minZ < 0 ||
     region.maxX >= size.width ||
     region.maxY >= size.height ||
-    region.maxZ >= size.length
-  ) {
-    return "grows";
-  }
-  return "fits";
+    region.maxZ >= size.length;
+  return outside ? "grows" : "fits";
+}
+
+/** The one-cell region a single placement covers, for `placementNeeds`. */
+export function cellRegion(cell: Cell): Region {
+  return {
+    minX: cell.x,
+    minY: cell.y,
+    minZ: cell.z,
+    maxX: cell.x,
+    maxY: cell.y,
+    maxZ: cell.z,
+  };
 }
 
 export type { Cell as GridCell, Ray, Region, Vec3 };

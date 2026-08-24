@@ -277,11 +277,51 @@ export class DocumentTooLargeError extends Error {
 export function applyEdit(session: DocumentSession, request: EditRequest): number {
   const { doc, history } = session;
 
+  /*
+   * Placing one block grows the document, exactly as filling does.
+   *
+   * It did not, and the asymmetry was invisible: `document.setBlock` refuses an
+   * out-of-bounds write by returning `null`, so a block placed past the edge
+   * reported `changed: 0` and looked like a click that had missed. In flight
+   * that is the ordinary way to build outwards -- right-click the outer face of
+   * an edge block -- and it was the one gesture with no answer at all, while
+   * the same act performed by dragging a selection and filling it worked.
+   *
+   * Below the origin the content moves up and the placement moves with it,
+   * because the grid has no negative index; that is `grow.ts`'s arithmetic and
+   * the same answer a fill dragged under the floor already gives.
+   */
   if (request.kind === "setBlock") {
     const entry = toEntry(request.block);
-    return runTransaction(doc, history, `Place ${entry.namespacedName}`, (tx) =>
-      tx.setBlock(request.x, request.y, request.z, entry) ? 1 : 0,
-    );
+    const cell = {
+      minX: request.x,
+      minY: request.y,
+      minZ: request.z,
+      maxX: request.x,
+      maxY: request.y,
+      maxZ: request.z,
+    };
+    /*
+     * Breaking is `setBlock` with air, and growing to make room for air would
+     * be a resize and nothing else -- the same reason `replace` below does not
+     * grow. Nothing sends a break from outside the box today (it comes from a
+     * pick, so the block exists), which is exactly why this is written down:
+     * the day something does, the failure would be a document that quietly got
+     * larger.
+     */
+    const growth =
+      entry.namespacedName === "minecraft:air" ? null : growthToInclude(doc, cell);
+    if (growth !== null && extentVolume(growth.size) > MAX_DOCUMENT_VOLUME) {
+      throw new DocumentTooLargeError(extentVolume(growth.size));
+    }
+    const at = growth === null ? cell : shiftRegion(cell, growth.shift);
+
+    return runTransaction(doc, history, `Place ${entry.namespacedName}`, (tx) => {
+      // Resize first, for the reason the fill below states: a block delta
+      // recorded before it would be an index into the old shape.
+      if (growth !== null) tx.resize(growth.size, growth.shift);
+      return tx.setBlock(at.minX, at.minY, at.minZ, entry) ? 1 : 0;
+    });
   }
 
   /*

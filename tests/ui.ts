@@ -41,6 +41,7 @@ import {
   cellFade,
   cellUnderRay,
   isInsideBox,
+  cellRegion,
   placementNeeds,
   regionBetween,
   visibleCells,
@@ -1010,7 +1011,16 @@ console.log("\n--- build grid ---");
    */
   equal("a region inside the box just fits", placementNeeds(regionBetween({ x: 1, y: 0, z: 1 }, { x: 2, y: 0, z: 2 }), size), "fits");
   equal("...past the far side asks to grow", placementNeeds(regionBetween({ x: 1, y: 0, z: 1 }, { x: 20, y: 0, z: 2 }), size), "grows");
-  equal("...and below the origin is refused", placementNeeds(regionBetween({ x: -1, y: 0, z: 1 }, { x: 2, y: 0, z: 2 }), size), "blocked");
+  /*
+   * Below the origin used to be "blocked", on the reasoning that growing that
+   * way moves the *content* instead. The reasoning is sound; the conclusion was
+   * wrong for this app, because a fill dragged under the floor has always moved
+   * the content up -- so refusing the same act to a single click left the two
+   * gestures disagreeing about what the editor is. One arithmetic, in `grow.ts`.
+   */
+  equal("...and below the origin also grows", placementNeeds(regionBetween({ x: -1, y: 0, z: 1 }, { x: 2, y: 0, z: 2 }), size), "grows");
+  equal("...as does a cell below the floor", placementNeeds(cellRegion({ x: 1, y: -1, z: 1 }), size), "grows");
+  equal("a single cell inside is still just a fit", placementNeeds(cellRegion({ x: 1, y: 0, z: 1 }), size), "fits");
 }
 
 // --- undo that reaches the selection ---------------------------------------

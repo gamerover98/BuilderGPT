@@ -39,11 +39,29 @@ export async function loadSkyTextures(
   fallbackResourcePackPath: string | null,
 ): Promise<{ sun: PackTexture | null; moon: PackTexture | null }> {
   const textures = await packTextures(resourcePackPath, fallbackResourcePackPath);
-  const sun = await textures.loadTexture("environment/sun");
-  const moonSheet = await textures.loadTexture("environment/moon_phases");
+  /*
+   * Two layouts, because the game changed one and a pack follows the version it
+   * was cut for. 1.21.9 moved the sky bodies into `environment/celestial/` and
+   * split the phase sheet into one file per phase; before that the sun sat at
+   * `environment/sun` beside a single `moon_phases` grid.
+   *
+   * Tried newest-first and falling through, rather than picking by pack format:
+   * a missing texture already means "draw the plain squares", so an unknown
+   * layout degrades to what this did before any of it existed. The full moon is
+   * named `full_moon` in the new layout and is the first cell of the old sheet.
+   */
+  const sun =
+    (await textures.loadTexture("environment/celestial/sun")) ??
+    (await textures.loadTexture("environment/sun"));
+  const wholeMoon = await textures.loadTexture("environment/celestial/moon/full_moon");
+  const moonSheet = wholeMoon ?? (await textures.loadTexture("environment/moon_phases"));
   return {
     sun: sun === null ? null : toPackTexture(sun),
-    moon: moonSheet === null ? null : toPackTexture(fullMoon(moonSheet)),
+    // Only the old layout needs cropping: the new one already *is* one moon.
+    moon:
+      moonSheet === null
+        ? null
+        : toPackTexture(wholeMoon === null ? fullMoon(moonSheet) : moonSheet),
   };
 }
 

@@ -478,13 +478,34 @@ if (pack === null) {
     [block("cobblestone_stairs", { facing: "east" }), "minecraft:block/cobblestone"],
     [block("glass_pane"), "minecraft:block/glass"],
     [block("wall_torch", { facing: "east" }), "minecraft:block/torch"],
-    // Block entities: real sheets under textures/entity/, not stand-ins.
-    [block("red_bed", { part: "head" }), "minecraft:entity/bed/red"],
+    /*
+     * Beds and signs are ordinary block textures as of 1.21.9, and were block
+     * entities before it. These two cases are the tripwire for that: the old
+     * `entity/bed/<colour>` and `entity/signs/<wood>` rules matched first and
+     * kept matching after the pack moved, which sent all sixteen beds and all
+     * 44 signs to the hashed-colour cube in one step.
+     *
+     * The head's *north* face is the joint end, and it is deliberately the
+     * uncoloured `bed_head_north`: every bed's joint looks the same, so vanilla
+     * ships one texture for all of them.
+     */
+    [block("red_bed", { part: "head", facing: "north" }), "minecraft:block/bed_head_north"],
+    [block("red_bed", { part: "foot", facing: "north" }), "minecraft:block/red_bed_foot_south"],
+    // Block entities: the sheets that really are still sheets.
     [block("chest", { facing: "north", type: "single" }), "minecraft:entity/chest/normal"],
     [block("chest", { facing: "north", type: "left" }), "minecraft:entity/chest/normal_left"],
     [block("chest", { facing: "north", type: "right" }), "minecraft:entity/chest/normal_right"],
     [block("trapped_chest", { type: "single" }), "minecraft:entity/chest/trapped"],
-    [block("oak_wall_sign", { facing: "north" }), "minecraft:entity/signs/oak"],
+    [block("oak_wall_sign", { facing: "north" }), "minecraft:block/oak_sign"],
+    [block("oak_hanging_sign", {}), "minecraft:block/oak_hanging_sign"],
+    // The lit face is a different texture, and nothing used to ask for it: a
+    // furnace wore `furnace_side` on all four sides, fire included.
+    [block("furnace", { facing: "north", lit: "false" }), "minecraft:block/furnace_front"],
+    [block("furnace", { facing: "north", lit: "true" }), "minecraft:block/furnace_front_on"],
+    // The rename the pack forced: `chain` is `iron_chain` from 1.21.9, and the
+    // app still offers both spellings.
+    [block("chain", {}), "minecraft:block/iron_chain"],
+    [block("iron_chain", {}), "minecraft:block/iron_chain"],
     // No usable sheet: a banner is a base plus pattern layers this code cannot
     // compose, so the dyed wool is the deliberate stand-in.
     [block("red_wall_banner", { facing: "north" }), "minecraft:block/red_wool"],

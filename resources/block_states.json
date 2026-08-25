@@ -2,11 +2,15 @@
   "_source": {
     "project": "misode/mcmeta",
     "file": "blocks/data.json",
-    "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.8-summary/blocks/data.json",
-    "minecraftVersion": "1.21.8",
+    "urls": [
+      "https://raw.githubusercontent.com/misode/mcmeta/26.2-summary/blocks/data.json",
+      "https://raw.githubusercontent.com/misode/mcmeta/1.21.8-summary/blocks/data.json"
+    ],
+    "minecraftVersion": "26.2",
+    "unionWith": "1.21.8",
     "checkedAt": "2026-08-25",
     "license": "MIT (as declared by the misode/mcmeta repository)",
-    "note": "Each entry is [legal values per property, the vanilla default state], copied verbatim from the source. Pinned to a released version rather than the summary branch, which tracks snapshots: on summary, chain has already been renamed iron_chain, and block_id_list.txt still offers chain. 1.21.8 is the newest release where every id the app offers except the four deliberate pre-Flattening spellings (grass, grass_path, sign, wall_sign) is present; the rename landed in 1.21.11."
+    "note": "Each entry is [legal values per property, the vanilla default state], copied verbatim. The union exists because this app writes schematics for 1.8 through the present and a rename drops a name the older versions still use: chain became iron_chain in 1.21.9, and it is the only block 1.21.8 has that 26.2 does not. Where both snapshots carry a block, the newer one wins. Pinned to releases rather than the summary branch, which tracks snapshots."
   },
   "blocks": {
     "acacia_button": [
@@ -156,7 +160,7 @@
       },
       {
         "attached": "false",
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -224,6 +228,36 @@
         "stage": "0"
       }
     ],
+    "acacia_shelf": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "side_chain": [
+          "unconnected",
+          "right",
+          "center",
+          "left"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "powered": "false",
+        "side_chain": "unconnected",
+        "waterlogged": "false"
+      }
+    ],
     "acacia_sign": [
       {
         "rotation": [
@@ -250,7 +284,7 @@
         ]
       },
       {
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -790,7 +824,7 @@
       },
       {
         "attached": "false",
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -865,6 +899,36 @@
       {},
       {}
     ],
+    "bamboo_shelf": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "side_chain": [
+          "unconnected",
+          "right",
+          "center",
+          "left"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "powered": "false",
+        "side_chain": "unconnected",
+        "waterlogged": "false"
+      }
+    ],
     "bamboo_sign": [
       {
         "rotation": [
@@ -891,7 +955,7 @@
         ]
       },
       {
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -1335,7 +1399,7 @@
       },
       {
         "attached": "false",
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -1403,6 +1467,36 @@
         "stage": "0"
       }
     ],
+    "birch_shelf": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "side_chain": [
+          "unconnected",
+          "right",
+          "center",
+          "left"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "powered": "false",
+        "side_chain": "unconnected",
+        "waterlogged": "false"
+      }
+    ],
     "birch_sign": [
       {
         "rotation": [
@@ -1429,7 +1523,7 @@
         ]
       },
       {
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -1584,7 +1678,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "black_bed": [
@@ -1872,7 +1966,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "blue_bed": [
@@ -2231,7 +2325,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "brown_bed": [
@@ -2921,7 +3015,7 @@
       },
       {
         "attached": "false",
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -2989,6 +3083,36 @@
         "stage": "0"
       }
     ],
+    "cherry_shelf": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "side_chain": [
+          "unconnected",
+          "right",
+          "center",
+          "left"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "powered": "false",
+        "side_chain": "unconnected",
+        "waterlogged": "false"
+      }
+    ],
     "cherry_sign": [
       {
         "rotation": [
@@ -3015,7 +3139,7 @@
         ]
       },
       {
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -3228,6 +3352,10 @@
         "slot_5_occupied": "false"
       }
     ],
+    "chiseled_cinnabar": [
+      {},
+      {}
+    ],
     "chiseled_copper": [
       {},
       {}
@@ -3261,6 +3389,10 @@
       {}
     ],
     "chiseled_stone_bricks": [
+      {},
+      {}
+    ],
+    "chiseled_sulfur": [
       {},
       {}
     ],
@@ -3321,6 +3453,190 @@
         "south": "false",
         "up": "false",
         "west": "false"
+      }
+    ],
+    "cinnabar": [
+      {},
+      {}
+    ],
+    "cinnabar_brick_slab": [
+      {
+        "type": [
+          "top",
+          "bottom",
+          "double"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "bottom",
+        "waterlogged": "false"
+      }
+    ],
+    "cinnabar_brick_stairs": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "half": [
+          "top",
+          "bottom"
+        ],
+        "shape": [
+          "straight",
+          "inner_left",
+          "inner_right",
+          "outer_left",
+          "outer_right"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "half": "bottom",
+        "shape": "straight",
+        "waterlogged": "false"
+      }
+    ],
+    "cinnabar_brick_wall": [
+      {
+        "east": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "north": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "south": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "up": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "none",
+          "low",
+          "tall"
+        ]
+      },
+      {
+        "east": "none",
+        "north": "none",
+        "south": "none",
+        "up": "true",
+        "waterlogged": "false",
+        "west": "none"
+      }
+    ],
+    "cinnabar_bricks": [
+      {},
+      {}
+    ],
+    "cinnabar_slab": [
+      {
+        "type": [
+          "top",
+          "bottom",
+          "double"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "bottom",
+        "waterlogged": "false"
+      }
+    ],
+    "cinnabar_stairs": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "half": [
+          "top",
+          "bottom"
+        ],
+        "shape": [
+          "straight",
+          "inner_left",
+          "inner_right",
+          "outer_left",
+          "outer_right"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "half": "bottom",
+        "shape": "straight",
+        "waterlogged": "false"
+      }
+    ],
+    "cinnabar_wall": [
+      {
+        "east": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "north": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "south": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "up": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "none",
+          "low",
+          "tall"
+        ]
+      },
+      {
+        "east": "none",
+        "north": "none",
+        "south": "none",
+        "up": "true",
+        "waterlogged": "false",
+        "west": "none"
       }
     ],
     "clay": [
@@ -3622,6 +3938,37 @@
         "waterlogged": "true"
       }
     ],
+    "copper_bars": [
+      {
+        "east": [
+          "true",
+          "false"
+        ],
+        "north": [
+          "true",
+          "false"
+        ],
+        "south": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "east": "false",
+        "north": "false",
+        "south": "false",
+        "waterlogged": "false",
+        "west": "false"
+      }
+    ],
     "copper_block": [
       {},
       {}
@@ -3640,6 +3987,47 @@
       {
         "lit": "false",
         "powered": "false"
+      }
+    ],
+    "copper_chain": [
+      {
+        "axis": [
+          "x",
+          "y",
+          "z"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "axis": "y",
+        "waterlogged": "false"
+      }
+    ],
+    "copper_chest": [
+      {
+        "type": [
+          "single",
+          "left",
+          "right"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "single",
+        "facing": "north",
+        "waterlogged": "false"
       }
     ],
     "copper_door": [
@@ -3675,6 +4063,31 @@
         "powered": "false"
       }
     ],
+    "copper_golem_statue": [
+      {
+        "copper_golem_pose": [
+          "standing",
+          "sitting",
+          "running",
+          "star"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "copper_golem_pose": "standing",
+        "facing": "north",
+        "waterlogged": "false"
+      }
+    ],
     "copper_grate": [
       {
         "waterlogged": [
@@ -3686,7 +4099,27 @@
         "waterlogged": "false"
       }
     ],
+    "copper_lantern": [
+      {
+        "hanging": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "hanging": "false",
+        "waterlogged": "false"
+      }
+    ],
     "copper_ore": [
+      {},
+      {}
+    ],
+    "copper_torch": [
       {},
       {}
     ],
@@ -3721,6 +4154,19 @@
         "open": "false",
         "powered": "false",
         "waterlogged": "false"
+      }
+    ],
+    "copper_wall_torch": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ]
+      },
+      {
+        "facing": "north"
       }
     ],
     "cornflower": [
@@ -4004,7 +4450,7 @@
       },
       {
         "attached": "false",
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -4043,6 +4489,36 @@
       {},
       {}
     ],
+    "crimson_shelf": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "side_chain": [
+          "unconnected",
+          "right",
+          "center",
+          "left"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "powered": "false",
+        "side_chain": "unconnected",
+        "waterlogged": "false"
+      }
+    ],
     "crimson_sign": [
       {
         "rotation": [
@@ -4069,7 +4545,7 @@
         ]
       },
       {
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -4322,7 +4798,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "cyan_bed": [
@@ -4642,7 +5118,7 @@
       },
       {
         "attached": "false",
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -4710,6 +5186,36 @@
         "stage": "0"
       }
     ],
+    "dark_oak_shelf": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "side_chain": [
+          "unconnected",
+          "right",
+          "center",
+          "left"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "powered": "false",
+        "side_chain": "unconnected",
+        "waterlogged": "false"
+      }
+    ],
     "dark_oak_sign": [
       {
         "rotation": [
@@ -4736,7 +5242,7 @@
         ]
       },
       {
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -5866,6 +6372,37 @@
       {},
       {}
     ],
+    "exposed_copper_bars": [
+      {
+        "east": [
+          "true",
+          "false"
+        ],
+        "north": [
+          "true",
+          "false"
+        ],
+        "south": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "east": "false",
+        "north": "false",
+        "south": "false",
+        "waterlogged": "false",
+        "west": "false"
+      }
+    ],
     "exposed_copper_bulb": [
       {
         "lit": [
@@ -5880,6 +6417,47 @@
       {
         "lit": "false",
         "powered": "false"
+      }
+    ],
+    "exposed_copper_chain": [
+      {
+        "axis": [
+          "x",
+          "y",
+          "z"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "axis": "y",
+        "waterlogged": "false"
+      }
+    ],
+    "exposed_copper_chest": [
+      {
+        "type": [
+          "single",
+          "left",
+          "right"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "single",
+        "facing": "north",
+        "waterlogged": "false"
       }
     ],
     "exposed_copper_door": [
@@ -5915,6 +6493,31 @@
         "powered": "false"
       }
     ],
+    "exposed_copper_golem_statue": [
+      {
+        "copper_golem_pose": [
+          "standing",
+          "sitting",
+          "running",
+          "star"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "copper_golem_pose": "standing",
+        "facing": "north",
+        "waterlogged": "false"
+      }
+    ],
     "exposed_copper_grate": [
       {
         "waterlogged": [
@@ -5923,6 +6526,22 @@
         ]
       },
       {
+        "waterlogged": "false"
+      }
+    ],
+    "exposed_copper_lantern": [
+      {
+        "hanging": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "hanging": "false",
         "waterlogged": "false"
       }
     ],
@@ -6008,6 +6627,31 @@
         "facing": "north",
         "half": "bottom",
         "shape": "straight",
+        "waterlogged": "false"
+      }
+    ],
+    "exposed_lightning_rod": [
+      {
+        "facing": [
+          "north",
+          "east",
+          "south",
+          "west",
+          "up",
+          "down"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "up",
+        "powered": "false",
         "waterlogged": "false"
       }
     ],
@@ -6295,6 +6939,10 @@
       {},
       {}
     ],
+    "golden_dandelion": [
+      {},
+      {}
+    ],
     "granite": [
       {},
       {}
@@ -6424,7 +7072,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "gray_bed": [
@@ -6602,7 +7250,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "green_bed": [
@@ -6982,6 +7630,23 @@
       {},
       {}
     ],
+    "iron_chain": [
+      {
+        "axis": [
+          "x",
+          "y",
+          "z"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "axis": "y",
+        "waterlogged": "false"
+      }
+    ],
     "iron_door": [
       {
         "facing": [
@@ -7244,7 +7909,7 @@
       },
       {
         "attached": "false",
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -7312,6 +7977,36 @@
         "stage": "0"
       }
     ],
+    "jungle_shelf": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "side_chain": [
+          "unconnected",
+          "right",
+          "center",
+          "left"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "powered": "false",
+        "side_chain": "unconnected",
+        "waterlogged": "false"
+      }
+    ],
     "jungle_sign": [
       {
         "rotation": [
@@ -7338,7 +8033,7 @@
         ]
       },
       {
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -7731,7 +8426,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "light_blue_bed": [
@@ -7909,7 +8604,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "light_gray_bed": [
@@ -8156,7 +8851,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "lime_bed": [
@@ -8351,7 +9046,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "magenta_bed": [
@@ -8658,7 +9353,7 @@
       },
       {
         "attached": "false",
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -8755,6 +9450,36 @@
         "waterlogged": "false"
       }
     ],
+    "mangrove_shelf": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "side_chain": [
+          "unconnected",
+          "right",
+          "center",
+          "left"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "powered": "false",
+        "side_chain": "unconnected",
+        "waterlogged": "false"
+      }
+    ],
     "mangrove_sign": [
       {
         "rotation": [
@@ -8781,7 +9506,7 @@
         ]
       },
       {
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -9512,6 +10237,10 @@
           "bit",
           "banjo",
           "pling",
+          "trumpet",
+          "trumpet_exposed",
+          "trumpet_oxidized",
+          "trumpet_weathered",
           "zombie",
           "skeleton",
           "creeper",
@@ -9705,7 +10434,7 @@
       },
       {
         "attached": "false",
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -9773,6 +10502,36 @@
         "stage": "0"
       }
     ],
+    "oak_shelf": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "side_chain": [
+          "unconnected",
+          "right",
+          "center",
+          "left"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "powered": "false",
+        "side_chain": "unconnected",
+        "waterlogged": "false"
+      }
+    ],
     "oak_sign": [
       {
         "rotation": [
@@ -9799,7 +10558,7 @@
         ]
       },
       {
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -9994,7 +10753,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "orange_bed": [
@@ -10166,6 +10925,37 @@
       {},
       {}
     ],
+    "oxidized_copper_bars": [
+      {
+        "east": [
+          "true",
+          "false"
+        ],
+        "north": [
+          "true",
+          "false"
+        ],
+        "south": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "east": "false",
+        "north": "false",
+        "south": "false",
+        "waterlogged": "false",
+        "west": "false"
+      }
+    ],
     "oxidized_copper_bulb": [
       {
         "lit": [
@@ -10180,6 +10970,47 @@
       {
         "lit": "false",
         "powered": "false"
+      }
+    ],
+    "oxidized_copper_chain": [
+      {
+        "axis": [
+          "x",
+          "y",
+          "z"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "axis": "y",
+        "waterlogged": "false"
+      }
+    ],
+    "oxidized_copper_chest": [
+      {
+        "type": [
+          "single",
+          "left",
+          "right"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "single",
+        "facing": "north",
+        "waterlogged": "false"
       }
     ],
     "oxidized_copper_door": [
@@ -10215,6 +11046,31 @@
         "powered": "false"
       }
     ],
+    "oxidized_copper_golem_statue": [
+      {
+        "copper_golem_pose": [
+          "standing",
+          "sitting",
+          "running",
+          "star"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "copper_golem_pose": "standing",
+        "facing": "north",
+        "waterlogged": "false"
+      }
+    ],
     "oxidized_copper_grate": [
       {
         "waterlogged": [
@@ -10223,6 +11079,22 @@
         ]
       },
       {
+        "waterlogged": "false"
+      }
+    ],
+    "oxidized_copper_lantern": [
+      {
+        "hanging": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "hanging": "false",
         "waterlogged": "false"
       }
     ],
@@ -10308,6 +11180,31 @@
         "facing": "north",
         "half": "bottom",
         "shape": "straight",
+        "waterlogged": "false"
+      }
+    ],
+    "oxidized_lightning_rod": [
+      {
+        "facing": [
+          "north",
+          "east",
+          "south",
+          "west",
+          "up",
+          "down"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "up",
+        "powered": "false",
         "waterlogged": "false"
       }
     ],
@@ -10516,7 +11413,7 @@
       },
       {
         "attached": "false",
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -10584,6 +11481,36 @@
         "stage": "0"
       }
     ],
+    "pale_oak_shelf": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "side_chain": [
+          "unconnected",
+          "right",
+          "center",
+          "left"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "powered": "false",
+        "side_chain": "unconnected",
+        "waterlogged": "false"
+      }
+    ],
     "pale_oak_sign": [
       {
         "rotation": [
@@ -10610,7 +11537,7 @@
         ]
       },
       {
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -10853,7 +11780,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "pink_bed": [
@@ -11474,6 +12401,98 @@
         "west": "none"
       }
     ],
+    "polished_cinnabar": [
+      {},
+      {}
+    ],
+    "polished_cinnabar_slab": [
+      {
+        "type": [
+          "top",
+          "bottom",
+          "double"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "bottom",
+        "waterlogged": "false"
+      }
+    ],
+    "polished_cinnabar_stairs": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "half": [
+          "top",
+          "bottom"
+        ],
+        "shape": [
+          "straight",
+          "inner_left",
+          "inner_right",
+          "outer_left",
+          "outer_right"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "half": "bottom",
+        "shape": "straight",
+        "waterlogged": "false"
+      }
+    ],
+    "polished_cinnabar_wall": [
+      {
+        "east": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "north": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "south": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "up": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "none",
+          "low",
+          "tall"
+        ]
+      },
+      {
+        "east": "none",
+        "north": "none",
+        "south": "none",
+        "up": "true",
+        "waterlogged": "false",
+        "west": "none"
+      }
+    ],
     "polished_deepslate": [
       {},
       {}
@@ -11670,6 +12689,98 @@
         "waterlogged": "false"
       }
     ],
+    "polished_sulfur": [
+      {},
+      {}
+    ],
+    "polished_sulfur_slab": [
+      {
+        "type": [
+          "top",
+          "bottom",
+          "double"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "bottom",
+        "waterlogged": "false"
+      }
+    ],
+    "polished_sulfur_stairs": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "half": [
+          "top",
+          "bottom"
+        ],
+        "shape": [
+          "straight",
+          "inner_left",
+          "inner_right",
+          "outer_left",
+          "outer_right"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "half": "bottom",
+        "shape": "straight",
+        "waterlogged": "false"
+      }
+    ],
+    "polished_sulfur_wall": [
+      {
+        "east": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "north": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "south": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "up": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "none",
+          "low",
+          "tall"
+        ]
+      },
+      {
+        "east": "none",
+        "north": "none",
+        "south": "none",
+        "up": "true",
+        "waterlogged": "false",
+        "west": "none"
+      }
+    ],
     "polished_tuff": [
       {},
       {}
@@ -11783,6 +12894,20 @@
         "age": "0"
       }
     ],
+    "potent_sulfur": [
+      {
+        "potent_sulfur_state": [
+          "dry",
+          "wet",
+          "dormant",
+          "erupting",
+          "continuous"
+        ]
+      },
+      {
+        "potent_sulfur_state": "dry"
+      }
+    ],
     "potted_acacia_sapling": [
       {},
       {}
@@ -11856,6 +12981,10 @@
       {}
     ],
     "potted_flowering_azalea_bush": [
+      {},
+      {}
+    ],
+    "potted_golden_dandelion": [
       {},
       {}
     ],
@@ -12159,7 +13288,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "purple_bed": [
@@ -12505,7 +13634,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "red_bed": [
@@ -14069,7 +15198,7 @@
       },
       {
         "attached": "false",
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -14137,6 +15266,36 @@
         "stage": "0"
       }
     ],
+    "spruce_shelf": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "side_chain": [
+          "unconnected",
+          "right",
+          "center",
+          "left"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "powered": "false",
+        "side_chain": "unconnected",
+        "waterlogged": "false"
+      }
+    ],
     "spruce_sign": [
       {
         "rotation": [
@@ -14163,7 +15322,7 @@
         ]
       },
       {
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -14824,6 +15983,214 @@
       },
       {
         "age": "0"
+      }
+    ],
+    "sulfur": [
+      {},
+      {}
+    ],
+    "sulfur_brick_slab": [
+      {
+        "type": [
+          "top",
+          "bottom",
+          "double"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "bottom",
+        "waterlogged": "false"
+      }
+    ],
+    "sulfur_brick_stairs": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "half": [
+          "top",
+          "bottom"
+        ],
+        "shape": [
+          "straight",
+          "inner_left",
+          "inner_right",
+          "outer_left",
+          "outer_right"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "half": "bottom",
+        "shape": "straight",
+        "waterlogged": "false"
+      }
+    ],
+    "sulfur_brick_wall": [
+      {
+        "east": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "north": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "south": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "up": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "none",
+          "low",
+          "tall"
+        ]
+      },
+      {
+        "east": "none",
+        "north": "none",
+        "south": "none",
+        "up": "true",
+        "waterlogged": "false",
+        "west": "none"
+      }
+    ],
+    "sulfur_bricks": [
+      {},
+      {}
+    ],
+    "sulfur_slab": [
+      {
+        "type": [
+          "top",
+          "bottom",
+          "double"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "bottom",
+        "waterlogged": "false"
+      }
+    ],
+    "sulfur_spike": [
+      {
+        "thickness": [
+          "tip_merge",
+          "tip",
+          "frustum",
+          "middle",
+          "base"
+        ],
+        "vertical_direction": [
+          "up",
+          "down"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "thickness": "tip",
+        "vertical_direction": "up",
+        "waterlogged": "false"
+      }
+    ],
+    "sulfur_stairs": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "half": [
+          "top",
+          "bottom"
+        ],
+        "shape": [
+          "straight",
+          "inner_left",
+          "inner_right",
+          "outer_left",
+          "outer_right"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "half": "bottom",
+        "shape": "straight",
+        "waterlogged": "false"
+      }
+    ],
+    "sulfur_wall": [
+      {
+        "east": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "north": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "south": [
+          "none",
+          "low",
+          "tall"
+        ],
+        "up": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "none",
+          "low",
+          "tall"
+        ]
+      },
+      {
+        "east": "none",
+        "north": "none",
+        "south": "none",
+        "up": "true",
+        "waterlogged": "false",
+        "west": "none"
       }
     ],
     "sunflower": [
@@ -15612,7 +16979,7 @@
       },
       {
         "attached": "false",
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -15651,6 +17018,36 @@
       {},
       {}
     ],
+    "warped_shelf": [
+      {
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "side_chain": [
+          "unconnected",
+          "right",
+          "center",
+          "left"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "north",
+        "powered": "false",
+        "side_chain": "unconnected",
+        "waterlogged": "false"
+      }
+    ],
     "warped_sign": [
       {
         "rotation": [
@@ -15677,7 +17074,7 @@
         ]
       },
       {
-        "rotation": "0",
+        "rotation": "8",
         "waterlogged": "false"
       }
     ],
@@ -15855,6 +17252,37 @@
       {},
       {}
     ],
+    "waxed_copper_bars": [
+      {
+        "east": [
+          "true",
+          "false"
+        ],
+        "north": [
+          "true",
+          "false"
+        ],
+        "south": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "east": "false",
+        "north": "false",
+        "south": "false",
+        "waterlogged": "false",
+        "west": "false"
+      }
+    ],
     "waxed_copper_block": [
       {},
       {}
@@ -15873,6 +17301,47 @@
       {
         "lit": "false",
         "powered": "false"
+      }
+    ],
+    "waxed_copper_chain": [
+      {
+        "axis": [
+          "x",
+          "y",
+          "z"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "axis": "y",
+        "waterlogged": "false"
+      }
+    ],
+    "waxed_copper_chest": [
+      {
+        "type": [
+          "single",
+          "left",
+          "right"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "single",
+        "facing": "north",
+        "waterlogged": "false"
       }
     ],
     "waxed_copper_door": [
@@ -15908,6 +17377,31 @@
         "powered": "false"
       }
     ],
+    "waxed_copper_golem_statue": [
+      {
+        "copper_golem_pose": [
+          "standing",
+          "sitting",
+          "running",
+          "star"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "copper_golem_pose": "standing",
+        "facing": "north",
+        "waterlogged": "false"
+      }
+    ],
     "waxed_copper_grate": [
       {
         "waterlogged": [
@@ -15916,6 +17410,22 @@
         ]
       },
       {
+        "waterlogged": "false"
+      }
+    ],
+    "waxed_copper_lantern": [
+      {
+        "hanging": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "hanging": "false",
         "waterlogged": "false"
       }
     ],
@@ -16012,6 +17522,37 @@
       {},
       {}
     ],
+    "waxed_exposed_copper_bars": [
+      {
+        "east": [
+          "true",
+          "false"
+        ],
+        "north": [
+          "true",
+          "false"
+        ],
+        "south": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "east": "false",
+        "north": "false",
+        "south": "false",
+        "waterlogged": "false",
+        "west": "false"
+      }
+    ],
     "waxed_exposed_copper_bulb": [
       {
         "lit": [
@@ -16026,6 +17567,47 @@
       {
         "lit": "false",
         "powered": "false"
+      }
+    ],
+    "waxed_exposed_copper_chain": [
+      {
+        "axis": [
+          "x",
+          "y",
+          "z"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "axis": "y",
+        "waterlogged": "false"
+      }
+    ],
+    "waxed_exposed_copper_chest": [
+      {
+        "type": [
+          "single",
+          "left",
+          "right"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "single",
+        "facing": "north",
+        "waterlogged": "false"
       }
     ],
     "waxed_exposed_copper_door": [
@@ -16061,6 +17643,31 @@
         "powered": "false"
       }
     ],
+    "waxed_exposed_copper_golem_statue": [
+      {
+        "copper_golem_pose": [
+          "standing",
+          "sitting",
+          "running",
+          "star"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "copper_golem_pose": "standing",
+        "facing": "north",
+        "waterlogged": "false"
+      }
+    ],
     "waxed_exposed_copper_grate": [
       {
         "waterlogged": [
@@ -16069,6 +17676,22 @@
         ]
       },
       {
+        "waterlogged": "false"
+      }
+    ],
+    "waxed_exposed_copper_lantern": [
+      {
+        "hanging": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "hanging": "false",
         "waterlogged": "false"
       }
     ],
@@ -16157,6 +17780,56 @@
         "waterlogged": "false"
       }
     ],
+    "waxed_exposed_lightning_rod": [
+      {
+        "facing": [
+          "north",
+          "east",
+          "south",
+          "west",
+          "up",
+          "down"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "up",
+        "powered": "false",
+        "waterlogged": "false"
+      }
+    ],
+    "waxed_lightning_rod": [
+      {
+        "facing": [
+          "north",
+          "east",
+          "south",
+          "west",
+          "up",
+          "down"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "up",
+        "powered": "false",
+        "waterlogged": "false"
+      }
+    ],
     "waxed_oxidized_chiseled_copper": [
       {},
       {}
@@ -16164,6 +17837,37 @@
     "waxed_oxidized_copper": [
       {},
       {}
+    ],
+    "waxed_oxidized_copper_bars": [
+      {
+        "east": [
+          "true",
+          "false"
+        ],
+        "north": [
+          "true",
+          "false"
+        ],
+        "south": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "east": "false",
+        "north": "false",
+        "south": "false",
+        "waterlogged": "false",
+        "west": "false"
+      }
     ],
     "waxed_oxidized_copper_bulb": [
       {
@@ -16179,6 +17883,47 @@
       {
         "lit": "false",
         "powered": "false"
+      }
+    ],
+    "waxed_oxidized_copper_chain": [
+      {
+        "axis": [
+          "x",
+          "y",
+          "z"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "axis": "y",
+        "waterlogged": "false"
+      }
+    ],
+    "waxed_oxidized_copper_chest": [
+      {
+        "type": [
+          "single",
+          "left",
+          "right"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "single",
+        "facing": "north",
+        "waterlogged": "false"
       }
     ],
     "waxed_oxidized_copper_door": [
@@ -16214,6 +17959,31 @@
         "powered": "false"
       }
     ],
+    "waxed_oxidized_copper_golem_statue": [
+      {
+        "copper_golem_pose": [
+          "standing",
+          "sitting",
+          "running",
+          "star"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "copper_golem_pose": "standing",
+        "facing": "north",
+        "waterlogged": "false"
+      }
+    ],
     "waxed_oxidized_copper_grate": [
       {
         "waterlogged": [
@@ -16222,6 +17992,22 @@
         ]
       },
       {
+        "waterlogged": "false"
+      }
+    ],
+    "waxed_oxidized_copper_lantern": [
+      {
+        "hanging": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "hanging": "false",
         "waterlogged": "false"
       }
     ],
@@ -16310,6 +18096,31 @@
         "waterlogged": "false"
       }
     ],
+    "waxed_oxidized_lightning_rod": [
+      {
+        "facing": [
+          "north",
+          "east",
+          "south",
+          "west",
+          "up",
+          "down"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "up",
+        "powered": "false",
+        "waterlogged": "false"
+      }
+    ],
     "waxed_weathered_chiseled_copper": [
       {},
       {}
@@ -16317,6 +18128,37 @@
     "waxed_weathered_copper": [
       {},
       {}
+    ],
+    "waxed_weathered_copper_bars": [
+      {
+        "east": [
+          "true",
+          "false"
+        ],
+        "north": [
+          "true",
+          "false"
+        ],
+        "south": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "east": "false",
+        "north": "false",
+        "south": "false",
+        "waterlogged": "false",
+        "west": "false"
+      }
     ],
     "waxed_weathered_copper_bulb": [
       {
@@ -16332,6 +18174,47 @@
       {
         "lit": "false",
         "powered": "false"
+      }
+    ],
+    "waxed_weathered_copper_chain": [
+      {
+        "axis": [
+          "x",
+          "y",
+          "z"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "axis": "y",
+        "waterlogged": "false"
+      }
+    ],
+    "waxed_weathered_copper_chest": [
+      {
+        "type": [
+          "single",
+          "left",
+          "right"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "single",
+        "facing": "north",
+        "waterlogged": "false"
       }
     ],
     "waxed_weathered_copper_door": [
@@ -16367,6 +18250,31 @@
         "powered": "false"
       }
     ],
+    "waxed_weathered_copper_golem_statue": [
+      {
+        "copper_golem_pose": [
+          "standing",
+          "sitting",
+          "running",
+          "star"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "copper_golem_pose": "standing",
+        "facing": "north",
+        "waterlogged": "false"
+      }
+    ],
     "waxed_weathered_copper_grate": [
       {
         "waterlogged": [
@@ -16375,6 +18283,22 @@
         ]
       },
       {
+        "waterlogged": "false"
+      }
+    ],
+    "waxed_weathered_copper_lantern": [
+      {
+        "hanging": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "hanging": "false",
         "waterlogged": "false"
       }
     ],
@@ -16463,6 +18387,31 @@
         "waterlogged": "false"
       }
     ],
+    "waxed_weathered_lightning_rod": [
+      {
+        "facing": [
+          "north",
+          "east",
+          "south",
+          "west",
+          "up",
+          "down"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "up",
+        "powered": "false",
+        "waterlogged": "false"
+      }
+    ],
     "weathered_chiseled_copper": [
       {},
       {}
@@ -16470,6 +18419,37 @@
     "weathered_copper": [
       {},
       {}
+    ],
+    "weathered_copper_bars": [
+      {
+        "east": [
+          "true",
+          "false"
+        ],
+        "north": [
+          "true",
+          "false"
+        ],
+        "south": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ],
+        "west": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "east": "false",
+        "north": "false",
+        "south": "false",
+        "waterlogged": "false",
+        "west": "false"
+      }
     ],
     "weathered_copper_bulb": [
       {
@@ -16485,6 +18465,47 @@
       {
         "lit": "false",
         "powered": "false"
+      }
+    ],
+    "weathered_copper_chain": [
+      {
+        "axis": [
+          "x",
+          "y",
+          "z"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "axis": "y",
+        "waterlogged": "false"
+      }
+    ],
+    "weathered_copper_chest": [
+      {
+        "type": [
+          "single",
+          "left",
+          "right"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "type": "single",
+        "facing": "north",
+        "waterlogged": "false"
       }
     ],
     "weathered_copper_door": [
@@ -16520,6 +18541,31 @@
         "powered": "false"
       }
     ],
+    "weathered_copper_golem_statue": [
+      {
+        "copper_golem_pose": [
+          "standing",
+          "sitting",
+          "running",
+          "star"
+        ],
+        "facing": [
+          "north",
+          "south",
+          "west",
+          "east"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "copper_golem_pose": "standing",
+        "facing": "north",
+        "waterlogged": "false"
+      }
+    ],
     "weathered_copper_grate": [
       {
         "waterlogged": [
@@ -16528,6 +18574,22 @@
         ]
       },
       {
+        "waterlogged": "false"
+      }
+    ],
+    "weathered_copper_lantern": [
+      {
+        "hanging": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "hanging": "false",
         "waterlogged": "false"
       }
     ],
@@ -16616,6 +18678,31 @@
         "waterlogged": "false"
       }
     ],
+    "weathered_lightning_rod": [
+      {
+        "facing": [
+          "north",
+          "east",
+          "south",
+          "west",
+          "up",
+          "down"
+        ],
+        "powered": [
+          "true",
+          "false"
+        ],
+        "waterlogged": [
+          "true",
+          "false"
+        ]
+      },
+      {
+        "facing": "up",
+        "powered": "false",
+        "waterlogged": "false"
+      }
+    ],
     "weeping_vines": [
       {
         "age": [
@@ -16698,7 +18785,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "white_bed": [
@@ -16952,7 +19039,7 @@
         ]
       },
       {
-        "rotation": "0"
+        "rotation": "8"
       }
     ],
     "yellow_bed": [

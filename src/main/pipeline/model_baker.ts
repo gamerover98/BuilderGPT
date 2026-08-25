@@ -113,8 +113,27 @@ const NAME_ALIASES: ReadonlyArray<(name: string) => string | null> = [
   // `oak_wood.png`. The nether's `_hyphae` stands the same way over `_stem`.
   (name) => (name.endsWith("_wood") ? `${name.slice(0, -"_wood".length)}_log` : null),
   (name) => (name.endsWith("_hyphae") ? `${name.slice(0, -"_hyphae".length)}_stem` : null),
-  // A wall-mounted torch is the torch.
-  (name) => (name.includes("_wall_torch") ? name.replace("_wall_torch", "_torch") : null),
+  /*
+   * A wall-mounted anything is the thing, minus the `_wall`.
+   *
+   * One rule where there were going to be five: `redstone_wall_torch` ->
+   * `redstone_torch`, `oak_wall_sign` -> `oak_sign`, `tube_coral_wall_fan` ->
+   * `tube_coral_fan`, `creeper_wall_head` -> `creeper_head`,
+   * `acacia_wall_hanging_sign` -> `acacia_hanging_sign`. The leading form --
+   * `wall_torch`, `wall_sign` -- is the shape-suffix rule's `wall_` strip below.
+   */
+  (name) => (name.includes("_wall_") ? name.replace("_wall_", "_") : null),
+  /*
+   * `chain` became `iron_chain` in 1.21.9 and the pack ships only the new name,
+   * while `block_id_list.txt` offers both -- a schematic written for anything
+   * earlier names the old one. Renames are the one thing a union registry
+   * cannot paper over, because the *texture* moved too.
+   */
+  (name) => (name === "chain" ? "iron_chain" : null),
+  // A cauldron with something in it is a cauldron.
+  (name) => (name.endsWith("_cauldron") ? "cauldron" : null),
+  // A cake with a candle on it is a cake; `block_shapes.ts` puts the candle on.
+  (name) => (name === "candle_cake" || name.endsWith("_candle_cake") ? "cake" : null),
   // The mature two-block plant is drawn from its crop's sheet.
   (name) => (name === "pitcher_plant" ? "pitcher_crop" : null),
   // The Flattening gave the bare 1.12 names a wood: `sign` became `oak_sign`.
@@ -154,6 +173,54 @@ const AGE_STAGES: Readonly<Record<string, readonly number[]>> = {
   torchflower_crop: [0, 1],
   sweet_berry_bush: [0, 1, 2, 3],
 };
+
+/** Clockwise from north, which is how a model's `facing` rotates. */
+const COMPASS: readonly string[] = ["north", "east", "south", "west"];
+
+const OPPOSITE_FACE: Readonly<Record<string, string>> = {
+  north: "south",
+  south: "north",
+  east: "west",
+  west: "east",
+  up: "down",
+  down: "up",
+};
+
+/**
+ * A world face expressed in the model's own axes, given which way it faces.
+ *
+ * Vanilla names a bed's textures by *model-local* direction -- `bed_head_north`
+ * is the end of the head whichever way the bed is turned -- so a per-face
+ * texture rule has to undo the rotation the blockstate applied. Vertical faces
+ * are unaffected, which is why they fall straight through.
+ */
+function localFace(face: string, facing: string): string {
+  const steps = COMPASS.indexOf(facing);
+  const at = COMPASS.indexOf(face);
+  if (steps < 0 || at < 0) return face;
+  return COMPASS[(at - steps + 4) % 4];
+}
+
+/**
+ * A bed's per-face textures.
+ *
+ * Beds used to be block entities drawn from one `entity/bed/<colour>` sheet,
+ * unwrapped by hand -- which is why `block_shapes.ts` still carries
+ * `unwrapCube` for the chests. **1.21.9 moved them onto ordinary block
+ * textures**, one per face: `red_bed_head_up`, `red_bed_foot_south`, and two
+ * shared ones, `bed_down` and `bed_head_north`, that carry no colour because
+ * the underside and the joint end look the same on every bed.
+ *
+ * That is strictly better than the sheet: no unwrap arithmetic to get wrong,
+ * and the two halves cannot disagree. The candidate list falls back from the
+ * coloured name to the shared one, which is what resolves those two.
+ */
+function bedCandidates(entry: PaletteEntry, name: string, face: string): string[] {
+  const colour = name.slice(0, -"_bed".length);
+  const part = entry.properties.part === "head" ? "head" : "foot";
+  const local = localFace(face, entry.properties.facing ?? "north");
+  return [`${colour}_bed_${part}_${local}`, `bed_${part}_${local}`, `bed_${local}`];
+}
 
 /**
  * The stage textures for a crop, most grown first from the one its `age`
@@ -357,6 +424,20 @@ export const SPECIAL_FACE_RULES: Record<string, SpecialFaceRule> = {
    * nothing would hide it.
    */
   end_portal: { top: ["black_concrete"], side: ["black_concrete"], bottom: ["black_concrete"] },
+
+  // A dried ghast rehydrates through four stages and a schematic holds one
+  // moment; stage 0 is how it is placed.
+  dried_ghast: {
+    top: ["dried_ghast_hydration_0_top"],
+    side: ["dried_ghast_hydration_0_north"],
+    bottom: ["dried_ghast_hydration_0_bottom"],
+  },
+  // The nether's dripstone, named the same way and sharing its shape.
+  sulfur_spike: {
+    top: ["sulfur_spike_up_tip"],
+    side: ["sulfur_spike_up_tip"],
+    bottom: ["sulfur_spike_up_tip"],
+  },
   end_gateway: { top: ["black_concrete"], side: ["black_concrete"], bottom: ["black_concrete"] },
 };
 
@@ -1139,11 +1220,13 @@ export class ModelBaker {
    * magenta and cyan patches on the render.
    */
   private static entityTextureAlias(entry: PaletteEntry, name: string): string | null {
-    // Real entity sheets where the pack ships them. `block_shapes.ts` builds
-    // the matching geometry and UV windows; without both halves a bed is just
-    // a coloured slab.
-    const bed = /^([a-z_]+)_bed$/.exec(name);
-    if (bed) return `entity/bed/${bed[1]}`;
+    /*
+     * Beds are **not** here any more, for the same reason signs are not: 1.21.9
+     * moved them off `entity/bed/<colour>` and onto per-face block textures.
+     * This rule outliving that change is what sent all sixteen back to the
+     * hashed-colour cube the moment the pack was updated -- it matched first
+     * and returned a path the pack no longer contains. `bedCandidates` has it.
+     */
     if (name === "chest" || name === "trapped_chest" || name === "ender_chest") {
       const sheet =
         name === "ender_chest" ? "ender" : name === "trapped_chest" ? "trapped" : "normal";
@@ -1153,19 +1236,43 @@ export class ModelBaker {
       return `entity/chest/${sheet}${suffix}`;
     }
     /*
-     * Hanging signs live one directory deeper, and must be matched *before* the
-     * ordinary sign rule -- which otherwise reads `acacia_hanging_sign` as a
-     * wood called "acacia_hanging" and asks for a sheet nobody ships. All 22 of
-     * them drew as coloured cubes, and the hand-written audit that preceded
-     * `tests/blocks.ts` missed every one because it excluded anything ending in
-     * `_sign` as "already handled".
+     * Signs are **not** here any more, and that is a change in the game rather
+     * than in this code. 1.21.9 moved beds and signs off their block-entity
+     * sheets and onto ordinary block textures -- `block/oak_sign`,
+     * `block/oak_hanging_sign` -- so the generic candidates find them with no
+     * rule at all, and the `entity/signs/` directory this used to point at no
+     * longer exists in the pack. Reintroducing an alias here would send every
+     * sign back to the hashed-colour cube.
      */
-    const hanging = /^([a-z_]+?)_(?:wall_)?hanging_sign$/.exec(name);
-    if (hanging) return `entity/signs/hanging/${hanging[1]}`;
-    if (name.endsWith("_sign")) {
-      const wood = name.replace(/_(?:wall_)?sign$/, "");
-      return `entity/signs/${wood}`;
+
+    // Copper chests came with the copper golem, and their sheets spell the
+    // oxidation stage *after* the material: `copper_exposed`, not
+    // `exposed_copper`.
+    const copperChest = /^(?:waxed_)?(exposed_|weathered_|oxidized_)?copper_chest$/.exec(name);
+    if (copperChest) {
+      const stage = copperChest[1] === undefined ? "" : `_${copperChest[1].slice(0, -1)}`;
+      const type = entry.properties.type;
+      const half = type === "left" ? "_left" : type === "right" ? "_right" : "";
+      return `entity/chest/copper${stage}${half}`;
     }
+    const golem = /^(?:waxed_)?(exposed_|weathered_|oxidized_)?copper_golem_statue$/.exec(name);
+    if (golem) {
+      const stage = golem[1] === undefined ? "" : `_${golem[1].slice(0, -1)}`;
+      return `entity/copper_golem/copper_golem${stage}`;
+    }
+
+    // Heads and skulls are drawn from the mob's own texture, which is what
+    // vanilla does. `_wall_` has already been stripped by the alias chain.
+    const HEADS: Readonly<Record<string, string>> = {
+      creeper_head: "entity/creeper/creeper",
+      dragon_head: "entity/enderdragon/dragon",
+      piglin_head: "entity/piglin/piglin",
+      player_head: "entity/player/wide/steve",
+      zombie_head: "entity/zombie/zombie",
+      skeleton_skull: "entity/skeleton/skeleton",
+      wither_skeleton_skull: "entity/skeleton/wither_skeleton",
+    };
+    if (HEADS[name] !== undefined) return HEADS[name];
 
     // No sheet is usable for these: a banner's art is a base plus a stack of
     // pattern layers this code cannot compose, and a shulker box's sheet is
@@ -1223,6 +1330,43 @@ export class ModelBaker {
     const stages = stageCandidates(entry, normalized);
     if (stages.length > 0) {
       return stages;
+    }
+
+    if (normalized.endsWith("_bed")) {
+      return bedCandidates(entry, normalized, face);
+    }
+
+    /*
+     * The face a block *points* is drawn from its own texture, and there was no
+     * rule for it at all -- so every furnace, dispenser and dropper in the game
+     * wore `furnace_side` on all four sides, including the one with the fire in
+     * it. The generic list offers `_front` only after `_side`, which always
+     * wins.
+     *
+     * Derived rather than tabulated: a block has a front if it has a `facing`
+     * and the pack ships a `<name>_front`. That covers the furnaces, the
+     * smoker, the dispenser and dropper, the loom, the barrel, the carved
+     * pumpkin and every workstation at once, and needs no maintenance when the
+     * game adds another. `_back` rides along for the observer and the dropper.
+     *
+     * `_front_on` first when the block is lit, which is the difference between
+     * a lit furnace and a cold one -- and `lighting.ts` already treats them as
+     * different blocks.
+     */
+    const facing = entry.properties.facing;
+    if (facing !== undefined) {
+      const lit = entry.properties.lit === "true";
+      if (face === facing) {
+        return [
+          ...(lit ? [`${normalized}_front_on`] : []),
+          `${normalized}_front`,
+          `${normalized}_side`,
+          normalized,
+        ];
+      }
+      if (face === OPPOSITE_FACE[facing]) {
+        return [`${normalized}_back`, `${normalized}_side`, normalized];
+      }
     }
 
     // Two-block-tall plants and doors carry their half in a property and split

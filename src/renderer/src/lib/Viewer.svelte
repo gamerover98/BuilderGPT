@@ -46,6 +46,7 @@ import {
   type Side,
 } from "./selection_drag.js";
   import { isSpuriousLook } from "./look_filter.js";
+  import { COPLANAR_OFFSET, GRID_DIVISIONS, GRID_SIZE } from "./depth.js";
   import { skyAt, skyDistance } from "./sky.js";
   import { fitShadow } from "./shadow_fit.js";
   import type { Face, PlacementLook } from "../../../shared/block_orientation.js";
@@ -368,6 +369,12 @@ import { isTyping } from "./typing.js";
    * is constructed, so recolouring is not a property assignment -- the helper
    * has to be replaced. It is 32 divisions of flat lines; this is cheap enough
    * to do on a theme change.
+   *
+   * It sits at exactly y=0, on the floor rather than a hundredth of a block
+   * above it. The gap was there to win the depth test and stopped winning it
+   * about 130 blocks out, which is inside this grid: the floor declares a
+   * `polygonOffset` instead, and lines are not polygons, so they win everywhere.
+   * `depth.ts` has the arithmetic.
    */
   function buildGrid(): void {
     if (!scene) return;
@@ -379,12 +386,11 @@ import { isTyping } from "./typing.js";
       }
     }
     grid = new THREE.GridHelper(
-      256,
-      32,
+      GRID_SIZE,
+      GRID_DIVISIONS,
       themeColor("--grid-major", 0x516079),
       themeColor("--grid-minor", 0x202937),
     );
-    grid.position.y = -0.01;
     for (const material of Array.isArray(grid.material) ? grid.material : [grid.material]) {
       material.depthWrite = false;
       material.transparent = true;
@@ -984,13 +990,15 @@ import { isTyping } from "./typing.js";
         box !== null && placementNeeds(cellRegion(cell), box) === "grows" ? beyond : inside;
       // Two of the four edges per cell: the neighbours draw the others, so the
       // shared ones are not drawn twice with two different fades.
-      const y = 0.002; // a hair above the plane, or it z-fights with the floor
+      // On the floor, not a hair above it: the floor's `polygonOffset` is what
+      // keeps these lines visible, and it works at 200 blocks where a 0.002
+      // gap is a fifth of one depth step. See `depth.ts`.
       const corners: [number, number, number, number][] = [
         [cell.x, cell.z, cell.x + 1, cell.z],
         [cell.x, cell.z, cell.x, cell.z + 1],
       ];
       for (const [x1, z1, x2, z2] of corners) {
-        positions.push(x1, y, z1, x2, y, z2);
+        positions.push(x1, 0, z1, x2, 0, z2);
         for (let i = 0; i < 2; i += 1) colours.push(base.r * fade, base.g * fade, base.b * fade);
       }
     }
@@ -1422,9 +1430,14 @@ import { isTyping } from "./typing.js";
    * blocks is past anything anyone will fly to.
    *
    * It receives shadows and casts none: it is not part of the build, and a
-   * floor that shadowed itself would put a seam across the world. It sits a
-   * hair below zero so the build grid, which is already at -0.01, still reads
-   * on top of it.
+   * floor that shadowed itself would put a seam across the world.
+   *
+   * It is at y=0 exactly, and everything drawn on it is too. What separates
+   * them is `polygonOffset`, which pushes this polygon one depth-buffer *step*
+   * away rather than a hundredth of a block: the grid and the build-grid patch
+   * are lines, polygon offset does not touch lines, and so they win the depth
+   * test at every distance instead of only near the camera. `depth.ts` says why
+   * the hand-picked epsilons this replaces could not have worked.
    */
   function applyGround(): void {
     if (!scene) return;
@@ -1442,9 +1455,13 @@ import { isTyping } from "./typing.js";
       geometry.rotateX(-Math.PI / 2);
       groundPlane = new THREE.Mesh(
         geometry,
-        new THREE.MeshLambertMaterial({ color: 0xffffff }),
+        new THREE.MeshLambertMaterial({
+          color: 0xffffff,
+          polygonOffset: true,
+          polygonOffsetFactor: COPLANAR_OFFSET.factor,
+          polygonOffsetUnits: COPLANAR_OFFSET.units,
+        }),
       );
-      groundPlane.position.y = -0.02;
       groundPlane.receiveShadow = true;
       groundPlane.castShadow = false;
       // Nothing raycasts it -- picking asks the loaded model and the build grid

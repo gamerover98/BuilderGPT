@@ -1643,6 +1643,34 @@ made the shadow setting look broken. `groundColor` is a string and `""` means
 "follow the theme": a stored hex would stay dark after switching to the light
 theme with nothing on screen to say why, so there is a button back to it.
 
+**It is at y=0, and so is everything drawn on it.** The floor, the 256-block
+`GridHelper` over it and the build-grid patch under the cursor are coplanar by
+design — the grids are a drawing *on* the floor — and they used to be held apart
+by hand-picked epsilons: -0.02, -0.01, +0.002. Those are the bug rather than the
+fix. A perspective depth buffer stores a value linear in `1/z`, so one step of it
+is worth `z²·(1/near − 1/far)/(2^bits − 1)` world units: with this viewer's near
+plane of 0.1, a thousandth of a block at 40 out and a *fiftieth* at 180 — which
+is where the far corner of the grid sits. Past that they round to the same depth
+and the winner is decided per pixel, which is the stipple that gets reported as
+"the floor and the grid intersect".
+
+No constant fixes it. One big enough to survive the far corner is a grid visibly
+floating near the camera, and the floor is 20,000 blocks across, so there is no
+far corner to stop at. The floor declares a `polygonOffset` instead, which is
+denominated in the two things that actually vary — `units` counts *depth-buffer
+steps* and `factor` scales with the polygon's depth slope, which is what grows as
+a surface turns edge-on. It applies to filled polygons only, and that is what
+makes it exact here: the floor is the only polygon of the three, so pushing it
+one step away wins the argument for both sets of lines at every distance. Pushing
+the base rather than pulling the decals is safe because nothing is behind the
+floor — the sky is a separate pass that clears the depth buffer first.
+
+`depth.ts` holds the arithmetic and `tests/ui.ts` states it from both ends: an
+epsilon is resolvable at 16 blocks and gone by 64, at every draw distance the
+slider offers. It also greps `Viewer.svelte` for a `position.y` assignment near
+zero, because the epsilons are easy to reintroduce, they look like care, and
+nothing else in the app would notice.
+
 **The sky is the viewer's alone, and `sky.ts` is the part that is testable.**
 The dome, the two squares and the stars are geometry with no relationship to the
 schematic; what needed writing down is the set of curves through a

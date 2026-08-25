@@ -72,7 +72,8 @@ import { isSafeHref } from "../src/renderer/src/lib/markdown_policy.js";
 import { HOSTILE_CASES } from "./markdown_cases.js";
 import { missingKeys, translate, translatePlural } from "../src/renderer/src/lib/i18n_core.js";
 import { openedAge } from "../src/renderer/src/lib/recent_age.js";
-import { PREVIEW_SETTING_RANGES } from "../src/shared/settings.js";
+import { DEFAULT_PREVIEW_SETTINGS, PREVIEW_SETTING_RANGES } from "../src/shared/settings.js";
+import { COPLANAR_OFFSET, depthEpsilon, GRID_SIZE } from "../src/renderer/src/lib/depth.js";
 import { normalizeTicks, skyAt, skyDistance } from "../src/renderer/src/lib/sky.js";
 import { fitShadow } from "../src/renderer/src/lib/shadow_fit.js";
 import { anchorKey, mirrorAnchor } from "../src/renderer/src/lib/anchor_draft.js";
@@ -885,6 +886,87 @@ console.log("\n--- sky ---");
 // different depth sample, so the edge of every shadow shimmers as the sun
 // moves. Along a straight wall, which is what a schematic is made of, that is
 // the only thing you can see.
+console.log("\n--- the floor and the grid ---");
+{
+  /*
+   * Three surfaces share y=0: the virtual floor, the 256-block grid over it and
+   * the build-grid patch under the cursor. They used to be held apart by
+   * hand-picked epsilons -- -0.02, -0.01, +0.002 -- and those *are* the bug
+   * rather than the fix, because a perspective depth buffer's precision is a
+   * function of distance. What follows is the arithmetic that says so, and it
+   * fails if anyone reaches for a constant again.
+   */
+  const CORNER = (GRID_SIZE / 2) * Math.SQRT2;
+  const NEAR = 0.1;
+  const FAR = DEFAULT_PREVIEW_SETTINGS.maxDrawDistance;
+
+  check(
+    "near the camera an epsilon looks like it works",
+    depthEpsilon(NEAR, FAR, 16) < 0.002,
+    String(depthEpsilon(NEAR, FAR, 16)),
+  );
+  check(
+    "...the build grid's 0.002 is gone by 64 blocks",
+    depthEpsilon(NEAR, FAR, 64) > 0.002,
+    String(depthEpsilon(NEAR, FAR, 64)),
+  );
+  check(
+    "...and the grid's 0.01 by its own far corner",
+    depthEpsilon(NEAR, FAR, CORNER) > 0.01,
+    String(depthEpsilon(NEAR, FAR, CORNER)),
+  );
+  // The corner is inside the frustum at the default draw distance, so this is
+  // not a hypothetical: it is on screen whenever the floor and the grid are.
+  check("...which is a place you can see", CORNER < FAR, String(CORNER));
+
+  /*
+   * Every draw distance the slider offers, at the furthest point of the grid
+   * that distance can show.
+   *
+   * The near plane dominates the expression, so raising the far plane barely
+   * moves the answer and lowering it only hides the far half of the grid. No
+   * setting rescues an epsilon: at the minimum draw distance one step is
+   * already thicker than the 0.002 the build grid had.
+   */
+  for (const far of [
+    PREVIEW_SETTING_RANGES.maxDrawDistance.min,
+    FAR,
+    PREVIEW_SETTING_RANGES.maxDrawDistance.max,
+  ]) {
+    const reach = Math.min(far, CORNER);
+    check(
+      `an epsilon is still too thin at ${far}`,
+      depthEpsilon(NEAR, far, reach) > 0.002,
+      String(depthEpsilon(NEAR, far, reach)),
+    );
+  }
+
+  // Positive pushes the base *away*, which is the direction that lets the lines
+  // drawn on it win; a unit is one whole depth step, so one is always enough.
+  check("the floor is offset away from the camera", COPLANAR_OFFSET.factor > 0);
+  check("...by at least one whole depth step", COPLANAR_OFFSET.units >= 1);
+
+  // A 16-bit depth buffer is 256 times coarser, and the same offset answers it.
+  check(
+    "a coarser buffer is worse, not different",
+    depthEpsilon(NEAR, FAR, CORNER, 16) > depthEpsilon(NEAR, FAR, CORNER, 24),
+  );
+  // Nonsense planes must not produce a NaN, which would read as "no gap at all".
+  check("zero planes still answer", Number.isFinite(depthEpsilon(0, 0, 100)));
+
+  /*
+   * And the viewer has to be the thing doing it. This is the check that bites
+   * on a revert: the epsilons are easy to put back, they look like care, and
+   * nothing else in the app would notice.
+   */
+  const viewer = readFileSync(path.join(RENDERER, "lib", "Viewer.svelte"), "utf8");
+  check("the floor declares a polygon offset", viewer.includes("polygonOffset: true"));
+  check(
+    "...and nothing at y=0 is nudged apart by hand",
+    !/(?:grid|groundPlane)\.position\.y\s*=/.test(viewer),
+  );
+}
+
 console.log("\n--- shadow fit ---");
 {
   const box = { center: { x: 32, y: 16, z: 32 }, size: { x: 64, y: 32, z: 64 } };

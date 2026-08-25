@@ -543,6 +543,27 @@ tables for 1.13+. Editing it by hand is fine right up until someone regenerates
 it. It is also the list spliced into the prompt, so the set the model is told
 about cannot drift from the set it is judged against.
 
+**Three vendored datasets, three generators, three skills.** The pattern is the
+same each time and it is the one to copy: the answers are looked up, recorded
+with where they came from, and the generator replaces only the rows between two
+markers. Running with nothing new must change no bytes — if it rewrites the file
+every time, the ordering or the formatting has drifted and *that* is the bug.
+
+| data | generator | skill |
+|---|---|---|
+| `resources/mc_versions.json` | `gen-mc-versions.mjs` | `mc-versions` |
+| `resources/block_states.json` | `gen-block-states.mjs` | `mc-blockstates` |
+| `block_id_list.txt` | `gen-block-list.mjs` | `mc-block-models` (for what the ids must draw as) |
+
+The skills' trust rules deliberately differ, and the difference is the point.
+`mc-versions` buys trust with **two independent sources that agree**, because a
+transposed digit in a DataVersion is undetectable by any local check — the file
+saves, opens, and misbehaves in game. A wrong property name or texture name is
+**mechanically detectable**, so those two skills' job is to keep the tripwire
+honest rather than to count sources. Corroboration still applies where no
+machine can check: the *history*, which is prose on a wiki page and appears in
+no dataset.
+
 **There are two ways into a document and neither is a panel.** The File menu and
 the start screen — the card the empty viewport shows. That is the answer to a
 whole class of "X is missing" reports that turned out to be "X is in the sidebar
@@ -925,15 +946,103 @@ instruction, and this is only a default.
 A block the file does not name keeps its default state, which is exactly what
 happened before — so an omission costs nothing, while a wrong guess writes a
 state that is *worse* than the default because it looks deliberate. `observer`
-and `anvil` are left out for that reason rather than overlooked, and stairs'
-`shape` is left out because a corner is decided by the *neighbours*, which is a
-question about the document and not about the click.
+and `anvil` are left out for that reason rather than overlooked.
 
 Two things `tests/blocks.ts` holds that are easy to lose. Every exact id the
 table names is checked against `block_id_list.txt` — a typo writes a state onto
 a block that does not exist, which nothing in the app would ever notice. And the
 properties are **baked**, because a `facing` the mesher ignored would pass every
 arithmetic check ever written and still place the same staircase four times.
+
+**The rest of the state is generated, and being hand-written was the fault.**
+`DEFAULT_STATE` was twenty-one families against the two hundred-odd blocks that
+carry properties at all, so everything else was placed bare — one cause with two
+symptoms: an empty inspector, and, for anything `block_shapes.ts` reads a
+property to draw, the wrong shape. A fence had no `north`, so it drew as a bare
+post, and the panel that exists to fix that had nothing in it.
+
+```
+resources/block_states.json     the data, with provenance   ← .claude/skills/mc-blockstates
+scripts/gen-block-states.mjs    JSON → the table
+src/shared/block_states.ts      the table, plus the lookups
+```
+
+`mc_versions.json`'s arrangement for its reason. 1105 blocks come out as 118
+distinct shapes — every fence in the game has the same five properties — which
+is both a third of the size and the only form a person can read.
+
+**It is pinned to 1.21.8, and that was measured rather than chosen.** `misode/
+mcmeta`'s `summary` branch tracks snapshots, and on it `chain` has already
+become `iron_chain` while `block_id_list.txt` still offers `chain`; sweeping the
+tagged branches puts the rename in 1.21.11. The four ids left outside the table
+are `grass`, `grass_path`, `sign` and `wall_sign` — pre-Flattening spellings the
+app still offers on purpose. The generator reports them and the suite **names**
+them rather than counting, because "one more appeared" is exactly what a rename
+looks like from here.
+
+**`waterlogged` is excluded from the defaults and kept in the legal values**,
+which are two different questions. `legacy_blocks.json` maps `85:0` to
+`oak_fence[east=false,south=false,north=false,west=false]` — four connections,
+no `waterlogged` — and the MCEdit writer matches the *exact* state, so writing
+the connections improves the legacy match while writing `waterlogged` breaks it
+on every stair, slab and pane in the build. But the inspector should still offer
+it and a file arriving with it keeps it: this decides what a *new* block is born
+with, not what a block may hold.
+
+`orientPlacement` stays hand-written and must. It asks where the camera was, and
+no dataset knows that.
+
+**And the state the *neighbours* decide is `shared/block_connections.ts`.**
+Stairs' `shape` used to be listed here as deliberately absent — "a corner is
+decided by the neighbours, which is a question about the document and not about
+the click" — and that was right about where it belongs, not about whether it
+gets an answer. Fences, walls, panes and bars, a gate's `in_wall`, stairs
+corners, rail shapes, double chests, redstone wire, chorus plant, vine, mushroom
+blocks and `snowy` all now get one.
+
+The rules are pure and know nothing about documents; `main/domain/connect.ts` is
+the other half — which cells to ask. Four things about it are load-bearing:
+
+- **It runs from `runTransaction`, once.** Place, break, fill, replace, paste,
+  move, transform, every agent tool and every build script therefore agree. A
+  rule enforced by discipline at nine call sites is wrong at one of them, and it
+  would be wrong at whichever was added next. Undo does not go through it — undo
+  replays deltas — and loading is not a transaction, so a file that arrives with
+  its own connections keeps exactly those.
+- **Every write is guarded by `hasProperty`.** A rule that sets `north` on
+  something with no `north` produces a state the game refuses, and *nothing in
+  this app would notice*: the inspector shows whatever the entry has, the
+  writers write it, the mesher ignores what it does not know.
+- **The block entity has to be put back by hand.** `setBlock` treats any write
+  as *displacing* what was there and drops the record with it — right when a
+  chest becomes stone, catastrophic when only a property changed. Deriving
+  `type=left` on a double chest emptied it.
+- **The palette cache grows during the pass.** Writing a correction interns a
+  new entry, so a cell already fixed carries an index past the end of the array
+  the pass was built with, and reading that as "no entry" makes the corrected
+  neighbour look like **air**. The symptom is a connection that works one way
+  only: placing a fence connected the new block and did not reach back.
+
+Asking the palette instead of the cell is what makes it affordable —
+`occludesNeighbours` calls `shapeFor`, which normalises a name with a regex and
+walks three tables, and it cannot differ between two cells holding the same
+entry. A 100-block fence line is **3 ms**. There is deliberately no size cap: a
+threshold would be a second answer to the same question, which is the fault this
+pass exists to remove.
+
+**`EditRequest.setState` is the one caller that derives nothing, and without it
+the feature would not exist.** The inspector sends its block-state edit down the
+same channel as a placement, so a hand-typed `north=false` would be re-derived
+and overwritten *inside the same transaction that carried it*. With it, a typed
+state stands until something is placed beside it — which is what the game does,
+and what "editable afterwards" has to mean.
+
+One consequence worth knowing before it is reported as a bug: the pass
+**normalises**, so a lone staircase carrying `shape=inner_left` becomes
+`straight` on the next edit near it. That is faithful — a schematic's stored
+shape is advisory and the game recomputes it on every neighbour update — and it
+is why `tests/session.ts`'s mirror fixture builds a real corner instead of one
+staircase with a shape typed onto it.
 
 `_stem` is not a suffix in the pillar table and must not become one:
 `crimson_stem` is a pillar and `melon_stem` is a crop with an `age`.
@@ -1252,10 +1361,28 @@ dead code (DEV-008) — so stairs, fences and slabs all rendered as solid blocks
 Reading real models is not an option: Faithful is a texture pack and ships none,
 and the vanilla models live in the client jar, which this app cannot
 redistribute. Shapes are transcribed from vanilla in the same 0..16 units;
-anything unlisted stays a cube. Two consequences worth knowing:
+anything unlisted stays a cube. `.claude/skills/mc-block-models` is how one is
+looked up, and it states the line that must not be crossed: **read and
+transcribe, never vendor and never fetch at runtime.** Consequences worth
+knowing:
 
 - Only a full opaque cube may cull a neighbour's face (`occludesNeighbours`).
   Culling against a slab or a fence punches holes where nothing covers.
+- **"Unlisted stays a cube" assumes a cube is the harmless answer, and for some
+  blocks it is the harmful one.** Redstone wire, fire, a skull, a decorated pot
+  and an end portal were all full opaque cubes, which is two faults rather than
+  one: the wrong silhouette, *and* a face deleted from each of six neighbours. A
+  line of redstone drawn as a cube deletes the floor it is lying on. Those get
+  approximations, and a close box beats a cube there. `tests/blocks.ts` states
+  it both ways — the ones that are cubes must stay cubes, or a wall of them
+  stops hiding its own interior.
+- **A face with no area is not drawn**, decided from the box rather than from a
+  hand-written `omit`. Vanilla writes a *plane* as an element whose `from` and
+  `to` agree on one axis — a chain is two of them, and so is a cross — and the
+  other four faces then collapse to a line, which is eight degenerate triangles
+  z-fighting along the edge they share with the two real ones. An `omit` list
+  would restate what the coordinates already say, and the first plane added
+  without one would read as a rendering bug rather than a missing entry.
 - Shaped blocks have no texture of their own. There is no `oak_stairs.png` —
   `materialCandidates` strips the shape suffix and tries the base material.
 - UVs are derived from box coordinates, which is right for anything cut from a
@@ -1272,6 +1399,44 @@ anything unlisted stays a cube. Two consequences worth knowing:
   `block_shapes.ts` reproduces that layout. Banners and shulker boxes stay on
   a dyed-wool stand-in — their sheets need layer composition this code does not
   do.
+
+**A texture name that resolves nothing is a hashed-colour cube, silently.**
+`bakeFallback` colours a cube by hashing the block's name: no error, no log, a
+plausible solid block in an arbitrary colour. `minecraft:water[level=0]` hashed
+to a vivid green and read as a strange-looking pond rather than as a defect.
+**162 of the 920 ids the app offers used to land there, and every one of their
+correct textures was already in the shipped pack** — not one asset was missing,
+they were all naming rules.
+
+So `tests/blocks.ts` walks all 920 and fails on any that reaches the fallback,
+by name. That check is the difference between "some blocks look wrong" and a
+finite list, and it is what found the 22 hanging signs a hand-written audit had
+excluded as "already handled".
+
+The fix is mostly one idea: **a name that resolves nothing is usually a variant
+of one that does, and the variants compose.** `NAME_ALIASES` peels one layer
+each — `waxed_`, `infested_`, `potted_`, `_wood`→`_log`, `_hyphae`→`_stem`,
+`_wall_torch`→`_torch`, the shape suffix — and `aliasChain` runs them to a fixed
+point, so `waxed_exposed_cut_copper_slab` needs the waxed strip and the slab
+strip in either order and gets both. Making the shape suffix an *alias* rather
+than only a `materialCandidates` spelling is what earns the structure: it puts
+the stripped name in the chain, where a rule can be waiting for it.
+
+Three that are not that idea. A carpet is cut from **wool** and the suffix
+already stripped `white_carpet` to `white`, which is not a texture. Hanging
+signs live one directory deeper and must be matched *before* the ordinary sign
+rule, which otherwise reads `acacia_hanging_sign` as a wood called
+"acacia_hanging". And **a crop's texture is a growth stage, which `age` is not**:
+carrots and potatoes have eight ages and four textures, spent `0,0,1,1,2,2,2,3`
+— weighted late, so a field looks nearly ripe for most of its life — while
+nether wart is `0,1,1,2`. Transcribed per crop from its blockstate file; no
+counting rule produces them.
+
+`SPECIAL_FACE_RULES` is checked **per face, not per candidate**: a row is a
+candidate list, and `grass_path`'s `["dirt_path_top", "grass_path_top"]` covers
+the 1.17 rename, so the older spelling is legitimately absent from a modern
+pack. Requiring every candidate to exist fails that row and teaches whoever hits
+it to delete the legacy name — the opposite of what the row is for.
 
 **Light and occlusion are baked into the vertices, and that is why they are
 main's.** Occlusion at a corner depends on the blocks *around* it and light is a

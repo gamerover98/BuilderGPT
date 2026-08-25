@@ -556,7 +556,12 @@ const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => Bl
   ["_button", (e) => transform([[5, 0, 6, 11, 2, 10]], facingSteps(e), false)],
   ["_bed", bed],
   ["_banner", (e) => againstWall(e, 2)],
-  ["_sign", (e) => againstWall(e, 2)],
+  // Order matters: a wall hanging sign ends in `_hanging_sign` too, and a wall
+  // sign ends in `_sign`.
+  ["_wall_hanging_sign", hangingSign],
+  ["_hanging_sign", hangingSign],
+  ["_wall_sign", wallSign],
+  ["_sign", standingSign],
   ["_torch", torchShape],
   ["_rail", () => boxes([0, 0, 0, 16, 1, 16])],
   ["_candle", () => boxes([7, 0, 7, 9, 6, 9])],
@@ -981,6 +986,66 @@ function vine(entry: PaletteEntry): BlockShape {
 }
 
 /**
+ * Signs: a board, and whatever holds it up.
+ *
+ * All three kinds were `againstWall(e, 2)` -- a full-height slab flat against
+ * one side of the cell. That is roughly right for a *wall* sign and plainly
+ * wrong for the other two: a standing sign stands on a post in the middle of
+ * its cell, and a hanging one hangs from a bar. Both were pressed against a
+ * wall that is often not there.
+ *
+ * ## Their UVs are derived, and that is a stated limit rather than an oversight
+ *
+ * Vanilla ships **no model** for a sign -- 1.21.9 moved the texture into
+ * `block/` but the geometry still comes from a block-entity renderer -- so
+ * there is no `uv` to transcribe, and `oak_sign.png` is a 128x128 sheet whose
+ * layout does not match any unwrap this file could derive with confidence.
+ * Guessing at it is what produced two rounds of chests with their fronts on
+ * their backs, so it is not guessed at: the boxes take coordinate-derived UVs
+ * and a sign reads as the plank it is cut from.
+ *
+ * The shape is the half that was visibly wrong, and it is the half that can be
+ * fixed without inventing anything.
+ */
+function standingSign(entry: PaletteEntry): BlockShape {
+  // `rotation` is 0..15 around the compass; the boards are square in plan, so
+  // the sixteenth-turns land on the nearest quarter.
+  const sixteenths = Number(entry.properties.rotation ?? "0");
+  const steps = Number.isFinite(sixteenths) ? Math.round(sixteenths / 4) : 0;
+  return transform(
+    [
+      [0, 9, 7, 16, 16, 9],
+      [7, 0, 7, 9, 9, 9],
+    ],
+    steps,
+    false,
+  );
+}
+
+/** A board flat on the wall, at the height a sign sits rather than floor to ceiling. */
+function wallSign(entry: PaletteEntry): BlockShape {
+  return transform([[0, 4, 14, 16, 12, 16]], facingSteps(entry) + 2, false);
+}
+
+/** A board on a bar, hanging clear of whatever is above it. */
+function hangingSign(entry: PaletteEntry): BlockShape {
+  const attached = entry.properties.attached === "true";
+  const parts: Box[] = [
+    // The board.
+    [1, 0, 7, 15, 10, 9],
+    // The bar it hangs from, and the two chains, or the one plate that
+    // replaces them when it is bolted straight to the block above.
+    [1, 14, 6, 15, 16, 10],
+  ];
+  if (!attached) {
+    parts.push([3, 10, 7.5, 5, 14, 8.5], [11, 10, 7.5, 13, 14, 8.5]);
+  }
+  const sixteenths = Number(entry.properties.rotation ?? "0");
+  const steps = Number.isFinite(sixteenths) ? Math.round(sixteenths / 4) : 0;
+  return transform(parts, steps, false);
+}
+
+/**
  * A piston head: the plate you see, and the rod holding it out.
  *
  * Vanilla's own model, in the same 0..16 units — a 4-deep plate at the far
@@ -1154,9 +1219,14 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
   // Tapered in vanilla, and a taper is a stack of boxes this does not build.
   // A narrow column is the shape's *reach*, which is what a neighbour needs.
   pointed_dripstone: () => boxes([5, 0, 5, 11, 16, 11]),
-  // The board on its post. `SUFFIX_SHAPES` keys "_sign", which catches
-  // `oak_sign` and `oak_wall_sign` and not the bare pre-Flattening name.
-  sign: () => boxes([0, 9, 7, 16, 16, 9], [7, 0, 7, 9, 9, 9]),
+  /*
+   * The two bare pre-Flattening names. `SUFFIX_SHAPES` keys `_sign` and
+   * `_wall_sign`, and neither matches a name that *is* those words -- so
+   * `wall_sign` fell through to the standing shape and stood a board on a post
+   * in mid-air where a wall sign belongs flat on the wall.
+   */
+  sign: standingSign,
+  wall_sign: wallSign,
   cocoa: (e) => transform([[6, 7, 11, 10, 12, 15]], northFacingSteps(e), false),
   /*
    * The two blocks vanilla draws with a shader over a starfield. There is

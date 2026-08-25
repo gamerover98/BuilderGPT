@@ -1606,6 +1606,27 @@ if (pack === null) {
   equal("...and falls back to a cross with nothing to hold", shapeOf("vine").kind, "cross");
   equal("cave vines hang as a cross", shapeOf("cave_vines").kind, "cross");
 
+  /*
+   * Signs: three kinds, three shapes, where there was one.
+   *
+   * All of them were a full-height slab flat against one side of the cell --
+   * roughly right for a wall sign and plainly wrong for the other two, which
+   * were pressed against a wall that is often not there.
+   *
+   * The two bare pre-Flattening names are the trap: `wall_sign` does not end in
+   * `_wall_sign`, so it fell through to the standing shape and stood a board on
+   * a post in mid-air.
+   */
+  check("a standing sign is a board on a post", boxCount("oak_sign", { rotation: "0" }) === 2);
+  check("a wall sign is just the board", boxCount("oak_wall_sign", { facing: "north" }) === 1);
+  check("a hanging sign hangs from two chains", boxCount("oak_hanging_sign", { attached: "false" }) === 4);
+  check(
+    "...or straight off the block above when it is attached",
+    boxCount("oak_hanging_sign", { attached: "true" }) === 2,
+  );
+  check("the bare `sign` stands", boxCount("sign") === 2);
+  check("...and the bare `wall_sign` does not", boxCount("wall_sign", { facing: "north" }) === 1);
+
   // 15. Beds stopped being block entities in 1.21.9; the geometry survived the
   // move and the unwrap did not.
   check("a bed is a mattress on four legs", boxCount("red_bed", { part: "head" }) === 5);

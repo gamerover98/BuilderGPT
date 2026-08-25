@@ -81,13 +81,13 @@ const SHAPE_SUFFIXES = [
  * — an explicit interface says so even though the Python type hint
  * (`Dict[str, Dict[str, list[str]]]`) doesn't.
  */
-interface SpecialFaceRule {
+export interface SpecialFaceRule {
   readonly top?: readonly string[];
   readonly side?: readonly string[];
   readonly bottom?: readonly string[];
 }
 
-const SPECIAL_FACE_RULES: Record<string, SpecialFaceRule> = {
+export const SPECIAL_FACE_RULES: Record<string, SpecialFaceRule> = {
   /*
    * The markers, and the only two rules here that point at `item/`.
    *

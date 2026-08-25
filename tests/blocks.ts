@@ -12,6 +12,8 @@ import { readdir } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import AdmZip from "adm-zip";
+
 import { parseBlockList } from "../src/main/core.js";
 import { searchBlocks } from "../src/renderer/src/lib/block_search.js";
 import {
@@ -21,10 +23,15 @@ import {
   type PlacementLook,
 } from "../src/shared/block_orientation.js";
 import { occludesNeighbours, shapeFor } from "../src/main/pipeline/block_shapes.js";
-import { ModelBaker, type BakedBlock } from "../src/main/pipeline/model_baker.js";
+import {
+  ModelBaker,
+  SPECIAL_FACE_RULES,
+  type BakedBlock,
+} from "../src/main/pipeline/model_baker.js";
 import { buildMesh, culledFaces } from "../src/main/pipeline/mesher.js";
 import { buildAtlas } from "../src/main/pipeline/atlas.js";
 import type { BakedFace, PaletteEntry, StructureData } from "../src/main/pipeline/types.js";
+import { paletteEntryCacheKey, paletteEntryIsAir } from "../src/main/pipeline/types.js";
 import {
   blockEmission,
   computeLight,
@@ -477,6 +484,133 @@ if (pack === null) {
     const baked = await baker.bakeBlockstate(entry);
     equal(`${entry.namespacedName.replace("minecraft:", "")} -> ${expected}`, baked.textureKey, expected);
   }
+}
+
+// --- every block the app offers can be drawn --------------------------------
+//
+// The failure this catches is silent by construction. When no candidate texture
+// name resolves, `bakeFallback` falls through to `hashedColorCube`, which
+// colours a cube by hashing the block's name: no error, no log, and a plausible
+// solid block in an arbitrary colour. `minecraft:water[level=0]` hashed to a
+// vivid green and read as a strange-looking pond rather than as a defect.
+//
+// A hashed cube is exactly detectable and needs no new state. Its `textureKey`
+// is `paletteEntryCacheKey(entry)` -- `minecraft:name[props]`, which carries no
+// slash -- while `normalizeTextureKey` always yields
+// `namespace:block|item|entity/...`. The two cannot collide.
+//
+// When this check was written, 140 of the 920 ids failed it, and every one of
+// their correct textures was already in the shipped pack: not a single asset was
+// missing, they were all naming rules. So this is not a coverage aspiration. It
+// is a list that must stay empty.
+console.log("\n--- every offered block resolves a texture ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack to resolve against");
+} else {
+  const listPath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "block_id_list.txt",
+  );
+  const ids = [...parseBlockList(readFileSync(listPath, "utf8"))];
+  const unresolved: string[] = [];
+  for (const id of ids) {
+    const entry: PaletteEntry = { namespacedName: id, properties: {} };
+    // Air is every empty cell in the document and is never drawn; it has no
+    // texture by definition, so it would fail this on a technicality.
+    if (paletteEntryIsAir(entry)) continue;
+    const baked = await baker.bakeBlockstate(entry);
+    if (baked.textureKey === paletteEntryCacheKey(entry)) {
+      unresolved.push(id.replace("minecraft:", ""));
+    }
+  }
+  check(
+    `all ${ids.length} offered ids resolve a real texture`,
+    unresolved.length === 0,
+    unresolved.length === 0
+      ? undefined
+      : `${unresolved.length} fall back to the hashed-colour cube: ${unresolved.join(" ")}`,
+  );
+}
+
+// --- every texture name a rule can produce exists ---------------------------
+//
+// The check above catches a block with *no* texture at all. This one catches
+// the narrower slip it cannot see: a rule that names a texture the pack does
+// not ship, on a block whose other faces resolve anyway. `faceCandidates`
+// returns a `SPECIAL_FACE_RULES` row and stops, so a typo in the `top` entry
+// leaves that face silently wearing the side texture, and the block still bakes
+// and still looks like a block.
+//
+// Read straight out of the zip rather than through the baker, because the thing
+// under test is the *name*, not whether some earlier bake happened to cache it.
+console.log("\n--- every texture a rule names is in the pack ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const shipped = new Set(
+    new AdmZip(pack)
+      .getEntries()
+      .map((e) => e.entryName)
+      .filter((n) => n.endsWith(".png"))
+      .map((n) => n.replace(/^assets\/minecraft\/textures\//, "").replace(/\.png$/, "")),
+  );
+  /** `normalizeTextureKey`'s rule, without reaching into the class. */
+  const inPack = (name: string): boolean => {
+    const bare = name.replace(/^#/, "").replace(/^minecraft:/, "");
+    const withDir =
+      bare.startsWith("block/") || bare.startsWith("item/") || bare.startsWith("entity/")
+        ? bare
+        : `block/${bare}`;
+    return shipped.has(withDir);
+  };
+
+  // A rule is a *candidate list*, not a name, so the invariant is that each
+  // face it names resolves **something** -- not that every spelling exists.
+  // `grass_path` is the case that settles it: `["dirt_path_top",
+  // "grass_path_top"]` is one row covering the 1.17 rename, and the older name
+  // is legitimately absent from a modern pack. Requiring every candidate would
+  // fail that row and teach whoever hit it to delete the legacy spelling, which
+  // is the opposite of what it is for. A single-candidate row with a typo in it
+  // still fails, which is the case this exists to catch.
+  const missing: string[] = [];
+  for (const [name, rule] of Object.entries(SPECIAL_FACE_RULES)) {
+    for (const [face, candidates] of Object.entries(rule) as Array<
+      [string, readonly string[] | undefined]
+    >) {
+      if (candidates === undefined || candidates.length === 0) continue;
+      if (!candidates.some(inPack)) missing.push(`${name}.${face} -> ${candidates.join("|")}`);
+    }
+  }
+  check(
+    `every SPECIAL_FACE_RULES face resolves (${Object.keys(SPECIAL_FACE_RULES).length} rules)`,
+    missing.length === 0,
+    missing.join(", "),
+  );
+
+  // `ShapeBox.texture` overrides a box's texture -- a beacon's glass shell is
+  // the reason the field exists. `resolveBoxTexture` falls back to the block's
+  // own texture when the override misses, so a typo here does not break the
+  // render, it just quietly stops doing what it was added to do.
+  const listPath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "block_id_list.txt",
+  );
+  const overrides = new Set<string>();
+  for (const id of parseBlockList(readFileSync(listPath, "utf8"))) {
+    const shape = shapeFor({ namespacedName: id, properties: {} });
+    if (shape.kind !== "boxes") continue;
+    for (const entry of shape.boxes) {
+      if (entry.texture !== undefined) overrides.add(entry.texture);
+    }
+  }
+  const missingOverrides = [...overrides].filter((name) => !inPack(name));
+  check(
+    `every box texture override is shipped (${overrides.size} checked)`,
+    missingOverrides.length === 0,
+    missingOverrides.join(", "),
+  );
 }
 
 // --- animated textures ------------------------------------------------------

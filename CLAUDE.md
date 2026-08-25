@@ -98,6 +98,21 @@ done by dragging a selection and filling it worked. One editor, two answers,
 depending on which door you came in by. `applyEdit`'s `setBlock` arm now takes
 the same path as `fill`, including the volume guard.
 
+**Two slabs meeting in one cell are one double slab.** In the game a slab placed
+against the top of a matching bottom slab does not go in the cell above — it
+fills the one already there. The editor stacked them, which is a shape the game
+cannot hold: the file pastes back looking nothing like it did here.
+
+`EditRequest.setBlock` carries `against` for exactly this rule and nothing else.
+`x/y/z` is the *empty* cell the click landed in, and the mesh has no per-block
+identity, so **neither side can find the clicked slab alone** — main has the
+document but not the direction, the renderer has the direction but not the
+document. Vertical faces only: the game also merges on a side click, and that
+needs where on the face the cursor was, which does not travel. Merging on a side
+click that meant "place beside it" would destroy the slab already there. A fill
+carries no `against`, which is what keeps this a click gesture rather than
+something that halves a filled region.
+
 **Breaking never grows.** A break is `setBlock` with air, and growing to make
 room for air is a resize and nothing else — the same reason `replace` does not.
 Nothing sends a break from outside the box today, because a break comes from a
@@ -537,11 +552,23 @@ is found by moving `1e-3` along `-normal` from the hit point and flooring. Half
 a block is the obvious choice and is wrong: a pressure plate is a sixteenth
 tall, so stepping half a block in from its top face lands underneath it.
 
-**`block_id_list.txt` is generated.** `node scripts/gen-block-list.mjs >
-block_id_list.txt`, idempotent, from `legacy_blocks.json` plus explicit family
-tables for 1.13+. Editing it by hand is fine right up until someone regenerates
-it. It is also the list spliced into the prompt, so the set the model is told
-about cannot drift from the set it is judged against.
+**`block_id_list.txt` is generated, and the registry decides what is in it.**
+`node scripts/gen-block-list.mjs > block_id_list.txt`, idempotent, from
+`resources/block_states.json` — the game's own block registry — plus the
+pre-Flattening names only `legacy_blocks.json` still carries, minus four debug
+and air blocks excluded by name with the reason beside each. It is also the list
+spliced into the prompt, so the set the model is told about cannot drift from
+the set it is judged against.
+
+It was hand-written family tables — one entry per wood, per stone, per copper
+oxidation stage — *seeded from the list it was regenerating*, so it could only
+grow and only by hand. It was **189 blocks behind** the registry vendored beside
+it: no coral fans, no firefly bush, no `pale_oak` anything, half the stone
+slabs, the banners, the heads, `pumpkin` and `short_grass`. Nobody had noticed,
+because **a missing block is invisible from inside the app** — you cannot miss
+what the inventory never offered. That is the same failure the hand-written
+`DEFAULT_STATE` had, one layer down, and it is the argument for generating a set
+rather than curating one.
 
 **Three vendored datasets, three generators, three skills.** The pattern is the
 same each time and it is the one to copy: the answers are looked up, recorded
@@ -971,14 +998,21 @@ src/shared/block_states.ts      the table, plus the lookups
 distinct shapes — every fence in the game has the same five properties — which
 is both a third of the size and the only form a person can read.
 
-**It is pinned to 1.21.8, and that was measured rather than chosen.** `misode/
-mcmeta`'s `summary` branch tracks snapshots, and on it `chain` has already
-become `iron_chain` while `block_id_list.txt` still offers `chain`; sweeping the
-tagged branches puts the rename in 1.21.11. The four ids left outside the table
-are `grass`, `grass_path`, `sign` and `wall_sign` — pre-Flattening spellings the
-app still offers on purpose. The generator reports them and the suite **names**
-them rather than counting, because "one more appeared" is exactly what a rename
-looks like from here.
+**It is a union of two releases, and the union is not tidiness.** `misode/
+mcmeta`'s `summary` branch tracks snapshots, so the vendored copy is pinned to
+releases — 26.2, unioned with 1.21.8. `chain` became `iron_chain` in **1.21.9**
+and is the only block the older snapshot has that the newer one does not; this
+app writes schematics for 1.8 onward and a file cut before that release still
+names it, so both spellings have to be offerable.
+
+A rename is the one thing a union cannot paper over, because the **texture moves
+too**: `block/chain` is simply absent from a modern pack, so `model_baker.ts`
+carries `chain` → `iron_chain` as an alias. Any future rename needs both halves.
+
+The four ids outside the registry are `grass`, `grass_path`, `sign` and
+`wall_sign` — pre-Flattening spellings the app still offers on purpose. The
+generator reports them and the suite **names** them rather than counting,
+because "one more appeared" is exactly what a rename looks like from here.
 
 **`waterlogged` is excluded from the defaults and kept in the legal values**,
 which are two different questions. `legacy_blocks.json` maps `85:0` to
@@ -1394,11 +1428,35 @@ knowing:
   load — without it the atlas squashes the strip into a square tile and every
   UV window on that texture addresses the wrong pixels. Detected by shape, not
   by reading the `.mcmeta`.
-- **Beds, chests and signs have no block model at all.** The game draws them
-  from `textures/entity/…` with a `ModelPart` cube unwrap; `unwrapCube` in
+- **Chests have no block model at all**, and are drawn from
+  `textures/entity/…` with a `ModelPart` cube unwrap; `unwrapCube` in
   `block_shapes.ts` reproduces that layout. Banners and shulker boxes stay on
   a dyed-wool stand-in — their sheets need layer composition this code does not
   do.
+- **Beds and signs used to be in that list and are not any more.** 1.21.9 moved
+  them onto ordinary per-face block textures — `red_bed_head_up`,
+  `block/oak_sign` — and the `entity/bed/<colour>` and `entity/signs/<wood>`
+  aliases kept matching after the pack moved, returning paths it no longer
+  contains: all sixteen beds and all 44 signs became hashed-colour cubes in one
+  step. Deleting the aliases deleted the unwrap arithmetic with them, which is
+  two classes of bug gone rather than fixed. `bedCandidates` maps a world face
+  back into the model's own axes, and the head's joint end is the uncoloured
+  `bed_head_north` because every bed's joint looks the same.
+- **The chest is authored facing *south*, and two independent facts say so.**
+  Diffing the four side windows of the body sheet leaves exactly one that
+  differs, and a chest has exactly one side that differs — the front. The double
+  sheets agree: `normal_left`'s seam is on its west window and `normal_right`'s
+  on its east, and those land on the model's east and west faces only under this
+  rotation, which is also what makes `getConnectedDirection`'s left/right
+  convention come out right. A double half is 15 wide so the two meet with no
+  seam, and its coordinates are written **inverted** because they describe the
+  model before the half-turn.
+- **A block has a front if it has a `facing` and the pack ships
+  `<name>_front`.** Derived rather than tabulated, so the furnace, smoker,
+  dispenser, dropper, loom, barrel and every workstation are covered at once —
+  before it, every one of them wore `<name>_side` on all four sides, fire
+  included, because the generic candidate list offers `_front` only after
+  `_side`. `_front_on` comes first when the block is lit.
 
 **A texture name that resolves nothing is a hashed-colour cube, silently.**
 `bakeFallback` colours a cube by hashing the block's name: no error, no log, a
@@ -1431,6 +1489,25 @@ carrots and potatoes have eight ages and four textures, spent `0,0,1,1,2,2,2,3`
 — weighted late, so a field looks nearly ripe for most of its life — while
 nether wart is `0,1,1,2`. Transcribed per crop from its blockstate file; no
 counting rule produces them.
+
+**Updating the bundled pack moves things out from under the code.** Faithful
+Release 14 is cut for the copper-golem era, and going there from Release 10
+broke three things at once that no amount of care in this repo would have
+prevented: beds and signs left `entity/`, `block/chain` disappeared behind
+`iron_chain`, and the sky bodies moved to `environment/celestial/` with one file
+per moon phase. `sky_textures.ts` therefore tries the new layout and falls
+through to the old, rather than switching on `pack_format` — a missing texture
+already means "draw the plain squares", so an unknown layout degrades to what
+the app did before the sky existed.
+
+The lesson is the tripwire's, not the pack's: 127 ids went to the hashed-colour
+cube in one step and were listed by name in one run. Without that check the
+report would have been "some blocks look odd since the update".
+
+**One alias earned its keep over five.** `X_wall_Y` → `X_Y` covers wall signs,
+wall torches, coral wall fans, wall heads and wall hanging signs together. The
+*leading* form — `wall_torch`, `wall_sign` — is the shape-suffix rule's `wall_`
+strip, which is a different rule for a different shape of name.
 
 `SPECIAL_FACE_RULES` is checked **per face, not per candidate**: a row is a
 candidate list, and `grass_path`'s `["dirt_path_top", "grass_path_top"]` covers

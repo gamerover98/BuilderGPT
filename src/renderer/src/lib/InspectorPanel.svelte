@@ -9,12 +9,20 @@
    * incomplete — whereas whatever `facing` or `half` or `waterlogged` a block
    * turns out to have, it is already right there in what the loader parsed.
    *
-   * Values are free text with a datalist of the usual suspects, not a closed
-   * dropdown. The app vendors no blockstate registry (the resource pack ships
-   * textures only), so it does not know the legal values for an arbitrary
-   * property, and pretending to would be worse than admitting it.
+   * Values are free text with a datalist of the legal ones, not a closed
+   * dropdown. The list is real now -- `shared/block_states.ts` is generated
+   * from the game's own data -- where it used to be twelve properties written
+   * out by hand, so `layers`, `age`, `level`, `power`, `rotation`, `honey_level`
+   * and every connection value were typed blind.
+   *
+   * Still free text, and still deliberately. The table knows 1105 blocks and
+   * the app will happily open a schematic holding one it does not, so a closed
+   * dropdown would refuse a value the file already contains. `legalValuesFor`
+   * returns `null` rather than `[]` for exactly that case, and a property with
+   * no known values gets a plain field instead of an empty menu.
    */
   import type { BlockInspection } from "../../../shared/ipc.js";
+  import { legalValuesFor } from "../../../shared/block_states.js";
   import { t } from "./i18n.svelte.js";
 
   interface Props {
@@ -31,23 +39,23 @@
   let showRaw = $state(false);
 
   /**
-   * The values these properties almost always take. Offered as suggestions;
-   * a property not listed here still gets a plain text field.
+   * The legal values of each property this block actually carries, keyed by
+   * property name. `null` for anything the generated table does not describe.
+   *
+   * Derived rather than looked up in the markup because the lookup takes the
+   * block id, and reading it per row would recompute it once per property on
+   * every render.
    */
-  const COMMON_VALUES: Readonly<Record<string, readonly string[]>> = {
-    facing: ["north", "south", "east", "west", "up", "down"],
-    axis: ["x", "y", "z"],
-    half: ["top", "bottom", "upper", "lower"],
-    type: ["top", "bottom", "double", "single", "left", "right"],
-    shape: ["straight", "inner_left", "inner_right", "outer_left", "outer_right"],
-    waterlogged: ["true", "false"],
-    open: ["true", "false"],
-    powered: ["true", "false"],
-    lit: ["true", "false"],
-    snowy: ["true", "false"],
-    hinge: ["left", "right"],
-    part: ["head", "foot"],
-  };
+  const valueLists = $derived.by(() => {
+    const block = inspection?.block;
+    if (block === undefined) return {} as Record<string, readonly string[]>;
+    const out: Record<string, readonly string[]> = {};
+    for (const name of Object.keys(inspection?.properties ?? {})) {
+      const values = legalValuesFor(block, name);
+      if (values !== null) out[name] = values;
+    }
+    return out;
+  });
 
   const properties = $derived(Object.entries(inspection?.properties ?? {}).sort());
 
@@ -113,14 +121,14 @@
               <span class="key">{name}</span>
               <input
                 value={value}
-                list={COMMON_VALUES[name] ? `values-${name}` : undefined}
+                list={valueLists[name] ? `values-${name}` : undefined}
                 disabled={busy}
                 spellcheck="false"
                 onchange={(event) => onchangeproperty(name, event.currentTarget.value)}
               />
-              {#if COMMON_VALUES[name]}
+              {#if valueLists[name]}
                 <datalist id={`values-${name}`}>
-                  {#each COMMON_VALUES[name] as option (option)}
+                  {#each valueLists[name] as option (option)}
                     <option value={option}></option>
                   {/each}
                 </datalist>

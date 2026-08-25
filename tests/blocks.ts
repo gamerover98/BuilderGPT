@@ -33,6 +33,13 @@ import { buildAtlas } from "../src/main/pipeline/atlas.js";
 import type { BakedFace, PaletteEntry, StructureData } from "../src/main/pipeline/types.js";
 import { paletteEntryCacheKey, paletteEntryIsAir } from "../src/main/pipeline/types.js";
 import {
+  defaultStateFor,
+  isKnownBlock,
+  knownBlockCount,
+  legalValuesFor,
+  propertiesOf,
+} from "../src/shared/block_states.js";
+import {
   blockEmission,
   computeLight,
   cornerOcclusion,
@@ -1070,6 +1077,79 @@ console.log("\n--- the state a placed block starts in ---");
   );
 
   equal("a block with no state to carry gains none", placementState("minecraft:stone", onFloor(0, -1)), {});
+}
+
+// --- the generated state table ----------------------------------------------
+//
+// `DEFAULT_STATE` was twenty-one families written by hand, against the two
+// hundred-odd blocks that carry properties at all. Everything else was placed
+// bare -- one cause with two symptoms: an empty inspector, and the wrong shape
+// for anything `block_shapes.ts` reads a property to draw. A fence had no
+// `north`, so it drew as a bare post.
+console.log("\n--- the generated state table ---");
+{
+  const registry = [...parseBlockList(readFileSync("block_id_list.txt", "utf-8"))].map((id) =>
+    id.replace("minecraft:", ""),
+  );
+  const unknown = registry.filter((id) => !isKnownBlock(id));
+  /*
+   * The four are `grass`, `grass_path`, `sign` and `wall_sign`: pre-Flattening
+   * spellings the app still offers and the modern game no longer has. Named
+   * rather than counted, so a fifth cannot join them quietly -- which is the
+   * whole failure mode a rename produces.
+   */
+  equal("only the pre-Flattening spellings are outside the table", unknown.sort(), [
+    "grass",
+    "grass_path",
+    "sign",
+    "wall_sign",
+  ]);
+  check(`the table describes ${knownBlockCount()} blocks`, knownBlockCount() > 1000);
+
+  // The reason the table exists, stated as a check: the blocks whose *shape* is
+  // read out of their properties must arrive carrying them.
+  const onFloor: PlacementLook = { direction: { x: 0, y: 0, z: -1 }, against: "up", cursorY: 0 };
+  for (const [id, property] of [
+    ["minecraft:oak_fence", "north"],
+    ["minecraft:cobblestone_wall", "up"],
+    ["minecraft:iron_bars", "east"],
+    ["minecraft:glass_pane", "west"],
+    ["minecraft:snow", "layers"],
+    ["minecraft:chain", "axis"],
+    ["minecraft:grass_block", "snowy"],
+    ["minecraft:redstone_wire", "power"],
+  ] as const) {
+    const state = placementState(id, onFloor);
+    check(
+      `${id.replace("minecraft:", "")} is placed carrying ${property}`,
+      property in state,
+      Object.keys(state).join(", ") || "(nothing)",
+    );
+  }
+
+  // A wall's connections are `none|low|tall`, not booleans -- the 1.16 change
+  // that reads as a value change and is a type change. Code testing
+  // `=== "true"` does not fail on a wall, it silently sees no connections.
+  equal("a wall's connections are not booleans", defaultStateFor("cobblestone_wall").north, "none");
+  equal("a fence's are", defaultStateFor("oak_fence").north, "false");
+
+  // Excluded from the default, kept in the legal values: the inspector should
+  // still offer it, and a file that arrives carrying it keeps it.
+  check(
+    "waterlogged is on no block's default state",
+    registry.every((id) => !("waterlogged" in defaultStateFor(id))),
+  );
+  equal("...but is still offered where it is legal", legalValuesFor("oak_stairs", "waterlogged"), [
+    "true",
+    "false",
+  ]);
+
+  // `null` and `[]` mean different things to the inspector: no knowledge is a
+  // free-text field, an empty list would claim the property accepts nothing.
+  equal("an unknown property has no value list", legalValuesFor("oak_stairs", "nonsense"), null);
+  equal("and neither does an unknown block", legalValuesFor("minecraft:not_a_block", "facing"), null);
+
+  equal("a block with no properties reports none", propertiesOf("stone"), []);
 }
 
 // The ids this file names have to be ids. A typo writes a state onto a block

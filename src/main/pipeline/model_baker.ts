@@ -1008,7 +1008,35 @@ export class ModelBaker {
     uvOverrides?: Readonly<Record<string, UvWindow>>,
   ): Record<string, BakedFace> {
     const faces: Record<string, BakedFace> = {};
+    /*
+     * A face with no area is not drawn.
+     *
+     * Vanilla expresses a *plane* as an element whose `from` and `to` agree on
+     * one axis -- a chain is two of them, and so is the cross a flower is drawn
+     * with. Four of that element's six faces then collapse to a line, and
+     * emitting them costs eight degenerate triangles that z-fight with the two
+     * real ones along their shared edge.
+     *
+     * Decided from the box rather than listed per shape on purpose: an `omit`
+     * written by hand is a list to keep in step with coordinates that already
+     * say the same thing, and the first plane added without one would look like
+     * a rendering bug rather than a missing entry.
+     */
+    const [bx0, by0, bz0, bx1, by1, bz1] = box;
+    const flat = { x: bx0 === bx1, y: by0 === by1, z: bz0 === bz1 };
+    const spans: Record<string, readonly ["x" | "y" | "z", "x" | "y" | "z"]> = {
+      north: ["x", "y"],
+      south: ["x", "y"],
+      east: ["y", "z"],
+      west: ["y", "z"],
+      up: ["x", "z"],
+      down: ["x", "z"],
+    };
     for (const [name, definition] of Object.entries(boxFaceGeometry(box))) {
+      const span = spans[name];
+      if (span !== undefined && (flat[span[0]] || flat[span[1]])) {
+        continue;
+      }
       // inventory.tsv row `_unit_cube_faces` nested-default-chain: written
       // as explicit statements (per-face override, else the generic "side"
       // override, else the plain texture key), NOT a nested ternary, so the

@@ -583,6 +583,99 @@ function lantern(entry: PaletteEntry): BlockShape {
 }
 
 /**
+ * A chain, transcribed from `chain.json`.
+ *
+ * It was a solid 3x3 post, and that is the wrong *kind* of wrong: `chain.png`
+ * is a sheet, three pixels of link beside three pixels of link seen edge-on,
+ * so a box wearing it does not merely have the wrong silhouette, it samples
+ * pixels that were never meant for those faces. The lantern failure again,
+ * which this file already carries a note about.
+ *
+ * Vanilla draws two **zero-thickness planes** crossed at 45 degrees, each with
+ * an explicit UV window into that sheet. Both are expressible here: `tiltFace`
+ * takes any of the three axes, `boxFaces` drops the four faces a plane has no
+ * area on, and the viewport's material is `DoubleSide`, so a plane is visible
+ * from behind.
+ *
+ * The reversed windows -- `[3, 0, 0, 16]` has `u0 > u1` -- are vanilla's way of
+ * mirroring a face, and `windowUvsFrom` does no ordering check, so they carry
+ * across unchanged.
+ *
+ * ## What a horizontal chain does not get
+ *
+ * `axis` is honoured for the geometry, which is the part that reads as broken:
+ * a chain strung sideways lies along its axis instead of standing up. Its
+ * *texture* still runs across the plane rather than along it, because the
+ * blockstate rotates the whole model 90 degrees about X and a UV window cannot
+ * transpose a quad's axes. Chains hang; this is the rare case, and a wrong
+ * silhouette was the visible half.
+ */
+const CHAIN_TILT: BoxRotation = { origin: [8, 8, 8], axis: "y", angle: 45 };
+
+function chain(entry: PaletteEntry): BlockShape {
+  const axis = entry.properties.axis ?? "y";
+  if (axis === "x") {
+    return boxes(
+      { box: [0, 6.5, 8, 16, 9.5, 8], rotation: { ...CHAIN_TILT, axis: "x" } },
+      { box: [0, 8, 6.5, 16, 8, 9.5], rotation: { ...CHAIN_TILT, axis: "x" } },
+    );
+  }
+  if (axis === "z") {
+    return boxes(
+      { box: [6.5, 8, 0, 9.5, 8, 16], rotation: { ...CHAIN_TILT, axis: "z" } },
+      { box: [8, 6.5, 0, 8, 9.5, 16], rotation: { ...CHAIN_TILT, axis: "z" } },
+    );
+  }
+  return boxes(
+    {
+      box: [6.5, 0, 8, 9.5, 16, 8],
+      rotation: CHAIN_TILT,
+      uv: { north: [3, 0, 0, 16], south: [0, 0, 3, 16] },
+    },
+    {
+      box: [8, 0, 6.5, 8, 16, 9.5],
+      rotation: CHAIN_TILT,
+      uv: { west: [6, 0, 3, 16], east: [3, 0, 6, 16] },
+    },
+  );
+}
+
+/**
+ * A potted plant: the pot from `flower_pot.json`, the plant as a cross above it.
+ *
+ * Both halves are needed and neither is enough. Before the texture rules
+ * reached them these were hashed-colour cubes; with the texture alone they
+ * became a *cube wearing a poppy*, which is arguably worse, because it looks
+ * like a decision.
+ *
+ * The plant is written as two crossed planes rather than `kind: "cross"`
+ * because a shape is one kind or the other and a pot with a flower in it is
+ * both. That costs nothing: a cross *is* two planes at 45 degrees, which is
+ * what `crossFaces` builds, and expressing it as boxes is what lets the pot
+ * keep its own texture through `ShapeBox.texture` while the plant keeps the
+ * block's.
+ *
+ * It reaches above the block, exactly as vanilla's does -- boxes here are not
+ * clamped to 0..16, which is the same latitude a wall torch uses to hang off
+ * the side.
+ */
+const FLOWER_POT: readonly ShapeBox[] = [
+  { box: [5, 0, 5, 6, 6, 11], texture: "flower_pot" },
+  { box: [10, 0, 5, 11, 6, 11], texture: "flower_pot" },
+  { box: [6, 0, 5, 10, 6, 6], texture: "flower_pot" },
+  { box: [6, 0, 10, 10, 6, 11], texture: "flower_pot" },
+  { box: [6, 0, 6, 10, 4, 10], texture: "dirt" },
+];
+
+function pottedPlant(): BlockShape {
+  return boxes(
+    ...FLOWER_POT,
+    { box: [4.8, 6, 8, 11.2, 22, 8], rotation: { origin: [8, 8, 8], axis: "y", angle: 45 } },
+    { box: [8, 6, 4.8, 8, 22, 11.2], rotation: { origin: [8, 8, 8], axis: "y", angle: 45 } },
+  );
+}
+
+/**
  * A piston head: the plate you see, and the rod holding it out.
  *
  * Vanilla's own model, in the same 0..16 units — a 4-deep plate at the far
@@ -681,13 +774,13 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
       { box: [0, 0, 0, 16, 16, 16], texture: "glass" },
       { box: [2, 2, 2, 14, 14, 14], texture: "beacon" },
     ),
-  flower_pot: () => boxes([5, 0, 5, 11, 6, 11]),
+  flower_pot: () => boxes(...FLOWER_POT),
   campfire: () => boxes([0, 0, 0, 16, 7, 16]),
   soul_campfire: () => boxes([0, 0, 0, 16, 7, 16]),
   cauldron: () => boxes([0, 0, 0, 16, 16, 16]),
   hopper: () => boxes([0, 10, 0, 16, 16, 16]),
   end_rod: () => boxes([6, 0, 6, 10, 16, 10]),
-  chain: () => boxes([6.5, 0, 6.5, 9.5, 16, 9.5]),
+  chain,
   bell: () => boxes([4, 4, 4, 12, 12, 12]),
   conduit: () => boxes([5, 5, 5, 11, 11, 11]),
   lily_pad: () => boxes([0, 0, 0, 16, 1, 16]),
@@ -743,6 +836,9 @@ export function shapeFor(entry: PaletteEntry): BlockShape {
   const exact = EXACT_SHAPES[name];
   if (exact) {
     return exact(entry);
+  }
+  if (name.startsWith("potted_")) {
+    return pottedPlant();
   }
   if (CROSS_BLOCKS.has(name)) {
     return { kind: "cross" };

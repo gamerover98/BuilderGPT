@@ -680,6 +680,73 @@ console.log("\n--- lantern ---");
   check("a hanging lantern's chain reaches the ceiling", topOf(hanging) === 1);
 }
 
+// --- planes -----------------------------------------------------------------
+//
+// Vanilla writes a *plane* as an element whose `from` and `to` agree on one
+// axis. Four of its six faces then have no area, and emitting them is eight
+// degenerate triangles z-fighting along the edge they share with the two real
+// ones. `boxFaces` decides that from the box rather than from a hand-written
+// `omit`, so a plane added later cannot arrive missing its entry.
+console.log("\n--- planes ---");
+{
+  // Two crossed planes, two drawn faces each. As a solid post it was 6, and
+  // wearing a sheet texture it sampled pixels meant for the other link.
+  const chain = await baker.bakeBlockstate(block("chain"));
+  equal("a chain is four faces, not a box", chain.extraFaces.length, 4);
+  check("a chain is not a full cube", chain.isFullCube !== true);
+
+  const verts = allVertices(chain);
+  check(
+    "and it spans its full height",
+    Math.min(...verts.map((v) => v[1])) === 0 && Math.max(...verts.map((v) => v[1])) === 1,
+  );
+  /*
+   * The signature of the tilt is that the plane gains depth it did not have.
+   * Untilted, the first plane sits at z = 8/16 exactly, so its z extent is
+   * zero; a 45 degree turn about Y trades width for depth and leaves the two
+   * equal.
+   *
+   * Not "it reaches further across x" -- rotating a thin plane about its own
+   * centre makes its x extent *smaller*, 3/16 * cos45 rather than 3/16, and a
+   * check written the other way round fails on correct geometry. Worth leaving
+   * as a comment because it is the obvious wrong guess.
+   */
+  const span = (i: number): number =>
+    Math.max(...verts.map((v) => v[i])) - Math.min(...verts.map((v) => v[i]));
+  check("the planes are tilted, not axis-aligned", span(2) > 1e-6);
+  check("...by 45 degrees, so width and depth come out equal", Math.abs(span(0) - span(2)) < 1e-6);
+  check("...trading width for depth", Math.abs(span(0) - (3 / 16) * Math.SQRT1_2) < 1e-6);
+
+  // A sideways chain lies along its axis instead of standing up. Only the
+  // geometry follows `axis`; the texture still runs across the plane, which is
+  // written down in block_shapes.ts rather than left to be discovered.
+  const sideways = await baker.bakeBlockstate(block("chain", { axis: "x" }));
+  const sx = allVertices(sideways).map((v) => v[0]);
+  equal("a chain on the x axis spans x", [Math.min(...sx), Math.max(...sx)], [0, 1]);
+  const sy = allVertices(sideways).map((v) => v[1]);
+  check("...and no longer spans y", Math.max(...sy) - Math.min(...sy) < 1);
+}
+
+// --- potted plants ----------------------------------------------------------
+//
+// Both halves are needed and neither is enough on its own. With no texture rule
+// these were hashed-colour cubes; with the texture alone they became a cube
+// wearing a poppy, which looks like a decision rather than a gap.
+console.log("\n--- potted plants ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const potted = await baker.bakeBlockstate(block("potted_poppy"));
+  const keys = new Set([...potted.extraFaces].map((face) => face.textureKey));
+  check("the pot is drawn from flower_pot", keys.has("minecraft:block/flower_pot"));
+  check("its soil is dirt", keys.has("minecraft:block/dirt"));
+  check("and the plant is the plant", keys.has("minecraft:block/poppy"));
+  check(
+    "the plant reaches above the pot, as vanilla's does",
+    Math.max(...allVertices(potted).map((v) => v[1])) > 1,
+  );
+}
+
 // --- trapdoor ---------------------------------------------------------------
 console.log("\n--- trapdoor ---");
 {

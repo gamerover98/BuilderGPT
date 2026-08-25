@@ -1154,6 +1154,52 @@ console.log("\n--- the generated state table ---");
   equal("a block with no properties reports none", propertiesOf("stone"), []);
 }
 
+// --- nothing is a cube by accident ------------------------------------------
+//
+// Only a full opaque cube may cull, so a block wrongly left as one does not
+// merely have the wrong silhouette -- it deletes a face from each of its six
+// neighbours. A line of redstone drawn as a cube deletes the floor it lies on.
+//
+// Named rather than swept, because "is this block really a cube" is a question
+// about Minecraft that no property of the code can answer. The list is the ones
+// that were wrong; a sweep would need the answer it is trying to check.
+console.log("\n--- nothing is a cube by accident ---");
+{
+  const notCubes = [
+    "redstone_wire",
+    "skeleton_skull",
+    "skeleton_wall_skull",
+    "decorated_pot",
+    "sniffer_egg",
+    "pointed_dripstone",
+    "sign",
+    "wall_sign",
+    "fire",
+    "soul_fire",
+    "end_portal",
+    "end_gateway",
+    "piston_head",
+    "cocoa",
+    "torchflower_crop",
+    "chain",
+    "potted_poppy",
+    "white_carpet",
+    "oak_hanging_sign",
+  ];
+  const wrong = notCubes.filter((name) =>
+    occludesNeighbours({ namespacedName: `minecraft:${name}`, properties: {} }),
+  );
+  check("none of these culls its neighbours", wrong.length === 0, wrong.join(", "));
+
+  // And the other half of the same rule: the blocks that really are cubes must
+  // stay cubes, or a wall of them stops hiding its own interior.
+  const cubes = ["stone", "oak_wood", "magma_block", "dried_kelp_block", "suspicious_sand"];
+  const soft = cubes.filter(
+    (name) => !occludesNeighbours({ namespacedName: `minecraft:${name}`, properties: {} }),
+  );
+  check("...and the ones that are cubes still are", soft.length === 0, soft.join(", "));
+}
+
 // --- neighbour-derived state ------------------------------------------------
 //
 // The rules alone, driven with literals. The pass that finds the cells to ask

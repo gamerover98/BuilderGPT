@@ -784,6 +784,43 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
   bell: () => boxes([4, 4, 4, 12, 12, 12]),
   conduit: () => boxes([5, 5, 5, 11, 11, 11]),
   lily_pad: () => boxes([0, 0, 0, 16, 1, 16]),
+
+  /*
+   * Blocks that had a texture before they had a shape.
+   *
+   * Every one of these was a full opaque cube, which is two faults rather than
+   * one: the wrong silhouette, and -- because only a full opaque cube may cull
+   * -- a hole punched in each of its six neighbours. A line of redstone drawn
+   * as a cube does not merely look like a wall, it deletes the floor it is
+   * lying on.
+   *
+   * These are approximations and are worth having as approximations. The rule
+   * this file states elsewhere -- an unlisted block stays a cube, because a
+   * confidently wrong shape looks deliberate -- assumes a cube is the harmless
+   * answer. For these it is the harmful one, so a close box beats it.
+   */
+  redstone_wire: () => boxes([0, 0, 0, 16, 1, 16]),
+  skeleton_skull: () => boxes([4, 0, 4, 12, 8, 12]),
+  skeleton_wall_skull: (e) => transform([[4, 4, 8, 12, 12, 16]], facingSteps(e) + 2, false),
+  decorated_pot: () => boxes([1, 0, 1, 15, 16, 15]),
+  sniffer_egg: () => boxes([1, 0, 1, 15, 16, 15]),
+  // Tapered in vanilla, and a taper is a stack of boxes this does not build.
+  // A narrow column is the shape's *reach*, which is what a neighbour needs.
+  pointed_dripstone: () => boxes([5, 0, 5, 11, 16, 11]),
+  // The board on its post. `SUFFIX_SHAPES` keys "_sign", which catches
+  // `oak_sign` and `oak_wall_sign` and not the bare pre-Flattening name.
+  sign: () => boxes([0, 9, 7, 16, 16, 9], [7, 0, 7, 9, 9, 9]),
+  cocoa: (e) => transform([[6, 7, 11, 10, 12, 15]], northFacingSteps(e), false),
+  /*
+   * The two blocks vanilla draws with a shader over a starfield. There is
+   * nothing in a resource pack to read, so the texture is a deliberate black
+   * stand-in and the shape is the surface it sits on: 12/16 up, which is where
+   * you fall through.
+   */
+  end_portal: () => boxes([0, 11, 0, 16, 12, 16]),
+  end_gateway: () => boxes([0, 11, 0, 16, 12, 16]),
+  // The same plate and rod as `moving_piston`, which is what a piston head is.
+  piston_head: pistonHead,
 };
 
 /** Blocks drawn as two crossed quads rather than boxes. */
@@ -824,6 +861,15 @@ const CROSS_BLOCKS: ReadonlySet<string> = new Set([
   "nether_sprouts",
   "brown_mushroom",
   "red_mushroom",
+  /*
+   * Fire is two crossed planes in vanilla too, and was a solid cube here --
+   * so a burning campfire walled off whatever it stood on. `torchflower_crop`
+   * is an ordinary crop that the `age` texture rule reached before any shape
+   * table did.
+   */
+  "fire",
+  "soul_fire",
+  "torchflower_crop",
 ]);
 
 function baseName(entry: PaletteEntry): string {

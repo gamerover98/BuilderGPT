@@ -1225,9 +1225,54 @@ console.log("\n--- nothing is a cube by accident ---");
   );
   check("none of these culls its neighbours", wrong.length === 0, wrong.join(", "));
 
-  // And the other half of the same rule: the blocks that really are cubes must
-  // stay cubes, or a wall of them stops hiding its own interior.
-  const cubes = ["stone", "oak_wood", "magma_block", "dried_kelp_block", "suspicious_sand"];
+  /*
+   * The families the registry brought in. `_bars` and `_lantern` are twenty ids
+   * between them -- the copper golem update added both in four oxidation stages
+   * and their waxed mirrors -- and every one arrived as a full opaque cube.
+   */
+  const families = [
+    "copper_bars",
+    "waxed_oxidized_copper_bars",
+    "copper_lantern",
+    "waxed_exposed_copper_lantern",
+    "candle_cake",
+    "dragon_egg",
+    "turtle_egg",
+    "chorus_flower",
+    "big_dripleaf",
+    "small_dripleaf",
+    "crimson_fungus",
+    "mangrove_propagule",
+    "melon_stem",
+    "attached_pumpkin_stem",
+  ];
+  const solid = families.filter((name) =>
+    occludesNeighbours({ namespacedName: `minecraft:${name}`, properties: {} }),
+  );
+  check("nor do the families the registry brought in", solid.length === 0, solid.join(", "));
+
+  /*
+   * And the other half of the same rule: the blocks that really are cubes must
+   * stay cubes, or a wall of them stops hiding its own interior.
+   *
+   * The last five are the trap. `sea_lantern` and `jack_o_lantern` end in the
+   * same six letters as a lantern and are nothing to do with one; `crimson_stem`
+   * is a *log*, which is why `_stem` is not a suffix rule anywhere in this
+   * codebase; `mushroom_stem` is a full block. Matching any of them by suffix
+   * turns a solid block into a hanging lamp or a sapling.
+   */
+  const cubes = [
+    "stone",
+    "oak_wood",
+    "magma_block",
+    "dried_kelp_block",
+    "suspicious_sand",
+    "sea_lantern",
+    "jack_o_lantern",
+    "crimson_stem",
+    "stripped_warped_stem",
+    "mushroom_stem",
+  ];
   const soft = cubes.filter(
     (name) => !occludesNeighbours({ namespacedName: `minecraft:${name}`, properties: {} }),
   );

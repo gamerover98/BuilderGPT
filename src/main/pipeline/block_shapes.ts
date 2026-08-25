@@ -511,6 +511,24 @@ const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => Bl
    * one entry, and the bare `chain` still reaches it through EXACT_SHAPES.
    */
   ["_chain", chain],
+  /*
+   * `_bars` and `_lantern` are families now, not one block each: the copper
+   * golem update added bars and a lantern in four oxidation stages plus their
+   * waxed mirrors, twenty ids that all arrived as full opaque cubes.
+   *
+   * `_lantern` has two exceptions and they are both real blocks that really are
+   * cubes -- `sea_lantern` and `jack_o_lantern` end in the same six letters and
+   * are nothing to do with lanterns. Matching by suffix without checking would
+   * have turned two solid blocks into hanging lamps.
+   */
+  ["_bars", pane],
+  [
+    "_lantern",
+    (e) => {
+      const name = baseName(e);
+      return name === "sea_lantern" || name === "jack_o_lantern" ? CUBE : lantern(e);
+    },
+  ],
   // A shelf against the wall, opening away from it.
   ["_shelf", shelf],
   /*
@@ -994,6 +1012,20 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
   sulfur_spike: () => boxes([5, 0, 5, 11, 16, 11]),
 
   /*
+   * The rest of the blocks the registry brought in that a cube gets wrong.
+   *
+   * A cube here is not merely the wrong silhouette: it culls, so each of these
+   * was deleting a face from all six of its neighbours. A crop stem across a
+   * field took the field with it.
+   */
+  candle_cake: () => boxes([1, 0, 1, 15, 8, 15], [7, 8, 7, 9, 14, 9]),
+  dragon_egg: () => boxes([1, 0, 1, 15, 16, 15]),
+  turtle_egg: () => boxes([5, 0, 5, 11, 7, 11]),
+  chorus_flower: () => boxes([2, 2, 2, 14, 14, 14]),
+  big_dripleaf: () => boxes([0, 11, 0, 16, 15, 16]),
+  big_dripleaf_stem: () => boxes([5, 0, 5, 11, 16, 11]),
+
+  /*
    * Blocks that had a texture before they had a shape.
    *
    * Every one of these was a full opaque cube, which is two faults rather than
@@ -1094,6 +1126,20 @@ const CROSS_BLOCKS: ReadonlySet<string> = new Set([
   "golden_dandelion",
   "pale_hanging_moss",
   "resin_clump",
+  /*
+   * Crops and fungi that arrived with the registry. `_stem` is emphatically not
+   * a suffix rule here -- `crimson_stem` is a log and a full cube -- so the two
+   * crop stems and their attached forms are named one at a time.
+   */
+  "crimson_fungus",
+  "warped_fungus",
+  "mangrove_propagule",
+  "hanging_roots",
+  "small_dripleaf",
+  "melon_stem",
+  "pumpkin_stem",
+  "attached_melon_stem",
+  "attached_pumpkin_stem",
 ]);
 
 function baseName(entry: PaletteEntry): string {

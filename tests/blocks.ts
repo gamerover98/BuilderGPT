@@ -1317,6 +1317,46 @@ if (pack === null) {
   ).map((v) => v[0]);
   equal("...and the right half reaches back", [Math.min(...right), Math.max(...right)], [0, 15 / 16]);
 
+  /*
+   * The sheet windows, read back in the sheet's own 64-unit space.
+   *
+   * A double half is unwrapped **15 wide** where a single is 14, and the unwrap
+   * lays the six faces out end to end -- so one extra column shifts every
+   * window after the first. Passing 14 for a `normal_left` sheet put the front
+   * one column off and gave each side a stripe of its neighbour, which looks
+   * like a texture drawn slightly wrong rather than one read from the wrong
+   * place. That is why it outlived the rotation fix.
+   *
+   * The front is the sheet's `south` window and it must land on the model's
+   * *north* face, which is what `facing=north` means.
+   */
+  const windowOf = (baked: BakedBlock, axis: 0 | 2, sign: number): [number, number] | null => {
+    const face = baked.extraFaces.find((f) => f.normal[axis] === sign && f.normal[1] === 0);
+    if (!face) return null;
+    const us = [face.uvs[0], face.uvs[2], face.uvs[4], face.uvs[6]].map((n) => n * 64);
+    return [Math.min(...us), Math.max(...us)];
+  };
+  const singleChest = await baker.bakeBlockstate(block("chest", { facing: "north", type: "single" }));
+  equal("a single chest's front is the sheet's south window", windowOf(singleChest, 2, -1), [42, 56]);
+  const leftChest = await baker.bakeBlockstate(block("chest", { facing: "north", type: "left" }));
+  equal("a double half's front is fifteen wide", windowOf(leftChest, 2, -1), [43, 58]);
+  equal("...and its outer side is where the wider unwrap puts it", windowOf(leftChest, 0, -1), [29, 43]);
+
+  /*
+   * The face that meets the partner is not drawn at all. Both halves put one
+   * there, at the same world position, both holding the sheet's dark seam --
+   * two coincident faces z-fighting over the chest's own interior, which is the
+   * black line down the middle of a double chest.
+   */
+  equal("a double half draws no face toward its partner", windowOf(leftChest, 0, 1), null);
+  const rightChest = await baker.bakeBlockstate(block("chest", { facing: "north", type: "right" }));
+  equal("...on the other side for the other half", windowOf(rightChest, 0, -1), null);
+  check(
+    "so a half has two fewer faces than a single chest",
+    leftChest.extraFaces.length === singleChest.extraFaces.length - 2,
+    `${leftChest.extraFaces.length} vs ${singleChest.extraFaces.length}`,
+  );
+
   // 2. A furnace wore furnace_side on all four sides, fire included.
   equal("a furnace has a front", await bakedKey("furnace", { facing: "north" }), "minecraft:block/furnace_front");
   equal(
@@ -1341,6 +1381,34 @@ if (pack === null) {
   // list, and the pack was updated to one that has them.
   check("a shelf is a back panel and two lips", boxCount("oak_shelf", { facing: "north" }) === 3);
   equal("...wearing its own texture", await bakedKey("oak_shelf", { facing: "north" }), "minecraft:block/oak_shelf");
+  /*
+   * `oak_shelf.png` is a *sheet* -- 128x128 where an ordinary block texture is
+   * 64x64 -- with the panel, the lips and their ends in separate regions. UVs
+   * derived from box coordinates address none of them, so the block came out
+   * the right shape wearing pieces of itself from the wrong places: the lantern
+   * and chain failure a third time.
+   *
+   * The check is that the windows are the *model's*, not the box's. A
+   * coordinate-derived window spans the face's own extent -- the panel is full
+   * width, so its south face would run u 0..16 -- while vanilla puts it at
+   * 8..16, the right half of the sheet.
+   */
+  const shelfBlock = await baker.bakeBlockstate(block("oak_shelf", { facing: "north" }));
+  const shelfSouth = shelfBlock.extraFaces.find((f) => f.normal[2] === 1);
+  check("its UVs come from the model, not from its boxes", shelfSouth !== undefined);
+  if (shelfSouth) {
+    const us = [shelfSouth.uvs[0], shelfSouth.uvs[2], shelfSouth.uvs[4], shelfSouth.uvs[6]];
+    equal("the panel reads the sheet's right half", [Math.min(...us) * 16, Math.max(...us) * 16], [8, 16]);
+  }
+  // Vanilla draws no face where one part covers another, and says so per face
+  // rather than leaving them to z-fight.
+  // Three boxes of six faces, less the one each that another part covers: the
+  // panel has no north, and neither lip has a south.
+  check(
+    "and the covered faces are left out",
+    shelfBlock.extraFaces.length === 15,
+    `${shelfBlock.extraFaces.length} faces, expected 18 less the three vanilla omits`,
+  );
   check("an iron chain is two planes", boxCount("iron_chain") === 2);
   check("...and so is a copper one", boxCount("copper_chain") === 2);
   // The rename: both spellings are offered and both draw the same thing.

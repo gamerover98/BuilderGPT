@@ -432,8 +432,24 @@ function bed(entry: PaletteEntry): BlockShape {
  * happen to be adjacent -- which is exactly what a double chest is not.
  */
 function chest(entry: PaletteEntry): BlockShape {
-  const body = unwrapCube(0, 19, 14, 10, 14);
-  const lid = unwrapCube(0, 0, 14, 5, 14);
+  /*
+   * A double half's sheet is unwrapped **15 wide**, not 14.
+   *
+   * The unwrap lays the six faces out end to end, so one extra column of width
+   * shifts every window after the first: the front sat one column left of where
+   * it is, and the sides sampled a stripe of their neighbour. Passing the
+   * single chest's 14 for a `normal_left` sheet is a fault that looks like a
+   * texture drawn slightly wrong rather than a texture read from the wrong
+   * place, which is why it survived the rotation fix.
+   *
+   * Confirmed against the sheets: the seam column -- the dark, textureless join
+   * -- starts at 29 on `normal_right`, which is `d + w` for d=14 and w=15.
+   */
+  const type = entry.properties.type;
+  const wide = type === "left" || type === "right";
+  const width = wide ? 15 : 14;
+  const body = unwrapCube(0, 19, width, 10, 14);
+  const lid = unwrapCube(0, 0, width, 5, 14);
   /*
    * The seam faces the partner: `left` is joined clockwise of its facing, which
    * for a north-facing chest is east.
@@ -445,16 +461,28 @@ function chest(entry: PaletteEntry): BlockShape {
    * double chest's seam on its outer edge and its open side against its
    * partner, which reads as two chests pushed apart rather than one joined.
    */
-  const type = entry.properties.type;
   const x0 = type === "left" ? 0 : 1;
   const x1 = type === "right" ? 16 : 15;
+  /*
+   * The face that meets the partner is not drawn.
+   *
+   * Both halves put one there, at the same world position, and both windows
+   * hold the sheet's seam -- the dark, textureless join. Two coincident faces
+   * z-fighting over the chest's own interior is exactly the black line down the
+   * middle of a double chest.
+   *
+   * Named before the rotation, because `rotateShapeBox` turns `omit` with the
+   * box: `left` is joined clockwise of its facing, which is the model's *west*
+   * face before the half-turn puts it east.
+   */
+  const inner = wide ? [type === "left" ? "west" : "east"] : [];
   return transform(
     [
       // The body's top and the lid's underside are coincident planes, and the
       // body's top window is the chest's dark *interior* -- left in, they
       // z-fight and the seam flickers black.
-      { box: [x0, 0, 1, x1, 10, 15], uv: body, omit: ["up"] },
-      { box: [x0, 9, 1, x1, 14, 15], uv: lid, omit: ["down"] },
+      { box: [x0, 0, 1, x1, 10, 15], uv: body, omit: ["up", ...inner] },
+      { box: [x0, 9, 1, x1, 14, 15], uv: lid, omit: ["down", ...inner] },
     ],
     southFacingSteps(entry),
     false,
@@ -814,17 +842,61 @@ function anvil(entry: PaletteEntry): BlockShape {
  *
  * `template_shelf_body.json` puts the panel at z 13..16, so the model is
  * authored with its opening facing **north**.
+ *
+ * ## Its UVs are the model's, and they have to be
+ *
+ * `oak_shelf.png` is a *sheet* -- 128x128 where an ordinary block texture is
+ * 64x64 -- with the panel, the lips and their ends laid out in separate
+ * regions. UVs derived from box coordinates address none of them, which is the
+ * lantern and chain failure a third time: the block was the right shape wearing
+ * pieces of itself from the wrong places.
+ *
+ * Several windows are **reversed** (`up: [16, 5, 8, 3.5]` has both u and v
+ * descending). That is vanilla mirroring a face, and `windowUvsFrom` carries it
+ * through unchanged because it does no ordering check.
+ *
+ * The `omit` lists are vanilla's too: the model simply has no `north` face on
+ * the panel and no `south` on either lip, because each is covered by what sits
+ * against it.
  */
+const SHELF_PARTS: readonly ShapeBox[] = [
+  {
+    box: [0, 0, 13, 16, 16, 16],
+    uv: {
+      east: [8, 0, 9.5, 8],
+      south: [8, 0, 16, 8],
+      west: [14.5, 0, 16, 8],
+      up: [16, 5, 8, 3.5],
+      down: [16, 6, 8, 4.5],
+    },
+    omit: ["north"],
+  },
+  {
+    box: [0, 0, 11, 16, 4, 13],
+    uv: {
+      north: [0, 6, 8, 8],
+      east: [1.5, 6, 2.5, 8],
+      west: [5.5, 6, 6.5, 8],
+      up: [8, 3.5, 16, 4.5],
+      down: [16, 4.5, 8, 3.5],
+    },
+    omit: ["south"],
+  },
+  {
+    box: [0, 12, 11, 16, 16, 13],
+    uv: {
+      north: [0, 0, 8, 2],
+      east: [1.5, 0, 2.5, 2],
+      west: [5.5, 0, 6.5, 2],
+      up: [16, 6, 8, 5],
+      down: [8, 5, 16, 6],
+    },
+    omit: ["south"],
+  },
+];
+
 function shelf(entry: PaletteEntry): BlockShape {
-  return transform(
-    [
-      [0, 0, 13, 16, 16, 16],
-      [0, 0, 11, 16, 4, 13],
-      [0, 12, 11, 16, 16, 13],
-    ],
-    northFacingSteps(entry),
-    false,
-  );
+  return transform(SHELF_PARTS, northFacingSteps(entry), false);
 }
 
 /**

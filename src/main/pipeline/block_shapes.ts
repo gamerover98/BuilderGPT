@@ -68,9 +68,14 @@ export interface ShapeBox {
   readonly omit?: readonly string[];
 }
 
+/*
+ * There is no "invisible" kind, and there used to be. `light` was the only
+ * block that produced one, on the argument that it has no in-game appearance to
+ * reproduce -- which is true and beside the point, because neither does a
+ * barrier. Now that it draws, nothing is invisible, and a variant nothing
+ * produces is a branch nothing tests.
+ */
 export type BlockShape =
-  /** Not drawn at all. */
-  | { readonly kind: "invisible" }
   /** The default: one 0..16 box, handled on the existing fast path. */
   | { readonly kind: "cube" }
   | { readonly kind: "boxes"; readonly boxes: readonly ShapeBox[] }
@@ -78,7 +83,6 @@ export type BlockShape =
   | { readonly kind: "cross" };
 
 const CUBE: BlockShape = { kind: "cube" };
-const INVISIBLE: BlockShape = { kind: "invisible" };
 
 const boxes = (...list: (Box | ShapeBox)[]): BlockShape => ({
   kind: "boxes",
@@ -361,13 +365,38 @@ function unwrapCube(
     (x + width) / 4,
     (y + height) / 4,
   ];
+  /*
+   * The four side strips run **bottom-up**, and the lock says so.
+   *
+   * A chest's lock plate straddles the joint: it is a notch in the *bottom* of
+   * the lid's front and the *top* of the body's front. In the sheet that notch
+   * sits two rows into the lid strip and two rows short of the end of the body
+   * strip -- which puts both of them at the joint only if the first row of a
+   * side strip is the box's bottom edge.
+   *
+   * Read the strips top-down instead and the chest comes out with its lock in
+   * two places it cannot be: near the top of the lid and near the bottom of the
+   * body. That is what it was doing, and it is the kind of fault that survives
+   * two rounds of looking at it, because every plank still lines up and only
+   * one small detail is in the wrong place.
+   *
+   * Expressed by handing back a window whose v descends. `windowUvsFrom` does
+   * no ordering check, so a reversed window flips the face -- the same
+   * mechanism vanilla's own models use to mirror one.
+   */
+  const side = (x: number, y: number, width: number, height: number): UvWindow => [
+    x / 4,
+    (y + height) / 4,
+    (x + width) / 4,
+    y / 4,
+  ];
   return {
     down: w(u + dz, v, dx, dz),
     up: w(u + dz + dx, v, dx, dz),
-    west: w(u, v + dz, dz, dy),
-    north: w(u + dz, v + dz, dx, dy),
-    east: w(u + dz + dx, v + dz, dz, dy),
-    south: w(u + 2 * dz + dx, v + dz, dx, dy),
+    west: side(u, v + dz, dz, dy),
+    north: side(u + dz, v + dz, dx, dy),
+    east: side(u + dz + dx, v + dz, dz, dy),
+    south: side(u + 2 * dz + dx, v + dz, dx, dy),
   };
 }
 
@@ -984,12 +1013,18 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
    * without hiding what is behind it. `preview.showMarkers` turns them back
    * into air for anyone who wants the player's view.
    *
-   * `light` stays invisible: it has no in-game appearance to reproduce and no
-   * structural meaning to review.
+   * `light` is one of them now, and used to be the exception. The argument for
+   * leaving it out was that it has no in-game appearance to reproduce -- which
+   * is true and beside the point, because neither does a barrier. A light block
+   * is placed deliberately, at a level somebody chose, and a build lit by a
+   * dozen of them looked exactly like a build lit by nothing. What it wears is
+   * the icon the game shows you in your hand, and vanilla ships **sixteen** of
+   * those, one per level, each with its number drawn on it -- so the level is
+   * legible on every face without this code drawing a single glyph.
    */
   barrier: () => CUBE,
   structure_void: () => CUBE,
-  light: () => INVISIBLE,
+  light: () => CUBE,
 
   /*
    * The block the game puts where a pushed block is on its way to.
@@ -1239,6 +1274,72 @@ export function shapeFor(entry: PaletteEntry): BlockShape {
   return CUBE;
 }
 
+/** The six sides of a cell, as the mesher names them. */
+export type CellFace = "north" | "south" | "east" | "west" | "up" | "down";
+
+const FACE_AXIS: Readonly<Record<CellFace, 0 | 1 | 2>> = {
+  west: 0,
+  east: 0,
+  down: 1,
+  up: 1,
+  north: 2,
+  south: 2,
+};
+
+/** Whether the face sits at the cell's 0 edge rather than its 16 edge. */
+const FACE_AT_MIN: Readonly<Record<CellFace, boolean>> = {
+  west: true,
+  east: false,
+  down: true,
+  up: false,
+  north: true,
+  south: false,
+};
+
+/**
+ * Whether this block's geometry fills one side of its cell, edge to edge.
+ *
+ * The question the mesher actually needs, and it is not the one
+ * `occludesNeighbours` answers. That one asks "is this a solid block", which is
+ * right for lighting and too blunt for culling: a slab covers the cell below it
+ * completely and the cell beside it not at all, and a shelf's back panel covers
+ * the wall it is hung on.
+ *
+ * A rotated box is refused outright. A tilted plane can pass through a face
+ * without covering it, and the arithmetic that would tell the two apart is
+ * worth less than the one block it would win -- nothing in this file tilts a
+ * box that also reaches a boundary.
+ */
+export function coversFace(entry: PaletteEntry, face: CellFace): boolean {
+  const shape = shapeFor(entry);
+  if (shape.kind === "cube") return true;
+  if (shape.kind !== "boxes") return false;
+
+  const axis = FACE_AXIS[face];
+  const atMin = FACE_AT_MIN[face];
+  const others: Array<0 | 1 | 2> = [0, 1, 2].filter((a) => a !== axis) as Array<0 | 1 | 2>;
+
+  return shape.boxes.some(({ box, rotation }) => {
+    if (rotation !== undefined) return false;
+    // The box has to touch the boundary this face sits on...
+    if (atMin ? box[axis] > 0 : box[axis + 3] < 16) return false;
+    // ...and span the whole square on the other two axes.
+    return others.every((a) => box[a] <= 0 && box[a + 3] >= 16);
+  });
+}
+
+/**
+ * Whether this block hides the neighbour's face on the given side.
+ *
+ * `coversFace` plus opacity: glass covers every side of its cell and hides
+ * nothing behind it. The see-through list is the same one `occludesNeighbours`
+ * consults, which is what keeps the two answers from drifting apart.
+ */
+export function occludesFace(entry: PaletteEntry, face: CellFace): boolean {
+  if (paletteEntryIsAir(entry)) return false;
+  return coversFace(entry, face) && !isSeeThrough(entry);
+}
+
 /**
  * Whether this block hides the face of the neighbour behind it.
  *
@@ -1290,6 +1391,7 @@ function isSeeThrough(entry: PaletteEntry): boolean {
      */
     name === "barrier" ||
     name === "structure_void" ||
+    name === "light" ||
     name.endsWith("_ice")
   );
 }

@@ -17,7 +17,12 @@
 // two Mapping.get() + skip-on-None(undefined) sites, both silent
 // (no log) on miss — preserved verbatim below, see comments at each site.
 
-import { occludesNeighbours } from "./block_shapes.js";
+import {
+  coversFace,
+  occludesFace,
+  occludesNeighbours,
+  type CellFace,
+} from "./block_shapes.js";
 import type { BakedFace, MeshBuffers, PaletteEntry, StructureData, UVRect } from "./types.js";
 import { bakedFaceOffset, paletteEntryIsAir } from "./types.js";
 import type { BakedBlock, ModelBaker } from "./model_baker.js";
@@ -75,6 +80,16 @@ const DIRECTIONS: Record<string, readonly [number, number, number]> = {
  * RULEBOOK.md §1's async-model row — awaited below, unlike the source's
  * synchronous `baker.bake_blockstate(entry)` call.
  */
+/** The face of the neighbouring cell that looks back at each of ours. */
+const OPPOSITE_FACE: Readonly<Record<string, CellFace>> = {
+  north: "south",
+  south: "north",
+  east: "west",
+  west: "east",
+  up: "down",
+  down: "up",
+};
+
 export async function culledFaces(
   struct: StructureData,
   baker: ModelBaker,
@@ -318,17 +333,38 @@ export async function culledFaces(
           const nz = z + dz;
           if (nx >= 0 && nx < sizeX && ny >= 0 && ny < sizeY && nz >= 0 && nz < sizeZ) {
             const neighbor = paletteEntry(voxels[flatIndex(nx, ny, nz)]);
-            // mesher.py asked `is_transparent`, a hardcoded name list. The
-            // real question is whether the neighbour *covers* this face, which
-            // a slab, a fence or a pane does not however opaque its texture.
-            if (occludesNeighbours(neighbor)) {
+            /*
+             * mesher.py asked `is_transparent`, a hardcoded name list. The real
+             * question is whether the neighbour *covers* this face, which a
+             * fence or a pane does not however opaque its texture.
+             *
+             * Asked per side rather than per block, which is the difference
+             * between "is this a solid block" and "does it cover *this* face".
+             * A slab covers the cell below it completely and the cell beside it
+             * not at all; a shelf's back panel covers the wall it hangs on, and
+             * without that its panel and the wall's face are coplanar and
+             * z-fight.
+             */
+            const facing = OPPOSITE_FACE[faceName];
+            if (occludesFace(neighbor, facing)) {
               continue;
             }
-            // A block always hides the identical block next to it, even when
-            // both are see-through. This is what keeps a body of water or a
-            // wall of glass from meshing every internal face now that neither
-            // occludes an opaque neighbour — and it is what the game does.
-            if (neighbor.namespacedName === entry.namespacedName) {
+            /*
+             * A block hides the identical block next to it, even when both are
+             * see-through: that is what keeps a body of water or a wall of
+             * glass from meshing every internal face, and it is what the game
+             * does.
+             *
+             * **It has to ask about coverage too.** `namespacedName` carries no
+             * block state, so a double slab and a single slab of the same wood
+             * are "identical" to a name comparison -- and the double slab lost
+             * the face the single one only half covers, leaving a hole across
+             * the middle of it.
+             */
+            if (
+              neighbor.namespacedName === entry.namespacedName &&
+              coversFace(neighbor, facing)
+            ) {
               continue;
             }
           }

@@ -921,12 +921,6 @@ export class ModelBaker {
 
   private async bakeFallback(entry: PaletteEntry): Promise<BakedBlock> {
     const shape = shapeFor(entry);
-    if (shape.kind === "invisible") {
-      // Nothing to draw and nothing to cull against — `barrier` is the reason
-      // this exists (see block_shapes.ts).
-      return { faces: {}, extraFaces: [], textureKey: "", isFullCube: false };
-    }
-
     const texturedFaces = await this.cubeFaceTextures(entry);
     if (texturedFaces !== null) {
       // inventory.tsv row `_cube_face_textures` (6-way first-non-null-wins
@@ -1334,6 +1328,23 @@ export class ModelBaker {
 
     if (normalized.endsWith("_bed")) {
       return bedCandidates(entry, normalized, face);
+    }
+
+    /*
+     * A light block wears the level it was set to.
+     *
+     * Vanilla ships `item/light_00` through `item/light_15`, each with its
+     * number drawn on it, because that is what the game puts in your hand. So
+     * "write the intensity on every face" needs no glyphs and no compositing --
+     * only the right one of sixteen files.
+     *
+     * Zero-padded, and 15 when the state says nothing, which is the level a
+     * light block is placed at.
+     */
+    if (normalized === "light") {
+      const raw = Number(entry.properties.level ?? "15");
+      const level = Number.isFinite(raw) ? Math.min(15, Math.max(0, Math.trunc(raw))) : 15;
+      return [`item/light_${String(level).padStart(2, "0")}`, "item/light"];
     }
 
     /*

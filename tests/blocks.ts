@@ -22,7 +22,12 @@ import {
   placementState,
   type PlacementLook,
 } from "../src/shared/block_orientation.js";
-import { occludesNeighbours, shapeFor } from "../src/main/pipeline/block_shapes.js";
+import {
+  coversFace,
+  occludesFace,
+  occludesNeighbours,
+  shapeFor,
+} from "../src/main/pipeline/block_shapes.js";
 import {
   ModelBaker,
   SPECIAL_FACE_RULES,
@@ -121,16 +126,42 @@ console.log("--- texture orientation ---");
   }
 }
 
-// --- invisible blocks -------------------------------------------------------
-console.log("\n--- invisible blocks ---");
+// --- the light block --------------------------------------------------------
+//
+// It used to bake nothing, on the argument that it has no in-game appearance to
+// reproduce. That is true and beside the point: neither does a barrier, and a
+// build lit by a dozen light blocks looked exactly like a build lit by none.
+//
+// What it wears is the icon the game puts in your hand, and vanilla ships
+// sixteen of those -- one per level, each with its number drawn on it -- so the
+// level is legible on every face without this code drawing a glyph.
+console.log("\n--- the light block ---");
 {
-  /*
-   * `light` really is invisible: it has no in-game appearance to reproduce and
-   * no structural meaning to review.
-   */
-  const baked = await baker.bakeBlockstate(block("light"));
-  equal("light bakes no geometry", allVertices(baked).length, 0);
+  const baked = await baker.bakeBlockstate(block("light", { level: "15" }));
+  check("a light block is drawn", allVertices(baked).length > 0);
+  equal("...wearing the level it was set to", baked.textureKey, "minecraft:item/light_15");
+  equal(
+    "...zero-padded, so 7 is light_07",
+    (await baker.bakeBlockstate(block("light", { level: "7" }))).textureKey,
+    "minecraft:item/light_07",
+  );
+  equal(
+    "a light block with no level is a full one",
+    (await baker.bakeBlockstate(block("light"))).textureKey,
+    "minecraft:item/light_15",
+  );
+  // It must not cull, for the reason the barrier must not: it hides nothing in
+  // the game, so deleting the face of the wall behind it would be worse than
+  // not drawing it.
   check("light does not occlude its neighbours", !occludesNeighbours(block("light")));
+  // Its *geometry* is a full cube -- that is how it gets six faces to write the
+  // level on -- so the thing that must be false is the opacity, not the shape.
+  check("its geometry is a full cube", coversFace(block("light"), "down"));
+  check("...but it hides nothing behind it", !occludesFace(block("light"), "down"));
+
+  // And it still lights the mesh, which is the whole point of the block.
+  equal("it emits the level it names", blockEmission(block("light", { level: "9" })), 9);
+  equal("...and a full one by default", blockEmission(block("light")), MAX_LIGHT);
 }
 
 // --- markers ----------------------------------------------------------------
@@ -1279,6 +1310,89 @@ console.log("\n--- nothing is a cube by accident ---");
   check("...and the ones that are cubes still are", soft.length === 0, soft.join(", "));
 }
 
+// --- culling is a question about a face, not about a block ------------------
+//
+// `occludesNeighbours` asks "is this a solid block", which is right for
+// lighting and too blunt for culling. Two faults came out of the gap.
+console.log("\n--- culling per face ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const air = block("air");
+  /** Faces of the block at x=0 that point east, toward its neighbour at x=1. */
+  const eastFacesOf = async (here: PaletteEntry, beside: PaletteEntry): Promise<number> => {
+    const struct = structureOf(2, 1, 1, [air, here, beside], (x) => (x === 0 ? 1 : 2));
+    const faces = await culledFaces(struct, baker);
+    return faces.filter((f) => f.normal[0] === 1 && f.positions[0] <= 1.01).length;
+  };
+  /** Faces of the block at y=0 that point up, toward its neighbour at y=1. */
+  const upFacesOf = async (lower: PaletteEntry, upper: PaletteEntry): Promise<number> => {
+    const struct = structureOf(1, 2, 1, [air, lower, upper], (_x, y) => (y === 0 ? 1 : 2));
+    const faces = await culledFaces(struct, baker);
+    return faces.filter((f) => f.normal[1] === 1 && f.positions[1] <= 1.01).length;
+  };
+  const slab = (type: string) => block("oak_slab", { type });
+
+  /*
+   * A hole across the middle of a double slab's face.
+   *
+   * `namespacedName` carries no block state, so the identical-neighbour rule --
+   * the one that keeps an ocean from meshing its own interior -- read a double
+   * slab and a single slab of the same wood as the same block and culled the
+   * face between them. A single slab covers half of that face, so the other
+   * half of the double slab was simply missing.
+   *
+   * Side by side, which is the arrangement that shows it: stacked, a bottom
+   * slab really does cover the whole top of the block beneath it, so there is
+   * nothing to lose.
+   */
+  equal("a double slab keeps the side a half slab only half covers", await eastFacesOf(slab("double"), slab("bottom")), 1);
+  equal("...and the side facing air", await eastFacesOf(slab("double"), air), 1);
+  // The rule still has to do its job where the blocks really are identical.
+  equal("...but not beside another double slab", await eastFacesOf(slab("double"), slab("double")), 0);
+  equal("nor does glass mesh its own interior", await eastFacesOf(block("glass"), block("glass")), 0);
+
+  /*
+   * The other half of the same gap: a slab *does* cover the cell below it, and
+   * a shelf covers the wall it hangs on. Without that the shelf's back panel
+   * and the wall's face are coplanar, which is the z-fighting that was reported
+   * as the shelf passing through its neighbour.
+   */
+  equal("a stone top is hidden by the slab resting on it", await upFacesOf(block("stone"), slab("bottom")), 0);
+  equal("...and not by a top slab, which does not touch it", await upFacesOf(block("stone"), slab("top")), 1);
+  equal(
+    "a wall loses the face a shelf hangs on",
+    await eastFacesOf(block("stone"), block("oak_shelf", { facing: "east" })),
+    0,
+  );
+  equal(
+    "...and keeps it when the shelf faces away",
+    await eastFacesOf(block("stone"), block("oak_shelf", { facing: "west" })),
+    1,
+  );
+
+  for (const [face, facing] of [
+    ["south", "north"],
+    ["north", "south"],
+    ["east", "west"],
+    ["west", "east"],
+  ] as const) {
+    check(
+      `a ${facing}-facing shelf covers its ${face} side`,
+      coversFace(block("oak_shelf", { facing }), face),
+    );
+    check(
+      `...and not the ${facing} one it opens onto`,
+      !coversFace(block("oak_shelf", { facing }), facing),
+    );
+  }
+
+  // A cross has no side to cover, and a rotated box is refused outright: a
+  // tilted plane can pass through a face without covering it.
+  check("a cross covers nothing", !coversFace(block("dandelion"), "down"));
+  check("nor does a chain, whose planes are tilted", !coversFace(block("chain"), "down"));
+}
+
 // --- the blocks that were reported wrong ------------------------------------
 //
 // One check per fault, named after what was on screen. Every one of these was a
@@ -1348,6 +1462,53 @@ if (pack === null) {
    * two coincident faces z-fighting over the chest's own interior, which is the
    * black line down the middle of a double chest.
    */
+  /*
+   * The lock straddles the joint, and that is what says the side strips run
+   * bottom-up.
+   *
+   * A chest's lock plate is a notch in the *bottom* of the lid's front and the
+   * *top* of the body's front. Read the sheet's side strips top-down -- the
+   * obvious way, and the way this did for two rounds -- and the chest comes out
+   * with its lock in two places it cannot be: near the top of the lid and near
+   * the bottom of the body. Every plank still lines up, which is why it
+   * survived being looked at twice.
+   *
+   * Checked by sampling the texture where the lock must be against the same
+   * column at the far end of each part. A re-inversion swaps which of the two
+   * is the notch, so the pair has to disagree in this direction specifically.
+   */
+  const frontFaces = singleChest.extraFaces.filter((f) => f.normal[2] === -1);
+  equal("the front is two parts, lid and body", frontFaces.length, 2);
+  const sampleFace = (face: BakedFace, fx: number, fy: number): number => {
+    const tex = baker.textures[face.textureKey];
+    const us = [face.uvs[0], face.uvs[2], face.uvs[4], face.uvs[6]];
+    const vs = [face.uvs[1], face.uvs[3], face.uvs[5], face.uvs[7]];
+    const u = us[3] + (us[2] - us[3]) * fx;
+    const v = vs[3] + (vs[0] - vs[3]) * fy;
+    const x = Math.min(tex.width - 1, Math.max(0, Math.floor(u * tex.width)));
+    const y = Math.min(tex.height - 1, Math.max(0, Math.floor(v * tex.height)));
+    const i = (tex.width * y + x) << 2;
+    return tex.data[i] * 0.299 + tex.data[i + 1] * 0.587 + tex.data[i + 2] * 0.114;
+  };
+  // Sort by height: the lid is the upper of the two.
+  const heightOf = (f: BakedFace) => Math.max(f.positions[1], f.positions[4], f.positions[7], f.positions[10]);
+  const [lidFace, bodyFace] = [...frontFaces].sort((a, b) => heightOf(b) - heightOf(a));
+  // fy runs 0 at the face's top to 1 at its bottom; fx 0.5 is the middle.
+  const lidNearJoint = sampleFace(lidFace, 0.5, 0.9);
+  const lidFarFromJoint = sampleFace(lidFace, 0.5, 0.1);
+  const bodyNearJoint = sampleFace(bodyFace, 0.5, 0.1);
+  const bodyFarFromJoint = sampleFace(bodyFace, 0.5, 0.9);
+  check(
+    "the lid's lock is at its bottom, against the body",
+    lidNearJoint < lidFarFromJoint - 8,
+    `near ${lidNearJoint.toFixed(0)} vs far ${lidFarFromJoint.toFixed(0)}`,
+  );
+  check(
+    "...and the body's is at its top, against the lid",
+    bodyNearJoint < bodyFarFromJoint - 8,
+    `near ${bodyNearJoint.toFixed(0)} vs far ${bodyFarFromJoint.toFixed(0)}`,
+  );
+
   equal("a double half draws no face toward its partner", windowOf(leftChest, 0, 1), null);
   const rightChest = await baker.bakeBlockstate(block("chest", { facing: "north", type: "right" }));
   equal("...on the other side for the other half", windowOf(rightChest, 0, -1), null);

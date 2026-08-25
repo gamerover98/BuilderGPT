@@ -541,7 +541,10 @@ function hideMarkers(structure: StructureData): StructureData {
   let touched = false;
   const palette = structure.palette.map((entry) => {
     const name = entry.namespacedName.replace("minecraft:", "");
-    if (name !== "barrier" && name !== "structure_void") return entry;
+    // `light` joins the two: it is drawn for the same reason they are -- placed
+    // on purpose, invisible in game, and a decision somebody has to be able to
+    // review -- so it hides for the same reason too.
+    if (name !== "barrier" && name !== "structure_void" && name !== "light") return entry;
     touched = true;
     return air;
   });

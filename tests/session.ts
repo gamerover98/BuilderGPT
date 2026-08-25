@@ -1003,12 +1003,127 @@ console.log("\n--- turning a region ---");
   equal("...and so does undoing all four", snapshot(), before);
 }
 
+// --- connecting to the neighbours -------------------------------------------
+//
+// The rules themselves are tests/blocks.ts's. This is the pass: which cells get
+// asked, that it runs from every write rather than from one of them, and that a
+// correction lands in the same undo step as the edit that caused it.
+console.log("\n--- connecting to the neighbours ---");
+{
+  const fence = (properties: Record<string, string> = {}) => ({
+    namespacedName: "minecraft:oak_fence",
+    properties: { north: "false", east: "false", south: "false", west: "false", ...properties },
+  });
+  const session = newDocument({ width: 5, height: 2, length: 5 });
+  const at = (x: number, z: number) => getBlock(session.doc, x, 0, z);
+
+  applyEdit(session, { kind: "setBlock", x: 1, y: 0, z: 1, block: fence() });
+  equal("a lone fence connects to nothing", at(1, 1).properties.north, "false");
+
+  /*
+   * The half that a rule applied at the click could not do: placing the second
+   * fence has to reach *back* and connect the first, or a run of fence is a row
+   * of posts each attached only to what came after it.
+   */
+  applyEdit(session, { kind: "setBlock", x: 1, y: 0, z: 2, block: fence() });
+  equal("placing a second fence connects the new one", at(1, 2).properties.north, "true");
+  equal("...and reaches back to connect the first", at(1, 1).properties.south, "true");
+
+  // One transaction. The correction to the neighbour is part of the placement,
+  // not a second step somebody has to undo separately.
+  const before = session.history.undoStack.length;
+  applyEdit(session, { kind: "setBlock", x: 1, y: 0, z: 3, block: fence() });
+  equal("a placement and its corrections are one undo step", session.history.undoStack.length, before + 1);
+  undoEdit(session);
+  equal("...so one undo removes the block", at(1, 3).namespacedName, "minecraft:air");
+  equal("...and the connection it caused", at(1, 2).properties.south, "false");
+
+  // Breaking is a write like any other, so what is left behind lets go.
+  applyEdit(session, {
+    kind: "setBlock",
+    x: 1,
+    y: 0,
+    z: 2,
+    block: { namespacedName: "minecraft:air" },
+  });
+  equal("breaking a fence disconnects its neighbour", at(1, 1).properties.south, "false");
+
+  /*
+   * A fill is the other door into the same room, and the one the rule would
+   * have been missing from if it lived in applyEdit's setBlock arm. Asking the
+   * chat or the agent to build a fence goes through here too.
+   */
+  const filled = newDocument({ width: 6, height: 2, length: 6 });
+  applyEdit(filled, {
+    kind: "fill",
+    region: { minX: 0, minY: 0, minZ: 2, maxX: 4, maxY: 0, maxZ: 2 },
+    block: fence(),
+  });
+  const line = (x: number) => getBlock(filled.doc, x, 0, 2).properties;
+  equal("a filled line of fence connects along itself", [line(1).east, line(1).west], ["true", "true"]);
+  equal("...and the end knows it is an end", [line(0).west, line(0).east], ["false", "true"]);
+
+  // A wall is the family whose connections are none|low|tall rather than
+  // booleans -- the 1.16 type change that reads as a value change.
+  const walls = newDocument({ width: 5, height: 2, length: 5 });
+  const wall = {
+    namespacedName: "minecraft:cobblestone_wall",
+    properties: { north: "none", east: "none", south: "none", west: "none", up: "true" },
+  };
+  applyEdit(walls, {
+    kind: "fill",
+    region: { minX: 1, minY: 0, minZ: 1, maxX: 3, maxY: 0, maxZ: 1 },
+    block: wall,
+  });
+  const middle = getBlock(walls.doc, 2, 0, 1).properties;
+  equal("a wall in a run connects both ways", [middle.east, middle.west], ["low", "low"]);
+  equal("...and drops its post", middle.up, "false");
+
+  /*
+   * The exception that makes "editable afterwards" true.
+   *
+   * The inspector sends `setState`, which derives nothing. Sent as an ordinary
+   * `setBlock` the typed value would be overwritten inside the same transaction
+   * that carried it, and the panel would appear to ignore what was typed.
+   */
+  const typed = at(1, 1).properties;
+  applyEdit(session, {
+    kind: "setState",
+    x: 1,
+    y: 0,
+    z: 1,
+    block: { namespacedName: "minecraft:oak_fence", properties: { ...typed, north: "true" } },
+  });
+  equal("a hand-typed state is not re-derived", at(1, 1).properties.north, "true");
+
+  // ...until something is placed next to it, which is what the game does.
+  applyEdit(session, { kind: "setBlock", x: 1, y: 0, z: 2, block: fence() });
+  equal("...but a placement beside it takes it back", at(1, 1).properties.north, "false");
+}
+
 console.log("\n--- mirroring a region ---");
 {
+  /*
+   * The corner is real geometry, and has to be.
+   *
+   * This used to be one staircase carrying `shape: inner_left` with nothing
+   * around it -- a state the game never produces, and one the derivation pass
+   * now normalises to `straight` on any edit, exactly as a neighbour update in
+   * the game would. So the fixture builds the corner it is claiming: a stair
+   * facing east whose *back* neighbour faces north is an inner-left corner, and
+   * mirroring the pair is what turns it into an inner-right one.
+   *
+   * The claim under test is unchanged -- a reflection changes a corner's hand --
+   * it is now made against an arrangement that can exist.
+   */
   const session = newDocument({ width: 4, height: 1, length: 4 });
-  setBlock(session.doc, 0, 0, 1, {
+  setBlock(session.doc, 1, 0, 1, {
     namespacedName: "minecraft:oak_stairs",
     properties: { facing: "east", shape: "inner_left" },
+  });
+  setBlock(session.doc, 0, 0, 1, {
+    namespacedName: "minecraft:oak_stairs",
+    properties: { facing: "north", shape: "straight" },
   });
   setBlock(session.doc, 1, 0, 0, {
     namespacedName: "minecraft:oak_door",
@@ -1020,18 +1135,18 @@ console.log("\n--- mirroring a region ---");
   const at = (x: number, z: number) => getBlock(session.doc, x, 0, z);
 
   transformRegion(session, whole, { kind: "mirror", axis: "x" });
-  equal("the block reflected across x", at(3, 1).namespacedName, "minecraft:oak_stairs");
-  equal("...and east became west", at(3, 1).properties.facing, "west");
+  equal("the block reflected across x", at(2, 1).namespacedName, "minecraft:oak_stairs");
+  equal("...and east became west", at(2, 1).properties.facing, "west");
   // A reflection is what turns a left-hand staircase into a right-hand one.
-  equal("...and the corner changed hand", at(3, 1).properties.shape, "inner_right");
+  equal("...and the corner changed hand", at(2, 1).properties.shape, "inner_right");
   equal("a door's hinge changed hand too", at(2, 0).properties.hinge, "right");
   equal("...while a north-facing door still faces north", at(2, 0).properties.facing, "north");
 
   // A mirror is its own inverse, which is the cheapest check there is.
-  const mirrored = at(3, 1).properties.facing;
+  const mirrored = at(2, 1).properties.facing;
   transformRegion(session, whole, { kind: "mirror", axis: "x" });
-  equal("mirroring twice restores the facing", at(0, 1).properties.facing, "east");
-  equal("...and the shape", at(0, 1).properties.shape, "inner_left");
+  equal("mirroring twice restores the facing", at(1, 1).properties.facing, "east");
+  equal("...and the shape", at(1, 1).properties.shape, "inner_left");
   check("...having actually changed it in between", mirrored === "west");
 }
 

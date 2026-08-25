@@ -335,6 +335,25 @@ export function applyEdit(session: DocumentSession, request: EditRequest): numbe
   }
 
   /*
+   * The inspector's own edit: exactly this state, no derivation.
+   *
+   * It goes before the growth logic on purpose -- the block is already there,
+   * so there is nothing to grow towards, for the same reason `replace` does not
+   * grow. A `setState` aimed outside the document changes nothing and says so
+   * through `changed: 0`.
+   */
+  if (request.kind === "setState") {
+    const entry = toEntry(request.block);
+    return runTransaction(
+      doc,
+      history,
+      `Edit ${entry.namespacedName}`,
+      (tx) => (tx.setBlock(request.x, request.y, request.z, entry) ? 1 : 0),
+      { derive: false },
+    );
+  }
+
+  /*
    * A region may reach outside the document, and a fill into it grows the
    * document to suit. `replace` deliberately does not: it rewrites blocks that
    * are already there, and there are none outside the box -- growing first would

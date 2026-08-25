@@ -32,8 +32,10 @@ import { buildMesh, culledFaces } from "../src/main/pipeline/mesher.js";
 import { buildAtlas } from "../src/main/pipeline/atlas.js";
 import type { BakedFace, PaletteEntry, StructureData } from "../src/main/pipeline/types.js";
 import { paletteEntryCacheKey, paletteEntryIsAir } from "../src/main/pipeline/types.js";
+import { connectedState } from "../src/shared/block_connections.js";
 import {
   defaultStateFor,
+  hasProperty,
   isKnownBlock,
   knownBlockCount,
   legalValuesFor,
@@ -1150,6 +1152,179 @@ console.log("\n--- the generated state table ---");
   equal("and neither does an unknown block", legalValuesFor("minecraft:not_a_block", "facing"), null);
 
   equal("a block with no properties reports none", propertiesOf("stone"), []);
+}
+
+// --- neighbour-derived state ------------------------------------------------
+//
+// The rules alone, driven with literals. The pass that finds the cells to ask
+// about is main's and lives in tests/session.ts; this is the half that says
+// what the answer should be.
+console.log("\n--- neighbour-derived state ---");
+{
+  const solid = (name: string, properties: Record<string, string> = {}) => ({
+    name,
+    properties,
+    solid: true,
+  });
+  const thin = (name: string, properties: Record<string, string> = {}) => ({
+    name,
+    properties,
+    solid: false,
+  });
+  const self = (name: string, properties: Record<string, string> = {}) => ({ name, properties });
+
+  // Fences.
+  equal(
+    "a lone fence connects to nothing",
+    connectedState(self("oak_fence"), {}),
+    { north: "false", east: "false", south: "false", west: "false" },
+  );
+  equal(
+    "a fence connects to a fence",
+    connectedState(self("oak_fence"), { north: thin("spruce_fence") }).north,
+    "true",
+  );
+  equal(
+    "...and to a solid block",
+    connectedState(self("oak_fence"), { east: solid("stone") }).east,
+    "true",
+  );
+  equal(
+    "...but not through a pane",
+    connectedState(self("oak_fence"), { west: thin("glass_pane") }).west,
+    "false",
+  );
+  // Two materials that deliberately do not meet.
+  equal(
+    "a wooden fence does not connect to a nether brick one",
+    connectedState(self("oak_fence"), { south: thin("nether_brick_fence") }).south,
+    "false",
+  );
+  equal(
+    "...and the nether brick fence agrees",
+    connectedState(self("nether_brick_fence"), { south: thin("oak_fence") }).south,
+    "false",
+  );
+  equal(
+    "nether brick fences connect to each other",
+    connectedState(self("nether_brick_fence"), { south: thin("nether_brick_fence") }).south,
+    "true",
+  );
+  // A gate stands in the line, so it counts across the line and not along it.
+  equal(
+    "a fence connects through a gate set across it",
+    connectedState(self("oak_fence"), { north: thin("oak_fence_gate", { facing: "east" }) }).north,
+    "true",
+  );
+  equal(
+    "...and not to one facing the same way it runs",
+    connectedState(self("oak_fence"), { north: thin("oak_fence_gate", { facing: "north" }) }).north,
+    "false",
+  );
+
+  // Walls: none/low/tall, not booleans, and the post.
+  const lone = connectedState(self("cobblestone_wall"), {});
+  equal("a lone wall is all post", [lone.north, lone.up], ["none", "true"]);
+  const run = connectedState(self("cobblestone_wall"), {
+    north: thin("cobblestone_wall"),
+    south: thin("cobblestone_wall"),
+  });
+  equal("a straight run connects both ways", [run.north, run.south], ["low", "low"]);
+  // The one case vanilla drops the post: exactly two opposite low sides.
+  equal("...and drops its post", run.up, "false");
+  const corner = connectedState(self("cobblestone_wall"), {
+    north: thin("cobblestone_wall"),
+    east: thin("cobblestone_wall"),
+  });
+  equal("a corner keeps its post", corner.up, "true");
+  const loaded = connectedState(self("cobblestone_wall"), {
+    north: thin("cobblestone_wall"),
+    south: thin("cobblestone_wall"),
+    up: solid("stone"),
+  });
+  equal("a wall under a block goes tall", [loaded.north, loaded.up], ["tall", "true"]);
+
+  // Panes and bars.
+  equal(
+    "iron bars connect to bars",
+    connectedState(self("iron_bars"), { east: thin("iron_bars") }).east,
+    "true",
+  );
+  equal(
+    "...and to glass panes",
+    connectedState(self("iron_bars"), { west: thin("glass_pane") }).west,
+    "true",
+  );
+  equal(
+    "a pane connects to a solid block",
+    connectedState(self("glass_pane"), { north: solid("stone") }).north,
+    "true",
+  );
+
+  // Chests: exactly one left and one right, and each knows where the other is.
+  const east = connectedState(self("chest", { facing: "north" }), {
+    east: thin("chest", { facing: "north" }),
+  });
+  const west = connectedState(self("chest", { facing: "north" }), {
+    west: thin("chest", { facing: "north" }),
+  });
+  equal("a chest with a partner to its east is the left half", east.type, "left");
+  equal("...and the one to its west is the right half", west.type, "right");
+  equal(
+    "a chest facing the other way is not a partner",
+    connectedState(self("chest", { facing: "north" }), { east: thin("chest", { facing: "south" }) })
+      .type,
+    "single",
+  );
+
+  // Rails: flat shapes only, which is the whole visible difference.
+  equal("a lone rail lies north-south", connectedState(self("rail"), {}).shape, "north_south");
+  equal(
+    "a rail with a neighbour east lies east-west",
+    connectedState(self("rail"), { east: thin("rail") }).shape,
+    "east_west",
+  );
+  equal(
+    "a rail turning a corner curves",
+    connectedState(self("rail"), { north: thin("rail"), east: thin("rail") }).shape,
+    "north_east",
+  );
+  // Only the plain rail has curves in its shape at all.
+  equal(
+    "a powered rail at a corner stays straight",
+    connectedState(self("powered_rail"), { north: thin("powered_rail"), east: thin("powered_rail") })
+      .shape,
+    "north_south",
+  );
+
+  // Grass under snow.
+  equal(
+    "grass under snow is snowy",
+    connectedState(self("grass_block"), { up: thin("snow") }).snowy,
+    "true",
+  );
+  equal("...and is not otherwise", connectedState(self("grass_block"), {}).snowy, "false");
+
+  // Nothing is written onto a block that does not carry it. This is the guard
+  // that makes a family matched by suffix safe: `hasProperty` refuses before a
+  // rule can invent a property the game would reject.
+  equal("a block with no connections gains none", connectedState(self("stone"), {
+    north: solid("stone"),
+  }), {});
+  check(
+    "and every property a rule writes is one the block has",
+    ["oak_fence", "cobblestone_wall", "iron_bars", "chest", "rail", "grass_block", "oak_stairs"]
+      .flatMap((name) =>
+        Object.keys(
+          connectedState(self(name, { facing: "north", half: "bottom" }), {
+            north: thin(name),
+            east: thin(name),
+            up: solid("stone"),
+          }),
+        ).map((property) => [name, property] as const),
+      )
+      .every(([name, property]) => hasProperty(name, property)),
+  );
 }
 
 // The ids this file names have to be ids. A typo writes a state onto a block

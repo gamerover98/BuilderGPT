@@ -689,6 +689,24 @@ export interface DocumentState {
  */
 export type EditRequest =
   | { kind: "setBlock"; x: number; y: number; z: number; block: BlockSpec }
+  /**
+   * The inspector's block-state editor: write exactly this state, and derive
+   * nothing.
+   *
+   * A separate verb rather than a flag on `setBlock`, and it has to exist at
+   * all. Every write runs the neighbour rules -- that is what makes a fence
+   * placed beside a fence connect at both ends, through place, break, fill,
+   * paste and the agent alike -- and the inspector sends its edit down the same
+   * channel. So a hand-typed `north=false` would be re-derived and overwritten
+   * *inside the same transaction that carried it*, and the panel would appear
+   * to ignore what you typed.
+   *
+   * With this, a state somebody typed stands until something is placed next to
+   * it, which is what the game does and what "editable afterwards" has to mean.
+   * It also grows the document no more than `replace` does: the block is
+   * already there.
+   */
+  | { kind: "setState"; x: number; y: number; z: number; block: BlockSpec }
   | { kind: "fill"; region: RegionSpec; block: BlockSpec }
   | { kind: "replace"; region: RegionSpec; from: BlockSpec; to: BlockSpec };
 

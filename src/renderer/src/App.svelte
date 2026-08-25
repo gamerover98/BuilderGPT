@@ -2219,8 +2219,11 @@ import VersionsModal from "./lib/VersionsModal.svelte";
     const at = inspectedAt;
     const properties = { ...inspection.properties, [name]: value.trim() };
     await runDocument(t("task.changingBlockState"), () =>
+      // `setState`, not `setBlock`: every ordinary write re-derives the states
+      // that depend on neighbours, so typing `north=false` here and sending it
+      // as a placement would have it overwritten inside the same transaction.
       api().applyEdit({
-        kind: "setBlock",
+        kind: "setState",
         x: at.x,
         y: at.y,
         z: at.z,

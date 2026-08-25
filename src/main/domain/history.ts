@@ -41,6 +41,7 @@ import {
   type NbtCompound,
   type PaletteEntry,
 } from "../pipeline/types.js";
+import { deriveConnections } from "./connect.js";
 import {
   internPalette,
   posKey,
@@ -281,6 +282,18 @@ class Recorder implements TransactionScope {
     });
     this.blocks.clear();
     this.entities.clear();
+  }
+
+  /**
+   * The voxels this recorder has written, in the shape currently in force.
+   *
+   * `deriveConnections` reads it to find where to look for blocks whose state
+   * depends on a neighbour. Only the *live* set: a resize calls `flush`, so
+   * anything already pushed into `commands` belongs to a different coordinate
+   * frame and indexing it would rewrite an unrelated block.
+   */
+  touchedIndices(): Iterable<number> {
+    return this.blocks.keys();
   }
 
   /**
@@ -544,6 +557,23 @@ function revertCommand(doc: SchematicDocument, command: Command): void {
 // The transaction boundary
 // ---------------------------------------------------------------------------
 
+export interface TransactionOptions {
+  /**
+   * Whether to rewrite the block states that depend on neighbours -- a fence's
+   * arms, a wall's post, a staircase's corner. On by default, because being on
+   * for every write is the whole design: one place, so place, break, fill,
+   * replace, paste, move, transform and every agent tool agree.
+   *
+   * Turned **off** by exactly one caller, and without it the feature would not
+   * exist. The inspector's block-state editor sends its edit as an ordinary
+   * `setBlock`, so a hand-typed `north=false` would be re-derived and
+   * overwritten inside the very same transaction that carried it. A state
+   * somebody typed is authoritative until something is placed next to it, which
+   * is what the game does and what "editable afterwards" has to mean.
+   */
+  readonly derive?: boolean;
+}
+
 /**
  * Runs `body` as one undoable step.
  *
@@ -557,11 +587,17 @@ export function runTransaction<T>(
   history: History,
   label: string,
   body: (tx: TransactionScope) => T,
+  options: TransactionOptions = {},
 ): T {
   const recorder = new Recorder(doc);
   let result: T;
   try {
     result = body(recorder);
+    // Inside the try, so a rule that throws rolls the whole edit back rather
+    // than leaving the document half-connected with no entry describing it.
+    if (options.derive !== false) {
+      deriveConnections(doc, recorder, [...recorder.touchedIndices()]);
+    }
   } catch (err) {
     recorder.flush();
     for (let i = recorder.commands.length - 1; i >= 0; i -= 1) {
@@ -596,11 +632,15 @@ export async function runTransactionAsync<T>(
   history: History,
   label: string,
   body: (tx: TransactionScope) => Promise<T>,
+  options: TransactionOptions = {},
 ): Promise<T> {
   const recorder = new Recorder(doc);
   let result: T;
   try {
     result = await body(recorder);
+    if (options.derive !== false) {
+      deriveConnections(doc, recorder, [...recorder.touchedIndices()]);
+    }
   } catch (err) {
     recorder.flush();
     for (let i = recorder.commands.length - 1; i >= 0; i -= 1) {

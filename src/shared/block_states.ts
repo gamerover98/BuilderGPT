@@ -1306,8 +1306,18 @@ const BLOCK_SHAPE: Readonly<Record<string, number>> = {
 
 // --- end generated ---------------------------------------------------------
 
-/** `minecraft:oak_stairs[facing=east]` and `oak_stairs` both come back bare. */
+/**
+ * `minecraft:oak_stairs[facing=east]` and `oak_stairs` both come back bare.
+ *
+ * The early return is not premature: `hasProperty` is called several times per
+ * cell by the connection pass, whose callers already hold bare names, and
+ * `split("[")` allocates an array every time it is asked. On a large fill that
+ * was most of what the pass spent.
+ */
 function bareName(id: string): string {
+  if (id.indexOf("[") === -1 && id.indexOf(":") === -1) {
+    return id;
+  }
   const withoutState = id.split("[")[0].trim();
   const colon = withoutState.lastIndexOf(":");
   return colon === -1 ? withoutState : withoutState.slice(colon + 1);

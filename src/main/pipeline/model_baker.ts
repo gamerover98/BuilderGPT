@@ -87,6 +87,96 @@ export interface SpecialFaceRule {
   readonly bottom?: readonly string[];
 }
 
+/**
+ * Block names that wear another block's texture, one layer at a time.
+ *
+ * A name that resolves nothing is usually a *variant* of one that does, and the
+ * variants compose: `waxed_exposed_cut_copper_slab` is a waxed, exposed, cut
+ * copper slab, and only the middle of those words survives into a file name.
+ * Each rule below peels one layer and `aliasChain` runs them to a fixed point,
+ * so the shape-suffix strip and the `waxed_` prefix never have to know about
+ * each other.
+ *
+ * Every target here was checked against the shipped pack rather than reasoned
+ * about, and `tests/blocks.ts` re-checks all 920 ids on every run -- which is
+ * how the 162 that reached the hashed-colour cube were found in the first place.
+ */
+const NAME_ALIASES: ReadonlyArray<(name: string) => string | null> = [
+  // Waxing changes nothing you can see: the whole copper family shares its
+  // unwaxed textures. 40 of the ids this fixes are these.
+  (name) => (name.startsWith("waxed_") ? name.slice("waxed_".length) : null),
+  // An infested block is its host block with a silverfish inside it.
+  (name) => (name.startsWith("infested_") ? name.slice("infested_".length) : null),
+  // A potted plant is the plant. `block_shapes.ts` adds the pot around it.
+  (name) => (name.startsWith("potted_") ? name.slice("potted_".length) : null),
+  // A "wood" block is a log showing its bark on all six faces, and there is no
+  // `oak_wood.png`. The nether's `_hyphae` stands the same way over `_stem`.
+  (name) => (name.endsWith("_wood") ? `${name.slice(0, -"_wood".length)}_log` : null),
+  (name) => (name.endsWith("_hyphae") ? `${name.slice(0, -"_hyphae".length)}_stem` : null),
+  // A wall-mounted torch is the torch.
+  (name) => (name.includes("_wall_torch") ? name.replace("_wall_torch", "_torch") : null),
+  // The mature two-block plant is drawn from its crop's sheet.
+  (name) => (name === "pitcher_plant" ? "pitcher_crop" : null),
+  // The Flattening gave the bare 1.12 names a wood: `sign` became `oak_sign`.
+  // Both spellings are still in `block_id_list.txt`, so both have to draw.
+  (name) => (name === "sign" ? "oak_sign" : null),
+  (name) => (name === "wall_sign" ? "oak_wall_sign" : null),
+  /*
+   * The shape suffix, as an alias rather than only a `materialCandidates`
+   * spelling. It has to be in the chain so that a *rule* for the stripped name
+   * can apply: `smooth_quartz_stairs` only draws because stripping `_stairs`
+   * puts `smooth_quartz` in the chain, where its own entry is waiting.
+   */
+  (name) => {
+    for (const suffix of SHAPE_SUFFIXES) {
+      if (name.endsWith(suffix)) return name.slice(0, -suffix.length);
+    }
+    return name.startsWith("wall_") ? name.slice("wall_".length) : null;
+  },
+];
+
+/**
+ * Crops whose texture is a growth stage, and how an `age` maps onto one.
+ *
+ * The two numbers are not the same and the difference is not derivable: carrots
+ * and potatoes have eight ages and four textures, and vanilla spends them
+ * `0,0,1,1,2,2,2,3` -- weighted late, so a field looks nearly ripe for most of
+ * its life. Transcribed from `assets/minecraft/blockstates/<crop>.json` at
+ * 1.21.4, one file each, not inferred from the texture count.
+ */
+const AGE_STAGES: Readonly<Record<string, readonly number[]>> = {
+  wheat: [0, 1, 2, 3, 4, 5, 6, 7],
+  carrots: [0, 0, 1, 1, 2, 2, 2, 3],
+  potatoes: [0, 0, 1, 1, 2, 2, 2, 3],
+  beetroots: [0, 1, 2, 3],
+  nether_wart: [0, 1, 1, 2],
+  cocoa: [0, 1, 2],
+  torchflower_crop: [0, 1],
+  sweet_berry_bush: [0, 1, 2, 3],
+};
+
+/**
+ * The stage textures for a crop, most grown first from the one its `age`
+ * selects.
+ *
+ * Descending rather than exact so a pack shipping fewer stages than vanilla
+ * still draws a crop instead of a coloured cube -- the same "offer several
+ * spellings and let the pack decide" rule `materialCandidates` follows.
+ */
+function stageCandidates(entry: PaletteEntry, name: string): string[] {
+  const stages = AGE_STAGES[name];
+  if (stages === undefined) {
+    return [];
+  }
+  const raw = Number(entry.properties.age ?? "0");
+  const age = Number.isFinite(raw) ? Math.min(Math.max(Math.trunc(raw), 0), stages.length - 1) : 0;
+  const out: string[] = [];
+  for (let stage = stages[age]; stage >= 0; stage -= 1) {
+    out.push(`${name}_stage${stage}`);
+  }
+  return out;
+}
+
 export const SPECIAL_FACE_RULES: Record<string, SpecialFaceRule> = {
   /*
    * The markers, and the only two rules here that point at `item/`.
@@ -128,6 +218,146 @@ export const SPECIAL_FACE_RULES: Record<string, SpecialFaceRule> = {
   bubble_column: { top: ["water_still"], side: ["water_still"], bottom: ["water_still"] },
   lava: { top: ["lava_still"], side: ["lava_still"], bottom: ["lava_still"] },
   flowing_lava: { top: ["lava_still"], side: ["lava_flow"], bottom: ["lava_flow"] },
+
+  /*
+   * Blocks whose texture is simply not named after them.
+   *
+   * Every one below reached the hashed-colour cube -- a plausible solid block
+   * in an arbitrary colour, with no error anywhere -- and every one of these
+   * targets was already sitting in the shipped pack. Nothing was missing; the
+   * names were just never right. `tests/blocks.ts` walks all 920 ids so a
+   * fourteenth spelling of this mistake cannot arrive quietly.
+   */
+  magma_block: { top: ["magma"], side: ["magma"], bottom: ["magma"] },
+  dried_kelp_block: {
+    top: ["dried_kelp_top"],
+    side: ["dried_kelp_side"],
+    bottom: ["dried_kelp_bottom"],
+  },
+  // Ice that is melting is four textures; a schematic captures one moment and
+  // frame 0 is the one that still looks like ice.
+  frosted_ice: { top: ["frosted_ice_0"], side: ["frosted_ice_0"], bottom: ["frosted_ice_0"] },
+  bamboo: { top: ["bamboo_stalk"], side: ["bamboo_stalk"], bottom: ["bamboo_stalk"] },
+  bamboo_sapling: { top: ["bamboo_stage0"], side: ["bamboo_stage0"], bottom: ["bamboo_stage0"] },
+  // The brushable blocks: `_0` is undisturbed, which is how a schematic holds
+  // them.
+  suspicious_sand: {
+    top: ["suspicious_sand_0"],
+    side: ["suspicious_sand_0"],
+    bottom: ["suspicious_sand_0"],
+  },
+  suspicious_gravel: {
+    top: ["suspicious_gravel_0"],
+    side: ["suspicious_gravel_0"],
+    bottom: ["suspicious_gravel_0"],
+  },
+  pointed_dripstone: {
+    top: ["pointed_dripstone_up_tip"],
+    side: ["pointed_dripstone_up_tip"],
+    bottom: ["pointed_dripstone_up_tip"],
+  },
+  sniffer_egg: {
+    top: ["sniffer_egg_not_cracked_top"],
+    side: ["sniffer_egg_not_cracked_north"],
+    bottom: ["sniffer_egg_not_cracked_bottom"],
+  },
+
+  /*
+   * Blocks drawn from `textures/entity/`, like the beds and chests above but
+   * without a sheet layout worth unwrapping. A decorated pot's patterns are a
+   * stack of layers this code cannot compose, so it wears its plain side; a
+   * skull is drawn from the mob's own texture, which is what vanilla does.
+   */
+  decorated_pot: {
+    top: ["entity/decorated_pot/decorated_pot_base"],
+    side: ["entity/decorated_pot/decorated_pot_side"],
+    bottom: ["entity/decorated_pot/decorated_pot_base"],
+  },
+  skeleton_skull: {
+    top: ["entity/skeleton/skeleton"],
+    side: ["entity/skeleton/skeleton"],
+    bottom: ["entity/skeleton/skeleton"],
+  },
+  skeleton_wall_skull: {
+    top: ["entity/skeleton/skeleton"],
+    side: ["entity/skeleton/skeleton"],
+    bottom: ["entity/skeleton/skeleton"],
+  },
+
+  /*
+   * A campfire's default state is `lit=true`, so the lit logs come first and
+   * the cold ones stand behind them -- the pack ships no `soul_campfire_log`,
+   * only the lit one, which is why the soul row falls back to the ordinary log
+   * rather than to a name that does not exist.
+   */
+  campfire: {
+    top: ["campfire_log_lit", "campfire_log"],
+    side: ["campfire_log_lit", "campfire_log"],
+    bottom: ["campfire_log_lit", "campfire_log"],
+  },
+  soul_campfire: {
+    top: ["soul_campfire_log_lit", "campfire_log"],
+    side: ["soul_campfire_log_lit", "campfire_log"],
+    bottom: ["soul_campfire_log_lit", "campfire_log"],
+  },
+  fire: { top: ["fire_0"], side: ["fire_0"], bottom: ["fire_0"] },
+  soul_fire: { top: ["soul_fire_0"], side: ["soul_fire_0"], bottom: ["soul_fire_0"] },
+
+  // Pistons: the head is the plate and rod that `block_shapes.ts` draws, and a
+  // sticky piston differs from an ordinary one only on its face.
+  piston_head: { top: ["piston_top"], side: ["piston_side"], bottom: ["piston_side"] },
+  sticky_piston: {
+    top: ["piston_top_sticky"],
+    side: ["piston_side"],
+    bottom: ["piston_bottom"],
+  },
+  redstone_wire: {
+    top: ["redstone_dust_dot"],
+    side: ["redstone_dust_line0"],
+    bottom: ["redstone_dust_dot"],
+  },
+
+  /*
+   * Polished stone that borrows a *face* of the block it was cut from. There is
+   * no rule to derive these -- smooth quartz takes the quartz block's bottom,
+   * smooth sandstone its top -- so they are transcribed one at a time.
+   */
+  smooth_quartz: {
+    top: ["quartz_block_bottom"],
+    side: ["quartz_block_bottom"],
+    bottom: ["quartz_block_bottom"],
+  },
+  smooth_sandstone: { top: ["sandstone_top"], side: ["sandstone_top"], bottom: ["sandstone_top"] },
+  smooth_red_sandstone: {
+    top: ["red_sandstone_top"],
+    side: ["red_sandstone_top"],
+    bottom: ["red_sandstone_top"],
+  },
+  // The one slab that is not cut from the material its name says: a petrified
+  // oak slab is stone that looks like planks.
+  petrified_oak_slab: { top: ["oak_planks"], side: ["oak_planks"], bottom: ["oak_planks"] },
+  heavy_weighted_pressure_plate: {
+    top: ["gold_block"],
+    side: ["gold_block"],
+    bottom: ["gold_block"],
+  },
+  light_weighted_pressure_plate: {
+    top: ["iron_block"],
+    side: ["iron_block"],
+    bottom: ["iron_block"],
+  },
+  // Renamed in 1.20.3. The old id is still offered, so it still has to draw.
+  grass: { top: ["short_grass"], side: ["short_grass"], bottom: ["short_grass"] },
+
+  /*
+   * The two blocks with no texture at all: vanilla draws both with a shader
+   * over a starfield, and there is nothing in a resource pack to read. Black is
+   * the honest stand-in -- the same decision as a banner falling back to dyed
+   * wool -- because an end portal in a schematic is structural and drawing
+   * nothing would hide it.
+   */
+  end_portal: { top: ["black_concrete"], side: ["black_concrete"], bottom: ["black_concrete"] },
+  end_gateway: { top: ["black_concrete"], side: ["black_concrete"], bottom: ["black_concrete"] },
 };
 
 /**
@@ -894,6 +1124,16 @@ export class ModelBaker {
       const suffix = type === "left" ? "_left" : type === "right" ? "_right" : "";
       return `entity/chest/${sheet}${suffix}`;
     }
+    /*
+     * Hanging signs live one directory deeper, and must be matched *before* the
+     * ordinary sign rule -- which otherwise reads `acacia_hanging_sign` as a
+     * wood called "acacia_hanging" and asks for a sheet nobody ships. All 22 of
+     * them drew as coloured cubes, and the hand-written audit that preceded
+     * `tests/blocks.ts` missed every one because it excluded anything ending in
+     * `_sign` as "already handled".
+     */
+    const hanging = /^([a-z_]+?)_(?:wall_)?hanging_sign$/.exec(name);
+    if (hanging) return `entity/signs/hanging/${hanging[1]}`;
     if (name.endsWith("_sign")) {
       const wood = name.replace(/_(?:wall_)?sign$/, "");
       return `entity/signs/${wood}`;
@@ -909,12 +1149,52 @@ export class ModelBaker {
     return null;
   }
 
+  /**
+   * The names to try, in order: this block's, then each name it is a variant
+   * of.
+   *
+   * Runs `NAME_ALIASES` to a fixed point so the rules compose without knowing
+   * about each other -- `waxed_exposed_cut_copper_slab` needs the `waxed_`
+   * strip and the `_slab` strip in either order, and gets both. Bounded and
+   * de-duplicated because an alias table is one careless rule away from a cycle.
+   */
+  private static aliasChain(name: string): string[] {
+    const chain = [name];
+    const seen = new Set(chain);
+    for (let i = 0; i < chain.length && chain.length < 8; i += 1) {
+      for (const alias of NAME_ALIASES) {
+        const next = alias(chain[i]);
+        if (next !== null && next !== "" && !seen.has(next)) {
+          seen.add(next);
+          chain.push(next);
+        }
+      }
+    }
+    return chain;
+  }
+
   private static faceCandidates(entry: PaletteEntry, baseName: string, face: string): string[] {
     const normalized = baseName.replace("minecraft:", "");
+    return ModelBaker.aliasChain(normalized).flatMap((name) =>
+      ModelBaker.candidatesForName(entry, name, face),
+    );
+  }
 
+  /** What one name in the chain offers for one face. */
+  private static candidatesForName(
+    entry: PaletteEntry,
+    normalized: string,
+    face: string,
+  ): string[] {
     const alias = ModelBaker.entityTextureAlias(entry, normalized);
     if (alias) {
       return [alias];
+    }
+
+    // A crop's texture is its growth stage, and `age` is not the stage number.
+    const stages = stageCandidates(entry, normalized);
+    if (stages.length > 0) {
+      return stages;
     }
 
     // Two-block-tall plants and doors carry their half in a property and split
@@ -994,7 +1274,21 @@ export class ModelBaker {
     if (stripped === name) {
       return [];
     }
-    return [stripped, `${stripped}_planks`, `${stripped}s`, `${stripped}_block`];
+    return [
+      stripped,
+      `${stripped}_planks`,
+      `${stripped}s`,
+      `${stripped}_block`,
+      // A carpet is cut from wool, and there is no `white_carpet.png`. All
+      // sixteen drew as coloured cubes, which for a *carpet* is very nearly
+      // convincing -- it is a flat coloured square either way.
+      `${stripped}_wool`,
+      // Quartz is the block whose faces are named after the block and not the
+      // material: `quartz_slab` strips to `quartz`, and the tile is
+      // `quartz_block_side`.
+      `${stripped}_block_side`,
+      `${stripped}_block_top`,
+    ];
   }
 
   private static normalizeTextureKey(name: string): string {

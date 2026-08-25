@@ -307,22 +307,35 @@ console.log("\n--- shapes ---");
     check("the window's V range is the model's", Math.min(...vs) === 2 / 16 && Math.max(...vs) === 9 / 16);
   }
 
-  // A bed's legs have their own offsets on the sheet. Sharing the mattress
-  // window, and leaving five of their six faces with no window at all, put
-  // pale rectangles of empty sheet under every bed.
+  /*
+   * A bed used to be one `entity/bed/<colour>` sheet unwrapped by hand, and the
+   * checks here were about that unwrap: that the legs did not reuse the
+   * mattress window, that the head and foot read from different halves.
+   *
+   * **1.21.9 moved beds onto per-face block textures**, so there is no sheet
+   * and no unwrap left to get wrong -- two whole classes of bug deleted rather
+   * than fixed. What replaces them is the claim that the halves are still told
+   * apart, which is now a question about texture *names*.
+   */
   const bedHead = await baker.bakeBlockstate(block("red_bed", { part: "head", facing: "north" }));
   const bedFoot = await baker.bakeBlockstate(block("red_bed", { part: "foot", facing: "north" }));
-  const windows = new Set(
-    bedHead.extraFaces.map((f) => [...f.uvs].map((n) => n.toFixed(4)).join(",")),
-  );
-  check("a bed's legs do not reuse the mattress window", windows.size > 2);
+  const keysOf = (b: BakedBlock) => new Set(b.extraFaces.map((f) => f.textureKey));
   check(
-    "head and foot read from different halves of the sheet",
-    JSON.stringify([...bedHead.extraFaces[0].uvs]) !== JSON.stringify([...bedFoot.extraFaces[0].uvs]),
+    "a bed's head and foot wear different textures",
+    [...keysOf(bedHead)].some((k) => !keysOf(bedFoot).has(k)),
+    [...keysOf(bedHead)].join(" "),
   );
   check(
-    "every bed face has an explicit window",
-    bedHead.extraFaces.every((f) => f.uvs.some((n) => n !== 0 && n !== 1)),
+    "the mattress and the legs are told apart",
+    keysOf(bedHead).size > 1,
+    [...keysOf(bedHead)].join(" "),
+  );
+  // The underside is the one texture every bed in the game shares, so it
+  // carries no colour -- a coloured candidate would miss and fall back.
+  check(
+    "the underside is the shared bed_down",
+    keysOf(bedHead).has("minecraft:block/bed_down"),
+    [...keysOf(bedHead)].join(" "),
   );
 
   // The chest's lid rests exactly on its body; two coincident planes z-fight,
@@ -1219,6 +1232,114 @@ console.log("\n--- nothing is a cube by accident ---");
     (name) => !occludesNeighbours({ namespacedName: `minecraft:${name}`, properties: {} }),
   );
   check("...and the ones that are cubes still are", soft.length === 0, soft.join(", "));
+}
+
+// --- the blocks that were reported wrong ------------------------------------
+//
+// One check per fault, named after what was on screen. Every one of these was a
+// block somebody looked at and could tell was wrong; the shapes are transcribed
+// from the vanilla models, and the tripwires above already guarantee the
+// textures exist.
+console.log("\n--- the blocks that were reported wrong ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const shapeOf = (name: string, props: Record<string, string> = {}) =>
+    shapeFor({ namespacedName: `minecraft:${name}`, properties: props });
+  const boxCount = (name: string, props: Record<string, string> = {}): number => {
+    const shape = shapeOf(name, props);
+    return shape.kind === "boxes" ? shape.boxes.length : -1;
+  };
+  const bakedKey = async (name: string, props: Record<string, string> = {}) =>
+    (await baker.bakeBlockstate({ namespacedName: `minecraft:${name}`, properties: props }))
+      .textureKey;
+
+  // 1. A chest faced backwards: the sheet's front window landed on the model's
+  // back. Two independent facts pin the rotation -- the body's `south` window
+  // is the only one that differs from the other three, and the double sheets'
+  // seams line up with getConnectedDirection only this way round.
+  const single = allVertices(await baker.bakeBlockstate(block("chest", { facing: "north" })));
+  const xs = single.map((v) => v[0]);
+  equal("a single chest is inset on both sides", [Math.min(...xs), Math.max(...xs)], [1 / 16, 15 / 16]);
+  const left = allVertices(
+    await baker.bakeBlockstate(block("chest", { facing: "north", type: "left" })),
+  ).map((v) => v[0]);
+  // A double half reaches the cell edge on the side its partner is on, so the
+  // two meet with no seam. `left` is joined clockwise of its facing.
+  equal("a left half reaches its partner", [Math.min(...left), Math.max(...left)], [1 / 16, 1]);
+  const right = allVertices(
+    await baker.bakeBlockstate(block("chest", { facing: "north", type: "right" })),
+  ).map((v) => v[0]);
+  equal("...and the right half reaches back", [Math.min(...right), Math.max(...right)], [0, 15 / 16]);
+
+  // 2. A furnace wore furnace_side on all four sides, fire included.
+  equal("a furnace has a front", await bakedKey("furnace", { facing: "north" }), "minecraft:block/furnace_front");
+  equal(
+    "...and a lit one is a different texture",
+    await bakedKey("furnace", { facing: "north", lit: "true" }),
+    "minecraft:block/furnace_front_on",
+  );
+  equal(
+    "the rule is derived, so a smoker has one too",
+    await bakedKey("smoker", { facing: "north" }),
+    "minecraft:block/smoker_front",
+  );
+
+  // 3, 4, 7. Workstations that were solid cubes.
+  check("a brewing stand is a rod on a base", boxCount("brewing_stand") === 4);
+  check("a grindstone has its legs and pivots back", boxCount("grindstone", { facing: "north" }) === 5);
+  for (const name of ["anvil", "chipped_anvil", "damaged_anvil"]) {
+    check(`${name} is an anvil, not a cube`, boxCount(name, { facing: "north" }) === 4);
+  }
+
+  // 5, 6. Blocks the app did not offer at all until the registry generated the
+  // list, and the pack was updated to one that has them.
+  check("a shelf is a back panel and two lips", boxCount("oak_shelf", { facing: "north" }) === 3);
+  equal("...wearing its own texture", await bakedKey("oak_shelf", { facing: "north" }), "minecraft:block/oak_shelf");
+  check("an iron chain is two planes", boxCount("iron_chain") === 2);
+  check("...and so is a copper one", boxCount("copper_chain") === 2);
+  // The rename: both spellings are offered and both draw the same thing.
+  equal("chain and iron_chain draw alike", await bakedKey("chain"), await bakedKey("iron_chain"));
+
+  // 8, 9, 14. Flat and 2D things that were full opaque cubes -- each of them
+  // also deleting a face from six neighbours.
+  equal("a firefly bush is a cross", shapeOf("firefly_bush").kind, "cross");
+  check("pink petals lie on the ground", boxCount("pink_petals") === 1);
+  equal("a coral plant is a cross", shapeOf("tube_coral").kind, "cross");
+  check("a coral fan lies flat", boxCount("tube_coral_fan") === 1);
+  check("a wall fan hangs on the wall", boxCount("tube_coral_wall_fan", { facing: "north" }) === 1);
+  // And the block really is a block: `_coral_block` does not end in `_coral`.
+  equal("a coral *block* is still a cube", shapeOf("tube_coral_block").kind, "cube");
+
+  // 10. The mature plant wore the seedling's texture.
+  equal(
+    "a pitcher plant is fully grown",
+    await bakedKey("pitcher_plant", { half: "upper" }),
+    "minecraft:block/pitcher_crop_top_stage_4",
+  );
+
+  // 11. "Only the top with the leaves, no bottom" -- vanilla's azalea is a
+  // hollow shell with the bush hanging inside it, and the bush is the part a
+  // cube cannot express at all.
+  check("an azalea has its bush", boxCount("flowering_azalea") === 7);
+  check("...and so does the plain one", boxCount("azalea") === 7);
+
+  // 12. Vines are a sheet per face they cling to, not a shrub in the middle of
+  // the cell. With nothing to cling to they keep the cross, which is the state
+  // one arrives in before any rule has run.
+  check("a vine clings to one wall", boxCount("vine", { north: "true" }) === 1);
+  check("...to two", boxCount("vine", { north: "true", up: "true" }) === 2);
+  equal("...and falls back to a cross with nothing to hold", shapeOf("vine").kind, "cross");
+  equal("cave vines hang as a cross", shapeOf("cave_vines").kind, "cross");
+
+  // 15. Beds stopped being block entities in 1.21.9; the geometry survived the
+  // move and the unwrap did not.
+  check("a bed is a mattress on four legs", boxCount("red_bed", { part: "head" }) === 5);
+  equal(
+    "the foot's outer end is its own texture",
+    await bakedKey("red_bed", { part: "foot", facing: "north" }),
+    "minecraft:block/red_bed_foot_south",
+  );
 }
 
 // --- neighbour-derived state ------------------------------------------------

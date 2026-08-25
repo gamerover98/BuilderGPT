@@ -279,6 +279,43 @@ export class DocumentTooLargeError extends Error {
 }
 
 /**
+ * Where a placed slab should merge into the slab it was placed against, if it
+ * should merge at all.
+ *
+ * `null` means "place normally", which is every case but one: the block is a
+ * slab, the click came off a vertical face, and the cell on the other side of
+ * that face holds *the same* slab in the complementary half. Same material,
+ * because an oak slab does not merge into a stone one; complementary half,
+ * because two bottom slabs are not a full block and never become one.
+ */
+function doubleSlabTarget(
+  doc: SchematicDocument,
+  request: { x: number; y: number; z: number; against?: string },
+  entry: PaletteEntry,
+): { x: number; y: number; z: number; entry: PaletteEntry } | null {
+  if (!entry.namespacedName.endsWith("_slab")) return null;
+  const below = request.against === "up";
+  if (!below && request.against !== "down") return null;
+
+  const y = below ? request.y - 1 : request.y + 1;
+  const existing = getBlock(doc, request.x, y, request.z);
+  if (existing.namespacedName !== entry.namespacedName) return null;
+
+  // The clicked slab must be the half nearest the click: a bottom slab clicked
+  // on its top, or a top slab clicked on its underside.
+  const wanted = below ? "bottom" : "top";
+  if ((existing.properties.type ?? "bottom") !== wanted) return null;
+  if ((entry.properties.type ?? "bottom") === wanted) return null;
+
+  return {
+    x: request.x,
+    y,
+    z: request.z,
+    entry: { ...existing, properties: { ...existing.properties, type: "double" } },
+  };
+}
+
+/**
  * Applies one request as one undoable step.
  *
  * The label is what the undo menu will say, so it is built from the request
@@ -303,6 +340,32 @@ export function applyEdit(session: DocumentSession, request: EditRequest): numbe
    */
   if (request.kind === "setBlock") {
     const entry = toEntry(request.block);
+
+    /*
+     * Two slabs meeting in one cell are one double slab.
+     *
+     * In the game a slab placed against the top of a matching bottom slab does
+     * not go in the cell above -- it fills the one that is already there, and
+     * the pair becomes a single full block. Without this the editor stacked
+     * them, which is a shape the game cannot hold and a file the game will not
+     * paste back the way it looks here.
+     *
+     * `against` is the only thing the renderer can contribute: `x/y/z` is the
+     * empty cell the click landed in, and the mesh has no per-block identity,
+     * so neither side can find the clicked slab on its own.
+     *
+     * Vertical faces only. The game also merges when you click the upper half
+     * of a slab's *side*, and that needs where on the face the cursor was --
+     * `placedInUpperHalf`'s question, which does not travel. Left out rather
+     * than guessed: merging on a side click that meant "place beside it" would
+     * destroy the slab already there.
+     */
+    const merged = doubleSlabTarget(doc, request, entry);
+    if (merged !== null) {
+      return runTransaction(doc, history, `Place ${entry.namespacedName}`, (tx) =>
+        tx.setBlock(merged.x, merged.y, merged.z, merged.entry) ? 1 : 0,
+      );
+    }
     const cell = {
       minX: request.x,
       minY: request.y,

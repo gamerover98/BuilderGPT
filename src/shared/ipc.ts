@@ -688,7 +688,26 @@ export interface DocumentState {
  * renderer should not be able to write history's description of what happened.
  */
 export type EditRequest =
-  | { kind: "setBlock"; x: number; y: number; z: number; block: BlockSpec }
+  | {
+      kind: "setBlock";
+      x: number;
+      y: number;
+      z: number;
+      block: BlockSpec;
+      /**
+       * The face the new block was placed against, when a click placed it.
+       *
+       * Carried for exactly one rule: two slabs meeting in one cell become a
+       * double slab. `x/y/z` is the *empty* cell the click landed in, so main
+       * cannot see the slab that was clicked without knowing which way the
+       * click came from -- and the renderer cannot decide it either, because it
+       * holds no schematic and the mesh has no per-block identity.
+       *
+       * Absent for anything that is not a hand placement, which is why the
+       * merge is a click gesture and not something a fill can trigger.
+       */
+      against?: "up" | "down" | "north" | "south" | "east" | "west";
+    }
   /**
    * The inspector's block-state editor: write exactly this state, and derive
    * nothing.

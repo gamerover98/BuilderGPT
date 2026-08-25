@@ -372,21 +372,22 @@ function unwrapCube(
 }
 
 /**
- * A bed's two halves are separate boxes in the sheet: the head at texture
- * offset (0,0), the foot at (0,22). `part` says which one this block is.
+ * A bed: the mattress and four legs.
  *
- * The sheet lays the bed out lying down, so the box's "north" face in the
- * unwrap is the mattress surface you look at from above; the windows are
- * re-pointed accordingly.
+ * It used to carry `unwrapCube` windows into a per-colour `entity/bed/<colour>`
+ * sheet, and every one of them is gone -- **1.21.9 moved beds onto ordinary
+ * per-face block textures**, so `model_baker.ts`'s `bedCandidates` names
+ * `red_bed_head_up` and the rest directly and there is no unwrap left to get
+ * wrong. Two classes of bug went with it: a leg wearing the mattress window,
+ * and the head and foot disagreeing about which way the sheet ran.
+ *
+ * The geometry stays. The model is authored with the head toward **north**,
+ * which is what `bedCandidates` undoes when it maps a world face back into the
+ * model's own axes; the foot is the same shape turned 180 degrees so the two
+ * halves meet head-to-foot.
  */
 function bed(entry: PaletteEntry): BlockShape {
   const head = entry.properties.part !== "foot";
-  const uv = unwrapCube(0, head ? 0 : 22, 16, 16, 6);
-  // The legs have their own offsets on the sheet, four 3x3x3 unwraps stacked
-  // at x=50. Giving them the mattress window instead — and leaving five of
-  // their six faces with no window at all, free to sample empty sheet — is
-  // what put pale rectangles under every bed.
-  const legUv = [0, 6, 12, 18].map((v) => unwrapCube(50, v, 3, 3, 3));
   const legs: Box[] = [
     [0, 0, 0, 3, 3, 3],
     [13, 0, 0, 16, 3, 3],
@@ -395,25 +396,10 @@ function bed(entry: PaletteEntry): BlockShape {
   ];
   return transform(
     [
-      {
-        // The sheet lays the bed out lying down, so the box's `north` face in
-        // the unwrap is the mattress you look at from above — verified against
-        // the texture: that window holds the white pillow on the head piece
-        // and plain red on the foot.
-        box: [0, 3, 0, 16, 9, 16],
-        uv: {
-          up: uv.north,
-          down: uv.south,
-          north: uv.down,
-          south: uv.up,
-          east: uv.east,
-          west: uv.west,
-        },
-      },
-      ...legs.map((box, i) => ({ box, uv: legUv[i], omit: ["up"] })),
+      { box: [0, 3, 0, 16, 9, 16] },
+      // A leg's top is under the mattress and would z-fight with its floor.
+      ...legs.map((box) => ({ box, omit: ["up"] })),
     ],
-    // The foot is rendered turned 180° from the head, so the two halves meet
-    // head-to-foot instead of both pointing the same way.
     northFacingSteps(entry) + (head ? 0 : 2),
     false,
   );
@@ -421,21 +407,56 @@ function bed(entry: PaletteEntry): BlockShape {
 
 /**
  * Chest: a 14x10x14 body at texture offset (0,19) and a 14x5x14 lid at (0,0),
- * exactly as the vanilla renderer builds them. `type` picks the sheet — a
- * double chest is two blocks each wearing half of `normal_left`/`normal_right`.
+ * exactly as the vanilla renderer builds them.
+ *
+ * ## It faced backwards, and the sheet says so
+ *
+ * The model is authored **facing south**, not north. Diffing the four side
+ * windows of the body against each other leaves exactly one that differs --
+ * `south` -- and a chest has exactly one side that differs, the front. Rotated
+ * as if it were north-authored, every chest in the app wore its front on its
+ * back.
+ *
+ * The double-chest sheets corroborate it independently. `normal_left`'s seam --
+ * the dark, textureless join where the other half goes -- is on its *west*
+ * window and `normal_right`'s is on its *east*, and those land on the model's
+ * east and west faces only under this rotation. That is also what makes
+ * `getConnectedDirection`'s convention come out right: a `left` chest's partner
+ * is clockwise of its facing.
+ *
+ * ## A double half is 15 wide
+ *
+ * Vanilla joins the two halves into one 30-wide chest, so each is 15 and they
+ * meet with no seam. Drawn as two 14-wide chests they stand a pixel apart with
+ * a wall of interior texture between them, which reads as two chests that
+ * happen to be adjacent -- which is exactly what a double chest is not.
  */
 function chest(entry: PaletteEntry): BlockShape {
   const body = unwrapCube(0, 19, 14, 10, 14);
   const lid = unwrapCube(0, 0, 14, 5, 14);
+  /*
+   * The seam faces the partner: `left` is joined clockwise of its facing, which
+   * for a north-facing chest is east.
+   *
+   * Written **inverted**, and that is not a slip. These coordinates are the
+   * model before `transform` turns it, and a south-authored model reaches a
+   * north-facing block through a half-turn -- so the side written at +x is the
+   * side that ends up at -x. Getting it the intuitive way round put every
+   * double chest's seam on its outer edge and its open side against its
+   * partner, which reads as two chests pushed apart rather than one joined.
+   */
+  const type = entry.properties.type;
+  const x0 = type === "left" ? 0 : 1;
+  const x1 = type === "right" ? 16 : 15;
   return transform(
     [
       // The body's top and the lid's underside are coincident planes, and the
-      // body's top window is the chest's dark *interior* — left in, they
+      // body's top window is the chest's dark *interior* -- left in, they
       // z-fight and the seam flickers black.
-      { box: [1, 0, 1, 15, 10, 15], uv: body, omit: ["up"] },
-      { box: [1, 9, 1, 15, 14, 15], uv: lid, omit: ["down"] },
+      { box: [x0, 0, 1, x1, 10, 15], uv: body, omit: ["up"] },
+      { box: [x0, 9, 1, x1, 14, 15], uv: lid, omit: ["down"] },
     ],
-    northFacingSteps(entry),
+    southFacingSteps(entry),
     false,
   );
 }
@@ -483,6 +504,37 @@ const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => Bl
   ["_rail", () => boxes([0, 0, 0, 16, 1, 16])],
   ["_candle", () => boxes([7, 0, 7, 9, 6, 9])],
   ["_sapling", () => ({ kind: "cross" })],
+  /*
+   * `_chain` covers the rename and everything that came with it: `chain` became
+   * `iron_chain` in 1.21.9, and the copper golem update added a copper chain in
+   * each of the four oxidation stages plus their waxed mirrors. Eighteen ids,
+   * one entry, and the bare `chain` still reaches it through EXACT_SHAPES.
+   */
+  ["_chain", chain],
+  // A shelf against the wall, opening away from it.
+  ["_shelf", shelf],
+  /*
+   * Coral. The *blocks* are cubes and stay cubes -- `_coral_block` does not end
+   * in `_coral` -- while the plants are crosses and the fans lie flat, wall fans
+   * against whatever they grew on. As cubes all thirty of them were solid
+   * lumps that deleted the seabed they stood on.
+   */
+  ["_coral_wall_fan", (e) => againstWall(e, 1)],
+  ["_coral_fan", () => boxes([0, 0, 0, 16, 1, 16])],
+  ["_coral", () => ({ kind: "cross" })],
+  // A head or a skull sits in the middle of its cell; a wall one hangs on the
+  // face opposite the one it looks out of.
+  ["_wall_head", (e) => transform([[4, 4, 8, 12, 12, 16]], facingSteps(e) + 2, false)],
+  ["_wall_skull", (e) => transform([[4, 4, 8, 12, 12, 16]], facingSteps(e) + 2, false)],
+  ["_head", () => boxes([4, 0, 4, 12, 8, 12])],
+  ["_skull", () => boxes([4, 0, 4, 12, 8, 12])],
+  // A cake with a candle on it: the cake, and the candle standing on top.
+  ["_candle_cake", () => boxes([1, 0, 1, 15, 8, 15], [7, 8, 7, 9, 14, 9])],
+  // A cauldron with something in it is the same iron pot.
+  ["_cauldron", () => boxes([0, 0, 0, 16, 16, 16])],
+  // The copper golem, stood still. A statue is not a cube and drawing it as one
+  // walled off whatever it was standing next to.
+  ["_golem_statue", (e) => transform([[4, 0, 4, 12, 14, 12]], facingSteps(e), false)],
   ["_tulip", () => ({ kind: "cross" })],
   ["_mushroom", () => ({ kind: "cross" })],
 ];
@@ -676,6 +728,140 @@ function pottedPlant(): BlockShape {
 }
 
 /**
+ * A brewing stand: the rod and its three-lobed base, from `brewing_stand.json`.
+ *
+ * The base plates carry explicit UVs because `brewing_stand_base.png` is a
+ * *plan view* of all three lobes at once -- the box coordinates would pick a
+ * different lobe for each plate, and one of them a corner of nothing.
+ */
+function brewingStand(): BlockShape {
+  const base = (box: Box, uv: UvWindow): ShapeBox => ({
+    box,
+    texture: "brewing_stand_base",
+    uv: { up: uv, down: uv },
+  });
+  return boxes(
+    { box: [7, 0, 7, 9, 14, 9] },
+    base([9, 0, 5, 15, 2, 11], [9, 5, 15, 11]),
+    base([1, 0, 1, 7, 2, 7], [1, 1, 7, 7]),
+    base([1, 0, 9, 7, 2, 15], [1, 9, 7, 15]),
+  );
+}
+
+/**
+ * A grindstone: the wheel between two legs, on two pivots.
+ *
+ * It was the wheel alone -- one box, floating -- which is the half of the model
+ * that does not tell you what the block is. The legs take `dark_oak_log`
+ * whatever the pack, exactly as vanilla's model does, and the pivots their own
+ * texture; the wheel keeps the block's, which resolves `grindstone_side`.
+ */
+function grindstone(entry: PaletteEntry): BlockShape {
+  const leg = (x0: number, x1: number): ShapeBox => ({
+    box: [x0, 0, 6, x1, 7, 10],
+    texture: "dark_oak_log",
+  });
+  const pivot = (x0: number, x1: number): ShapeBox => ({
+    box: [x0, 7, 5, x1, 13, 11],
+    texture: "grindstone_pivot",
+  });
+  return transform(
+    [leg(12, 14), leg(2, 4), pivot(12, 14), pivot(2, 4), { box: [4, 4, 2, 12, 16, 14] }],
+    facingSteps(entry),
+    false,
+  );
+}
+
+/**
+ * An anvil, from `template_anvil.json`: a wide foot, a waist, and the block on
+ * top that the hammer lands on.
+ *
+ * Authored **facing south** -- its blockstate gives `facing=south` no rotation,
+ * which is worth reading off the file rather than guessing, because the anvil
+ * is not symmetric and a quarter-turn puts its long axis across the run.
+ */
+const ANVIL_PARTS: Box[] = [
+  [2, 0, 2, 14, 4, 14],
+  [4, 4, 3, 12, 5, 13],
+  [6, 5, 4, 10, 10, 12],
+  [3, 10, 0, 13, 16, 16],
+];
+
+function anvil(entry: PaletteEntry): BlockShape {
+  return transform(ANVIL_PARTS, southFacingSteps(entry), false);
+}
+
+/**
+ * A shelf: the back panel against the wall, with a lip top and bottom.
+ *
+ * `template_shelf_body.json` puts the panel at z 13..16, so the model is
+ * authored with its opening facing **north**.
+ */
+function shelf(entry: PaletteEntry): BlockShape {
+  return transform(
+    [
+      [0, 0, 13, 16, 16, 16],
+      [0, 0, 11, 16, 4, 13],
+      [0, 12, 11, 16, 16, 13],
+    ],
+    northFacingSteps(entry),
+    false,
+  );
+}
+
+/**
+ * Azalea: a hollow shell of leaves with the bush hanging inside it.
+ *
+ * Drawn as a solid cube it lost the whole lower half of the block -- the report
+ * was "only the top with the leaves, no bottom", and that is exactly right:
+ * vanilla's `template_azalea` is a lid at y=16, four paper-thin walls from y=5
+ * up, and a cross of `azalea_plant` filling the space under them. The cross is
+ * the part a cube cannot express at all.
+ */
+function azalea(entry: PaletteEntry): BlockShape {
+  const plant = baseName(entry) === "flowering_azalea" ? "flowering_azalea_top" : "azalea_plant";
+  const tilt: BoxRotation = { origin: [8, 8, 8], axis: "y", angle: 45 };
+  return boxes(
+    { box: [0, 16, 0, 16, 16, 16] },
+    { box: [0, 5, 0, 16, 16, 0.01] },
+    { box: [0, 5, 15.99, 16, 16, 16] },
+    { box: [0, 5, 0, 0.01, 16, 16] },
+    { box: [15.99, 5, 0, 16, 16, 16] },
+    { box: [0.1, 0, 8, 15.9, 15.9, 8], rotation: tilt, texture: plant },
+    { box: [8, 0, 0.1, 8, 15.9, 15.9], rotation: tilt, texture: plant },
+  );
+}
+
+/**
+ * A vine: one flat sheet per face it clings to.
+ *
+ * It was a cross, which is the shape of a *plant standing in a cell* and not of
+ * something growing on a wall -- a curtain of vines down a cliff came out as a
+ * row of little shrubs floating a half-block off it. Vanilla draws one plane
+ * per connected side, and now that `block_connections.ts` derives those sides
+ * this can too.
+ *
+ * A vine with nothing to cling to keeps the cross. That is the state a vine
+ * arrives in when it is placed with no rule having run yet, and an empty shape
+ * would make it vanish.
+ */
+function vine(entry: PaletteEntry): BlockShape {
+  const list: ShapeBox[] = [];
+  for (const [direction, box] of [
+    ["north", [0, 0, 0.05, 16, 16, 0.05]],
+    ["south", [0, 0, 15.95, 16, 16, 15.95]],
+    ["west", [0.05, 0, 0, 0.05, 16, 16]],
+    ["east", [15.95, 0, 0, 15.95, 16, 16]],
+    ["up", [0, 15.95, 0, 16, 15.95, 16]],
+  ] as const) {
+    if (entry.properties[direction] === "true") {
+      list.push({ box: box as unknown as Box });
+    }
+  }
+  return list.length === 0 ? { kind: "cross" } : boxes(...list);
+}
+
+/**
  * A piston head: the plate you see, and the rod holding it out.
  *
  * Vanilla's own model, in the same 0..16 units — a 4-deep plate at the far
@@ -753,7 +939,14 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
   // Workstations that are not full blocks. `composter` is left a cube on
   // purpose: its outer shell really is 16x16x16, only its inside is hollow.
   stonecutter: () => boxes([0, 0, 0, 16, 9, 16]),
-  grindstone: (e) => transform([[4, 4, 2, 12, 16, 14]], facingSteps(e), false),
+  grindstone,
+  brewing_stand: brewingStand,
+  anvil,
+  chipped_anvil: anvil,
+  damaged_anvil: anvil,
+  azalea,
+  flowering_azalea: azalea,
+  vine,
   lectern: () => boxes([0, 0, 0, 16, 2, 16], [4, 2, 4, 12, 15, 12]),
   chest,
   trapped_chest: chest,
@@ -784,6 +977,21 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
   bell: () => boxes([4, 4, 4, 12, 12, 12]),
   conduit: () => boxes([5, 5, 5, 11, 11, 11]),
   lily_pad: () => boxes([0, 0, 0, 16, 1, 16]),
+
+  /*
+   * A flowerbed: petals lying on the ground, like a carpet with a stem.
+   *
+   * Vanilla varies the number of petals with `flower_amount`; one flat plate is
+   * the shape that matters, because as a full cube it was a solid pink block
+   * that also deleted the grass underneath it.
+   */
+  pink_petals: () => boxes([0, 0, 0, 16, 1, 16]),
+  wildflowers: () => boxes([0, 0, 0, 16, 1, 16]),
+  leaf_litter: () => boxes([0, 0, 0, 16, 1, 16]),
+
+  // The nether's dripstone: same silhouette, same reasoning as its overworld
+  // twin -- a narrow column is the reach a neighbour needs to know about.
+  sulfur_spike: () => boxes([5, 0, 5, 11, 16, 11]),
 
   /*
    * Blocks that had a texture before they had a shape.
@@ -840,7 +1048,6 @@ const CROSS_BLOCKS: ReadonlySet<string> = new Set([
   "nether_wart",
   "sweet_berry_bush",
   "cobweb",
-  "vine",
   "dandelion",
   "poppy",
   "blue_orchid",
@@ -870,6 +1077,23 @@ const CROSS_BLOCKS: ReadonlySet<string> = new Set([
   "fire",
   "soul_fire",
   "torchflower_crop",
+  /*
+   * Hanging and standing plants that were full opaque cubes. `cave_vines` is
+   * vanilla's `block/cross` verbatim; `firefly_bush` and the dry grasses came
+   * with the registry and had never been drawn at all.
+   */
+  "cave_vines",
+  "cave_vines_plant",
+  "firefly_bush",
+  "bush",
+  "short_dry_grass",
+  "tall_dry_grass",
+  "open_eyeblossom",
+  "closed_eyeblossom",
+  "cactus_flower",
+  "golden_dandelion",
+  "pale_hanging_moss",
+  "resin_clump",
 ]);
 
 function baseName(entry: PaletteEntry): string {

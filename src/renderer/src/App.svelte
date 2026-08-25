@@ -531,7 +531,17 @@ import VersionsModal from "./lib/VersionsModal.svelte";
             },
           };
     await runDocument(action === "break" ? t("task.breakingBlock") : t("task.placingBlock"), () =>
-      api().applyEdit({ kind: "setBlock", x: at.x, y: at.y, z: at.z, block }),
+      api().applyEdit({
+        kind: "setBlock",
+        x: at.x,
+        y: at.y,
+        z: at.z,
+        block,
+        // Only main can see what was clicked -- the renderer holds no schematic
+        // -- so it needs the direction to look in. Two slabs meeting is the one
+        // rule that reads it.
+        ...(look.against === null ? {} : { against: look.against }),
+      }),
     );
   }
 

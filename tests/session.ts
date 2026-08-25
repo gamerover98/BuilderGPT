@@ -1003,6 +1003,79 @@ console.log("\n--- turning a region ---");
   equal("...and so does undoing all four", snapshot(), before);
 }
 
+// --- two slabs are one block ------------------------------------------------
+//
+// In the game a slab placed against the top of a matching bottom slab does not
+// go in the cell above -- it fills the one already there, and the pair becomes a
+// single full block. The editor stacked them instead, which is a shape the game
+// cannot hold: the file pastes back looking nothing like it did here.
+console.log("\n--- two slabs are one block ---");
+{
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  const slab = (type: string) => ({
+    namespacedName: "minecraft:oak_slab",
+    properties: { type },
+  });
+  const at = (y: number) => getBlock(session.doc, 1, y, 1);
+
+  applyEdit(session, { kind: "setBlock", x: 1, y: 0, z: 1, block: slab("bottom") });
+  // Clicking the top of that slab targets the cell above, and `against: "up"`
+  // is the only thing that lets main find the slab that was clicked -- the
+  // renderer holds no schematic and the mesh has no per-block identity.
+  const changed = applyEdit(session, {
+    kind: "setBlock",
+    x: 1,
+    y: 1,
+    z: 1,
+    block: slab("top"),
+    against: "up",
+  });
+  equal("the second slab merges into the first", at(0).properties.type, "double");
+  equal("...leaving the cell above empty", at(1).namespacedName, "minecraft:air");
+  equal("...and reporting the one block it changed", changed, 1);
+
+  // Same material only: an oak slab does not merge into a stone one.
+  applyEdit(session, { kind: "setBlock", x: 2, y: 0, z: 1, block: slab("bottom") });
+  applyEdit(session, {
+    kind: "setBlock",
+    x: 2,
+    y: 1,
+    z: 1,
+    block: { namespacedName: "minecraft:stone_slab", properties: { type: "top" } },
+    against: "up",
+  });
+  equal(
+    "a different material stacks instead",
+    getBlock(session.doc, 2, 0, 1).properties.type,
+    "bottom",
+  );
+  equal("...in its own cell", getBlock(session.doc, 2, 1, 1).namespacedName, "minecraft:stone_slab");
+
+  // Two bottom slabs are not a full block and never become one.
+  applyEdit(session, { kind: "setBlock", x: 3, y: 0, z: 1, block: slab("bottom") });
+  applyEdit(session, {
+    kind: "setBlock",
+    x: 3,
+    y: 1,
+    z: 1,
+    block: slab("bottom"),
+    against: "up",
+  });
+  equal("two bottom slabs do not merge", getBlock(session.doc, 3, 0, 1).properties.type, "bottom");
+  equal("...they stack", getBlock(session.doc, 3, 1, 1).properties.type, "bottom");
+
+  // A fill carries no `against`, which is what keeps this a click gesture: a
+  // region filled with slabs is a region of slabs, not half as many doubles.
+  const filled = newDocument({ width: 2, height: 4, length: 2 });
+  applyEdit(filled, {
+    kind: "fill",
+    region: { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 1, maxZ: 0 },
+    block: slab("bottom"),
+  });
+  equal("a fill never merges", getBlock(filled.doc, 0, 0, 0).properties.type, "bottom");
+  equal("...at either level", getBlock(filled.doc, 0, 1, 0).properties.type, "bottom");
+}
+
 // --- connecting to the neighbours -------------------------------------------
 //
 // The rules themselves are tests/blocks.ts's. This is the pass: which cells get

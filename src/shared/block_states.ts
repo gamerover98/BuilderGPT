@@ -43,13 +43,20 @@
  * generated: it answers which way a block placed by *this click* points, and
  * that depends on where the camera was. No dataset knows that.
  *
- * ## The dataset is pinned to a release, deliberately
+ * ## The dataset is two releases, deliberately
  *
- * `misode/mcmeta`'s `summary` branch tracks snapshots, and on it `chain` has
- * already become `iron_chain` -- while `block_id_list.txt` still offers
- * `chain`. Pinning to 1.21.8 is what keeps the two in step; the rename landed
- * in 1.21.11. The provenance block in the JSON records this so a future refresh
- * does not "helpfully" move to the newest branch.
+ * `misode/mcmeta`'s `summary` branch tracks snapshots, so the vendored copy is
+ * pinned to releases. It is a **union** of 26.2 and 1.21.8, and the union is
+ * not tidiness: `chain` became `iron_chain` in **1.21.9**, and it is the only
+ * block the older snapshot has that the newer one does not. This app writes
+ * schematics for 1.8 onward and a file cut before that release still names it,
+ * so both spellings have to be offerable.
+ *
+ * The rename was first recorded here as 1.21.11, which was wrong -- the sweep
+ * that found it skipped 1.21.9 and 1.21.10 and so put the boundary two releases
+ * late. It is written down because a rename is the one thing a union cannot
+ * paper over: the *texture* moved too, and `model_baker.ts` carries an alias
+ * for it.
  */
 
 export interface BlockStateShape {

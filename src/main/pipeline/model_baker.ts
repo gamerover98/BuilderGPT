@@ -1337,6 +1337,20 @@ export class ModelBaker {
     }
 
     /*
+     * The mature pitcher plant wears its crop's *final* stage.
+     *
+     * Not expressible as an alias, which is why it is written out: the file is
+     * `pitcher_crop_top_stage_4`, so the growth stage comes *after* the half,
+     * and the `half` branch below would build `pitcher_crop_stage_4_top`. Left
+     * to the plain alias it drew `pitcher_crop_top` -- the seedling -- so a
+     * full-grown plant wore a sprout.
+     */
+    if (normalized === "pitcher_plant") {
+      const half = entry.properties.half === "upper" ? "top" : "bottom";
+      return [`pitcher_crop_${half}_stage_4`, `pitcher_crop_${half}`];
+    }
+
+    /*
      * The face a block *points* is drawn from its own texture, and there was no
      * rule for it at all -- so every furnace, dispenser and dropper in the game
      * wore `furnace_side` on all four sides, including the one with the fire in

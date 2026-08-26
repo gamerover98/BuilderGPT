@@ -29,6 +29,8 @@ import {
   type GenerateRequest,
   type GenerateResponse,
   type InspectResponse,
+  type McpActivity,
+  type McpStatus,
   openCodeModelRequiresKey,
   type OpenCodeModelInfo,
   type ConfirmDiscardRequest,
@@ -155,6 +157,7 @@ import {
   autosaveDir,
   checkpointsDir,
   conversationsDir,
+  mcpDiscoveryFile,
   snapshotsDir,
   defaultResourcePackPath,
   generatedDir,
@@ -183,6 +186,14 @@ import {
 } from "../services/snapshots.js";
 import { refreshShell, rememberInOsRecents } from "../menu.js";
 import { shellState, useWindow } from "../services/broadcast.js";
+import {
+  mcpActivity,
+  mcpStatus,
+  regenerateMcpToken,
+  startMcpServer,
+  stopMcpServer,
+  useHost,
+} from "../mcp/server.js";
 import { VERSION_NAMES } from "../services/versions.js";
 
 /** File-picking kinds only; `directory` takes the folder branch instead. */
@@ -255,6 +266,59 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   useConversationDirectory(conversationsDir());
   useCheckpointDirectory(checkpointsDir());
   useSnapshotDirectory(snapshotsDir());
+
+  /*
+   * The MCP server's three dependencies, injected for the same reason.
+   *
+   * `allowedBlocks` is a function rather than a set because the set is loaded
+   * from disk and this runs before anything has been read; `onStatus` is how a
+   * change nobody in the window caused — a client connecting, a call landing —
+   * reaches the indicator in the navbar.
+   */
+  useHost({
+    allowedBlocks: async () => await loadAllowedBlocks(resourcesDir()),
+    discoveryFile: mcpDiscoveryFile(),
+    onStatus: (status) => {
+      const window = getWindow();
+      if (window && !window.isDestroyed()) {
+        window.webContents.send(IPC.mcpStatusChanged, status);
+      }
+    },
+  });
+  /*
+   * Started from the stored setting, not awaited.
+   *
+   * Not awaited because a listener that fails to bind must not hold up the
+   * window — the failure is reported into the status and the app is otherwise
+   * unaffected, which is the same "up with less beats not up" rule the startup
+   * steps follow.
+   */
+  void (async () => {
+    const settings = await getSettings();
+    if (settings.mcp.enabled) await startMcpServer(settings.mcp);
+  })();
+
+  ipcMain.handle(IPC.mcpStatus, (): McpStatus => mcpStatus());
+  ipcMain.handle(IPC.mcpActivity, (): McpActivity[] => mcpActivity());
+
+  /*
+   * The toggle is an action, not just a setting.
+   *
+   * It writes the preference *and* starts or stops the listener, and answers
+   * with what actually happened — because starting can fail on a port somebody
+   * else holds, and a control that said "on" while nothing was listening is
+   * exactly the failure this split exists to prevent.
+   */
+  ipcMain.handle(IPC.mcpSetEnabled, async (_event, enabled: boolean): Promise<McpStatus> => {
+    const settings = await getSettings();
+    const next = await setSettings({ ...settings, mcp: { ...settings.mcp, enabled } });
+    return enabled ? await startMcpServer(next.mcp) : await stopMcpServer();
+  });
+
+  ipcMain.handle(IPC.mcpRegenerateToken, async (): Promise<McpStatus> => {
+    const settings = await getSettings();
+    return await regenerateMcpToken(settings.mcp);
+  });
 
   ipcMain.handle(IPC.settingsGet, async (): Promise<Settings> => await getSettings());
 

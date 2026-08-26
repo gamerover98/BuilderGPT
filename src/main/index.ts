@@ -18,6 +18,7 @@ import { installMenu } from "./menu.js";
 import { isDirty } from "./domain/history.js";
 import { currentSession } from "./services/session.js";
 import { discardPrompt } from "./services/discard_prompt.js";
+import { stopMcpServer } from "./mcp/server.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -134,4 +135,16 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+/*
+ * The MCP listener goes down with the app, and the discovery file with it.
+ *
+ * `will-quit` rather than `window-all-closed`, because on macOS the process
+ * outlives its window and the server should keep serving until the app really
+ * is going away. Leaving the file behind would point the stdio bridge at a port
+ * nobody is listening on, which is a confusing failure a long way from here.
+ */
+app.on("will-quit", () => {
+  void stopMcpServer();
 });

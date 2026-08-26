@@ -193,6 +193,23 @@ export const IPC = {
   /** main → renderer: what the turn in flight is doing, as it does it. */
   agentTrace: "bgpt:agent:trace",
 
+  /**
+   * The MCP server: what it is doing, and the two things you can tell it.
+   *
+   * `mcpStatus` is asked; `mcpStatusChanged` is pushed, because the answer
+   * moves for reasons the window did not cause — a client connecting, a call
+   * arriving, a port turning out to be taken after the toggle said yes.
+   *
+   * `mcpSetEnabled` is deliberately not "save the setting and let something
+   * else notice": starting a listener can fail, and the caller has to be told
+   * whether it did. It answers with the resulting status.
+   */
+  mcpStatus: "bgpt:mcp:status",
+  mcpStatusChanged: "bgpt:mcp:status:changed",
+  mcpActivity: "bgpt:mcp:activity",
+  mcpSetEnabled: "bgpt:mcp:setEnabled",
+  mcpRegenerateToken: "bgpt:mcp:regenerateToken",
+
   artifactsList: "bgpt:artifacts:list",
 
   /** main → renderer, `ipcRenderer.on`. Replaces `st.progress`. */
@@ -1212,6 +1229,60 @@ export type InspectResponse = Result<BlockInspection>;
 export type SchematicNbtResponse = Result<SchematicNbtText>;
 export type SaveResponse = Result<SaveSuccess>;
 
+// ---------------------------------------------------------------------------
+// The MCP server
+// ---------------------------------------------------------------------------
+
+/**
+ * What the server is actually doing — as opposed to what the checkbox says.
+ *
+ * The two are different questions and conflating them is how you get a control
+ * reading "on" while nothing is listening: `settings.mcp.enabled` is the user's
+ * intent, this is main's observation. Only one of them can say "the port was
+ * already taken".
+ */
+export type McpServerState = "off" | "starting" | "listening" | "error";
+
+export interface McpStatus {
+  state: McpServerState;
+  /** Where clients connect, once there is somewhere. */
+  url: string | null;
+  /**
+   * The bearer token, in the clear.
+   *
+   * A deliberate exception to "secrets never travel main → renderer". That rule
+   * protects credentials for *remote* services: the renderer has no use for
+   * them and a leak costs the user money. This one authorises a local server
+   * this app generates itself, and its whole purpose is to be pasted into
+   * another program by the user — withholding it would mean opening a file in
+   * userData by hand. It is shown masked, and it can be regenerated, which is
+   * the mitigation that actually matters.
+   */
+  token: string | null;
+  /** How many clients hold a session right now. */
+  clients: number;
+  /**
+   * Tool calls served since the server started.
+   *
+   * A monotonic counter rather than an "a call happened" event, so the renderer
+   * can flash the indicator from the number moving and main never has to model
+   * an animation.
+   */
+  calls: number;
+  /** Why it is not running. Main's own wording, so not translated. */
+  message: string | null;
+}
+
+/** One line of the activity log: what was called, and when. */
+export interface McpActivity {
+  /** Milliseconds since the epoch, so the renderer can format it in its locale. */
+  at: number;
+  tool: string;
+  /** The tool's own phrasing of what it did, or the error it raised. */
+  summary: string;
+  ok: boolean;
+}
+
 export interface Artifact {
   path: string;
   name: string;
@@ -1386,6 +1457,22 @@ export interface BgptApi {
    * started it. `null` means it was closed.
    */
   onDocumentChanged(listener: (state: DocumentState | null) => void): () => void;
+
+  /** What the MCP server is doing right now. */
+  getMcpStatus(): Promise<McpStatus>;
+  /**
+   * Start or stop it, and say what happened.
+   *
+   * Answers with the resulting status rather than a boolean: starting opens a
+   * socket and can fail on a port somebody else holds, and the caller is the
+   * one that has to show that.
+   */
+  setMcpEnabled(enabled: boolean): Promise<McpStatus>;
+  /** A new token. Every client holding the old one stops working. */
+  regenerateMcpToken(): Promise<McpStatus>;
+  /** The last hundred tool calls, newest first. */
+  getMcpActivity(): Promise<McpActivity[]>;
+  onMcpStatusChanged(listener: (status: McpStatus) => void): () => void;
 
   /**
    * The application menu, one subscription per verb.

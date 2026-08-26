@@ -73,7 +73,7 @@ import { createDocument, documentFromLoaded, setBlock } from "../src/main/domain
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { loadSkyTextures } from "../src/main/services/sky_textures.js";
 import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/services/versions.js";
-import { coerceSettings, coerceUi } from "../src/main/services/settings_coerce.js";
+import { coerceMcp, coerceSettings, coerceUi } from "../src/main/services/settings_coerce.js";
 import { discardPrompt } from "../src/main/services/discard_prompt.js";
 import {
   buildBlockIcons,
@@ -104,9 +104,11 @@ import {
 } from "../src/main/domain/grow.js";
 import {
   DEFAULT_HOTBAR,
+  DEFAULT_MCP_SETTINGS,
   DEFAULT_SETTINGS,
   DEFAULT_UI_SETTINGS,
   SIDEBAR_WIDTH,
+  type McpSettings,
   type Settings,
   type UiSettings,
 } from "../src/shared/settings.js";
@@ -1220,6 +1222,17 @@ console.log("\n--- settings coercion ---");
 
   equal("every ui field survives a round-trip", coerceUi(ui), ui);
 
+  // Every field the opposite of its default, so a `coerceMcp` that dropped one
+  // and substituted the default could not survive the comparison below.
+  const mcp = {
+    enabled: true,
+    port: 4600,
+    root: "C:/builds/mcp",
+    allowDelete: true,
+  } satisfies McpSettings;
+
+  equal("every mcp field survives a round-trip", coerceMcp(mcp), mcp);
+
   const settings = {
     provider: "OpenAI",
     model: "gpt-4o-mini",
@@ -1229,9 +1242,24 @@ console.log("\n--- settings coercion ---");
     outputDir: "C:/builds",
     preview: { ...DEFAULT_SETTINGS.preview, wireframe: true, maxDrawDistance: 1024 },
     ui,
+    mcp,
   } satisfies Settings;
 
   equal("every settings field survives a round-trip", coerceSettings(settings), settings);
+
+  /*
+   * The two flags are compared against `true` rather than coerced, because
+   * anything that is not exactly `true` has to be off: one opens a listening
+   * socket and the other decides whether a delete verb exists at all, and a
+   * settings file carrying `"yes"` or `1` must not be read as permission.
+   */
+  equal("a truthy string does not enable the server", coerceMcp({ enabled: "yes" }).enabled, false);
+  equal("...nor deletion", coerceMcp({ allowDelete: 1 }).allowDelete, false);
+  equal("a missing mcp block is all defaults", coerceMcp(undefined), DEFAULT_MCP_SETTINGS);
+  // `0` is legal and means "any free port", so it must survive rather than
+  // being read as absent and replaced by the default.
+  equal("port 0 is a real answer", coerceMcp({ port: 0 }).port, 0);
+  equal("a port past the range falls back", coerceMcp({ port: 99999 }).port, DEFAULT_MCP_SETTINGS.port);
 
   // A file written by an older build, or edited by hand into nonsense.
   const fallback = coerceUi({ theme: "neon", language: "xx", sidebarWidth: "wide" });

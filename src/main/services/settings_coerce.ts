@@ -16,14 +16,17 @@
 
 import {
   DEFAULT_HOTBAR,
+  DEFAULT_MCP_SETTINGS,
   DEFAULT_SETTINGS,
   DEFAULT_UI_SETTINGS,
   HOTBAR_SLOTS,
   LANGUAGES,
+  MCP_PORT,
   PROVIDERS,
   SIDEBAR_WIDTH,
   THEMES,
   type Language,
+  type McpSettings,
   type Provider,
   type Settings,
   type Theme,
@@ -130,6 +133,29 @@ function coordinate(raw: unknown, fallback: number): number {
 }
 
 /**
+ * Every field of `McpSettings`, named — see the module comment.
+ *
+ * Whitelisted rather than spread for a reason sharper than `ui`'s: these decide
+ * whether a socket is opened and whether a delete verb exists, so a field that
+ * arrives from a settings file this build does not understand must not survive
+ * into one that does. `enabled` and `allowDelete` are compared against `true`
+ * rather than coerced, so anything that is not exactly `true` is off.
+ */
+export function coerceMcp(raw: unknown): McpSettings {
+  const source = (raw ?? {}) as Partial<McpSettings>;
+  const port = Number(source.port);
+  return {
+    enabled: source.enabled === true,
+    port:
+      Number.isFinite(port) && port >= MCP_PORT.min && port <= MCP_PORT.max
+        ? Math.trunc(port)
+        : DEFAULT_MCP_SETTINGS.port,
+    root: typeof source.root === "string" ? source.root : DEFAULT_MCP_SETTINGS.root,
+    allowDelete: source.allowDelete === true,
+  };
+}
+
+/**
  * Merges a persisted blob over the defaults field by field. A settings file
  * written by an older build must not be able to produce `undefined` where the
  * renderer expects a value, so nothing is spread blindly.
@@ -145,6 +171,7 @@ export function coerceSettings(raw: unknown): Settings {
   const source = (raw ?? {}) as Partial<Settings>;
   const preview = { ...DEFAULT_SETTINGS.preview, ...(source.preview ?? {}) };
   const ui = coerceUi(source.ui);
+  const mcp = coerceMcp(source.mcp);
   return {
     provider: isProvider(source.provider) ? source.provider : DEFAULT_SETTINGS.provider,
     model: typeof source.model === "string" ? source.model : DEFAULT_SETTINGS.model,
@@ -154,5 +181,6 @@ export function coerceSettings(raw: unknown): Settings {
     outputDir: typeof source.outputDir === "string" ? source.outputDir : DEFAULT_SETTINGS.outputDir,
     preview,
     ui,
+    mcp,
   };
 }

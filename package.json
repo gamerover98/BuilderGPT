@@ -32,6 +32,7 @@
     "smoke:formats": "tsx tests/formats.ts",
     "smoke:session": "tsx tests/session.ts",
     "smoke:agent": "tsx tests/agent.ts",
+    "smoke:mcp": "tsx tests/mcp.ts",
     "smoke:autosave": "tsx tests/autosave.ts",
     "smoke:ui": "tsx tests/ui.ts",
     "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json"
@@ -39,6 +40,7 @@
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.27",
     "@jitl/quickjs-singlefile-cjs-release-sync": "^0.32.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "adm-zip": "^0.5.16",
     "ai": "^7.0.58",
     "pngjs": "^7.0.0",

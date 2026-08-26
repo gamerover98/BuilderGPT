@@ -18,6 +18,7 @@
       * formats     — writing a document back out, round-tripped through the reader
       * session     — the open document as the IPC handlers drive it
       * agent       — the AI tool loop, driven by a scripted model
+      * mcp         — what the MCP server will and will not do
       * autosave    — crash recovery: snapshot, lose the session, get the work back
       * ui          — the renderer's pure modules: i18n lookup and catalogue coverage
 
@@ -50,6 +51,7 @@ $steps = @(
     @{ Name = 'formats';    Script = 'smoke:formats' }
     @{ Name = 'session';    Script = 'smoke:session' }
     @{ Name = 'agent';      Script = 'smoke:agent' }
+    @{ Name = 'mcp';        Script = 'smoke:mcp' }
     @{ Name = 'autosave';   Script = 'smoke:autosave' }
     @{ Name = 'ui';         Script = 'smoke:ui' }
 )

@@ -391,6 +391,54 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   hotbarSlot: 0,
 };
 
+/**
+ * The MCP server: whether it runs, where, and what it may do.
+ *
+ * Every field is a decision about what somebody else's model is allowed to do
+ * to your build, which is why none of them defaults to permissive.
+ */
+export interface McpSettings {
+  /**
+   * Off until asked for.
+   *
+   * This opens a listening socket in the privileged process, so the safe
+   * default is the only defensible one — and it is *intent*, not state: the
+   * server may still fail to start because the port is taken. What is actually
+   * listening is `McpStatus`, which comes from main.
+   */
+  enabled: boolean;
+  /** `0` asks the OS for a free one, which is what a second instance needs. */
+  port: number;
+  /**
+   * The directory outside which the server will not open, save or delete.
+   *
+   * Empty means the output directory, which is where the app's own files
+   * already go. A root is what keeps a mistyped path from reaching the rest of
+   * the disk; it is not a sandbox against a hostile client, and does not claim
+   * to be one.
+   */
+  root: string;
+  /**
+   * Whether `delete_document` exists at all.
+   *
+   * Separate from `enabled` because the two questions are different: "may
+   * another program edit my schematics" is most of the value here, and "may it
+   * throw them away" is the one verb that leaves the app's own safety net.
+   * Even on, the file goes to the OS trash rather than being unlinked.
+   */
+  allowDelete: boolean;
+}
+
+export const DEFAULT_MCP_SETTINGS: McpSettings = {
+  enabled: false,
+  port: 4571,
+  root: "",
+  allowDelete: false,
+};
+
+/** What the port may be. `0` is legal and means "any free one". */
+export const MCP_PORT = { min: 0, max: 65535 } as const;
+
 export interface Settings {
   provider: Provider;
   model: string;
@@ -402,6 +450,7 @@ export interface Settings {
   outputDir: string;
   preview: PreviewSettings;
   ui: UiSettings;
+  mcp: McpSettings;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -417,6 +466,7 @@ export const DEFAULT_SETTINGS: Settings = {
   outputDir: "",
   preview: { ...DEFAULT_PREVIEW_SETTINGS },
   ui: { ...DEFAULT_UI_SETTINGS },
+  mcp: { ...DEFAULT_MCP_SETTINGS },
 };
 
 /**

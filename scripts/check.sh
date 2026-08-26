@@ -15,6 +15,7 @@
 #   formats     writing a document back out, round-tripped through the reader
 #   session     the open document as the IPC handlers drive it
 #   agent       the AI tool loop, driven by a scripted model
+#   mcp         what the MCP server will and will not do
 #   autosave    crash recovery: snapshot, lose the session, get the work back
 #   ui          the renderer's pure modules: i18n lookup and catalogue coverage
 #
@@ -34,8 +35,8 @@ set +e
 
 install_dependencies_if_missing
 
-STEP_NAMES=(typecheck hello smoke sandbox services schematics blocks chunks document snbt history formats session agent autosave ui)
-STEP_SCRIPTS=(typecheck smoke:hello smoke smoke:sandbox smoke:services smoke:schematics smoke:blocks smoke:chunks smoke:document smoke:snbt smoke:history smoke:formats smoke:session smoke:agent smoke:autosave smoke:ui)
+STEP_NAMES=(typecheck hello smoke sandbox services schematics blocks chunks document snbt history formats session agent mcp autosave ui)
+STEP_SCRIPTS=(typecheck smoke:hello smoke smoke:sandbox smoke:services smoke:schematics smoke:blocks smoke:chunks smoke:document smoke:snbt smoke:history smoke:formats smoke:session smoke:agent smoke:mcp smoke:autosave smoke:ui)
 STEP_RESULTS=()
 
 # ASCII only, to stay readable in terminals that are not UTF-8.

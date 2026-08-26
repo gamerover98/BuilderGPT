@@ -170,6 +170,17 @@ export function generatedDir(): string {
   return path.join(app.getPath("userData"), "generated");
 }
 
+/**
+ * Where the MCP server writes its URL and token, for the stdio bridge to read.
+ *
+ * A file rather than a fixed port, because the port can be `0` — and because a
+ * bridge that had to be reconfigured every time the port moved would be a
+ * bridge nobody keeps working.
+ */
+export function mcpDiscoveryFile(): string {
+  return path.join(app.getPath("userData"), "mcp.json");
+}
+
 /** `temp_uploads/` (component.py:296, 352), relocated likewise. */
 export function tempDir(): string {
   return path.join(app.getPath("temp"), "buildergpt");

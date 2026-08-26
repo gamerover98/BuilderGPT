@@ -30,6 +30,8 @@ import {
   type GenerateRequest,
   type GenerateResponse,
   type InspectResponse,
+  type McpActivity,
+  type McpStatus,
   type OpenCodeModelInfo,
   type ConfirmDiscardRequest,
   type DocumentVersion,
@@ -191,6 +193,18 @@ const api: BgptApi = {
     const wrapped = (_event: unknown, payload: TraceEvent) => listener(payload);
     ipcRenderer.on(IPC.agentTrace, wrapped);
     return () => ipcRenderer.removeListener(IPC.agentTrace, wrapped);
+  },
+
+  getMcpStatus: () => ipcRenderer.invoke(IPC.mcpStatus) as Promise<McpStatus>,
+  setMcpEnabled: (enabled: boolean) =>
+    ipcRenderer.invoke(IPC.mcpSetEnabled, enabled) as Promise<McpStatus>,
+  regenerateMcpToken: () => ipcRenderer.invoke(IPC.mcpRegenerateToken) as Promise<McpStatus>,
+  getMcpActivity: () => ipcRenderer.invoke(IPC.mcpActivity) as Promise<McpActivity[]>,
+
+  onMcpStatusChanged(listener) {
+    const wrapped = (_event: unknown, payload: McpStatus) => listener(payload);
+    ipcRenderer.on(IPC.mcpStatusChanged, wrapped);
+    return () => ipcRenderer.removeListener(IPC.mcpStatusChanged, wrapped);
   },
 
   onDocumentChanged(listener) {

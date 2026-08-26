@@ -1088,6 +1088,22 @@ import VersionsModal from "./lib/VersionsModal.svelte";
       liveTrace = applyTraceEvent(liveTrace, event);
     });
     /*
+     * Somebody outside this window edited the document.
+     *
+     * The MCP server acts on the same session the viewport is drawing, and it
+     * is the only thing that can move the document without this window having
+     * asked — so every other path to a `DocumentState` arrives as the return
+     * value of an invoke and this one arrives here.
+     *
+     * `refreshDocument` reads `docState`, so the assignment has to land first;
+     * it also handles the `null` case by clearing the mesh, which is what
+     * makes closing from outside the window work.
+     */
+    const unsubscribeDocument = api().onDocumentChanged((state) => {
+      docState = state;
+      void refreshDocument();
+    });
+    /*
      * The application menu, one subscription per verb.
      *
      * The menu is main's because the accelerators are: a key claimed by a
@@ -1121,6 +1137,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
       unsubscribe();
       unsubscribeStartup();
       unsubscribeTrace();
+      unsubscribeDocument();
       for (const off of unsubscribeMenu) off();
     };
   });

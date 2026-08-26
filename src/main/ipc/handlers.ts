@@ -182,6 +182,7 @@ import {
   useSnapshotDirectory,
 } from "../services/snapshots.js";
 import { refreshShell, rememberInOsRecents } from "../menu.js";
+import { shellState, useWindow } from "../services/broadcast.js";
 import { VERSION_NAMES } from "../services/versions.js";
 
 /** File-picking kinds only; `directory` takes the folder branch instead. */
@@ -233,24 +234,12 @@ function emitProgress(window: BrowserWindow | null, event: ProgressEvent): void 
   }
 }
 
-/**
- * `documentState`, and the window chrome derived from the same facts.
- *
- * Every handler that answers with a `DocumentState` has, by construction, just
- * changed one — so this is the single place the title bar and the File menu are
- * brought back in step, rather than fourteen separate reminders to remember to.
- * `refreshShell` rebuilds the menu only when its shape actually moved; the
- * title is cheap and always set, which is what makes the dirty marker live.
- *
- * Not awaited: nothing downstream depends on the chrome having repainted, and
- * making every edit wait on a menu rebuild would be the wrong trade.
- */
-function shellState(session: DocumentSession): DocumentState {
-  void refreshShell();
-  return documentState(session);
-}
-
 export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
+  // Where `announceDocument` pushes. Installed here because this is where the
+  // window getter arrives, and before anything can edit a document.
+  useWindow(getWindow);
+
+
   // Snapshots the open document while it differs from disk. Started here
   // because this is where the app's wiring lives, and left running for the
   // process's lifetime — there is nothing to tear down that outlives it.

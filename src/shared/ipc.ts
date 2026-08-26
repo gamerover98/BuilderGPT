@@ -80,6 +80,22 @@ export const IPC = {
   docNew: "bgpt:doc:new",
   docClose: "bgpt:doc:close",
   docState: "bgpt:doc:state",
+  /**
+   * main → renderer: the open document moved, and nobody in the window asked.
+   *
+   * Every other path to a `DocumentState` is an answer to a question the
+   * renderer put — which is why this channel did not exist for so long, and
+   * why it has to now. An edit arriving from outside the window (the MCP
+   * server) would otherwise leave the viewport showing a build that is no
+   * longer there and a title bar with the wrong dirty marker, until the user
+   * happened to do something that asked.
+   *
+   * It carries the whole `DocumentState` rather than a "something changed"
+   * ping: the renderer needs it either way, and a ping would only mean one
+   * more round trip before the same answer. `null` means the document was
+   * closed, which is a state the window has to be able to be told about.
+   */
+  docChanged: "bgpt:doc:changed",
   docMesh: "bgpt:doc:mesh",
   docApply: "bgpt:doc:apply",
   docUndo: "bgpt:doc:undo",
@@ -1360,6 +1376,16 @@ export interface BgptApi {
    * conversations hold.
    */
   onAgentTrace(listener: (event: TraceEvent) => void): () => void;
+
+  /**
+   * The open document changed without the renderer having asked.
+   *
+   * The only source today is the MCP server, which edits the same session the
+   * window is showing. The renderer adopts the state and re-requests the mesh,
+   * exactly as it does after one of its own edits — the difference is only who
+   * started it. `null` means it was closed.
+   */
+  onDocumentChanged(listener: (state: DocumentState | null) => void): () => void;
 
   /**
    * The application menu, one subscription per verb.

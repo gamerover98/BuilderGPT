@@ -23,6 +23,7 @@ import {
   type BlockIconsResponse,
   type BgptApi,
   type DocumentMeshResponse,
+  type DocumentState,
   type DocumentStateResponse,
   type EditRequest,
   type EditResponse,
@@ -190,6 +191,12 @@ const api: BgptApi = {
     const wrapped = (_event: unknown, payload: TraceEvent) => listener(payload);
     ipcRenderer.on(IPC.agentTrace, wrapped);
     return () => ipcRenderer.removeListener(IPC.agentTrace, wrapped);
+  },
+
+  onDocumentChanged(listener) {
+    const wrapped = (_event: unknown, payload: DocumentState | null) => listener(payload);
+    ipcRenderer.on(IPC.docChanged, wrapped);
+    return () => ipcRenderer.removeListener(IPC.docChanged, wrapped);
   },
 
   /*

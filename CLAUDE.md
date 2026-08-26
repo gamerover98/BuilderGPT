@@ -27,13 +27,16 @@ src/
     services/ session (the open document), writers, llm, opencode, generate,
               preview, schematic, output, settings-store, snapshots, …
     pipeline/ schem -> GLB (loader, loader_formats, model_baker, mesher, atlas, …)
+    mcp/      the MCP server: policy.ts (the rules, pure), tools.ts (dispatch
+              and the queue), lifecycle.ts + document_tools.ts (the two
+              non-agent tables), server.ts (the listener)
     core.ts   sandboxed execution of LLM-generated build scripts
     menu.ts   the application menu + window title (Electron half)
     menu_model.ts  what the menu contains, as data — testable, no Electron
   preload/    contextBridge — the only renderer↔main surface
   renderer/   Svelte 5 UI + the Three.js viewer
 resources/    shipped as extraResources: the default pack, legacy_blocks.json,
-              opencode_models.json
+              opencode_models.json, mcp-bridge.mjs
 tests/        the automated suites (see Commands)
 scripts/      build / start / check, in PowerShell and sh; gen-block-list.mjs
 ```
@@ -65,7 +68,7 @@ scripts/check.sh          # or scripts\check.ps1   — typecheck + all four test
 ```
 
 They are thin wrappers over the npm scripts, which stay the source of truth:
-`npm run dev｜build｜typecheck｜package:{win,linux,mac}｜smoke｜smoke:{hello,sandbox,services,schematics,blocks,document,history,formats,session,agent}`.
+`npm run dev｜build｜typecheck｜package:{win,linux,mac}｜smoke｜smoke:{hello,sandbox,services,schematics,blocks,document,history,formats,session,agent,mcp}`.
 
 `check.sh` runs typecheck plus every suite and does **not** stop at the first
 failure — a runner that aborts early hides how much else is broken.
@@ -797,6 +800,89 @@ wants them.
 
 **API keys never travel main → renderer.** They are stored encrypted via
 `safeStorage`; the renderer only ever learns `{ hasKey: true }`.
+
+**The app serves its own editing surface over MCP, and the rule is one
+sentence: every operation must leave a way back inside the app's own model.**
+`src/main/mcp/` is a listener on loopback that lets a stronger harness — Claude
+Code, Codex — drive the schematic the user has open, through the same tools,
+with the same undo stack underneath. What those harnesses cannot do for
+themselves is the whole value: read and write the container formats, place a
+block with the state and the neighbour connections the game would give it, mesh
+the result, and show a picture of it.
+
+An external client can already destroy a build with one `fill_region`, and that
+is *acceptable* because it is a transaction, on the undo stack, with a version
+history behind it. So the rules are only for the verbs that would step outside
+that net: a save snapshots first, `save_document_as` moves an existing file
+aside under a timestamp rather than overwriting, opening over unsaved work is
+**refused**, and a delete goes to `shell.trashItem` and never to `unlink`.
+
+**HTTP, not stdio, and the reason is the whole point.** stdio means the *client*
+spawns the server, and a freshly spawned process has no document open. What
+makes this worth building is the session the user is looking at — they watch the
+build change and their Ctrl+Z takes it back. `resources/mcp-bridge.mjs` covers
+the stdio-only clients by forwarding to the running app; it is dependency-free
+plain Node because it is run by whatever `node` the *client* has, which cannot
+see this app's `node_modules`.
+
+**Never a native dialog.** `discard_prompt.ts` is right for a person at the
+keyboard and wrong twice over here: a background agent must not be able to make
+a modal appear on somebody's screen, and must certainly not answer its own
+question about throwing away their work. The refusal *is* the answer, phrased
+for a model to relay and call again with `discardUnsavedChanges`.
+
+**Four tables, because there are four relationships to a transaction**, and
+mixing them is how you get an edit that cannot be undone:
+
+| | |
+|---|---|
+| `agent/tools.ts` | needs one **wrapped around it** — `callTool` provides it |
+| `mcp/document_tools.ts` | **owns its own** (`pasteSelection` already calls `runTransaction`) |
+| `mcp/lifecycle.ts` | needs **none** — it replaces the document rather than editing it |
+| `mcp/policy.ts` | pure rules, no effects at all |
+
+`TOOL_SPECS` is why the first row is shared rather than copied: two places
+deciding what `fill_region` means is how you get a tool that works in the chat
+and not over MCP. `tests/mcp.ts` states that from both sides — every agent tool
+must be offered, and MCP must have invented none of its own.
+
+**Mutating calls are serialised, and `serialised` is tested directly.** Driving
+it through two `fill_region`s proves nothing: that body has no real `await`, so
+the two run in order whether or not the queue exists, and a check written that
+way passes with the queue deleted. Verified by deleting it.
+
+**`Recorder` is not exported, so a tool cannot edit outside a transaction at
+all.** `refusingScope` covers the one case left — a writing tool wrongly listed
+in `READ_ONLY` — and fires with a sentence naming the mistake.
+
+**`readOnly` and `changesDocument` are different questions.** `copy_region`
+writes the clipboard the user's own paste reads, so it is not read-only; the
+schematic did not move, so the viewport has nothing to redraw. One flag would
+make one of those a lie.
+
+**The checkbox is intent; `McpStatus` is reality.** They come apart when a port
+is already held by a second copy of the app, and a navbar dot derived from the
+setting would be green over a server that never started. `mcp_status.ts` holds
+the rule, and `showsIndicator` never hides a *listening* server whatever the
+setting says — the warning is the point.
+
+**The MCP token does travel to the renderer, deliberately.** The standing rule
+protects credentials for *remote* services; this one authorises a local server
+the app generates itself and exists to be pasted into another program. Masked,
+re-masked when the modal closes, and regenerable — rotation is the mitigation
+that matters.
+
+**Main can now push a `DocumentState`, and could not before.** `IPC.docChanged`
+and `services/broadcast.ts`. `shellState` is the *asked-for* case and must not
+push — the caller already has the value, and a selection-face drag sends an edit
+many times a second. `announceDocument` is the unasked case. Folding them into
+one function with a flag would put that decision at twenty-one call sites.
+
+**`capture_viewport` photographs the window, and cannot aim the camera.** Main
+cannot work out where the canvas is — the layout is CSS — and cannot *ask* the
+renderer anything, only be told; so the renderer reports its rect from `resize`.
+Aiming would need a request from main to the renderer and a reply channel, which
+does not exist.
 
 **One IPC channel per verb, all declared in `src/shared/ipc.ts`.** No generic
 dispatcher. Everything crossing must be structured-clone-safe — binary payloads

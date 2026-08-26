@@ -38,7 +38,7 @@
   import { t, tn } from "./i18n.svelte.js";
   import type { McpActivity, McpStatus } from "../../../shared/ipc.js";
   import { dotColor, dotFor, maskToken } from "./mcp_status.js";
-  import { connectCommand } from "../../../shared/mcp.js";
+  import { bridgeCommand, connectCommand } from "../../../shared/mcp.js";
   import { api } from "./bridge.svelte.js";
 
   type Category =
@@ -162,7 +162,7 @@
   /** Whether the token is shown in the clear. Off every time the modal opens. */
   let revealed = $state(false);
   /** Which field was last copied, so the button can say so briefly. */
-  let copied = $state<"url" | "token" | "command" | null>(null);
+  let copied = $state<"url" | "token" | "command" | "bridge" | null>(null);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
   $effect(() => {
@@ -172,7 +172,7 @@
     if (!open) revealed = false;
   });
 
-  async function copy(what: "url" | "token" | "command", value: string): Promise<void> {
+  async function copy(what: "url" | "token" | "command" | "bridge", value: string): Promise<void> {
     if (value === "") return;
     await api().copyToClipboard(value);
     copied = what;
@@ -183,6 +183,15 @@
   const command = $derived(
     mcpStatus?.url && mcpStatus.token ? connectCommand(mcpStatus.url, mcpStatus.token) : "",
   );
+  /*
+   * The same, for a client that will not speak HTTP.
+   *
+   * Shown beside the HTTP one rather than instead of it: some clients take
+   * either, and the HTTP form is one fewer process. The bridge is here because
+   * some take only stdio, and without this line it would be a file in the
+   * install directory that nobody could be expected to find.
+   */
+  const bridge = $derived(mcpStatus?.bridge ? bridgeCommand(mcpStatus.bridge) : "");
 
   /*
    * The state in words.
@@ -775,7 +784,21 @@
                   {copied === "command" ? t("mcp.copied") : t("mcp.copy")}
                 </button>
               </div>
+              <p class="hint">{t("mcp.commandHint")}</p>
             </div>
+
+            {#if bridge !== ""}
+              <div class="field">
+                <label for="mcp-bridge">{t("mcp.bridge")}</label>
+                <div class="pick-row">
+                  <input id="mcp-bridge" readonly value={bridge} title={bridge} />
+                  <button onclick={() => copy("bridge", bridge)}>
+                    {copied === "bridge" ? t("mcp.copied") : t("mcp.copy")}
+                  </button>
+                </div>
+                <p class="hint">{t("mcp.bridgeHint")}</p>
+              </div>
+            {/if}
           {/if}
 
           <div class="field">

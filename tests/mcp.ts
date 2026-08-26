@@ -13,7 +13,9 @@
  * thing, the app says no.
  */
 
+import { spawn } from "child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
+import { createServer } from "http";
 import { tmpdir } from "os";
 import path from "path";
 
@@ -753,6 +755,106 @@ try {
       acceptsRequest({ host: "127.0.0.1:4571", origin: "http://localhost:5173" }, 4571).ok,
     );
     check("garbage in Origin is refused rather than parsed", !acceptsRequest({ host: "127.0.0.1:4571", origin: "not a url" }, 4571).ok);
+  }
+
+  // --- the stdio bridge, actually spawned ----------------------------------
+  //
+  // The one part of this feature that cannot be checked by reading it: the
+  // bridge is a separate process, run by whatever `node` the user's client has,
+  // talking newline-framed JSON-RPC on one side and HTTP on the other. Every
+  // way it can be wrong is a framing bug, and framing bugs are invisible until
+  // something is at the other end.
+  //
+  // No Electron involved: the discovery file it reads is found through APPDATA
+  // (or XDG_CONFIG_HOME), which a spawned process can be given.
+  console.log("\n--- the stdio bridge ---");
+  {
+    const seen: unknown[] = [];
+    const stub = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => (body += chunk));
+      request.on("end", () => {
+        const message = JSON.parse(body) as { id?: number; method?: string };
+        seen.push({ method: message.method, auth: request.headers.authorization });
+        // A notification has no id and is answered 202 with no body -- which the
+        // bridge must not forward, or the client gets a parse error.
+        if (message.id === undefined) {
+          response.writeHead(202).end();
+          return;
+        }
+        response.writeHead(200, {
+          "content-type": "application/json",
+          "mcp-session-id": "session-1",
+        });
+        response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { ok: true } }));
+      });
+    });
+    await new Promise<void>((resolve) => stub.listen(0, "127.0.0.1", () => resolve()));
+    const port = (stub.address() as { port: number }).port;
+
+    // The bridge looks for `mcp.json` under the platform's config directory,
+    // and both of the ones it consults come from the environment.
+    const fakeUserData = path.join(workDir, "userdata", "buildergpt");
+    await mkdir(fakeUserData, { recursive: true });
+    await writeFile(
+      path.join(fakeUserData, "mcp.json"),
+      JSON.stringify({ version: 1, url: `http://127.0.0.1:${port}/mcp`, token: "t0ken", pid: 1 }),
+      "utf8",
+    );
+    const home = path.join(workDir, "userdata");
+
+    const bridge = spawn(process.execPath, [path.resolve("resources/mcp-bridge.mjs")], {
+      env: { ...process.env, APPDATA: home, XDG_CONFIG_HOME: home },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const lines: string[] = [];
+    let buffered = "";
+    bridge.stdout.setEncoding("utf8");
+    bridge.stdout.on("data", (chunk: string) => {
+      buffered += chunk;
+      let at: number;
+      while ((at = buffered.indexOf("\n")) !== -1) {
+        const line = buffered.slice(0, at).trim();
+        buffered = buffered.slice(at + 1);
+        if (line !== "") lines.push(line);
+      }
+    });
+    let stderr = "";
+    bridge.stderr.setEncoding("utf8");
+    bridge.stderr.on("data", (chunk: string) => (stderr += chunk));
+
+    const waitForLines = async (count: number): Promise<void> => {
+      for (let tries = 0; tries < 100 && lines.length < count; tries += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    };
+
+    bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" })}\n`);
+    await waitForLines(1);
+    check("the bridge answered", lines.length === 1, `${lines.join(" | ")} ${stderr}`);
+    equal("...with the reply the server gave", JSON.parse(lines[0] ?? "{}"), {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { ok: true },
+    });
+    equal("...having sent the token from the discovery file", seen[0], {
+      method: "initialize",
+      auth: "Bearer t0ken",
+    });
+
+    // A notification: answered 202 with no body, and the bridge must stay
+    // quiet. Forwarding an empty line would be a parse error at the client.
+    bridge.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
+    );
+    bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+    await waitForLines(2);
+    equal("a notification produces no line", lines.length, 2);
+    equal("...and the next request still answers", JSON.parse(lines[1] ?? "{}").id, 2);
+
+    bridge.kill();
+    await new Promise<void>((resolve) => stub.close(() => resolve()));
   }
 
   // --- the command the settings pane offers --------------------------------

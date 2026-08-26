@@ -77,6 +77,10 @@ export const en = {
   "mcp.copied": "Copied",
   "mcp.regenerate": "Regenerate",
   "mcp.command": "Command to connect",
+  "mcp.commandHint": "For a client that speaks MCP over HTTP. Anything that can send an Authorization header will do — the address and token above are all it needs.",
+  "mcp.bridge": "…or over stdio",
+  "mcp.bridgeHint":
+    "For a client that only speaks stdio. It forwards to this app, so the schematic you have open is the one it edits. Needs Node on the path.",
   "mcp.activity": "Recent calls",
   "mcp.activityEmpty": "Nothing yet.",
   "mcp.activityFailed": "failed",

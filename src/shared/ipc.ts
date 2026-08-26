@@ -1290,6 +1290,15 @@ export interface McpStatus {
   calls: number;
   /** Why it is not running. Main's own wording, so not translated. */
   message: string | null;
+  /**
+   * Where the stdio bridge script is, for clients that will not speak HTTP.
+   *
+   * On the status rather than derived in the renderer, because only main knows
+   * where the app's resources ended up — that differs between a dev run and an
+   * installed copy, and a renderer guessing would be right in exactly one of
+   * them.
+   */
+  bridge: string | null;
 }
 
 /** One line of the activity log: what was called, and when. */

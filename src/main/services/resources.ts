@@ -171,6 +171,20 @@ export function generatedDir(): string {
 }
 
 /**
+ * The stdio bridge, for MCP clients that will not speak HTTP.
+ *
+ * Beside the resource pack because it ships the same way -- `resources/` goes
+ * out whole as an extraResource -- and `resourcesDir()` is the one function
+ * that knows whether this is a dev run or an installed copy.
+ */
+export function mcpBridgeFile(): string {
+  // Two levels, exactly like `legacyBlocksPath`: `extraResources` copies the
+  // repo's `resources/` folder to `<resourcesPath>/resources/`, so the inner
+  // segment is part of the path in a packaged build as well as in a dev run.
+  return path.join(resourcesDir(), "resources", "mcp-bridge.mjs");
+}
+
+/**
  * Where the MCP server writes its URL and token, for the stdio bridge to read.
  *
  * A file rather than a fixed port, because the port can be `0` — and because a

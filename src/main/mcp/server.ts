@@ -89,6 +89,8 @@ export interface McpHost {
   discoveryFile: string;
   /** What an empty `mcp.root` means — the app's own output directory. */
   defaultRoot(): Promise<string>;
+  /** Where `mcp-bridge.mjs` ended up, which differs between dev and installed. */
+  bridgeFile: string;
   /** A PNG of the 3D viewport, base64-encoded, or `null` if there is no window. */
   capture(): Promise<{ data: string; width: number; height: number } | null>;
   /** Called whenever the status moves, so the window can be told. */
@@ -125,6 +127,7 @@ export function mcpStatus(): McpStatus {
     clients: sessions.size,
     calls,
     message,
+    bridge: host?.bridgeFile ?? null,
   };
 }
 

@@ -80,7 +80,7 @@ import {
   maskToken,
   showsIndicator,
 } from "../src/renderer/src/lib/mcp_status.js";
-import { connectCommand } from "../src/shared/mcp.js";
+import { bridgeCommand, connectCommand } from "../src/shared/mcp.js";
 import type { McpStatus } from "../src/shared/ipc.js";
 import { normalizeTicks, skyAt, skyDistance } from "../src/renderer/src/lib/sky.js";
 import { fitShadow } from "../src/renderer/src/lib/shadow_fit.js";
@@ -903,6 +903,7 @@ console.log("\n--- the MCP indicator ---");
     clients: 0,
     calls: 0,
     message: null,
+    bridge: "C:/app/resources/mcp-bridge.mjs",
     ...over,
   });
 
@@ -959,6 +960,15 @@ console.log("\n--- the MCP indicator ---");
   const command = connectCommand("http://127.0.0.1:4571/mcp", "s3cret");
   check("the connect command names the transport", command.includes("--transport http"), command);
   check("...and carries the token as a bearer header", command.includes("Bearer s3cret"), command);
+
+  /*
+   * The stdio form quotes the path, and that is not cosmetic: the bridge ships
+   * under the app's install directory, which on Windows is under "Program
+   * Files". Unquoted, the command a user pastes stops at the space.
+   */
+  const stdio = bridgeCommand("C:/Program Files/Schematic AI Studio/resources/mcp-bridge.mjs");
+  check("the bridge command quotes the path", stdio.includes('"C:/Program Files/'), stdio);
+  check("...and passes it to node after the separator", stdio.includes("-- node"), stdio);
 }
 
 console.log("\n--- the floor and the grid ---");

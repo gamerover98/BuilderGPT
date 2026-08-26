@@ -157,6 +157,7 @@ import {
   autosaveDir,
   checkpointsDir,
   conversationsDir,
+  mcpBridgeFile,
   mcpDiscoveryFile,
   snapshotsDir,
   defaultResourcePackPath,
@@ -317,6 +318,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     allowedBlocks: async () => await loadAllowedBlocks(resourcesDir()),
     discoveryFile: mcpDiscoveryFile(),
     defaultRoot: async () => generatedDir(),
+    bridgeFile: mcpBridgeFile(),
     capture: async () => await captureViewport(getWindow()),
     onStatus: (status) => {
       const window = getWindow();

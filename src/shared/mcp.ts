@@ -20,3 +20,14 @@
 export function connectCommand(url: string, token: string): string {
   return `claude mcp add --transport http schematic ${url} --header "Authorization: Bearer ${token}"`;
 }
+
+/**
+ * The same, for a client that will only speak stdio.
+ *
+ * The bridge takes no arguments: it finds the running app through the discovery
+ * file the server writes, which is also why the port may be `0` — nothing has
+ * to agree on a number in two places.
+ */
+export function bridgeCommand(bridgePath: string): string {
+  return `claude mcp add schematic -- node "${bridgePath}"`;
+}

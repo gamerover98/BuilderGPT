@@ -55,18 +55,27 @@ import { callTool, describeTools } from "./tools.js";
 import { shell } from "electron";
 
 import {
+  adoptDocument,
   closeDocument,
   currentSession,
   newDocument,
   openDocument,
   saveSession,
 } from "../services/session.js";
+import { countBlocks } from "../domain/document.js";
+import { listSnapshots, readSnapshot, takeSnapshot } from "../services/snapshots.js";
+import { generate } from "../services/generate.js";
 import { announceDocument } from "../services/broadcast.js";
 import { isDirty } from "../domain/history.js";
 import { dataVersionOf, refusalFor } from "../../shared/mc_versions.js";
 import { legacyBlocksPath } from "../services/resources.js";
 import { adoptSubject } from "../services/conversation.js";
-import { getRecentDocuments, getSettings, rememberRecentDocument } from "../services/settings-store.js";
+import {
+  getApiKey,
+  getRecentDocuments,
+  getSettings,
+  rememberRecentDocument,
+} from "../services/settings-store.js";
 import { rememberInOsRecents } from "../menu.js";
 import { type Lifecycle } from "./lifecycle.js";
 
@@ -238,6 +247,59 @@ function lifecycleHost(): Lifecycle {
     refusalFor: (format, version) => refusalFor(format, version ?? ""),
     announce: announceDocument,
     capture: async () => await requireHost().capture(),
+    versions: async () => {
+      const session = currentSession();
+      if (session === null) return [];
+      return (await listSnapshots(session.doc.filePath)).map((snapshot) => ({
+        id: snapshot.id,
+        label: snapshot.label,
+        at: snapshot.at,
+      }));
+    },
+    saveVersion: async (label) => {
+      const session = currentSession();
+      if (session === null) return [];
+      await takeSnapshot(session, "manual", label);
+      return (await listSnapshots(session.doc.filePath)).map((snapshot) => ({
+        id: snapshot.id,
+        label: snapshot.label,
+        at: snapshot.at,
+      }));
+    },
+    restoreVersion: async (id) => {
+      const session = currentSession();
+      if (session === null || session.doc.filePath === null) return null;
+      const restored = await readSnapshot(session.doc.filePath, id);
+      if (restored === null) return null;
+      // What is being left, kept first. `adoptDocument` starts a fresh history,
+      // so a restore cannot be undone -- this snapshot is the way back, and it
+      // is what makes going back a fork rather than a one-way door.
+      await takeSnapshot(session, "manual", "Before going back");
+      return adoptDocument(restored.doc, restored.history);
+    },
+    generate: async (prompt) => {
+      const settings = await getSettings();
+      const apiKey = (await getApiKey(settings.provider)) ?? "";
+      const outcome = await generate({
+        provider: settings.provider,
+        model: settings.model,
+        apiKey,
+        baseUrl: settings.baseUrl,
+        description: prompt,
+        version: settings.version,
+        exportType: settings.exportType,
+        imagePath: null,
+        outputDir: settings.outputDir,
+      });
+      // Opened, like every other route that produces a schematic: generating and
+      // then not showing the result is how the app used to work, and it left the
+      // one thing you asked for behind a preview nothing could edit.
+      const session = await openDocument(outcome.path, { legacyBlocksPath: legacyBlocksPath() });
+      await rememberRecentDocument(outcome.path);
+      await adoptSubject(outcome.path);
+      announceDocument(session);
+      return { filePath: outcome.path, blocks: countBlocks(session.doc) };
+    },
   };
 }
 

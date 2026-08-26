@@ -91,6 +91,25 @@ export interface Lifecycle {
    * handed a blank image.
    */
   capture(): Promise<{ data: string; width: number; height: number } | null>;
+  /** The open schematic's own version history, newest first. */
+  versions(): Promise<readonly { id: string; label: string; at: number }[]>;
+  /** Snapshot the current state under a label. */
+  saveVersion(label: string): Promise<readonly { id: string; label: string; at: number }[]>;
+  /**
+   * Go back to one, snapshotting what is being left first.
+   *
+   * Returns `null` when the id names nothing. Restoring starts a fresh history,
+   * so it cannot be undone — which is exactly why the state being left is
+   * snapshotted, and why this is a fork rather than a one-way door.
+   */
+  restoreVersion(id: string): Promise<DocumentSession | null>;
+  /**
+   * Build a schematic from a sentence, with the app's own model and key.
+   *
+   * The key never reaches the caller: this is the app spending the user's
+   * budget on their behalf, which is why the tool says so in its description.
+   */
+  generate(prompt: string): Promise<{ filePath: string; blocks: number }>;
 }
 
 export interface LifecycleSpec {
@@ -426,6 +445,82 @@ export const LIFECYCLE_SPECS: readonly LifecycleSpec[] = [
       };
     },
   },
+  {
+    name: "list_versions",
+    description:
+      "The open schematic's own version history — snapshots of the file, kept beside it and outliving this session.",
+    schema: { type: "object", properties: {}, additionalProperties: false },
+    readOnly: true,
+    destructive: false,
+    async run(host) {
+      return { versions: await host.versions() };
+    },
+  },
+
+  {
+    name: "save_version",
+    description:
+      "Snapshot the schematic as it is now, so it can be returned to later. Cheap, and a good idea before anything sweeping.",
+    schema: {
+      type: "object",
+      properties: { label: { type: "string", description: "What this version is, in a few words." } },
+      required: ["label"],
+      additionalProperties: false,
+    },
+    readOnly: false,
+    destructive: false,
+    async run(host, args) {
+      const { label } = args as { label: string };
+      return { versions: await host.saveVersion(label) };
+    },
+  },
+
+  {
+    name: "restore_version",
+    description:
+      "Put the schematic back to one of its saved versions. This cannot be undone — but the state you are leaving is snapshotted first, so it is a fork rather than a one-way door.",
+    schema: {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    readOnly: false,
+    destructive: true,
+    async run(host, args) {
+      const { id } = args as { id: string };
+      const session = await host.restoreVersion(id);
+      if (session === null) {
+        throw new McpRefusal(
+          `No version with id ${id}. Use list_versions to see what there is.`,
+        );
+      }
+      host.announce(session);
+      return describe(session, true);
+    },
+  },
+
+  {
+    name: "generate_schematic",
+    description:
+      "Build a whole schematic from a description, using the model the user configured in this app — not you. Costs the user's own API budget, so prefer building it yourself with the block tools unless they asked for this specifically. The result is opened.",
+    schema: {
+      type: "object",
+      properties: { prompt: { type: "string", description: "What to build." } },
+      required: ["prompt"],
+      additionalProperties: false,
+    },
+    readOnly: false,
+    destructive: false,
+    async run(host, args) {
+      const { prompt } = args as { prompt: string };
+      if (String(prompt ?? "").trim() === "") {
+        throw new McpRefusal("Say what to build.");
+      }
+      return await host.generate(prompt);
+    },
+  },
+
   CAPTURE,
 ];
 

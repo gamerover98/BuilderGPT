@@ -99,6 +99,19 @@ function fakeLifecycle(over: Partial<Lifecycle> & { log?: string[] } = {}): Life
       log.push("announce");
     },
     capture: async () => null,
+    versions: async () => [{ id: "v1", label: "before the roof", at: 1 }],
+    saveVersion: async (label) => {
+      log.push(`version:${label}`);
+      return [{ id: "v2", label, at: 2 }];
+    },
+    restoreVersion: async (id) => {
+      log.push(`restore:${id}`);
+      return id === "v1" ? open() : null;
+    },
+    generate: async (prompt) => {
+      log.push(`generate:${prompt}`);
+      return { filePath: "C:/builds/made.schem", blocks: 12 };
+    },
     ...over,
   };
   return base;
@@ -601,6 +614,51 @@ try {
     // Read-only: photographing the window is not an edit, so nothing queues and
     // the viewport has nothing to redraw.
     equal("...without touching the undo stack", currentSession()?.history.undoStack.length ?? -1, 0);
+
+    /*
+     * Going back to a version that is not there.
+     *
+     * A restore that silently did nothing would be the worst answer available:
+     * the model would carry on believing the schematic is in a state it never
+     * reached. It is refused by name, and pointed at the tool that lists them.
+     */
+    const log: string[] = [];
+    const host = fakeLifecycle({ log });
+    let gone: string | null = null;
+    try {
+      await callTool("restore_version", { id: "nope" }, options(sink, host));
+    } catch (err) {
+      gone = err instanceof Error ? err.message : String(err);
+    }
+    check(
+      "restoring a version that is gone is refused",
+      gone !== null && gone.includes("list_versions"),
+      String(gone),
+    );
+
+    await callTool("restore_version", { id: "v1" }, options(sink, host));
+    /*
+     * The whole sequence, which says two things rather than one: the failed
+     * restore above *did* go looking -- it has to, to find out the id is gone --
+     * and it did **not** announce, so the window was never told about a document
+     * that did not change.
+     */
+    equal("...and a real one restores and tells the window", log, [
+      "restore:nope",
+      "restore:v1",
+      "announce",
+    ]);
+
+    // Generation spends the *user's* API budget, not the calling model's, so an
+    // empty prompt is refused rather than sent.
+    let blank: string | null = null;
+    try {
+      await callTool("generate_schematic", { prompt: "   " }, options(sink, host));
+    } catch (err) {
+      blank = err instanceof Error ? err.message : String(err);
+    }
+    check("an empty generation prompt is refused", blank !== null, String(blank));
+    equal("...and nothing was generated", log.filter((entry) => entry.startsWith("generate:")), []);
   }
 
   // --- the root ------------------------------------------------------------

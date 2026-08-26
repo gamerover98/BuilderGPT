@@ -46,6 +46,7 @@ import {
   type Side,
 } from "./selection_drag.js";
   import { isSpuriousLook } from "./look_filter.js";
+  import { api } from "./bridge.svelte.js";
   import { COPLANAR_OFFSET, GRID_DIVISIONS, GRID_SIZE } from "./depth.js";
   import { skyAt, skyDistance } from "./sky.js";
   import { fitShadow } from "./shadow_fit.js";
@@ -1528,6 +1529,31 @@ import { isTyping } from "./typing.js";
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
     renderer.setSize(width, height, false);
+    reportRect();
+  }
+
+  /**
+   * Tells main where this canvas is, so `capture_viewport` can crop to it.
+   *
+   * Reported rather than asked for, because main can only send to the renderer
+   * and never ask it anything -- and it cannot work the answer out either,
+   * since the layout is CSS. Sent from `resize`, which already runs on every
+   * layout change the viewer cares about, and once on mount.
+   *
+   * Window coordinates, which is what `getBoundingClientRect` gives and what
+   * `capturePage` takes: both are device-independent pixels, so the two agree
+   * on a high-DPI display with no scale factor carried between them.
+   */
+  function reportRect(): void {
+    if (!canvas) return;
+    const box = canvas.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0) return;
+    void api()
+      .reportViewportRect({ x: box.x, y: box.y, width: box.width, height: box.height })
+      .catch(() => {
+        // A picture of the whole window instead of the canvas is a worse
+        // answer, not a broken one, so this is never worth a banner.
+      });
   }
 
   /**

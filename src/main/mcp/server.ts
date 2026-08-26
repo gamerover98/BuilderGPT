@@ -80,6 +80,8 @@ export interface McpHost {
   discoveryFile: string;
   /** What an empty `mcp.root` means — the app's own output directory. */
   defaultRoot(): Promise<string>;
+  /** A PNG of the 3D viewport, base64-encoded, or `null` if there is no window. */
+  capture(): Promise<{ data: string; width: number; height: number } | null>;
   /** Called whenever the status moves, so the window can be told. */
   onStatus(status: McpStatus): void;
 }
@@ -235,6 +237,7 @@ function lifecycleHost(): Lifecycle {
     allowDelete: async () => (await getSettings()).mcp.allowDelete,
     refusalFor: (format, version) => refusalFor(format, version ?? ""),
     announce: announceDocument,
+    capture: async () => await requireHost().capture(),
   };
 }
 
@@ -271,6 +274,19 @@ function buildMcpServer(): Server {
         onChanged: announceDocument,
       });
       record(name, outcome.summary, true);
+      /*
+       * A picture goes back as an image block, not as JSON with base64 in it.
+       *
+       * MCP has a content type for this and a client that gets it shows the
+       * model an image; the same bytes inside a `text` block are a wall of
+       * base64 that costs the tokens and conveys nothing.
+       */
+      const shot = outcome.result as { data?: unknown; width?: unknown };
+      if (typeof shot?.data === "string" && typeof shot.width === "number") {
+        return {
+          content: [{ type: "image" as const, data: shot.data, mimeType: "image/png" }],
+        };
+      }
       return {
         content: [{ type: "text" as const, text: JSON.stringify(outcome.result, null, 2) }],
         structuredContent: outcome.result as Record<string, unknown>,

@@ -98,6 +98,7 @@ function fakeLifecycle(over: Partial<Lifecycle> & { log?: string[] } = {}): Life
     announce: () => {
       log.push("announce");
     },
+    capture: async () => null,
     ...over,
   };
   return base;
@@ -279,7 +280,14 @@ try {
       const at = session.history.undoStack.length;
       let raised: string | null = null;
       try {
-        await callTool(tool.name, region, options(spy));
+        // A working camera, so `capture_viewport` is exercised for what this
+        // loop is about -- whether a read-only tool writes -- rather than
+        // failing on the window that a test process does not have.
+        await callTool(
+          tool.name,
+          region,
+          options(spy, fakeLifecycle({ capture: async () => ({ data: "iVBOR", width: 8, height: 8 }) })),
+        );
       } catch (err) {
         raised = err instanceof Error ? err.message : String(err);
       }
@@ -563,6 +571,36 @@ try {
     );
 
     equal("an unknown lifecycle tool is not found", findLifecycle("no_such_tool"), null);
+
+    /*
+     * A picture, and the case where there is not one.
+     *
+     * The process outlives its window on macOS, so "no window to photograph" is
+     * a state that really happens -- and a model handed a blank image would
+     * describe the blank image. It gets a sentence instead.
+     */
+    open();
+    let noWindow: string | null = null;
+    try {
+      await callTool("capture_viewport", {}, options(sink));
+    } catch (err) {
+      noWindow = err instanceof Error ? err.message : String(err);
+    }
+    check(
+      "capturing with no window says so",
+      noWindow !== null && noWindow.includes("window"),
+      String(noWindow),
+    );
+
+    const shot = (await callTool(
+      "capture_viewport",
+      {},
+      options(sink, fakeLifecycle({ capture: async () => ({ data: "iVBOR", width: 1024, height: 640 }) })),
+    )).result as { data: string; width: number };
+    equal("...and otherwise hands back the image", shot.width, 1024);
+    // Read-only: photographing the window is not an edit, so nothing queues and
+    // the viewport has nothing to redraw.
+    equal("...without touching the undo stack", currentSession()?.history.undoStack.length ?? -1, 0);
   }
 
   // --- the root ------------------------------------------------------------

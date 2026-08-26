@@ -239,6 +239,44 @@ const inFlightGenerations = new Map<string, AbortController>();
  */
 const MAX_ICONS_PER_REQUEST = 128;
 
+/**
+ * Where the 3D canvas is, as the renderer last reported it.
+ *
+ * `null` until it has: main cannot work the layout out for itself and cannot
+ * ask, so the honest answer before the first report is "photograph the whole
+ * window" rather than a guess at where the sidebar ends.
+ */
+let viewportRect: { x: number; y: number; width: number; height: number } | null = null;
+
+/**
+ * A picture of the viewport, small enough to send to a model.
+ *
+ * Scaled to 1024 across, which is the width most vision models sample at
+ * anyway: a 2560-pixel screenshot costs several times the tokens and shows the
+ * same wall in the same place. `capturePage` takes device-independent pixels,
+ * which is what `getBoundingClientRect` gave the renderer, so the two agree on
+ * a high-DPI display without a scale factor being carried across.
+ */
+async function captureViewport(
+  window: BrowserWindow | null,
+): Promise<{ data: string; width: number; height: number } | null> {
+  if (window === null || window.isDestroyed()) return null;
+  const rect = viewportRect;
+  const image =
+    rect !== null && rect.width > 0 && rect.height > 0
+      ? await window.webContents.capturePage({
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        })
+      : await window.webContents.capturePage();
+  const size = image.getSize();
+  const scaled = size.width > 1024 ? image.resize({ width: 1024 }) : image;
+  const out = scaled.getSize();
+  return { data: scaled.toPNG().toString("base64"), width: out.width, height: out.height };
+}
+
 function emitProgress(window: BrowserWindow | null, event: ProgressEvent): void {
   if (window && !window.isDestroyed()) {
     window.webContents.send(IPC.progress, event);
@@ -279,6 +317,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     allowedBlocks: async () => await loadAllowedBlocks(resourcesDir()),
     discoveryFile: mcpDiscoveryFile(),
     defaultRoot: async () => generatedDir(),
+    capture: async () => await captureViewport(getWindow()),
     onStatus: (status) => {
       const window = getWindow();
       if (window && !window.isDestroyed()) {
@@ -457,6 +496,13 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   ipcMain.handle(IPC.revealPath, async (_event, target: string): Promise<void> => {
     shell.showItemInFolder(target);
   });
+
+  ipcMain.handle(
+    IPC.viewportRect,
+    async (_event, rect: { x: number; y: number; width: number; height: number }): Promise<void> => {
+      viewportRect = rect;
+    },
+  );
 
   ipcMain.handle(IPC.clipboardWrite, async (_event, text: string): Promise<void> => {
     clipboard.writeText(String(text ?? ""));

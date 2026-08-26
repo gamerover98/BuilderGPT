@@ -1,5 +1,10 @@
 /**
- * The verbs that are about the *file*, not about the blocks in it.
+ * The verbs that need an effect this process has to inject.
+ *
+ * Mostly the ones about the *file* rather than the blocks in it — open, create,
+ * save, close, delete — plus the one that photographs the window, which needs
+ * the same treatment for the same reason: it reaches Electron, and the rule it
+ * has to obey is worth testing without it.
  *
  * Deliberately not in `agent/tools.ts`, and that asymmetry is the design. The
  * in-app agent edits the schematic the user opened; it has no business opening
@@ -78,6 +83,14 @@ export interface Lifecycle {
   refusalFor(format: SchematicFormat, version: string | null): string | null;
   /** Called after anything that changes what is open. */
   announce(session: DocumentSession | null): void;
+  /**
+   * A picture of the 3D viewport, as PNG bytes already base64-encoded.
+   *
+   * `null` when there is no window to photograph — the process outlives its
+   * window on macOS, and a client asking then should be told so rather than
+   * handed a blank image.
+   */
+  capture(): Promise<{ data: string; width: number; height: number } | null>;
 }
 
 export interface LifecycleSpec {
@@ -130,6 +143,41 @@ const DISCARD = {
       "Only after the user has said to throw away their unsaved changes. Never assume it.",
   },
 } as const;
+
+/**
+ * The one tool that answers with a picture.
+ *
+ * This is the capability no harness can get any other way: a model editing a
+ * schematic through coordinates is working blind, and one look at what it built
+ * catches the whole class of mistakes that are obvious to a person and
+ * invisible in a block list — a roof one block short, a wall inside out, a
+ * staircase facing the wall.
+ *
+ * It photographs the window as it *is*, including the camera angle the user
+ * left it at. Aiming the camera would need main to make a request *of* the
+ * renderer and wait for it, and main can only send — a correlation id and a
+ * reply channel is real work and is deliberately not in this change. So the
+ * description says what the picture is of, rather than letting a model assume
+ * it chose the angle.
+ */
+const CAPTURE: LifecycleSpec = {
+  name: "capture_viewport",
+  description:
+    "A picture of the 3D viewport as the user is currently looking at it — their camera angle, their lighting, their theme. Use it to check what you have built actually looks right; a block list cannot show you a wall facing the wrong way. You cannot aim the camera, so ask the user to move it if you need another angle.",
+  schema: { type: "object", properties: {}, additionalProperties: false },
+  readOnly: true,
+  destructive: false,
+  async run(host) {
+    const shot = await host.capture();
+    if (shot === null) {
+      throw new McpRefusal(
+        "There is no window open to photograph. Ask the user to bring Schematic AI Studio " +
+          "to the front and try again.",
+      );
+    }
+    return shot;
+  },
+};
 
 export const LIFECYCLE_SPECS: readonly LifecycleSpec[] = [
   {
@@ -378,6 +426,7 @@ export const LIFECYCLE_SPECS: readonly LifecycleSpec[] = [
       };
     },
   },
+  CAPTURE,
 ];
 
 export function findLifecycle(name: string): LifecycleSpec | null {

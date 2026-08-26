@@ -129,6 +129,15 @@ export const IPC = {
   docMove: "bgpt:doc:move",
   /** A region's contents as standalone geometry, for the move preview. */
   docRegionMesh: "bgpt:doc:region:mesh",
+  /**
+   * renderer → main: where the 3D canvas sits in the window.
+   *
+   * So `capture_viewport` can crop to the build rather than photographing the
+   * sidebar and the settings gear. Main cannot work this out for itself — the
+   * layout is CSS — and there is no way for main to *ask* the renderer
+   * anything, only to be told. So the renderer reports it when it changes.
+   */
+  viewportRect: "bgpt:viewport:rect",
   /** The sun and moon images out of the resource pack. */
   skyTextures: "bgpt:sky:textures",
   /** The wooden axe, drawn on the cell WorldEdit would paste from. */
@@ -1317,6 +1326,8 @@ export interface BgptApi {
   /** `true` to go ahead and lose the unsaved changes. */
   confirmDiscard(req: ConfirmDiscardRequest): Promise<boolean>;
   revealPath(path: string): Promise<void>;
+  /** Where the 3D canvas is, in window coordinates. See `IPC.viewportRect`. */
+  reportViewportRect(rect: { x: number; y: number; width: number; height: number }): Promise<void>;
   /** Put text on the system clipboard. Main's, because the preload is sandboxed. */
   copyToClipboard(text: string): Promise<void>;
   getDefaultOutputDir(): Promise<string>;

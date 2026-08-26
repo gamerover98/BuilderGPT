@@ -25,6 +25,7 @@ import { LIFECYCLE_SPECS, findLifecycle, type Lifecycle } from "../src/main/mcp/
 import { DOCUMENT_SPECS, findDocumentTool } from "../src/main/mcp/document_tools.js";
 import {
   acceptsRequest,
+  chooseToken,
   connectCommand,
   isInside,
   mayDelete,
@@ -855,6 +856,26 @@ try {
 
     bridge.kill();
     await new Promise<void>((resolve) => stub.close(() => resolve()));
+  }
+
+  // --- the token survives a restart ----------------------------------------
+  //
+  // It used to live in a module variable and nowhere else, so every launch
+  // minted a fresh one and silently invalidated whatever the user had already
+  // pasted into their client. That reads as "the integration stopped working",
+  // which is a long way from "the token changed".
+  console.log("\n--- the token is kept until somebody asks ---");
+  {
+    equal("a stored token is used again", chooseToken("keep-me", false, "brand-new"), "keep-me");
+    equal("...and only replaced when asked", chooseToken("keep-me", true, "brand-new"), "brand-new");
+    equal("a first run makes one", chooseToken(null, false, "brand-new"), "brand-new");
+    // A settings file edited by hand into `""` heals rather than serving an
+    // empty bearer token, which would authorise everyone.
+    equal("an empty string is not a token", chooseToken("", false, "brand-new"), "brand-new");
+    equal("...nor is whitespace", chooseToken("   ", false, "brand-new"), "brand-new");
+    // Stored tokens are trimmed on the way out, so a stray newline from a
+    // hand-edited file cannot make the header not match.
+    equal("a stored token is trimmed", chooseToken(" keep-me\n", false, "brand-new"), "keep-me");
   }
 
   // --- the command the settings pane offers --------------------------------

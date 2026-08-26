@@ -160,6 +160,26 @@ export function mayDelete(
 }
 
 /**
+ * Which token the server should use: the one it already had, or a new one.
+ *
+ * A rule small enough to look like it does not need writing down, and it is the
+ * one that was wrong. The token lived in a module variable and nowhere else, so
+ * every launch minted a fresh one — silently invalidating whatever the user had
+ * pasted into their client the day before, which reads as "the integration
+ * stopped working" rather than as anything to do with tokens.
+ *
+ * So: a stored token is kept. A new one is made only when explicitly asked for,
+ * or when there is nothing stored — a first run, or a settings file from before
+ * this feature existed. An empty string counts as nothing rather than as a
+ * token, because a file edited by hand is one of the ways it can arrive.
+ */
+export function chooseToken(stored: string | null, regenerate: boolean, fresh: string): string {
+  if (regenerate) return fresh;
+  const trimmed = (stored ?? "").trim();
+  return trimmed === "" ? fresh : trimmed;
+}
+
+/**
  * Whether a request's `Host` and `Origin` may be served.
  *
  * DNS rebinding is the attack this turns away: a page on the open web resolves

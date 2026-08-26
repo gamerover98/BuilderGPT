@@ -45,6 +45,23 @@ interface PersistedFile {
    * vanish from the list. Only main writes this.
    */
   recentDocuments: RecentDocument[];
+  /**
+   * The MCP server's bearer token.
+   *
+   * Beside `settings` for the same reason `recentDocuments` is: the renderer
+   * round-trips the whole `Settings` object on every save from a snapshot taken
+   * when it started, so a token regenerated in main since then would be
+   * overwritten by the stale copy the moment somebody moved a slider.
+   *
+   * **Plaintext, deliberately.** The API keys next to it are encrypted because
+   * they are credentials for a remote service that nothing else should ever
+   * read. This one is displayed in the UI on purpose and written in the clear to
+   * `mcp.json` so the stdio bridge — a dependency-free Node script with no way
+   * to reach `safeStorage` — can send it. Encrypting one copy while another sits
+   * in plaintext beside it would be theatre. What protects it is that it
+   * authorises a loopback server and can be rotated in one click.
+   */
+  mcpToken: string | null;
 }
 
 /** Windows reaches the same file through paths differing only in case. */
@@ -73,6 +90,9 @@ async function load(): Promise<PersistedFile> {
       encryptedKeys:
         parsed.encryptedKeys && typeof parsed.encryptedKeys === "object" ? parsed.encryptedKeys : {},
       recentDocuments: coerceRecents(parsed.recentDocuments),
+      // An empty string is treated as absent by `chooseToken`, so a file edited
+      // by hand into `""` heals into a fresh token rather than serving one.
+      mcpToken: typeof parsed.mcpToken === "string" ? parsed.mcpToken : null,
     };
   } catch (err: unknown) {
     // RULEBOOK.md §1 "Standard library I/O": catch-ENOENT, rethrow-else. A
@@ -82,7 +102,12 @@ async function load(): Promise<PersistedFile> {
     if (code !== "ENOENT" && !(err instanceof SyntaxError)) {
       throw err;
     }
-    cache = { settings: { ...DEFAULT_SETTINGS }, encryptedKeys: {}, recentDocuments: [] };
+    cache = {
+      settings: { ...DEFAULT_SETTINGS },
+      encryptedKeys: {},
+      recentDocuments: [],
+      mcpToken: null,
+    };
   }
   return cache;
 }
@@ -95,6 +120,18 @@ async function persist(): Promise<void> {
 
 export async function getSettings(): Promise<Settings> {
   return (await load()).settings;
+}
+
+/** The MCP server's stored token, or `null` if it has never had one. */
+export async function getMcpToken(): Promise<string | null> {
+  return (await load()).mcpToken;
+}
+
+/** Remembers a token across launches. See the note on `PersistedFile.mcpToken`. */
+export async function setMcpToken(token: string): Promise<void> {
+  const data = await load();
+  data.mcpToken = token;
+  await persist();
 }
 
 export async function setSettings(next: Settings): Promise<Settings> {

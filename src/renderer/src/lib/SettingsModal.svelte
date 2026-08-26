@@ -204,7 +204,9 @@
   const stateLabel = $derived.by(() => {
     switch (dotFor(mcpStatus)) {
       case "active":
-        return t("mcp.stateActive");
+        // The count *is* the state here, so it is said once rather than beside
+        // a label that says the same thing less precisely.
+        return tn("mcp.clients", mcpStatus?.clients ?? 0);
       case "listening":
         return t("mcp.stateListening");
       case "error":
@@ -740,9 +742,6 @@
             <p class="state">
               <span class="dot" style={`background: var(${dotColor(dotFor(mcpStatus))})`}></span>
               <span>{stateLabel}</span>
-              {#if mcpStatus !== null && mcpStatus.clients > 0}
-                <span class="muted">· {tn("mcp.clients", mcpStatus.clients)}</span>
-              {/if}
             </p>
           </div>
 
@@ -985,9 +984,6 @@
     flex: none;
   }
 
-  .state .muted {
-    color: var(--text-dim);
-  }
 
   .activity {
     list-style: none;

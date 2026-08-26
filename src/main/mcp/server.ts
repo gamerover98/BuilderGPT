@@ -50,7 +50,7 @@ import {
 
 import { type McpActivity, type McpStatus } from "../../shared/ipc.js";
 import { type McpSettings } from "../../shared/settings.js";
-import { acceptsRequest } from "./policy.js";
+import { acceptsRequest, chooseToken } from "./policy.js";
 import { callTool, describeTools } from "./tools.js";
 import { shell } from "electron";
 
@@ -72,9 +72,11 @@ import { legacyBlocksPath } from "../services/resources.js";
 import { adoptSubject } from "../services/conversation.js";
 import {
   getApiKey,
+  getMcpToken,
   getRecentDocuments,
   getSettings,
   rememberRecentDocument,
+  setMcpToken,
 } from "../services/settings-store.js";
 import { rememberInOsRecents } from "../menu.js";
 import { type Lifecycle } from "./lifecycle.js";
@@ -149,17 +151,23 @@ function record(tool: string, summary: string, ok: boolean): void {
 }
 
 /**
- * A token, or the one already in use.
+ * The token to serve with, remembered across launches.
  *
  * 32 bytes from the CSPRNG, base64url so it survives being pasted into a shell
- * command and a JSON file without quoting. Regenerating is the whole mitigation
- * for a token that has to be readable in the UI, so it is cheap on purpose.
+ * command and a JSON file without quoting — but only *made* when there is
+ * nothing stored or somebody asked for a new one. It used to live in this
+ * module and nowhere else, so every launch minted a fresh one and silently
+ * broke whatever the user had already configured in their client.
+ *
+ * `chooseToken` is in `policy.ts` because that rule is worth a test and this
+ * file cannot have one.
  */
-function ensureToken(fresh: boolean): string {
-  if (fresh || token === null) {
-    token = randomBytes(32).toString("base64url");
-  }
-  return token;
+async function ensureToken(regenerate: boolean): Promise<string> {
+  const stored = await getMcpToken();
+  const next = chooseToken(stored, regenerate, randomBytes(32).toString("base64url"));
+  if (next !== stored) await setMcpToken(next);
+  token = next;
+  return next;
 }
 
 function bearerOf(request: IncomingMessage): string | null {
@@ -406,7 +414,7 @@ export async function startMcpServer(settings: McpSettings): Promise<McpStatus> 
   message = null;
   announce();
 
-  const secret = ensureToken(false);
+  const secret = await ensureToken(false);
   mcp = buildMcpServer();
   transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
@@ -517,7 +525,7 @@ export async function stopMcpServer(): Promise<McpStatus> {
  * secret is the one being checked.
  */
 export async function regenerateMcpToken(settings: McpSettings): Promise<McpStatus> {
-  ensureToken(true);
+  await ensureToken(true);
   if (state !== "listening") {
     announce();
     return mcpStatus();

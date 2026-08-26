@@ -267,6 +267,41 @@ console.log("\n--- catalogue coverage ---");
     console.log(`         unused in en.ts: ${orphans.join(", ")}`);
   }
   check("no message sits in the catalogue unused", orphans.length === 0);
+
+  /*
+   * A plural message may only ask for `{count}`.
+   *
+   * `translatePlural` supplies exactly that one name, and no `tn(...)` call site
+   * passes anything else. A placeholder it does not fill is not an error and not
+   * blank -- it renders as itself, so the user reads a literal `{n}` in the
+   * middle of a sentence. That shipped once: `mcp.clients` was written with
+   * `{n}` and the settings pane said "{n} client connected".
+   *
+   * Narrow on purpose. If a plural message ever legitimately needs a second
+   * parameter, this is where to say so deliberately rather than a rule to work
+   * around silently.
+   */
+  const PLACEHOLDER = /\{(\w+)\}/g;
+  const wrongPlaceholders: string[] = [];
+  for (const [key, message] of Object.entries(en)) {
+    if (!key.endsWith(".one") && !key.endsWith(".other")) continue;
+    for (const found of String(message).matchAll(PLACEHOLDER)) {
+      if (found[1] !== "count") wrongPlaceholders.push(`${key}: {${found[1]}}`);
+    }
+  }
+  equal("a plural message only asks for {count}", wrongPlaceholders, []);
+
+  /*
+   * And every *singular* form that has a plural sibling names no number at all.
+   *
+   * "1 client connected" rather than "{count} client connected": the count is
+   * known to be one, and spelling it is what makes the two forms read as one
+   * sentence rather than as a template.
+   */
+  const chattySingulars = Object.entries(en)
+    .filter(([key, message]) => key.endsWith(".one") && String(message).includes("{count}"))
+    .map(([key]) => key);
+  equal("a singular form spells its one out", chattySingulars, []);
 }
 
 // --- keeping the floating tool window reachable ---------------------------

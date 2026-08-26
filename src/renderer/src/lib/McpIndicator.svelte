@@ -19,7 +19,7 @@
    */
   import type { McpStatus } from "../../../shared/ipc.js";
   import { dotColor, dotFor } from "./mcp_status.js";
-  import { t } from "./i18n.svelte.js";
+  import { t, tn } from "./i18n.svelte.js";
 
   interface Props {
     status: McpStatus | null;
@@ -33,7 +33,7 @@
   const label = $derived.by(() => {
     switch (dot) {
       case "active":
-        return t("mcp.stateActive");
+        return tn("mcp.clients", status?.clients ?? 0);
       case "listening":
         return t("mcp.stateListening");
       case "error":

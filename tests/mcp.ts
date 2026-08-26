@@ -20,6 +20,7 @@ import path from "path";
 import { TOOL_SPECS, buildTools, type ToolContext } from "../src/main/agent/tools.js";
 import { callTool, describeTools, findTool, isReadOnly, serialised } from "../src/main/mcp/tools.js";
 import { LIFECYCLE_SPECS, findLifecycle, type Lifecycle } from "../src/main/mcp/lifecycle.js";
+import { DOCUMENT_SPECS, findDocumentTool } from "../src/main/mcp/document_tools.js";
 import {
   acceptsRequest,
   connectCommand,
@@ -144,7 +145,10 @@ try {
 
     const fromAgent = Object.keys(buildTools(context)).sort();
     const fromMcp = describeTools().map((tool) => tool.name);
-    const lifecycle = LIFECYCLE_SPECS.map((spec) => spec.name);
+    const lifecycle = [
+      ...LIFECYCLE_SPECS.map((spec) => spec.name),
+      ...DOCUMENT_SPECS.map((spec) => spec.name),
+    ];
 
     /*
      * The anti-duplication rule, stated from both sides.
@@ -179,7 +183,7 @@ try {
     equal(
       "nothing was left out of the descriptors",
       describeTools().length,
-      TOOL_SPECS.length + LIFECYCLE_SPECS.length,
+      TOOL_SPECS.length + LIFECYCLE_SPECS.length + DOCUMENT_SPECS.length,
     );
   }
 
@@ -265,7 +269,11 @@ try {
      * throw with a sentence naming the mistake rather than quietly editing the
      * document outside the undo stack.
      */
-    const region = { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 1, maxZ: 1 };
+    // A superset of the arguments any read-only tool wants: a region for the
+    // ones that take one, a coordinate for the ones that take that. Nothing
+    // validates against the schema here, so the extras are ignored -- and the
+    // point of the loop is what the tools *do*, not what they accept.
+    const region = { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 1, maxZ: 1, x: 0, y: 0, z: 0 };
     for (const tool of describeTools().filter((t) => t.annotations.readOnlyHint)) {
       const spy = { changed: 0 };
       const at = session.history.undoStack.length;
@@ -380,6 +388,57 @@ try {
       !unnamed.ok && unnamed.refused.trim() !== "",
       unnamed.ok ? "" : unnamed.refused,
     );
+  }
+
+  // --- the verbs that own their own transaction ----------------------------
+  //
+  // The third table's defining property. `pasteSelection` and its neighbours
+  // call `runTransaction` themselves, so `callTool` must not wrap them again:
+  // nested, the inner one pushes onto the undo stack and the outer records
+  // nothing, so the label a user reads is the wrong one and the rollback
+  // belongs to the wrong scope. One step in, one step back out.
+  console.log("\n--- copy, paste and undo ---");
+  {
+    const session = open();
+    const sink = { changed: 0 };
+    await callTool(
+      "fill_region",
+      { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 1, block: "minecraft:stone" },
+      options(sink),
+    );
+    const afterFill = session.history.undoStack.length;
+
+    const copied = (await callTool(
+      "copy_region",
+      { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 1 },
+      options(sink),
+    )).result as { width: number };
+    equal("copying took the region", copied.width, 2);
+    equal("...and left the undo stack alone", session.history.undoStack.length, afterFill);
+    // The clipboard is not the document, so the viewport has nothing to redraw
+    // -- which is why `changesDocument` is a separate question from `readOnly`.
+    equal("...and told the window nothing", sink.changed, 1);
+
+    await callTool("paste_clipboard", { x: 4, y: 0, z: 4 }, options(sink));
+    equal("pasting landed", countBlocks(session.doc), 8);
+    equal("...as exactly one more step", session.history.undoStack.length - afterFill, 1);
+    equal("...and the window was told", sink.changed, 2);
+
+    const undone = (await callTool("undo", {}, options(sink))).result as { undone: string | null };
+    check("undo names what it took back", typeof undone.undone === "string", JSON.stringify(undone));
+    equal("...and one undo was enough", countBlocks(session.doc), 4);
+
+    await callTool("redo", {}, options(sink));
+    equal("redo puts it back", countBlocks(session.doc), 8);
+
+    /*
+     * "Pasting with an empty clipboard is refused" is deliberately not checked
+     * here, and the reason is worth writing down rather than leaving as a gap:
+     * the clipboard is module-level state in `session.ts` with no exported way
+     * to clear it, so by this point in the file it is never empty. A check that
+     * cannot fail is worse than no check, so this is a note instead of one.
+     */
+    equal("an unknown document tool is not found", findDocumentTool("no_such_tool"), null);
   }
 
   // --- the guards actually stop things -------------------------------------

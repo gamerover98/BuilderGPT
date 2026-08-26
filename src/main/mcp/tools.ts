@@ -36,6 +36,7 @@ import {
   type ToolSpec,
 } from "../agent/tools.js";
 import { findLifecycle, LIFECYCLE_SPECS, McpRefusal, type Lifecycle } from "./lifecycle.js";
+import { DOCUMENT_SPECS, findDocumentTool } from "./document_tools.js";
 import { runTransactionAsync } from "../domain/history.js";
 import { type Region } from "../domain/document.js";
 import { type DocumentSession } from "../services/session.js";
@@ -92,6 +93,12 @@ export function describeTools(): McpToolDescriptor[] {
       },
     })),
     ...LIFECYCLE_SPECS.map((spec) => ({
+      name: spec.name,
+      description: spec.description,
+      inputSchema: spec.schema,
+      annotations: { readOnlyHint: spec.readOnly, destructiveHint: spec.destructive },
+    })),
+    ...DOCUMENT_SPECS.map((spec) => ({
       name: spec.name,
       description: spec.description,
       inputSchema: spec.schema,
@@ -229,7 +236,8 @@ export async function callTool(
   }
 
   const spec = findTool(name);
-  if (spec === null) {
+  const owned = findDocumentTool(name);
+  if (spec === null && owned === null) {
     throw new Error(`No such tool: ${name}`);
   }
 
@@ -244,6 +252,31 @@ export async function callTool(
       "No schematic is open. Use open_document or create_document first, or ask the user " +
         "to open one.",
     );
+  }
+
+  /*
+   * The verbs that already run their own transaction.
+   *
+   * `pasteSelection` and its neighbours call `runTransaction` themselves and
+   * take no `tx`, so there is nothing to wrap them in. Queued like every other
+   * mutation, and otherwise left alone — see the note at the top of
+   * `document_tools.ts` for why wrapping them anyway would be misleading rather
+   * than broken.
+   */
+  if (owned !== null) {
+    const run = async (): Promise<CallOutcome> => {
+      const result = await owned.run(session, args ?? {});
+      if (owned.changesDocument) options.onChanged(session);
+      return { result, summary: name };
+    };
+    // `changesDocument`, not `readOnly`: `copy_region` is not read-only -- it
+    // writes the clipboard the user's own paste reads -- but the schematic did
+    // not move, so there is nothing for the viewport to redraw and nothing to
+    // queue behind.
+    return owned.changesDocument ? await serialised(run) : await run();
+  }
+  if (spec === null) {
+    throw new Error(`No such tool: ${name}`);
   }
 
   let summary = name;

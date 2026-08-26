@@ -35,6 +35,7 @@ import {
   type ToolContext,
   type ToolSpec,
 } from "../agent/tools.js";
+import { findLifecycle, LIFECYCLE_SPECS, McpRefusal, type Lifecycle } from "./lifecycle.js";
 import { runTransactionAsync } from "../domain/history.js";
 import { type Region } from "../domain/document.js";
 import { type DocumentSession } from "../services/session.js";
@@ -70,16 +71,33 @@ const READ_ONLY = new Set(["get_schematic_info", "get_palette", "get_region"]);
  */
 const DESTRUCTIVE = new Set(["fill_region", "replace_blocks", "resize_document"]);
 
+/**
+ * Every tool, block-editing and file-level together.
+ *
+ * Two tables rather than one because they answer to different things: the nine
+ * come from `agent/tools.ts` and are shared with the in-app agent, while the
+ * lifecycle verbs are MCP's alone -- the agent has no business opening a
+ * different schematic while somebody is typing to it. A client sees one list,
+ * which is right: from the outside they are all just tools.
+ */
 export function describeTools(): McpToolDescriptor[] {
-  return TOOL_SPECS.map((spec) => ({
-    name: spec.name,
-    description: spec.description,
-    inputSchema: spec.schema,
-    annotations: {
-      readOnlyHint: READ_ONLY.has(spec.name),
-      destructiveHint: DESTRUCTIVE.has(spec.name),
-    },
-  }));
+  return [
+    ...TOOL_SPECS.map((spec) => ({
+      name: spec.name,
+      description: spec.description,
+      inputSchema: spec.schema,
+      annotations: {
+        readOnlyHint: READ_ONLY.has(spec.name),
+        destructiveHint: DESTRUCTIVE.has(spec.name),
+      },
+    })),
+    ...LIFECYCLE_SPECS.map((spec) => ({
+      name: spec.name,
+      description: spec.description,
+      inputSchema: spec.schema,
+      annotations: { readOnlyHint: spec.readOnly, destructiveHint: spec.destructive },
+    })),
+  ];
 }
 
 export function findTool(name: string): ToolSpec | null {
@@ -158,17 +176,19 @@ export interface CallOutcome {
   summary: string;
 }
 
-/**
- * Runs one tool against the open session.
- *
- * `label` is what the undo stack shows, so it names the client rather than the
- * tool alone: "Claude Code: fill_region" is something a user can recognise a
- * week later, and "fill_region" is not.
- */
 export interface CallOptions {
   client: string;
   selection: Region | null;
   allowedBlocks: ReadonlySet<string>;
+  /**
+   * The file-level verbs and everything they need to reach.
+   *
+   * Also how a block-editing tool finds the open document: `lifecycle.session()`
+   * is asked at the moment of the call rather than passed in, because a client
+   * can call `open_document` and `fill_region` one after the other and the
+   * second must land on what the first opened.
+   */
+  lifecycle: Lifecycle;
   /**
    * Called after a mutation lands, so the window can be told.
    *
@@ -183,15 +203,47 @@ export interface CallOptions {
   onChanged: (session: DocumentSession) => void;
 }
 
+/**
+ * Runs one tool, whichever table it came from.
+ *
+ * The two are dispatched here rather than in the server so that both go through
+ * the same queue: a `save_document` landing halfway through a `run_build_script`
+ * would write a file that is neither the before nor the after.
+ *
+ * The transaction label names the client rather than the tool alone. "Claude
+ * Code: fill_region" is something a user can recognise in the undo list a week
+ * later; "fill_region" is not.
+ */
 export async function callTool(
-  session: DocumentSession,
   name: string,
   args: unknown,
   options: CallOptions,
 ): Promise<CallOutcome> {
+  const lifecycle = findLifecycle(name);
+  if (lifecycle !== null) {
+    const run = async (): Promise<CallOutcome> => ({
+      result: await lifecycle.run(options.lifecycle, args ?? {}),
+      summary: name,
+    });
+    return lifecycle.readOnly ? await run() : await serialised(run);
+  }
+
   const spec = findTool(name);
   if (spec === null) {
     throw new Error(`No such tool: ${name}`);
+  }
+
+  const session = options.lifecycle.session();
+  if (session === null) {
+    /*
+     * A refusal rather than a transport error, so the model reads it and can
+     * say something useful. It names the way forward, because a client that has
+     * just connected has no way to know whether a window is even open.
+     */
+    throw new McpRefusal(
+      "No schematic is open. Use open_document or create_document first, or ask the user " +
+        "to open one.",
+    );
   }
 
   let summary = name;

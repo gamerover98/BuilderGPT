@@ -278,6 +278,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   useHost({
     allowedBlocks: async () => await loadAllowedBlocks(resourcesDir()),
     discoveryFile: mcpDiscoveryFile(),
+    defaultRoot: async () => generatedDir(),
     onStatus: (status) => {
       const window = getWindow();
       if (window && !window.isDestroyed()) {

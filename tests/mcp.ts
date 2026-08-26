@@ -19,6 +19,7 @@ import path from "path";
 
 import { TOOL_SPECS, buildTools, type ToolContext } from "../src/main/agent/tools.js";
 import { callTool, describeTools, findTool, isReadOnly, serialised } from "../src/main/mcp/tools.js";
+import { LIFECYCLE_SPECS, findLifecycle, type Lifecycle } from "../src/main/mcp/lifecycle.js";
 import {
   acceptsRequest,
   connectCommand,
@@ -53,12 +54,61 @@ function equal(label: string, actual: unknown, expected: unknown): void {
 
 const ALLOWED = new Set(["minecraft:stone", "minecraft:oak_planks", "minecraft:air"]);
 
+/**
+ * A `Lifecycle` whose effects are recorded rather than performed.
+ *
+ * The point of injecting them: a refusal can be checked by what it *stopped*
+ * rather than only by what it said, which is the difference between testing a
+ * guard and testing a sentence.
+ */
+function fakeLifecycle(over: Partial<Lifecycle> & { log?: string[] } = {}): Lifecycle {
+  const log = over.log ?? [];
+  const base: Lifecycle = {
+    session: currentSession,
+    isDirty: () => false,
+    open: async (filePath) => {
+      log.push(`open:${filePath}`);
+      return open();
+    },
+    create: async () => {
+      log.push("create");
+      return open();
+    },
+    save: async (_session, options) => {
+      log.push(`save:${options.filePath ?? "(same)"}`);
+      return {
+        filePath: options.filePath ?? "C:/builds/x.schem",
+        format: "sponge3" as const,
+        degraded: [],
+        cropped: null,
+      };
+    },
+    close: () => {
+      log.push("close");
+      closeDocument();
+    },
+    recents: async () => [{ filePath: "C:/builds/a.schem", openedAt: 1 }],
+    trash: async (filePath) => {
+      log.push(`trash:${filePath}`);
+    },
+    root: async () => "C:/builds",
+    allowDelete: async () => false,
+    refusalFor: () => null,
+    announce: () => {
+      log.push("announce");
+    },
+    ...over,
+  };
+  return base;
+}
+
 /** The options every call needs, with a spy for the "tell the window" callback. */
-function options(sink: { changed: number }) {
+function options(sink: { changed: number }, lifecycle?: Lifecycle) {
   return {
     client: "Test",
     selection: null,
     allowedBlocks: ALLOWED,
+    lifecycle: lifecycle ?? fakeLifecycle(),
     onChanged: (_session: DocumentSession) => {
       sink.changed += 1;
     },
@@ -93,9 +143,24 @@ try {
     } as unknown as ToolContext;
 
     const fromAgent = Object.keys(buildTools(context)).sort();
-    const fromMcp = describeTools().map((tool) => tool.name).sort();
-    equal("MCP offers exactly the agent's tools", fromMcp, fromAgent);
-    check("...and there are some", fromMcp.length >= 9, String(fromMcp.length));
+    const fromMcp = describeTools().map((tool) => tool.name);
+    const lifecycle = LIFECYCLE_SPECS.map((spec) => spec.name);
+
+    /*
+     * The anti-duplication rule, stated from both sides.
+     *
+     * Every block-editing tool the agent has must be offered over MCP -- that
+     * is the half that fails if somebody adds a tool to `agent/tools.ts` and
+     * forgets this file. And the MCP list must be exactly those plus the
+     * file-level verbs, which is the half that fails if somebody writes a
+     * second `fill_region` here instead of reusing the one that exists.
+     */
+    const missing = fromAgent.filter((name) => !fromMcp.includes(name));
+    equal("every agent tool is offered over MCP", missing, []);
+    const extra = fromMcp.filter((name) => !fromAgent.includes(name) && !lifecycle.includes(name));
+    equal("...and MCP invented none of its own", extra, []);
+    equal("...with nothing listed twice", fromMcp.length, new Set(fromMcp).size);
+    check("...and there are some", fromAgent.length >= 9, String(fromAgent.length));
 
     // A tool with no description is a tool a model will not choose correctly,
     // and an empty schema object is not the same as "no arguments".
@@ -110,8 +175,12 @@ try {
     equal("an unknown tool is not found", findTool("no_such_tool"), null);
     check("the read-only ones are the getters", isReadOnly("get_region") && !isReadOnly("fill_region"));
 
-    // `describeTools` reads `TOOL_SPECS` and must not be a copy of it.
-    equal("nothing was left out of the descriptors", describeTools().length, TOOL_SPECS.length);
+    // `describeTools` reads the two tables and must not be a copy of either.
+    equal(
+      "nothing was left out of the descriptors",
+      describeTools().length,
+      TOOL_SPECS.length + LIFECYCLE_SPECS.length,
+    );
   }
 
   // --- one call is one transaction -----------------------------------------
@@ -122,7 +191,6 @@ try {
     const before = session.history.undoStack.length;
 
     await callTool(
-      session,
       "fill_region",
       { minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 0, maxZ: 3, block: "minecraft:stone" },
       options(sink),
@@ -146,7 +214,6 @@ try {
     const session = open();
     const sink = { changed: 0 };
     await callTool(
-      session,
       "fill_region",
       { minX: 0, minY: 0, minZ: 0, maxX: 7, maxY: 7, maxZ: 7, block: "minecraft:stone" },
       options(sink),
@@ -159,7 +226,6 @@ try {
       // Not in the allowlist, and `checkBlockAllowed` throws *after* the region
       // has been resolved -- so this is a real mid-tool failure.
       await callTool(
-        session,
         "fill_region",
         { minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 3, maxZ: 3, block: "minecraft:beacon" },
         options(sink),
@@ -184,7 +250,7 @@ try {
     const session = open();
     const sink = { changed: 0 };
     const depth = session.history.undoStack.length;
-    const outcome = await callTool(session, "get_schematic_info", {}, options(sink));
+    const outcome = await callTool("get_schematic_info", {}, options(sink));
 
     equal("the read answered", (outcome.result as { width: number }).width, 8);
     equal("...with no undo step", session.history.undoStack.length, depth);
@@ -205,7 +271,7 @@ try {
       const at = session.history.undoStack.length;
       let raised: string | null = null;
       try {
-        await callTool(session, tool.name, region, options(spy));
+        await callTool(tool.name, region, options(spy));
       } catch (err) {
         raised = err instanceof Error ? err.message : String(err);
       }
@@ -264,13 +330,11 @@ try {
 
     await Promise.all([
       callTool(
-        session,
         "fill_region",
         { minX: 0, minY: 0, minZ: 0, maxX: 7, maxY: 0, maxZ: 7, block: "minecraft:stone" },
         options(sink),
       ),
       callTool(
-        session,
         "fill_region",
         { minX: 0, minY: 1, minZ: 0, maxX: 7, maxY: 1, maxZ: 7, block: "minecraft:oak_planks" },
         options(sink),
@@ -316,6 +380,130 @@ try {
       !unnamed.ok && unnamed.refused.trim() !== "",
       unnamed.ok ? "" : unnamed.refused,
     );
+  }
+
+  // --- the guards actually stop things -------------------------------------
+  //
+  // The section above checks that a refusal says the right words. This one
+  // checks that nothing happened: a guard that returns a polite sentence and
+  // then opens the file anyway would pass every check up there.
+  console.log("\n--- refusing means not doing ---");
+  {
+    open();
+    const log: string[] = [];
+    const dirty = fakeLifecycle({ log, isDirty: () => true });
+    const sink = { changed: 0 };
+
+    let raised: string | null = null;
+    try {
+      await callTool("open_document", { path: "C:/builds/other.schem" }, options(sink, dirty));
+    } catch (err) {
+      raised = err instanceof Error ? err.message : String(err);
+    }
+    check("opening over unsaved work is refused", raised !== null, String(raised));
+    equal("...and nothing was opened", log, []);
+
+    // With the flag, the same call goes through -- and the window is told,
+    // because what is open has changed.
+    await callTool(
+      "open_document",
+      { path: "C:/builds/other.schem", discardUnsavedChanges: true },
+      options(sink, dirty),
+    );
+    equal("...until the user says to discard", log, [
+      `open:${path.resolve("C:/builds/other.schem")}`,
+      "announce",
+    ]);
+  }
+
+  console.log("\n--- deleting, end to end ---");
+  {
+    open();
+    const log: string[] = [];
+    const sink = { changed: 0 };
+
+    let raised: string | null = null;
+    try {
+      await callTool(
+        "delete_document",
+        { path: "C:/builds/old.schem" },
+        options(sink, fakeLifecycle({ log })),
+      );
+    } catch (err) {
+      raised = err instanceof Error ? err.message : String(err);
+    }
+    check("with the flag off it is refused", raised !== null, String(raised));
+    equal("...and nothing was trashed", log, []);
+
+    const allowed = fakeLifecycle({ log, allowDelete: async () => true });
+    await callTool("delete_document", { path: "C:/builds/old.schem" }, options(sink, allowed));
+    equal("...with the flag on it goes to the trash", log, [
+      `trash:${path.resolve("C:/builds/old.schem")}`,
+    ]);
+
+    // The file that is open is refused even with the flag on: the app must not
+    // be left editing something that no longer exists.
+    log.length = 0;
+    const session = currentSession();
+    if (session !== null) session.doc.filePath = path.resolve("C:/builds/open.schem");
+    let onOpen: string | null = null;
+    try {
+      await callTool("delete_document", { path: "C:/builds/open.schem" }, options(sink, allowed));
+    } catch (err) {
+      onOpen = err instanceof Error ? err.message : String(err);
+    }
+    check("the open schematic is never deleted", onOpen !== null, String(onOpen));
+    equal("...and was not trashed", log, []);
+  }
+
+  console.log("\n--- the file-level verbs ---");
+  {
+    open();
+    const sink = { changed: 0 };
+
+    const info = (await callTool("get_document", {}, options(sink))).result as {
+      open: boolean;
+      width: number;
+    };
+    check("get_document describes what is open", info.open && info.width === 8, JSON.stringify(info));
+
+    // And answers rather than failing when nothing is: a client that has just
+    // connected has no other way to find out.
+    closeDocument();
+    const empty = (await callTool("get_document", {}, options(sink))).result as { open: boolean };
+    equal("...and says so when nothing is open", empty.open, false);
+
+    // A document that has never been saved has nowhere to go, and the refusal
+    // has to name the tool that does.
+    open();
+    let raised: string | null = null;
+    try {
+      await callTool("save_document", {}, options(sink));
+    } catch (err) {
+      raised = err instanceof Error ? err.message : String(err);
+    }
+    check(
+      "saving an unsaved document points at save_document_as",
+      raised !== null && raised.includes("save_document_as"),
+      String(raised),
+    );
+
+    // A block tool with nothing open is a refusal, not a crash -- and it names
+    // the way forward.
+    closeDocument();
+    let noDoc: string | null = null;
+    try {
+      await callTool("get_palette", {}, options(sink));
+    } catch (err) {
+      noDoc = err instanceof Error ? err.message : String(err);
+    }
+    check(
+      "a block tool with nothing open says what to do",
+      noDoc !== null && noDoc.includes("open_document"),
+      String(noDoc),
+    );
+
+    equal("an unknown lifecycle tool is not found", findLifecycle("no_such_tool"), null);
   }
 
   // --- the root ------------------------------------------------------------

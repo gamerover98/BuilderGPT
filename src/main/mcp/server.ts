@@ -52,8 +52,23 @@ import { type McpActivity, type McpStatus } from "../../shared/ipc.js";
 import { type McpSettings } from "../../shared/settings.js";
 import { acceptsRequest } from "./policy.js";
 import { callTool, describeTools } from "./tools.js";
-import { currentSession } from "../services/session.js";
+import { shell } from "electron";
+
+import {
+  closeDocument,
+  currentSession,
+  newDocument,
+  openDocument,
+  saveSession,
+} from "../services/session.js";
 import { announceDocument } from "../services/broadcast.js";
+import { isDirty } from "../domain/history.js";
+import { dataVersionOf, refusalFor } from "../../shared/mc_versions.js";
+import { legacyBlocksPath } from "../services/resources.js";
+import { adoptSubject } from "../services/conversation.js";
+import { getRecentDocuments, getSettings, rememberRecentDocument } from "../services/settings-store.js";
+import { rememberInOsRecents } from "../menu.js";
+import { type Lifecycle } from "./lifecycle.js";
 
 /** How many calls the activity log remembers. */
 const ACTIVITY_LIMIT = 100;
@@ -63,6 +78,8 @@ export interface McpHost {
   allowedBlocks(): Promise<ReadonlySet<string>>;
   /** Where the discovery file goes, so the stdio bridge can find the server. */
   discoveryFile: string;
+  /** What an empty `mcp.root` means — the app's own output directory. */
+  defaultRoot(): Promise<string>;
   /** Called whenever the status moves, so the window can be told. */
   onStatus(status: McpStatus): void;
 }
@@ -82,6 +99,11 @@ const activity: McpActivity[] = [];
 
 export function useHost(next: McpHost): void {
   host = next;
+}
+
+function requireHost(): McpHost {
+  if (host === null) throw new Error("The MCP server has no host: useHost was never called.");
+  return host;
 }
 
 export function mcpStatus(): McpStatus {
@@ -161,6 +183,61 @@ function deny(response: ServerResponse, status: number, reason: string): void {
   );
 }
 
+/**
+ * The effects the file-level tools are allowed to have.
+ *
+ * Assembled here because this is the layer that may import Electron and the
+ * settings store; `mcp/lifecycle.ts` holds the rules and takes this as an
+ * argument, which is what lets `tests/mcp.ts` drive all of them with fakes.
+ */
+function lifecycleHost(): Lifecycle {
+  return {
+    session: currentSession,
+    isDirty: (session) => isDirty(session.history),
+    open: async (filePath) => {
+      const session = await openDocument(filePath, { legacyBlocksPath: legacyBlocksPath() });
+      // The same three follow-ups the window's own Open does. A file opened
+      // over MCP that skipped them would be missing from the recents and would
+      // arrive without its conversation -- "recovering is opening", and so is
+      // this.
+      await rememberRecentDocument(filePath);
+      rememberInOsRecents(filePath);
+      await adoptSubject(filePath);
+      return session;
+    },
+    create: async (size, format, version) => {
+      const session = newDocument(size, format, dataVersionOf(version ?? ""));
+      await adoptSubject(null);
+      return session;
+    },
+    save: async (session, options) => {
+      const result = await saveSession(session, {
+        filePath: options.filePath,
+        format: options.format,
+        legacyBlocksPath: legacyBlocksPath(),
+      });
+      await adoptSubject(result.filePath);
+      return result;
+    },
+    close: closeDocument,
+    recents: async () =>
+      (await getRecentDocuments()).map((entry) => ({
+        filePath: entry.filePath,
+        openedAt: entry.openedAt,
+      })),
+    // `shell.trashItem`, never `unlink`: the way back is the user's own recycle
+    // bin, and that is what makes deletion something this server may do at all.
+    trash: async (filePath) => await shell.trashItem(filePath),
+    root: async () => {
+      const settings = await getSettings();
+      return settings.mcp.root.trim() === "" ? await requireHost().defaultRoot() : settings.mcp.root;
+    },
+    allowDelete: async () => (await getSettings()).mcp.allowDelete,
+    refusalFor: (format, version) => refusalFor(format, version ?? ""),
+    announce: announceDocument,
+  };
+}
+
 function buildMcpServer(): Server {
   const server = new Server(
     { name: "schematic-ai-studio", version: "3.0.0" },
@@ -181,26 +258,8 @@ function buildMcpServer(): Server {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params.name;
-    const session = currentSession();
-    if (session === null) {
-      // Returned as a tool error rather than thrown, so the model reads it and
-      // can say something useful instead of seeing a transport failure.
-      record(name, "no schematic is open", false);
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text" as const,
-            text:
-              "No schematic is open in Schematic AI Studio. Ask the user to open or create " +
-              "one, then try again.",
-          },
-        ],
-      };
-    }
-
     try {
-      const outcome = await callTool(session, name, request.params.arguments ?? {}, {
+      const outcome = await callTool(name, request.params.arguments ?? {}, {
         client: "MCP",
         // The selection lives in the renderer and main is not told about it, so
         // an MCP tool has no selection to default to and must be given explicit
@@ -208,6 +267,7 @@ function buildMcpServer(): Server {
         // document", which is the honest answer rather than a guessed one.
         selection: null,
         allowedBlocks: (await host?.allowedBlocks()) ?? new Set<string>(),
+        lifecycle: lifecycleHost(),
         onChanged: announceDocument,
       });
       record(name, outcome.summary, true);
@@ -216,6 +276,15 @@ function buildMcpServer(): Server {
         structuredContent: outcome.result as Record<string, unknown>,
       };
     } catch (err) {
+      /*
+       * Returned as a tool error rather than thrown past the transport.
+       *
+       * A refusal is *information* -- "that file is outside the folder I may
+       * touch", "the open document has unsaved changes" -- and a model that
+       * reads it can relay it or correct itself. Thrown, it reaches the client
+       * as a protocol failure with no way to tell it apart from the server
+       * being broken.
+       */
       const text = err instanceof Error ? err.message : String(err);
       record(name, text, false);
       return { isError: true, content: [{ type: "text" as const, text }] };

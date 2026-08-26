@@ -16,6 +16,9 @@
     import ChatPanel from "./lib/ChatPanel.svelte";
   import CommandPalette, { type Command } from "./lib/CommandPalette.svelte";
   import DocumentBar from "./lib/DocumentBar.svelte";
+  import McpIndicator from "./lib/McpIndicator.svelte";
+  import { showsIndicator } from "./lib/mcp_status.js";
+  import type { McpActivity, McpStatus } from "../../shared/ipc.js";
   import InspectorPanel from "./lib/InspectorPanel.svelte";
   import AnchorModal from "./lib/AnchorModal.svelte";
   import NbtModal from "./lib/NbtModal.svelte";
@@ -1099,6 +1102,18 @@ import VersionsModal from "./lib/VersionsModal.svelte";
      * it also handles the `null` case by clearing the mesh, which is what
      * makes closing from outside the window work.
      */
+    const unsubscribeMcp = api().onMcpStatusChanged((next) => {
+      mcpStatus = next;
+      void refreshMcpActivity();
+    });
+    void (async () => {
+      try {
+        mcpStatus = await api().getMcpStatus();
+      } catch {
+        // Leaving it null reads as "starting", which is the honest answer to a
+        // question that has not come back -- see `dotFor`.
+      }
+    })();
     const unsubscribeDocument = api().onDocumentChanged((state) => {
       docState = state;
       void refreshDocument();
@@ -1138,6 +1153,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
       unsubscribeStartup();
       unsubscribeTrace();
       unsubscribeDocument();
+      unsubscribeMcp();
       for (const off of unsubscribeMenu) off();
     };
   });
@@ -1305,6 +1321,65 @@ import VersionsModal from "./lib/VersionsModal.svelte";
 
   let paletteOpen = $state(false);
   let settingsOpen = $state(false);
+
+  /*
+   * The MCP server, as main reports it.
+   *
+   * Kept apart from `settings.mcp.enabled` on purpose: that is what the user
+   * asked for and this is what is actually listening. They disagree when a port
+   * is already taken, which is exactly the case the indicator has to be able to
+   * show. `mcp_status.ts` holds the rule.
+   */
+  let mcpStatus = $state<McpStatus | null>(null);
+  let mcpActivity = $state<McpActivity[]>([]);
+  /** Which pane the gear opens on. Set by the indicator, cleared by the modal. */
+  let settingsCategory = $state<"mcp" | null>(null);
+
+  async function refreshMcpActivity(): Promise<void> {
+    // Only while the pane that shows it is open: it is a hundred rows fetched
+    // over IPC, and nothing else in the window reads them.
+    if (!settingsOpen) return;
+    try {
+      mcpActivity = await api().getMcpActivity();
+    } catch {
+      // A log that cannot be read is not worth a banner over.
+    }
+  }
+
+  async function setMcpEnabled(enabled: boolean): Promise<void> {
+    busy = true;
+    try {
+      mcpStatus = await api().setMcpEnabled(enabled);
+      // The checkbox reads from `settings`, which main has just written, so the
+      // local copy has to catch up or it would spring back on the next paint.
+      settings = { ...settings, mcp: { ...settings.mcp, enabled } };
+      if (mcpStatus.state === "error" && mcpStatus.message !== null) {
+        status = { tone: "error", text: mcpStatus.message };
+      }
+    } catch (err) {
+      failed(err, t("mcp.title"));
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function regenerateMcpToken(): Promise<void> {
+    busy = true;
+    try {
+      mcpStatus = await api().regenerateMcpToken();
+    } catch (err) {
+      failed(err, t("mcp.title"));
+    } finally {
+      busy = false;
+    }
+  }
+
+  function openMcpSettings(): void {
+    settingsCategory = "mcp";
+    settingsOpen = true;
+    void refreshMcpActivity();
+  }
+
 
   /**
    * The schematic's own NBT, as text.
@@ -1655,6 +1730,17 @@ import VersionsModal from "./lib/VersionsModal.svelte";
       run: () => (settingsOpen = true),
     },
     {
+      // The one way to find the MCP server before it has been switched on --
+      // the indicator only appears once it is, so without this the feature is
+      // discoverable by scrolling the settings rail and no other way.
+      id: "mcp",
+      title: t("mcp.title"),
+      group: t("group.view"),
+      keywords: t("mcp.keywords"),
+      enabled: true,
+      run: openMcpSettings,
+    },
+    {
       id: "toggle-sidebar",
       title: sidebarCollapsed ? t("sidebar.show") : t("sidebar.hide"),
       group: t("group.view"),
@@ -1846,10 +1932,14 @@ import VersionsModal from "./lib/VersionsModal.svelte";
     status = { tone: "error", text: t("status.failed", { doing, message }) };
   }
 
-  async function pick(kind: "image" | "resource-pack" | "directory"): Promise<void> {
+  async function pick(
+    kind: "image" | "resource-pack" | "directory" | "mcp-root",
+  ): Promise<void> {
     let picked: Awaited<ReturnType<ReturnType<typeof api>["pickFile"]>>;
     try {
-      picked = await api().pickFile({ kind });
+      // The MCP root is a directory like the output folder; only what happens
+      // to the answer differs.
+      picked = await api().pickFile({ kind: kind === "mcp-root" ? "directory" : kind });
     } catch (err) {
       failed(err, t("task.openingPicker"));
       return;
@@ -1867,6 +1957,8 @@ import VersionsModal from "./lib/VersionsModal.svelte";
     } else if (kind === "resource-pack") {
       resourcePackPath = picked.path;
       resourcePackName = picked.name;
+    } else if (kind === "mcp-root") {
+      void patchSettings({ mcp: { ...settings.mcp, root: picked.path } });
     } else if (kind === "directory") {
       void patchSettings({ outputDir: picked.path });
     }
@@ -2906,7 +2998,10 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   {busy}
   onpickoutputdir={() => pick("directory")}
   onrevealoutputdir={() => api().revealPath(settings.outputDir || defaultOutputDir)}
-  onclose={() => (settingsOpen = false)}
+  onclose={() => {
+    settingsOpen = false;
+    settingsCategory = null;
+  }}
   onchange={patchSettings}
   onpreviewchange={patchPreview}
   onuichange={patchUi}
@@ -2917,6 +3012,12 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   }}
   onsavekey={saveKey}
   onclearkey={clearKey}
+  {mcpStatus}
+  {mcpActivity}
+  startOn={settingsCategory}
+  onmcpenabled={(enabled) => void setMcpEnabled(enabled)}
+  onmcpregenerate={() => void regenerateMcpToken()}
+  onpickmcproot={() => pick("mcp-root")}
 />
 
 <NbtModal
@@ -3033,6 +3134,15 @@ import VersionsModal from "./lib/VersionsModal.svelte";
     >
       {t("nbt.open")}
     </button>
+
+    <!--
+      Present only while the server is on, rather than a permanently dim dot in
+      a bar that already carries five controls. It is a button because a status
+      light with no way to act on what it reports is a half-feature.
+    -->
+    {#if showsIndicator(settings.mcp.enabled, mcpStatus)}
+      <McpIndicator status={mcpStatus} onopen={openMcpSettings} />
+    {/if}
 
     <button
       class="icon gear"

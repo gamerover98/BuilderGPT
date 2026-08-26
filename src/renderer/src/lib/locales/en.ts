@@ -41,6 +41,47 @@ export const en = {
   "settings.quality": "Quality",
   "settings.textures": "Textures & colours",
   "settings.providers": "Providers",
+  "settings.mcp": "MCP server",
+
+  // The MCP server. Main's own failure wording is not translated — it arrives
+  // already phrased, like every other `Failure.message` — so there is no key
+  // here for "port 4571 is in use".
+  "mcp.title": "MCP server",
+  "mcp.short": "MCP",
+  "mcp.keywords": "mcp server claude code codex api integration remote",
+  "mcp.stateListening": "listening, no client connected",
+  "mcp.stateActive": "a client is connected",
+  "mcp.stateStarting": "starting",
+  "mcp.stateError": "could not start",
+  "mcp.stateOff": "off",
+  "mcp.enable": "Run the MCP server",
+  "mcp.enableHint":
+    "Lets another program — Claude Code, Codex — edit the schematic you have open, through the same tools and the same undo stack. It listens on this computer only, and asks for a token.",
+  "mcp.port": "Port",
+  "mcp.portHint": "0 asks the system for any free port, which is what a second copy of the app needs.",
+  "mcp.root": "Folder it may touch",
+  "mcp.rootHint":
+    "The server will not open, save or delete outside this folder. Empty means the output folder.",
+  "mcp.rootDefault": "Use the output folder",
+  "mcp.allowDelete": "Allow it to delete schematics",
+  "mcp.allowDeleteHint":
+    "Off by default. Even on, files go to the recycle bin rather than being erased, and the schematic you have open can never be deleted.",
+  "mcp.status": "Status",
+  "mcp.url": "Address",
+  "mcp.token": "Token",
+  "mcp.tokenHint":
+    "Anything holding this token can edit your schematics. Regenerating it disconnects whatever is connected now.",
+  "mcp.reveal": "Show",
+  "mcp.hide": "Hide",
+  "mcp.copy": "Copy",
+  "mcp.copied": "Copied",
+  "mcp.regenerate": "Regenerate",
+  "mcp.command": "Command to connect",
+  "mcp.activity": "Recent calls",
+  "mcp.activityEmpty": "Nothing yet.",
+  "mcp.activityFailed": "failed",
+  "mcp.clients.one": "{n} client connected",
+  "mcp.clients.other": "{n} clients connected",
   "settings.theme": "Theme",
   "settings.theme.system": "Match the system",
   "settings.theme.light": "Light",

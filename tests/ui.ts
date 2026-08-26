@@ -74,6 +74,14 @@ import { missingKeys, translate, translatePlural } from "../src/renderer/src/lib
 import { openedAge } from "../src/renderer/src/lib/recent_age.js";
 import { DEFAULT_PREVIEW_SETTINGS, PREVIEW_SETTING_RANGES } from "../src/shared/settings.js";
 import { COPLANAR_OFFSET, depthEpsilon, GRID_SIZE } from "../src/renderer/src/lib/depth.js";
+import {
+  dotColor,
+  dotFor,
+  maskToken,
+  showsIndicator,
+} from "../src/renderer/src/lib/mcp_status.js";
+import { connectCommand } from "../src/shared/mcp.js";
+import type { McpStatus } from "../src/shared/ipc.js";
 import { normalizeTicks, skyAt, skyDistance } from "../src/renderer/src/lib/sky.js";
 import { fitShadow } from "../src/renderer/src/lib/shadow_fit.js";
 import { anchorKey, mirrorAnchor } from "../src/renderer/src/lib/anchor_draft.js";
@@ -886,6 +894,73 @@ console.log("\n--- sky ---");
 // different depth sample, so the edge of every shadow shimmers as the sun
 // moves. Along a straight wall, which is what a schematic is made of, that is
 // the only thing you can see.
+console.log("\n--- the MCP indicator ---");
+{
+  const listening = (over: Partial<McpStatus> = {}): McpStatus => ({
+    state: "listening",
+    url: "http://127.0.0.1:4571/mcp",
+    token: "abcdefghijklmnop",
+    clients: 0,
+    calls: 0,
+    message: null,
+    ...over,
+  });
+
+  /*
+   * The whole reason this is a function of `McpStatus` and not of the setting.
+   *
+   * The checkbox says "on" and the server is not listening, because a second
+   * copy of the app has the port. A dot derived from the setting is green over
+   * nothing; this one is red, and the message beside it names the port.
+   */
+  equal(
+    "a server that failed to start is not green",
+    dotFor({ ...listening(), state: "error", url: null, message: "Port 4571 is already in use" }),
+    "error",
+  );
+  equal("...listening with nobody connected is", dotFor(listening()), "listening");
+  equal("...and a connected client is louder still", dotFor(listening({ clients: 1 })), "active");
+  equal("off is off", dotFor({ ...listening(), state: "off", url: null }), "off");
+
+  /*
+   * The dangerous default. A status that has not come back must not read as
+   * "listening" — green means "something outside can edit this build", and it
+   * cannot appear because a question is still in flight.
+   */
+  equal("no answer yet is not an answer", dotFor(null), "starting");
+
+  // Four states, four distinct tokens, all of which exist in app.css in both
+  // palettes -- a dot that shares a colour with another state says nothing.
+  const colors = (["off", "starting", "listening", "active", "error"] as const).map(dotColor);
+  check("the states are told apart by colour", new Set(colors).size === 4, colors.join(" "));
+
+  /*
+   * Visibility. Hidden while off, so the bar is not carrying a dim dot for a
+   * feature nobody switched on -- but a *listening* server is never hidden,
+   * whatever the setting says, because the warning is the point.
+   */
+  check("hidden while the server is off", !showsIndicator(false, { ...listening(), state: "off" }));
+  check("...shown once it is enabled", showsIndicator(true, null));
+  check(
+    "...and never hidden while something is listening",
+    showsIndicator(false, listening()),
+  );
+
+  // The token is shown at all -- a deliberate exception to "secrets stay in
+  // main" -- so it is masked by default, and the tail is what lets someone tell
+  // which token they are looking at without revealing it.
+  const masked = maskToken("abcdefghijklmnop");
+  check("a masked token hides the secret", !masked.includes("abcdefghijkl"), masked);
+  check("...but shows enough to recognise it", masked.endsWith("mnop"), masked);
+  equal("no token, nothing to mask", maskToken(null), "");
+
+  // The one string in this feature that has to be exactly right: a wrong flag
+  // is a client that cannot connect and an error message about neither.
+  const command = connectCommand("http://127.0.0.1:4571/mcp", "s3cret");
+  check("the connect command names the transport", command.includes("--transport http"), command);
+  check("...and carries the token as a bearer header", command.includes("Bearer s3cret"), command);
+}
+
 console.log("\n--- the floor and the grid ---");
 {
   /*

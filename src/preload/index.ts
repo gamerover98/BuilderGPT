@@ -77,6 +77,8 @@ const api: BgptApi = {
   confirmDiscard: (req: ConfirmDiscardRequest) =>
     ipcRenderer.invoke(IPC.confirmDiscard, req) as Promise<boolean>,
   revealPath: (target: string) => ipcRenderer.invoke(IPC.revealPath, target) as Promise<void>,
+  copyToClipboard: (text: string) =>
+    ipcRenderer.invoke(IPC.clipboardWrite, text) as Promise<void>,
   getDefaultOutputDir: () => ipcRenderer.invoke(IPC.defaultOutputDir) as Promise<string>,
   listBlocks: () => ipcRenderer.invoke(IPC.blocksList) as Promise<string[]>,
   getBlockIcons: (req) => ipcRenderer.invoke(IPC.blockIcons, req) as Promise<BlockIconsResponse>,

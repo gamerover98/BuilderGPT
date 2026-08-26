@@ -23,6 +23,7 @@
     DEFAULT_BIOME_COLOR,
     DEFAULT_WATER_COLOR,
     LANGUAGES,
+    MCP_PORT,
     PREVIEW_SETTING_RANGES,
     SHADOW_QUALITIES,
     THEMES,
@@ -34,7 +35,11 @@
     type Theme,
   } from "../../../shared/settings.js";
   import ApiKeysSection from "./ApiKeysSection.svelte";
-  import { t } from "./i18n.svelte.js";
+  import { t, tn } from "./i18n.svelte.js";
+  import type { McpActivity, McpStatus } from "../../../shared/ipc.js";
+  import { dotColor, dotFor, maskToken } from "./mcp_status.js";
+  import { connectCommand } from "../../../shared/mcp.js";
+  import { api } from "./bridge.svelte.js";
 
   type Category =
     | "appearance"
@@ -43,7 +48,8 @@
     | "viewport"
     | "quality"
     | "textures"
-    | "providers";
+    | "providers"
+    | "mcp";
 
   interface Props {
     open: boolean;
@@ -73,6 +79,26 @@
     onclearresourcepack: () => void;
     onsavekey: (provider: Provider, apiKey: string) => Promise<void>;
     onclearkey: (provider: Provider) => Promise<void>;
+    /**
+     * The MCP server, from main rather than from the settings above.
+     *
+     * `settings.mcp.enabled` is the checkbox and this is what is actually
+     * listening; they come apart when a port is taken, which is exactly the
+     * case worth showing. See `mcp_status.ts`.
+     */
+    /**
+     * The pane to open on, when something else chose it.
+     *
+     * `startOn`, not `category`: the local `$state` below is already called
+     * that, and a prop of the same name would shadow it — the same class of
+     * collision `DocumentPanel`'s `doc` prop exists to avoid.
+     */
+    startOn: Category | null;
+    mcpStatus: McpStatus | null;
+    mcpActivity: readonly McpActivity[];
+    onmcpenabled: (enabled: boolean) => void;
+    onmcpregenerate: () => void;
+    onpickmcproot: () => void;
   }
 
   const {
@@ -94,6 +120,12 @@
     onclearresourcepack,
     onsavekey,
     onclearkey,
+    startOn,
+    mcpStatus,
+    mcpActivity,
+    onmcpenabled,
+    onmcpregenerate,
+    onpickmcproot,
   }: Props = $props();
 
   /**
@@ -127,6 +159,54 @@
     return value === "" ? "#161d27" : value;
   });
 
+  /** Whether the token is shown in the clear. Off every time the modal opens. */
+  let revealed = $state(false);
+  /** Which field was last copied, so the button can say so briefly. */
+  let copied = $state<"url" | "token" | "command" | null>(null);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+
+  $effect(() => {
+    // Re-masked whenever the modal is closed: a token left revealed would still
+    // be on screen the next time this pane is opened, which is the one place it
+    // could be read by somebody standing behind you.
+    if (!open) revealed = false;
+  });
+
+  async function copy(what: "url" | "token" | "command", value: string): Promise<void> {
+    if (value === "") return;
+    await api().copyToClipboard(value);
+    copied = what;
+    clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => (copied = null), 1500);
+  }
+
+  const command = $derived(
+    mcpStatus?.url && mcpStatus.token ? connectCommand(mcpStatus.url, mcpStatus.token) : "",
+  );
+
+  /*
+   * The state in words.
+   *
+   * An error carries main's own message, which is not translated -- it arrives
+   * already phrased, like every other `Failure.message`, and it is the one that
+   * names the port. The generic key is the fallback for an error with nothing
+   * to say.
+   */
+  const stateLabel = $derived.by(() => {
+    switch (dotFor(mcpStatus)) {
+      case "active":
+        return t("mcp.stateActive");
+      case "listening":
+        return t("mcp.stateListening");
+      case "error":
+        return mcpStatus?.message ?? t("mcp.stateError");
+      case "starting":
+        return t("mcp.stateStarting");
+      default:
+        return t("mcp.stateOff");
+    }
+  });
+
   const CATEGORIES: readonly { id: Category; key: string }[] = [
     { id: "appearance", key: "settings.appearance" },
     { id: "schematic", key: "settings.schematic" },
@@ -135,9 +215,22 @@
     { id: "quality", key: "settings.quality" },
     { id: "textures", key: "settings.textures" },
     { id: "providers", key: "settings.providers" },
+    { id: "mcp", key: "settings.mcp" },
   ];
 
   let category = $state<Category>("appearance");
+
+  /*
+   * Opening on a named pane, when the caller had one in mind.
+   *
+   * The MCP indicator opens this modal to say something about the MCP server,
+   * and landing on Appearance would make it a button that appears to do nothing.
+   * Only while `open`, so choosing a pane by hand is not overwritten on the next
+   * paint; `startOn` is cleared by the caller on close.
+   */
+  $effect(() => {
+    if (open && startOn !== null) category = startOn;
+  });
   let dialog = $state<HTMLDivElement | undefined>(undefined);
 
   const preview = $derived(settings.preview);
@@ -616,6 +709,145 @@
             </div>
             <p class="hint">{t("preview.biomeHint")}</p>
           </div>
+        {:else if category === "mcp"}
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={settings.mcp.enabled}
+              disabled={busy}
+              onchange={(event) => onmcpenabled(event.currentTarget.checked)}
+            />
+            {t("mcp.enable")}
+          </label>
+          <p class="hint">{t("mcp.enableHint")}</p>
+
+          <!--
+            The status is main's, not the checkbox's. They disagree exactly when
+            it matters — a port already held by a second copy of the app — and
+            that disagreement is the thing this row exists to show.
+          -->
+          <div class="field">
+            <span class="label">{t("mcp.status")}</span>
+            <p class="state">
+              <span class="dot" style={`background: var(${dotColor(dotFor(mcpStatus))})`}></span>
+              <span>{stateLabel}</span>
+              {#if mcpStatus !== null && mcpStatus.clients > 0}
+                <span class="muted">· {tn("mcp.clients", mcpStatus.clients)}</span>
+              {/if}
+            </p>
+          </div>
+
+          {#if mcpStatus?.url}
+            <div class="field">
+              <label for="mcp-url">{t("mcp.url")}</label>
+              <div class="pick-row">
+                <input id="mcp-url" readonly value={mcpStatus.url} />
+                <button onclick={() => copy("url", mcpStatus?.url ?? "")}>
+                  {copied === "url" ? t("mcp.copied") : t("mcp.copy")}
+                </button>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="mcp-token">{t("mcp.token")}</label>
+              <div class="pick-row">
+                <input
+                  id="mcp-token"
+                  readonly
+                  value={revealed ? (mcpStatus.token ?? "") : maskToken(mcpStatus.token)}
+                />
+                <button onclick={() => (revealed = !revealed)}>
+                  {revealed ? t("mcp.hide") : t("mcp.reveal")}
+                </button>
+                <button onclick={() => copy("token", mcpStatus?.token ?? "")}>
+                  {copied === "token" ? t("mcp.copied") : t("mcp.copy")}
+                </button>
+                <button onclick={onmcpregenerate} disabled={busy}>{t("mcp.regenerate")}</button>
+              </div>
+              <p class="hint">{t("mcp.tokenHint")}</p>
+            </div>
+
+            <div class="field">
+              <label for="mcp-command">{t("mcp.command")}</label>
+              <div class="pick-row">
+                <input id="mcp-command" readonly value={command} title={command} />
+                <button onclick={() => copy("command", command)}>
+                  {copied === "command" ? t("mcp.copied") : t("mcp.copy")}
+                </button>
+              </div>
+            </div>
+          {/if}
+
+          <div class="field">
+            <label for="mcp-port">{t("mcp.port")}</label>
+            <input
+              id="mcp-port"
+              type="number"
+              min={MCP_PORT.min}
+              max={MCP_PORT.max}
+              value={settings.mcp.port}
+              onchange={(event) =>
+                onchange({ mcp: { ...settings.mcp, port: Number(event.currentTarget.value) } })}
+            />
+            <p class="hint">{t("mcp.portHint")}</p>
+          </div>
+
+          <div class="field">
+            <label for="mcp-root">{t("mcp.root")}</label>
+            <div class="pick-row">
+              <input
+                id="mcp-root"
+                readonly
+                value={settings.mcp.root}
+                placeholder={defaultOutputDir}
+                title={settings.mcp.root || defaultOutputDir}
+              />
+              <button onclick={onpickmcproot} disabled={busy}>{t("common.choose")}</button>
+              <button
+                onclick={() => onchange({ mcp: { ...settings.mcp, root: "" } })}
+                disabled={busy || settings.mcp.root === ""}>{t("mcp.rootDefault")}</button
+              >
+            </div>
+            <p class="hint">{t("mcp.rootHint")}</p>
+          </div>
+
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={settings.mcp.allowDelete}
+              disabled={busy}
+              onchange={(event) =>
+                onchange({ mcp: { ...settings.mcp, allowDelete: event.currentTarget.checked } })}
+            />
+            {t("mcp.allowDelete")}
+          </label>
+          <p class="hint">{t("mcp.allowDeleteHint")}</p>
+
+          <!--
+            Letting somebody else's model edit your build is only reasonable if
+            you can see what it did. Newest first, because that is the one
+            anybody is looking for.
+          -->
+          <div class="field">
+            <span class="label">{t("mcp.activity")}</span>
+            {#if mcpActivity.length === 0}
+              <p class="hint">{t("mcp.activityEmpty")}</p>
+            {:else}
+              <ul class="activity">
+                {#each mcpActivity as call, index (`${call.at}-${index}`)}
+                  <li class:failed={!call.ok}>
+                    <span class="when">{new Date(call.at).toLocaleTimeString()}</span>
+                    <span class="tool">{call.tool}</span>
+                    <span class="summary">{call.summary}</span>
+                    <!-- In words, not only in colour: the summary of a failed
+                         call is the error text, which on its own reads like an
+                         unusually chatty success. -->
+                    {#if !call.ok}<span class="tag">{t("mcp.activityFailed")}</span>{/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
         {:else}
           <ApiKeysSection {settings} {keyStatus} {onchange} {onsavekey} {onclearkey} />
         {/if}
@@ -705,6 +937,78 @@
   .pick-row {
     display: flex;
     gap: 8px;
+  }
+
+  /* A label for a row that is read, not edited -- the status and the activity
+     list have no control to be the `for` of. */
+  .label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .state {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+  }
+
+  .state .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: none;
+  }
+
+  .state .muted {
+    color: var(--text-dim);
+  }
+
+  .activity {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 220px;
+    overflow-y: auto;
+    font-size: 12px;
+  }
+
+  .activity li {
+    display: flex;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .activity .when {
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+    flex: none;
+  }
+
+  .activity .tool {
+    flex: none;
+    font-family: var(--mono, monospace);
+  }
+
+  /* The summary is the long one, so it is the one that gives way. */
+  .activity .summary {
+    flex: 1;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .activity .tag {
+    flex: none;
+    color: var(--danger);
+  }
+
+  .activity li.failed .tool {
+    color: var(--danger);
   }
 
   .pick-row input {

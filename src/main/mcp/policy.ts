@@ -20,6 +20,8 @@
 
 import path from "path";
 
+export { connectCommand } from "../../shared/mcp.js";
+
 /** Why a request was turned down, in words meant for a model to act on. */
 export interface Refusal {
   refused: string;
@@ -155,18 +157,6 @@ export function mayDelete(
     );
   }
   return allow(within.value);
-}
-
-/**
- * The command to paste into a client, ready to run.
- *
- * Here rather than in the settings component because it is the one string in
- * this feature that has to be exactly right — a wrong flag produces a client
- * that cannot connect and an error message about neither — and because a test
- * can hold it here.
- */
-export function connectCommand(url: string, token: string): string {
-  return `claude mcp add --transport http schematic ${url} --header "Authorization: Bearer ${token}"`;
 }
 
 /**

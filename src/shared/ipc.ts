@@ -35,6 +35,16 @@ export const IPC = {
    */
   confirmDiscard: "bgpt:dialog:confirmDiscard",
   revealPath: "bgpt:shell:reveal",
+  /**
+   * Put text on the system clipboard.
+   *
+   * Main's, because it has to be: the preload runs with `sandbox: true`, which
+   * exposes `ipcRenderer` and `webUtils` and not `clipboard`. `navigator.clipboard`
+   * would usually work in the renderer and "usually" is the problem -- it is
+   * gated on a secure context and on user activation, and the one thing it is
+   * needed for here is a token nobody can retype from memory.
+   */
+  clipboardWrite: "bgpt:clipboard:write",
   /** The app's own `generated/` folder — what an empty `outputDir` resolves to. */
   defaultOutputDir: "bgpt:output:defaultDir",
 
@@ -1307,6 +1317,8 @@ export interface BgptApi {
   /** `true` to go ahead and lose the unsaved changes. */
   confirmDiscard(req: ConfirmDiscardRequest): Promise<boolean>;
   revealPath(path: string): Promise<void>;
+  /** Put text on the system clipboard. Main's, because the preload is sandboxed. */
+  copyToClipboard(text: string): Promise<void>;
   getDefaultOutputDir(): Promise<string>;
   listBlocks(): Promise<string[]>;
   /** Geometry for the blocks the inventory is about to draw. */

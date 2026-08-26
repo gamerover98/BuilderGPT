@@ -9,7 +9,7 @@
  * method` strings on the other side.
  */
 
-import { BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
 
 import {
   IPC,
@@ -455,6 +455,10 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
 
   ipcMain.handle(IPC.revealPath, async (_event, target: string): Promise<void> => {
     shell.showItemInFolder(target);
+  });
+
+  ipcMain.handle(IPC.clipboardWrite, async (_event, text: string): Promise<void> => {
+    clipboard.writeText(String(text ?? ""));
   });
 
   ipcMain.handle(IPC.defaultOutputDir, async (): Promise<string> => generatedDir());

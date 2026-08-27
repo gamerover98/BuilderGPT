@@ -524,6 +524,14 @@ const BIOME_TINTED: readonly string[] = [
   "block/large_fern_bottom",
   "block/vine",
   "block/lily_pad",
+  /*
+   * Leaf litter ships greyscale and takes the foliage colour, exactly as leaves
+   * do -- it is fallen leaves. Without the tint it came out flat grey, which
+   * reads as a texture that failed to load rather than as one that is waiting
+   * for a colour. Pink petals and wildflowers are *not* here: they are painted
+   * their own colours and vanilla tints only their stems.
+   */
+  "block/leaf_litter",
   "block/sugar_cane",
   "block/attached_melon_stem",
   "block/attached_pumpkin_stem",
@@ -890,6 +898,8 @@ export class ModelBaker {
   // RULEBOOK §1 Record-over-Map row: both caches below.
   private readonly cache: Record<string, BakedBlock> = {};
   private readonly textureCache: Record<string, RgbaImage> = {};
+  /** Memo for `isTextureOpaque`; a texture's alpha does not change once decoded. */
+  private readonly opaqueTextures = new Map<string, boolean>();
   private readonly textureSource: ResourcePackTextures;
 
   private readonly biomeTint: readonly [number, number, number];
@@ -924,6 +934,41 @@ export class ModelBaker {
 
   get textures(): Readonly<Record<string, RgbaImage>> {
     return this.textureCache;
+  }
+
+  /**
+   * Whether a decoded texture has a pixel you can see through.
+   *
+   * This is what decides whether a surface may hide the one behind it, and it
+   * is asked of the *pixels* rather than of a list of names on purpose. The
+   * list was `isSeeThrough` in `block_shapes.ts`, which is geometry and cannot
+   * open a PNG, so every block whose shape covers a face but whose art does not
+   * had to be remembered by hand — and the ones nobody remembered deleted the
+   * face behind them. Pink petals scattered on grass took the grass's top face
+   * with them and the gaps between the petals became a hole through the floor.
+   *
+   * Cached per key, because the answer is a property of the image and a
+   * structure asks it once per palette entry per chunk. Scanning a 64x64 tile
+   * is four thousand reads, once.
+   */
+  isTextureOpaque(key: string): boolean {
+    const known = this.opaqueTextures.get(key);
+    if (known !== undefined) return known;
+    const image = this.textureCache[key];
+    // A texture that has not been decoded cannot be shown to be see-through,
+    // and answering "opaque" here only ever preserves the culling that was
+    // already happening.
+    let opaque = true;
+    if (image !== undefined) {
+      for (let i = 3; i < image.data.length; i += 4) {
+        if (image.data[i] < 255) {
+          opaque = false;
+          break;
+        }
+      }
+    }
+    this.opaqueTextures.set(key, opaque);
+    return opaque;
   }
 
   /**

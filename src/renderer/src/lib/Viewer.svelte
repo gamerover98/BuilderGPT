@@ -26,7 +26,7 @@
   } from "../../../shared/ipc.js";
   import type { ResolvedTheme } from "../../../shared/settings.js";
   import { t } from "./i18n.svelte.js";
-  import { hoverSource, outlineCentre } from "./block_hover.js";
+  import { facingNormal, hoverSource, outlineCentre } from "./block_hover.js";
   import {
   cellFade,
   cellRegion,
@@ -596,10 +596,19 @@ import { isTyping } from "./typing.js";
     // Object space is world space here — the pipeline emits no node transform —
     // but going through the normal matrix costs nothing and survives that
     // changing.
-    const normal = hit.face.normal
+    const surface = hit.face.normal
       .clone()
       .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
       .normalize();
+    // ...and turned to face the ray, because the material is `DoubleSide` and
+    // a paper-thin element can perfectly well be struck from behind. See
+    // `facingNormal`: this is the azalea's "unremovable air block above".
+    const normal = new THREE.Vector3(
+      ...facingNormal(
+        [surface.x, surface.y, surface.z],
+        [raycaster.ray.direction.x, raycaster.ray.direction.y, raycaster.ray.direction.z],
+      ),
+    );
     const inside = hit.point.clone().addScaledVector(normal, -1e-3);
     const x = Math.floor(inside.x);
     const y = Math.floor(inside.y);

@@ -141,6 +141,37 @@ export async function culledFaces(
    * distinct blocks and millions of cells, and `occludesNeighbours` walks a
    * shape table every time it is asked.
    */
+  /**
+   * Whether every texture a palette entry draws with is fully opaque.
+   *
+   * The palette is baked up front rather than as cells are visited, because
+   * this has to be answerable about a *neighbour* — which for a region pass may
+   * sit outside the region and so never be reached by the loop below.
+   * `bakeBlockstate` is memoised, so for a full pass this costs the bakes the
+   * loop was going to do anyway.
+   */
+  const opaqueTexture: boolean[] = [];
+  for (const entry of struct.palette) {
+    if (paletteEntryIsAir(entry)) {
+      opaqueTexture.push(true);
+      continue;
+    }
+    const baked = await baker.bakeBlockstate(entry);
+    const drawn = [...Object.values(baked.faces), ...baked.extraFaces];
+    opaqueTexture.push(drawn.every((face) => baker.isTextureOpaque(face.textureKey)));
+  }
+
+  /*
+   * Deliberately **not** narrowed by `opaqueTexture`.
+   *
+   * This array answers "is that cell solid", and it is read by the light
+   * lookups as well as by the culling: a face in front of a cell this calls
+   * open takes that cell's light, and `lighting.ts` computes the light grid
+   * from `occludesNeighbours` alone. Fold the texture in here and the two stop
+   * agreeing -- a copper grate becomes a cell the mesher reads light from and
+   * the flood never lit, so the wall behind it goes black. The texture decides
+   * culling and nothing else.
+   */
   const opaqueEntry = struct.palette.map(
     (entry) => !paletteEntryIsAir(entry) && occludesNeighbours(entry),
   );
@@ -346,7 +377,22 @@ export async function culledFaces(
              * z-fight.
              */
             const facing = OPPOSITE_FACE[faceName];
-            if (occludesFace(neighbor, facing)) {
+            /*
+             * ...and covering it is not enough: the surface doing the covering
+             * has to be **opaque**, which is a question about pixels.
+             *
+             * `occludesFace` answers it from `isSeeThrough`, a list of names in
+             * a module that is geometry and cannot open a PNG. So every block
+             * whose shape covers a face while its art does not had to be
+             * remembered by hand, and the ones nobody remembered deleted the
+             * face behind them: a rail on a floor, a lily pad on water, petals
+             * scattered on grass. The gaps in the texture then showed whatever
+             * was behind the *structure*, which reads as a hole through it.
+             *
+             * Asked of the neighbour's decoded textures instead. It can only
+             * ever cull less than the name list did, never more.
+             */
+            if (occludesFace(neighbor, facing) && opaqueTexture[voxels[flatIndex(nx, ny, nz)]]) {
               continue;
             }
             /*

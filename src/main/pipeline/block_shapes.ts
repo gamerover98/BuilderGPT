@@ -645,6 +645,15 @@ const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => Bl
   ["_pressure_plate", () => boxes([1, 0, 1, 15, 1, 15])],
   ["_button", (e) => transform([[5, 0, 6, 11, 2, 10]], facingSteps(e), false)],
   ["_bed", bed],
+  /*
+   * The copper chests came with the copper golem and only ever got half the
+   * treatment: `entityTextureAlias` knows their sheets, so they wore a chest
+   * and were shaped like a solid cube -- which also walled off all six of
+   * their neighbours. A suffix rather than eight more exact names, and it
+   * catches `ender_chest` and `trapped_chest` on the way past, which have the
+   * same shape and only differ in which sheet they wear.
+   */
+  ["_chest", chest],
   ["_banner", (e) => againstWall(e, 2)],
   // Order matters: a wall hanging sign ends in `_hanging_sign` too, and a wall
   // sign ends in `_sign`.
@@ -1267,6 +1276,42 @@ function azalea(entry: PaletteEntry): BlockShape {
 }
 
 /**
+ * A flowerbed — pink petals, wildflowers, leaf litter: one quarter-plate per
+ * segment, scattered across the floor of the cell.
+ *
+ * It was a full 16x16 plate at `y = 0` whatever the count, which is wrong twice
+ * over. One petal covered the whole cell, so `flower_amount` did nothing and
+ * `leaf_litter[segment_amount=1]` looked exactly like a carpet of it. And a
+ * plate that spans the square *at* `y = 0` **covers the face below it**, so the
+ * grass it was scattered on lost its top face and the transparent half of the
+ * petals became a hole through the floor — which is what was reported.
+ *
+ * Vanilla's `flowerbed_1..4` are a multipart: `flower_amount=3` applies models
+ * 1, 2 and 3, one 8x8 plate each, and they sit at four different heights so a
+ * patch does not read as a grid. The heights are transcribed rather than
+ * levelled -- they are what makes it look scattered. The blockstate turns the
+ * whole thing by `facing`, north unrotated.
+ *
+ * The stems in those models are not here: each is a one-pixel sliver rotated
+ * about the cell's *corner*, and a row of them is a smaller thing than the
+ * plates by any measure. Their absence is a plant with no visible stalk, which
+ * is what the block looked like before this anyway.
+ */
+const FLOWERBED_PLATES: readonly Box[] = [
+  [0, 2.99, 0, 8, 2.99, 8],
+  [0, 1, 8, 8, 1, 16],
+  [8, 2, 8, 16, 2, 16],
+  [8, 2, 0, 16, 2, 8],
+];
+
+function flowerbed(entry: PaletteEntry): BlockShape {
+  const stated = entry.properties.flower_amount ?? entry.properties.segment_amount ?? "1";
+  const parsed = Number(stated);
+  const count = Number.isFinite(parsed) ? Math.min(4, Math.max(1, Math.round(parsed))) : 1;
+  return transform(FLOWERBED_PLATES.slice(0, count), northFacingSteps(entry), false);
+}
+
+/**
  * A vine: one flat sheet per face it clings to.
  *
  * It was a cross, which is the shape of a *plant standing in a cell* and not of
@@ -1549,9 +1594,9 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
    * the shape that matters, because as a full cube it was a solid pink block
    * that also deleted the grass underneath it.
    */
-  pink_petals: () => boxes([0, 0, 0, 16, 1, 16]),
-  wildflowers: () => boxes([0, 0, 0, 16, 1, 16]),
-  leaf_litter: () => boxes([0, 0, 0, 16, 1, 16]),
+  pink_petals: flowerbed,
+  wildflowers: flowerbed,
+  leaf_litter: flowerbed,
 
   // The nether's dripstone: same silhouette, same reasoning as its overworld
   // twin -- a narrow column is the reach a neighbour needs to know about.

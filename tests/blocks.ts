@@ -932,6 +932,102 @@ console.log("\n--- planes ---");
   check("...and no longer spans y", Math.max(...sy) - Math.min(...sy) < 1);
 }
 
+// --- what is scattered on the floor -----------------------------------------
+//
+// Pink petals, wildflowers and leaf litter were one 16x16 plate at y=0, whatever
+// the count. That is wrong twice: `flower_amount` did nothing, so one petal
+// carpeted the cell; and a plate that spans the square *at* y=0 covers the face
+// below it, so the grass underneath lost its top face and the gaps in the
+// petals became a hole through the floor.
+console.log("\n--- what is scattered on the floor ---");
+{
+  const platesOf = (name: string, props: Record<string, string>): number => {
+    const shape = shapeFor(block(name, props));
+    return shape.kind === "boxes" ? shape.boxes.length : -1;
+  };
+  equal("one petal is one quarter-plate", platesOf("pink_petals", { flower_amount: "1" }), 1);
+  equal("...and four are four", platesOf("pink_petals", { flower_amount: "4" }), 4);
+  equal(
+    "leaf litter counts segments rather than flowers",
+    platesOf("leaf_litter", { segment_amount: "3" }),
+    3,
+  );
+  // The plates sit a little above the floor, at the four heights vanilla gives
+  // them, so none of them lies in the plane it would have to cover.
+  for (const name of ["pink_petals", "wildflowers", "leaf_litter"]) {
+    check(
+      `${name} covers nothing below it, at any count`,
+      ["1", "2", "3", "4"].every(
+        (n) =>
+          !coversFace(block(name, { flower_amount: n, segment_amount: n }), "down") &&
+          !occludesNeighbours(block(name, { flower_amount: n, segment_amount: n })),
+      ),
+    );
+  }
+}
+
+// --- a cutout texture may not hide what is behind it ------------------------
+//
+// The end-to-end half of the same rule, and the one that would have caught it:
+// `occludesFace` answers from `isSeeThrough`, a list of names in a module that
+// is geometry and cannot open a PNG. So every block whose *shape* covers a face
+// while its *art* does not had to be remembered by hand, and the ones nobody
+// remembered deleted the face behind them — a rail on a floor, a lily pad on
+// water, petals on grass.
+//
+// Driven through `culledFaces` rather than the predicate, because the predicate
+// is only half of it: what matters is the face that survives.
+console.log("\n--- a cutout texture may not hide what is behind it ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  /** The number of upward faces the block at y=0 keeps, with `above` over it. */
+  const topFacesUnder = async (above: PaletteEntry): Promise<number> => {
+    const palette: PaletteEntry[] = [block("air"), block("grass_block"), above];
+    const struct: StructureData = {
+      bounds: { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 1, maxZ: 0 },
+      palette,
+      voxels: new Int32Array([1, 2]),
+    };
+    const faces = await culledFaces(struct, baker);
+    return faces.filter((f) => f.normal[1] === 1 && f.positions[1] === 1).length;
+  };
+  equal("stone on grass takes the grass's top face", await topFacesUnder(block("stone")), 0);
+  equal(
+    "pink petals do not",
+    await topFacesUnder(block("pink_petals", { flower_amount: "4" })),
+    1,
+  );
+  equal("...nor does a rail", await topFacesUnder(block("rail")), 1);
+  equal("...nor a lily pad", await topFacesUnder(block("lily_pad")), 1);
+}
+
+// --- leaf litter takes the foliage colour -----------------------------------
+//
+// It ships **greyscale**, exactly as leaves and grass do, and takes the biome's
+// foliage colour at render time. Untinted it came out flat grey, which reads as
+// a texture that failed to load rather than one waiting for a colour. Pink
+// petals are painted their own colour and must stay untinted, or the check
+// below would pass on a rule that tinted everything.
+console.log("\n--- leaf litter takes the foliage colour ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const isGrey = (key: string): boolean => {
+    const tex = baker.textures[key];
+    if (tex === undefined) return true;
+    for (let i = 0; i < tex.data.length; i += 4) {
+      if (tex.data[i + 3] < 8) continue;
+      if (tex.data[i] !== tex.data[i + 1] || tex.data[i + 1] !== tex.data[i + 2]) return false;
+    }
+    return true;
+  };
+  const litter = await baker.bakeBlockstate(block("leaf_litter", { segment_amount: "4" }));
+  check("leaf litter is not left grey", !isGrey(litter.textureKey), litter.textureKey);
+  const petals = await baker.bakeBlockstate(block("pink_petals", { flower_amount: "4" }));
+  check("...and pink petals were coloured to begin with", !isGrey(petals.textureKey));
+}
+
 // --- potted plants ----------------------------------------------------------
 //
 // Both halves are needed and neither is enough on its own. With no texture rule

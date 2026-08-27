@@ -74,3 +74,35 @@ export function outlineCentre(cell: {
 }): { x: number; y: number; z: number } {
   return { x: cell.x + 0.5, y: cell.y + 0.5, z: cell.z + 0.5 };
 }
+
+/**
+ * The hit normal, turned to face the ray that found it.
+ *
+ * `pickBlockAt` steps a hair *inwards* from the surface along `-normal`, and
+ * that is right only for a face the ray struck from the front. The block
+ * material is `DoubleSide` — it has to be, because a cross and every other
+ * paper-thin element in the game is one quad seen from both sides — so a ray
+ * can perfectly well arrive at a face's back, and there `-normal` points back
+ * out along the line of sight instead of into the block.
+ *
+ * The azalea is where that shows. Vanilla's `template_azalea` states its lid as
+ * a zero-thickness element at `y = 16` carrying **both** an `up` and a `down`
+ * face, so the block's top surface sits exactly on the boundary with the cell
+ * above and half of it points the wrong way. Whichever of the two the raycaster
+ * returned decided the answer: on the `down` one the pick landed one cell up,
+ * and since that cell is air the outline drew around nothing, breaking it
+ * changed nothing, and placing went a cell too high. The report was "placing an
+ * azalea puts an air block above it that cannot be removed", which is exactly
+ * what that looks like from the outside.
+ *
+ * Turning the normal costs nothing and cannot change a front-face answer: there
+ * the dot product is already negative and the vector is returned as it came.
+ */
+export function facingNormal(
+  normal: readonly [number, number, number],
+  direction: readonly [number, number, number],
+): readonly [number, number, number] {
+  const towardsRay =
+    normal[0] * direction[0] + normal[1] * direction[1] + normal[2] * direction[2] > 0;
+  return towardsRay ? [-normal[0], -normal[1], -normal[2]] : normal;
+}

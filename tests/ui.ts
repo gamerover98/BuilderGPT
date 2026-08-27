@@ -26,7 +26,7 @@ import {
   placePopover,
 } from "../src/renderer/src/lib/floating.js";
 import { PANEL_SIZE } from "../src/shared/settings.js";
-import { hoverSource, outlineCentre } from "../src/renderer/src/lib/block_hover.js";
+import { facingNormal, hoverSource, outlineCentre } from "../src/renderer/src/lib/block_hover.js";
 import {
   blockLabel,
   gridWindow,
@@ -1601,6 +1601,40 @@ console.log("\n--- the block under the pointer ---");
     y: 0.5,
     z: -1.5,
   });
+}
+
+/*
+ * Which side of a surface the block is on.
+ *
+ * `pickBlockAt` steps a hair inwards along `-normal`, which is right only for a
+ * face struck from the front. The block material is `DoubleSide` -- it has to
+ * be, because a cross and every other paper-thin element in the game is one
+ * quad seen from both sides -- so a ray can arrive at a face's back, and there
+ * `-normal` points back out along the line of sight.
+ *
+ * The azalea is where it showed. Vanilla's `template_azalea` states its lid as
+ * a zero-thickness element at y=16 carrying both an `up` and a `down` face, so
+ * half of the block's top surface points into the cell above. Landing on the
+ * `down` one put the pick one cell up: the outline drew around air, breaking it
+ * did nothing, and placing went a cell too high -- reported as "placing an
+ * azalea leaves an air block above it that cannot be removed".
+ */
+console.log("\n--- which side of a surface the block is on ---");
+{
+  const down: readonly [number, number, number] = [0, -1, 0];
+  const up: readonly [number, number, number] = [0, 1, 0];
+  // Looking down at a lid's up face: the front, and nothing moves.
+  equal("a face struck from the front is left alone", facingNormal(up, down), up);
+  // The same plane's down face, struck from above: its normal runs with the
+  // ray, so the block is the other way.
+  equal("one struck from behind is turned to face the ray", facingNormal(down, down), up);
+  // And it is the *ray* that decides, not the axis: the same face seen from
+  // below is a front hit again.
+  equal("...decided by the ray, not by the axis", facingNormal(down, up), down);
+  // A grazing ray is still on one side or the other. Exactly perpendicular
+  // cannot be hit at all, and falls to the front branch rather than flipping.
+  equal("a grazing hit keeps its side", facingNormal(up, [0.999, -0.01, 0]), up);
+  equal("a perpendicular one is left alone", facingNormal(up, [1, 0, 0]), up);
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

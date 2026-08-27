@@ -1556,6 +1556,40 @@ knowing:
   sheet it had been used on and wrong the moment a 32-wide one arrived: a sign's
   board came out wearing a quarter of its own sheet blown up to fill the face,
   which reads as a plank and is why it nearly passed review.
+- **Only a full opaque cube may cull — and "opaque" is a question about
+  pixels.** `occludesFace` answered it from `isSeeThrough`, a list of names in
+  `block_shapes.ts`, which is geometry and cannot open a PNG. So every block
+  whose *shape* covers a face while its *art* does not had to be remembered by
+  hand, and the ones nobody remembered deleted the face behind them: a rail on a
+  floor, a lily pad on water, petals scattered on grass — and the gaps in the
+  texture then showed what was behind the whole structure, which reads as a hole
+  through it. `ModelBaker.isTextureOpaque` asks the decoded alpha instead,
+  memoised per key, and the mesher gates culling on it. It can only ever cull
+  less than the name list did, never more.
+
+  It gates **culling and nothing else**. `opaqueEntry` in `mesher.ts` also
+  answers "is that cell solid" for the light lookups, and `lighting.ts` floods
+  from `occludesNeighbours` alone — fold the texture into that one and the two
+  stop agreeing, so a copper grate becomes a cell the mesher reads light from
+  and the flood never lit, and the wall behind it goes black.
+- **A flowerbed is one quarter-plate per segment, and they sit above the
+  floor.** Pink petals, wildflowers and leaf litter were a full 16×16 plate at
+  `y = 0` whatever the count: one petal carpeted the cell, and a plate that
+  spans the square *at* `y = 0` covers the face below it. Vanilla's
+  `flowerbed_1..4` is a multipart — `flower_amount=3` applies models 1, 2 and 3
+  — one 8×8 plate each at four different heights, which is what stops a patch
+  reading as a grid. The heights are transcribed rather than levelled.
+- **A paper-thin element points both ways, and the picker has to know which
+  way the ray came.** Vanilla's `template_azalea` states its lid as a
+  zero-thickness element at `y = 16` carrying **both** an `up` and a `down`
+  face, so half of the block's top surface points into the cell above. The block
+  material is `DoubleSide` — it has to be, for crosses — so the raycaster can
+  return either, and on the `down` one `pickBlockAt`'s step along `-normal`
+  landed one cell up: the outline drew around air, breaking it did nothing, and
+  placing went a cell too high. Reported as "placing an azalea leaves an air
+  block above it that cannot be removed". `facingNormal` in `block_hover.ts`
+  turns the normal to face the ray first; a front hit is returned unchanged, so
+  it cannot alter an answer that was already right.
 - **A texture that lands outside its tile is clamped, not refused.** The atlas
   smears the edge pixels across the face, which reads as a badly drawn texture
   rather than as a window that missed — so `tests/blocks.ts` walks every offered

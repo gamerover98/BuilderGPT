@@ -1028,6 +1028,122 @@ if (pack === null) {
   check("...and pink petals were coloured to begin with", !isGrey(petals.textureKey));
 }
 
+// --- water is blended, and cutouts are not ----------------------------------
+//
+// The block material alpha-tests at 0.5 and does not blend, which is right for
+// a cutout and wrong for water: `water_still` is alpha 180 across its whole
+// tile, so it passes any alpha test and then draws **solid**. That is the whole
+// of "the water block has no transparency".
+//
+// The fix is a second pass, and a second pass is worth paying for only where it
+// is needed — so the three cases have to stay told apart. Blending a cutout
+// would cost the sorting for nothing, and blending everything would move the
+// block mesh wholesale into three's transparent pass, where it would sort
+// against the selection box and the grid.
+console.log("\n--- water is blended, and cutouts are not ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  for (const name of ["water", "ice", "nether_portal"]) {
+    const baked = await baker.bakeBlockstate(block(name));
+    check(`${name} is blended`, baker.isTextureTranslucent(baked.textureKey), baked.textureKey);
+  }
+  for (const name of ["oak_leaves", "pink_petals", "rail"]) {
+    const baked = await baker.bakeBlockstate(block(name));
+    check(
+      `${name} is a cutout, not a blend`,
+      !baker.isTextureOpaque(baked.textureKey) && !baker.isTextureTranslucent(baked.textureKey),
+      baked.textureKey,
+    );
+  }
+  const stone = await baker.bakeBlockstate(block("stone"));
+  check("stone is neither", baker.isTextureOpaque(stone.textureKey));
+
+  /*
+   * ...and the split reaches the geometry, at the end of the index buffer.
+   *
+   * One number over one set of vertices: the renderer draws `[0, opaqueIndices)`
+   * with the alpha-tested material and the tail with the blended one. Ordering
+   * matters — a translucent index in the middle would make that number a lie
+   * about which faces it names.
+   */
+  const both: PaletteEntry[] = [block("air"), block("stone"), block("water")];
+  const struct: StructureData = {
+    bounds: { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 0 },
+    palette: both,
+    voxels: new Int32Array([1, 2]),
+  };
+  const faces = await culledFaces(struct, baker);
+  const mesh = buildMesh(faces, buildAtlas(baker.textures).uvRects, (key) =>
+    baker.isTextureTranslucent(key),
+  );
+  check("a stone-and-water pair meshes both", mesh.indices.length > 0);
+  check(
+    "...with some of it blended and some not",
+    mesh.opaqueIndices > 0 && mesh.opaqueIndices < mesh.indices.length,
+    `${mesh.opaqueIndices} of ${mesh.indices.length}`,
+  );
+  // Without the predicate every face is opaque, which is what a block icon and
+  // the GLB path get, and what every caller written before the split saw.
+  const flat = buildMesh(faces, buildAtlas(baker.textures).uvRects);
+  equal("...and nothing is blended when nobody asks", flat.opaqueIndices, flat.indices.length);
+}
+
+// --- waterlogged is water ---------------------------------------------------
+//
+// `waterlogged` is how the game puts water in a cell that already holds a fence
+// or a slab or a stair. It was read, shown in the inspector and written back to
+// the file, and never drawn — so a waterlogged fence in the middle of a pond
+// was a fence-shaped hole in the water.
+console.log("\n--- waterlogged is water ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const waterFaces = async (palette: PaletteEntry[], voxels: number[], maxX: number) => {
+    const struct: StructureData = {
+      bounds: { minX: 0, minY: 0, minZ: 0, maxX, maxY: 0, maxZ: 0 },
+      palette,
+      voxels: new Int32Array(voxels),
+    };
+    const faces = await culledFaces(struct, baker);
+    return faces.filter((f) => f.textureKey.includes("water")).length;
+  };
+  equal(
+    "a dry fence stands in nothing",
+    await waterFaces([block("air"), block("oak_fence")], [1], 0),
+    0,
+  );
+  equal(
+    "a waterlogged one is under water on all six sides",
+    await waterFaces([block("air"), block("oak_fence", { waterlogged: "true" })], [1], 0),
+    6,
+  );
+  /*
+   * And it is one body of water, not two blocks of it. Two waterlogged cells
+   * side by side do not draw the surface between them, for the same reason an
+   * ocean does not mesh its own interior — five faces each, not six.
+   */
+  equal(
+    "two of them share the water between",
+    await waterFaces(
+      [block("air"), block("oak_fence", { waterlogged: "true" })],
+      [1, 1],
+      1,
+    ),
+    10,
+  );
+  equal(
+    "...and a water block counts as the same body",
+    await waterFaces(
+      [block("air"), block("oak_fence", { waterlogged: "true" }), block("water")],
+      [1, 2],
+      1,
+    ),
+    // Five for the fence's water, and the water block's own five.
+    10,
+  );
+}
+
 // --- potted plants ----------------------------------------------------------
 //
 // Both halves are needed and neither is enough on its own. With no texture rule

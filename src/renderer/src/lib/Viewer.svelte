@@ -331,6 +331,7 @@ import { isTyping } from "./typing.js";
   let texture: THREE.DataTexture | undefined;
   let textureVersion = -1;
   let material: THREE.MeshStandardMaterial | undefined;
+  let blended: THREE.MeshStandardMaterial | undefined;
 
   /** The block outline under the pointer or the crosshair; see `updateBlockHighlight`. */
   let highlight: THREE.LineSegments | undefined;
@@ -2357,6 +2358,48 @@ import { isTyping } from "./typing.js";
   }
 
   /**
+   * The second material, for the faces that have to be blended.
+   *
+   * Water's texture is `alpha 180` across its whole tile: it passes any alpha
+   * test and then draws **solid**, which is the whole of "the water block has
+   * no transparency". Blending is the only thing that fixes it, and blending
+   * everything is not an option — the block mesh would move wholesale into
+   * three's transparent pass, where it would sort against the selection box,
+   * the plates and the grid, all of which are transparent already.
+   *
+   * So main splits each chunk's indices, this draws the tail of them, and the
+   * two share one geometry. Three things about it are deliberate:
+   *
+   * - **`depthWrite` stays on.** Minecraft's water is a surface, not a fog;
+   *   with depth writes a pond hides the sand under its far side exactly as it
+   *   should, and the ordering artefacts left are between one water surface and
+   *   another, which is where nobody looks.
+   * - **`alphaTest` goes off.** A blended pass that also discarded at 0.5 would
+   *   throw away the very pixels it exists to draw.
+   * - **It is the same shader.** `shadeWithBakedLight` is applied here too, or
+   *   water would be the one surface in the build that ignored the sun and the
+   *   torches.
+   */
+  function ensureBlendedMaterial(texture: THREE.Texture): THREE.MeshStandardMaterial {
+    if (!blended) {
+      blended = new THREE.MeshStandardMaterial({
+        map: texture,
+        metalness: 0,
+        roughness: 1,
+        transparent: true,
+        depthWrite: true,
+        side: THREE.DoubleSide,
+        vertexColors: true,
+      });
+      shadeWithBakedLight(blended);
+    } else if (blended.map !== texture) {
+      blended.map = texture;
+      blended.needsUpdate = true;
+    }
+    return blended;
+  }
+
+  /**
    * Teaches a material to read the light main baked into the vertices.
    *
    * The vertex colour is not a colour: r is block light, g is sky light and b
@@ -2446,7 +2489,7 @@ import { isTyping } from "./typing.js";
   /** Which chunk each mesh under `loaded` is, so a delta can find it. */
   const chunkMeshes = new Map<number, THREE.Mesh>();
 
-  function chunkMesh(chunk: ChunkGeometry, material: THREE.Material): THREE.Mesh {
+  function chunkMesh(chunk: ChunkGeometry, materials: THREE.Material[]): THREE.Mesh {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(chunk.positions, 3));
     geometry.setAttribute("normal", new THREE.BufferAttribute(chunk.normals, 3));
@@ -2461,13 +2504,25 @@ import { isTyping } from "./typing.js";
     // for keeping the chunks apart rather than fusing them back together.
     geometry.computeBoundingSphere();
     geometry.computeBoundingBox();
-    return new THREE.Mesh(geometry, material);
+    /*
+     * Two draws over one geometry: the opaque indices, then the blended tail.
+     *
+     * `addGroup` is what lets a chunk hold both without a second set of
+     * vertices — the split main sends is a draw order and nothing more. A chunk
+     * with no water is one group and one draw, exactly as before.
+     */
+    const opaqueCount = Math.min(chunk.opaqueIndices, chunk.indices.length);
+    geometry.addGroup(0, opaqueCount, 0);
+    if (opaqueCount < chunk.indices.length) {
+      geometry.addGroup(opaqueCount, chunk.indices.length - opaqueCount, 1);
+    }
+    return new THREE.Mesh(geometry, materials);
   }
 
   /** One mesh per chunk, under a group the rest of the viewer treats as before. */
   function buildModel(payload: MeshPayload, texture: THREE.Texture): THREE.Group {
     const group = new THREE.Group();
-    const shared = ensureMaterial(texture);
+    const shared = [ensureMaterial(texture), ensureBlendedMaterial(texture)];
     chunkMeshes.clear();
     for (const chunk of payload.chunks) {
       const mesh = chunkMesh(chunk, shared);
@@ -2489,7 +2544,7 @@ import { isTyping } from "./typing.js";
    * else, so `partial` is a fact the renderer has to honour, not a hint.
    */
   function applyDelta(group: THREE.Object3D, payload: MeshPayload, texture: THREE.Texture): void {
-    const shared = ensureMaterial(texture);
+    const shared = [ensureMaterial(texture), ensureBlendedMaterial(texture)];
     for (const key of payload.dropped) {
       const gone = chunkMeshes.get(key);
       if (!gone) continue;
@@ -2550,7 +2605,10 @@ import { isTyping } from "./typing.js";
     const group = new THREE.Group();
     group.renderOrder = 997;
     for (const chunk of preview.chunks) {
-      const mesh = chunkMesh(chunk, ghostMaterial);
+      // The ghost is one flat translucent material whatever the block, so both
+      // groups draw with it -- a move preview says "this region is going here",
+      // not what it is made of.
+      const mesh = chunkMesh(chunk, [ghostMaterial, ghostMaterial]);
       mesh.renderOrder = 997;
       group.add(mesh);
     }

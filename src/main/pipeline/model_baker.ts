@@ -898,8 +898,8 @@ export class ModelBaker {
   // RULEBOOK §1 Record-over-Map row: both caches below.
   private readonly cache: Record<string, BakedBlock> = {};
   private readonly textureCache: Record<string, RgbaImage> = {};
-  /** Memo for `isTextureOpaque`; a texture's alpha does not change once decoded. */
-  private readonly opaqueTextures = new Map<string, boolean>();
+  /** Memo for `alphaOf`; a texture's alpha does not change once decoded. */
+  private readonly opaqueTextures = new Map<string, "opaque" | "cutout" | "translucent">();
   private readonly textureSource: ResourcePackTextures;
 
   private readonly biomeTint: readonly [number, number, number];
@@ -952,23 +952,50 @@ export class ModelBaker {
    * is four thousand reads, once.
    */
   isTextureOpaque(key: string): boolean {
+    return this.alphaOf(key) === "opaque";
+  }
+
+  /**
+   * Whether a texture has pixels that are *partly* see-through, as opposed to
+   * either solid or cut away.
+   *
+   * The two are different jobs for the renderer and only one of them is
+   * expensive. A cutout — leaves, petals, a rail — is every pixel either 0 or
+   * 255, and `alphaTest` handles it in the opaque pass for free. Water is
+   * `alpha 180` across its whole tile, which passes any alpha test and then
+   * draws **solid**: that is the whole of "the water block has no transparency".
+   * Blending it needs a second pass, and a second pass is worth paying for only
+   * where it is actually needed.
+   */
+  isTextureTranslucent(key: string): boolean {
+    return this.alphaOf(key) === "translucent";
+  }
+
+  /** Cached verdict on a decoded texture's alpha channel. */
+  private alphaOf(key: string): "opaque" | "cutout" | "translucent" {
     const known = this.opaqueTextures.get(key);
     if (known !== undefined) return known;
     const image = this.textureCache[key];
     // A texture that has not been decoded cannot be shown to be see-through,
     // and answering "opaque" here only ever preserves the culling that was
     // already happening.
-    let opaque = true;
+    let verdict: "opaque" | "cutout" | "translucent" = "opaque";
     if (image !== undefined) {
       for (let i = 3; i < image.data.length; i += 4) {
-        if (image.data[i] < 255) {
-          opaque = false;
-          break;
+        const alpha = image.data[i];
+        if (alpha === 255) continue;
+        if (alpha === 0) {
+          // Keep looking: one cut-away pixel does not stop a later one being a
+          // real blend, and translucent is the answer that wins.
+          verdict = "cutout";
+          continue;
         }
+        verdict = "translucent";
+        break;
       }
     }
-    this.opaqueTextures.set(key, opaque);
-    return opaque;
+    this.opaqueTextures.set(key, verdict);
+    return verdict;
   }
 
   /**

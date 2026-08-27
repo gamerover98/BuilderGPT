@@ -516,6 +516,20 @@ export interface ChunkGeometry {
    * document every frame it moved and a torch would go out at dusk.
    */
   light: Float32Array;
+  /**
+   * How many of `indices` at the front can be drawn in the opaque pass.
+   *
+   * The rest are translucent — water, ice, stained glass, the nether portal —
+   * and have to be blended, which is a second draw with a different material.
+   * One number rather than a second set of buffers, because the vertices are
+   * the same vertices and the split is only a draw order: the viewer expresses
+   * it as two geometry groups over one geometry.
+   *
+   * A cutout is deliberately *not* in here. Leaves and petals are every pixel
+   * either solid or cut away, `alphaTest` handles them in the opaque pass, and
+   * putting them in the blended one would cost the sorting for nothing.
+   */
+  opaqueIndices: number;
 }
 
 /**

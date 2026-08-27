@@ -336,6 +336,29 @@ export async function culledFaces(
     return struct.palette[index];
   }
 
+  /**
+   * A cell that holds water, whether it says so as a block or as a property.
+   *
+   * `waterlogged` is how the game puts water in a cell that already has a fence
+   * or a slab or a stair in it, and this app read it as decoration: the
+   * property showed in the inspector, the writers carried it to the file, and
+   * nothing was ever drawn. A waterlogged stair in the middle of a pond was a
+   * hole in the pond.
+   *
+   * Water and waterlogged read the same here on purpose — it is one body of
+   * water either way, so the surface between two such cells is not drawn, which
+   * is the same identical-neighbour rule that stops an ocean meshing its own
+   * interior.
+   */
+  const holdsWaterEntry = struct.palette.map((entry) => {
+    const name = entry.namespacedName.slice(entry.namespacedName.indexOf(":") + 1);
+    return name === "water" || name === "bubble_column" || entry.properties.waterlogged === "true";
+  });
+  const holdsWater = (x: number, y: number, z: number): boolean =>
+    inside(x, y, z) ? holdsWaterEntry[voxels[flatIndex(x, y, z)]] === true : false;
+  const WATER: PaletteEntry = { namespacedName: "minecraft:water", properties: { level: "0" } };
+  const waterBlock = holdsWaterEntry.some(Boolean) ? await baker.bakeBlockstate(WATER) : null;
+
   for (let x = fromX; x <= toX; x++) {
     for (let y = fromY; y <= toY; y++) {
       for (let z = fromZ; z <= toZ; z++) {
@@ -353,6 +376,39 @@ export async function culledFaces(
         for (const face of bakedBlock.extraFaces) {
           faces.push(bakedFaceOffset(face, x, y, z, shadeFace(face, x, y, z)));
         }
+
+        /*
+         * ...and the water it is standing in, if it says it is waterlogged.
+         *
+         * The property was being carried faithfully and drawn not at all, so a
+         * waterlogged fence in a pond was a fence-shaped hole in the water.
+         * The cell gets water's own six faces, culled exactly as a water block's
+         * would be: not against another cell of water — one body of water does
+         * not mesh its own interior — and not against something opaque.
+         *
+         * A *water block* keeps going through the ordinary path below; this arm
+         * is only for the cells where water is a property of something else, so
+         * nothing is drawn twice.
+         */
+        if (waterBlock !== null && entry.properties.waterlogged === "true") {
+          for (const [faceName, offset] of Object.entries(DIRECTIONS)) {
+            const [dx, dy, dz] = offset;
+            if (holdsWater(x + dx, y + dy, z + dz)) continue;
+            // Out of bounds is open air, and `flatIndex` on a negative
+            // coordinate wraps into a real cell, so the bounds check has to
+            // come before the lookup rather than beside it.
+            if (inside(x + dx, y + dy, z + dz)) {
+              const at = voxels[flatIndex(x + dx, y + dy, z + dz)];
+              if (occludesFace(paletteEntry(at), OPPOSITE_FACE[faceName]) && opaqueTexture[at]) {
+                continue;
+              }
+            }
+            const waterFace = waterBlock.faces[faceName];
+            if (waterFace === undefined) continue;
+            faces.push(bakedFaceOffset(waterFace, x, y, z, shadeFace(waterFace, x, y, z)));
+          }
+        }
+
         if (!bakedBlock.isFullCube) {
           continue;
         }
@@ -413,6 +469,17 @@ export async function culledFaces(
             ) {
               continue;
             }
+            /*
+             * ...and the same rule across the water/waterlogged boundary.
+             *
+             * A name comparison cannot see it: a waterlogged fence is called
+             * `oak_fence`, so a water block beside one drew the surface between
+             * them — a pane of water inside a single body of it, right where
+             * the fence meets the pond.
+             */
+            if (holdsWaterEntry[paletteIndex] && holdsWater(nx, ny, nz)) {
+              continue;
+            }
           }
           // Out of bounds is air, matching mesher.py:47-48.
 
@@ -439,6 +506,7 @@ function emptyMeshBuffers(): MeshBuffers {
     uvs: new Float32Array(0),
     indices: new Uint32Array(0),
     light: new Float32Array(0),
+    opaqueIndices: 0,
   };
 }
 
@@ -456,7 +524,18 @@ const UNSHADED = [0, 1, 1] as const;
  * Ported from `build_mesh` (mesher.py:56-104). Synchronous — pure in-memory
  * mesh-buffer construction, no I/O, per RULEBOOK.md §1's async-model row.
  */
-export function buildMesh(faces: readonly BakedFace[], atlasUv: Record<string, UVRect>): MeshBuffers {
+export function buildMesh(
+  faces: readonly BakedFace[],
+  atlasUv: Record<string, UVRect>,
+  /**
+   * Which textures have to be blended rather than alpha-tested.
+   *
+   * Optional, and omitting it means "none" — which is what every caller that
+   * predates the split gets, and is the right answer for a block icon, where
+   * one block is drawn against nothing.
+   */
+  isTranslucent?: (textureKey: string) => boolean,
+): MeshBuffers {
   if (faces.length === 0) {
     return emptyMeshBuffers();
   }
@@ -465,7 +544,10 @@ export function buildMesh(faces: readonly BakedFace[], atlasUv: Record<string, U
   const normalsChunks: Float32Array[] = [];
   const uvsChunks: Float32Array[] = [];
   const lightChunks: Float32Array[] = [];
-  const indices: number[] = [];
+  // Two index lists over one set of vertices: the split is a draw order, not a
+  // second mesh, so only the indices are partitioned.
+  const opaque: number[] = [];
+  const translucent: number[] = [];
 
   let vertexOffset = 0;
   // Counter-clockwise winding when looking from the face normal so front
@@ -512,8 +594,9 @@ export function buildMesh(faces: readonly BakedFace[], atlasUv: Record<string, U
       lightChunks.push(flat);
     }
 
+    const into = isTranslucent?.(face.textureKey) === true ? translucent : opaque;
     for (const qi of quadIndices) {
-      indices.push(qi + vertexOffset);
+      into.push(qi + vertexOffset);
     }
     vertexOffset += 4;
   }
@@ -526,8 +609,9 @@ export function buildMesh(faces: readonly BakedFace[], atlasUv: Record<string, U
     positions: concatFloat32(positionsChunks),
     normals: concatFloat32(normalsChunks),
     uvs: concatFloat32(uvsChunks),
-    indices: new Uint32Array(indices),
+    indices: Uint32Array.from([...opaque, ...translucent]),
     light: concatFloat32(lightChunks),
+    opaqueIndices: opaque.length,
   };
 }
 

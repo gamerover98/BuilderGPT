@@ -1678,6 +1678,45 @@ knowing:
   included, because the generic candidate list offers `_front` only after
   `_side`. `_front_on` comes first when the block is lit.
 
+**Water is blended, and a cutout is not — they are different jobs.** The block
+material alpha-tests at 0.5 and does not blend, which is right for leaves and
+wrong for water: `water_still` is `alpha 180` across its whole tile, so it
+passes any alpha test and then draws **solid**. That was the whole of "the water
+block has no transparency".
+
+Blending everything is not the fix. The block mesh would move wholesale into
+three's transparent pass, where it would sort against the selection box, the
+face plates and the grid — all of which are transparent already. So
+`ModelBaker` tells the three cases apart from the decoded alpha (`opaque`,
+`cutout`, `translucent`), `buildMesh` puts the translucent faces at the **end**
+of the index buffer, and `MeshBuffers.opaqueIndices` says where the tail starts.
+The viewer draws it as two `addGroup` ranges over one geometry with a
+two-material array: no second set of vertices, and a chunk with no water is one
+group and one draw exactly as before.
+
+`concatChunks` has to preserve that shape — all the opaque indices, then all the
+translucent ones — or the single number naming the split would be a lie about
+the middle of the array, so it copies the indices in two passes over the same
+pieces.
+
+The blended material keeps **`depthWrite` on** (Minecraft's water is a surface,
+not a fog, so a pond hides the sand under its far side), drops **`alphaTest`**
+(a blended pass that discarded at 0.5 would throw away the pixels it exists to
+draw), and gets **the same `shadeWithBakedLight` injection**, or water would be
+the one surface in the build that ignored the sun and the torches.
+
+**`waterlogged` puts water in the cell, and used to put nothing.** It is how the
+game floods a cell that already holds a fence or a slab or a stair; this app
+read it, showed it in the inspector and wrote it back to the file while drawing
+nothing, so a waterlogged fence in a pond was a fence-shaped hole in the water.
+The cell now gets water's own six faces, culled as a water block's would be.
+
+Water and waterlogged are **one body of water**, which the identical-neighbour
+rule cannot see on its own: a waterlogged fence is called `oak_fence`, so a
+water block beside one drew the surface between them — a pane of water inside a
+single body of it, right where the fence meets the pond. `holdsWaterEntry` in
+`mesher.ts` is the answer both sides ask.
+
 **A texture name that resolves nothing is a hashed-colour cube, silently.**
 `bakeFallback` colours a cube by hashing the block's name: no error, no log, a
 plausible solid block in an arbitrary colour. `minecraft:water[level=0]` hashed

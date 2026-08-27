@@ -235,6 +235,22 @@ export interface MeshBuffers {
    * would go out at dusk along with the sky.
    */
   readonly light: Float32Array;
+  /**
+   * How many of `indices` at the front belong to faces that can be drawn in the
+   * opaque pass. The rest are translucent and must be blended.
+   *
+   * One number rather than a second set of buffers: the vertices are the same
+   * vertices and the split is a draw order, so the renderer expresses it as two
+   * geometry groups over one geometry. Zero translucent faces leaves this equal
+   * to `indices.length`, which is what every caller that predates it sees.
+   *
+   * The distinction is *not* "has alpha". A cutout — leaves, petals, a rail —
+   * is handled by `alphaTest` in the opaque pass, where it writes depth and
+   * needs no sorting. This is for the textures that are genuinely part-way
+   * see-through, which today is water, ice, the nether portal and stained
+   * glass: they pass any alpha test and then draw solid.
+   */
+  readonly opaqueIndices: number;
 }
 
 /**

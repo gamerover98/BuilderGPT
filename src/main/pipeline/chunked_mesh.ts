@@ -108,6 +108,7 @@ function emptyBuffers(): MeshBuffers {
     uvs: new Float32Array(0),
     indices: new Uint32Array(0),
     light: new Float32Array(0),
+    opaqueIndices: 0,
   };
 }
 
@@ -137,9 +138,22 @@ function concatChunks(pieces: readonly MeshBuffers[]): MeshBuffers {
   const light = new Float32Array(positionCount);
   const indices = new Uint32Array(indexCount);
 
+  /*
+   * The vertices concatenate straight through; the indices do not.
+   *
+   * Every piece keeps its opaque indices in front of its translucent ones, and
+   * the joined buffer has to hold the same shape — all the opaque ones, then
+   * all the translucent ones — or the single number that says where the split
+   * is would be a lie about the middle of the array. So the indices are copied
+   * in two passes over the same pieces.
+   */
+  let opaqueTotal = 0;
+  for (const piece of pieces) opaqueTotal += piece.opaqueIndices;
+
   let positionAt = 0;
   let uvAt = 0;
-  let indexAt = 0;
+  let opaqueAt = 0;
+  let translucentAt = opaqueTotal;
   let vertexBase = 0;
   for (const piece of pieces) {
     positions.set(piece.positions, positionAt);
@@ -147,14 +161,20 @@ function concatChunks(pieces: readonly MeshBuffers[]): MeshBuffers {
     light.set(piece.light, positionAt);
     uvs.set(piece.uvs, uvAt);
     for (let i = 0; i < piece.indices.length; i += 1) {
-      indices[indexAt + i] = piece.indices[i] + vertexBase;
+      const shifted = piece.indices[i] + vertexBase;
+      if (i < piece.opaqueIndices) {
+        indices[opaqueAt] = shifted;
+        opaqueAt += 1;
+      } else {
+        indices[translucentAt] = shifted;
+        translucentAt += 1;
+      }
     }
     positionAt += piece.positions.length;
     uvAt += piece.uvs.length;
-    indexAt += piece.indices.length;
     vertexBase += piece.positions.length / 3;
   }
-  return { positions, normals, uvs, indices, light };
+  return { positions, normals, uvs, indices, light, opaqueIndices: opaqueTotal };
 }
 
 /** The chunks a changed voxel invalidates: its own, and its face-neighbours'. */
@@ -285,7 +305,7 @@ export async function buildChunkedMesh(
       },
       shading,
     );
-    const buffers = buildMesh(faces, atlasUv);
+    const buffers = buildMesh(faces, atlasUv, (key) => baker.isTextureTranslucent(key));
     if (buffers.indices.length === 0) {
       // An all-air chunk holds nothing; dropping it keeps the concatenation
       // short rather than walking thousands of empty entries.

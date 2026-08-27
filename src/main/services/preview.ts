@@ -133,6 +133,7 @@ function toMeshPayload(
       uvs: piece.uvs,
       indices: piece.indices,
       light: piece.light,
+      opaqueIndices: piece.opaqueIndices,
     })),
     // A whole payload says what exists by listing it; there is nothing left
     // over to take down, and no token because nothing here is incremental.
@@ -458,7 +459,7 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
   // After culling, not before: `culledFaces` is what asks the baker for each
   // blockstate, so the texture set is only complete once it has run.
   const { atlas, version } = cachedAtlas(cached);
-  const mesh = buildMesh(faces, atlas.uvRects);
+  const mesh = buildMesh(faces, atlas.uvRects, (key) => baker.isTextureTranslucent(key));
   await warnAboutBlocksWithNoGeometry(normalized, baker, new Set(Object.keys(atlas.uvRects)));
   if (mesh.indices.length === 0) {
     // Raised before anything is assembled: a blank result is not worth

@@ -126,7 +126,11 @@ console.log("\n--- a GLB larger than a plain array can hold ---");
   const atlas = buildAtlas((await ModelBaker.create(null)).textures);
   // `light` is what the viewport shades with; the GLB path does not carry it,
   // so an empty one is the honest value here rather than a made-up buffer.
-  const big = meshToGlb({ positions, normals, uvs, indices, light: new Float32Array(0) }, atlas);
+  // Every index opaque: the GLB path has one material and no blended pass.
+  const big = meshToGlb(
+    { positions, normals, uvs, indices, light: new Float32Array(0), opaqueIndices: indices.length },
+    atlas,
+  );
   const magic = Buffer.from(big.glbBytes.buffer, big.glbBytes.byteOffset, 4).toString("ascii");
   check("a 145 MB GLB is produced rather than throwing", magic === "glTF");
   check(

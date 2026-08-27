@@ -90,6 +90,52 @@ const OPPOSITE_FACE: Readonly<Record<string, CellFace>> = {
   down: "up",
 };
 
+/**
+ * How tall the fluid in a cell stands, as a fraction of the block.
+ *
+ * Vanilla's rule: `level` 0 is a source and 1..7 are the flowing steps, each
+ * `(8 - level) / 9` of a block; 8 and above mean *falling*, which fills the
+ * cell. A source with air over it therefore stands at 8/9 — the small step down
+ * from the block's top that makes the surface of a pond read as a surface.
+ *
+ * Anything with the same fluid above it is full height whatever its level, and
+ * that is not a refinement: without it every layer of a pool would stand 8/9
+ * tall with a gap above, and a deep pond would be stripes.
+ */
+function fluidHeight(entry: PaletteEntry, sameAbove: boolean): number {
+  if (sameAbove) return 1;
+  const level = Number(entry.properties.level ?? "0");
+  if (!Number.isFinite(level) || level >= 8) return 1;
+  return (8 - Math.max(0, Math.trunc(level))) / 9;
+}
+
+/**
+ * The same face with its top edge dropped to `height`.
+ *
+ * Only the vertices sitting on the cell's ceiling move, which is the top edge
+ * of each side face and the whole of the `up` face; the underside and the
+ * bottom edges stay where they are. The `v` moves with them, because
+ * `boxFaceGeometry` gives a side face `v = 1 - y` and leaving it behind would
+ * stretch the texture over the shorter face instead of cropping it.
+ *
+ * Done here rather than by giving the fluid a shorter *shape*, because a shape
+ * of kind `boxes` leaves the culled path entirely -- its faces are `extraFaces`,
+ * which never cull -- and an ocean would then mesh every one of its own
+ * internal faces.
+ */
+function loweredFace(face: BakedFace, height: number): BakedFace {
+  if (height >= 1) return face;
+  const positions = face.positions.slice();
+  const uvs = face.uvs.slice();
+  for (let v = 0; v < positions.length / 3; v += 1) {
+    if (positions[v * 3 + 1] !== 1) continue;
+    positions[v * 3 + 1] = height;
+    // Horizontal faces carry no height in their UVs; a side face does.
+    if (face.normal[1] === 0) uvs[v * 2 + 1] = 1 - height;
+  }
+  return { ...face, positions, uvs };
+}
+
 export async function culledFaces(
   struct: StructureData,
   baker: ModelBaker,
@@ -354,6 +400,19 @@ export async function culledFaces(
     const name = entry.namespacedName.slice(entry.namespacedName.indexOf(":") + 1);
     return name === "water" || name === "bubble_column" || entry.properties.waterlogged === "true";
   });
+  /**
+   * Which fluid a cell's *own* block is, for the height rule.
+   *
+   * Narrower than `holdsWaterEntry` on purpose: a waterlogged fence holds water
+   * but is not a fluid block, so it keeps its own shape and gets its water from
+   * the arm below. This is only the blocks that *are* the fluid.
+   */
+  const fluidEntry = struct.palette.map((entry) => {
+    const name = entry.namespacedName.slice(entry.namespacedName.indexOf(":") + 1);
+    return name === "water" || name === "lava" ? name : null;
+  });
+  const fluidAt = (x: number, y: number, z: number): string | null =>
+    inside(x, y, z) ? fluidEntry[voxels[flatIndex(x, y, z)]] : null;
   const holdsWater = (x: number, y: number, z: number): boolean =>
     inside(x, y, z) ? holdsWaterEntry[voxels[flatIndex(x, y, z)]] === true : false;
   const WATER: PaletteEntry = { namespacedName: "minecraft:water", properties: { level: "0" } };
@@ -405,7 +464,10 @@ export async function culledFaces(
             }
             const waterFace = waterBlock.faces[faceName];
             if (waterFace === undefined) continue;
-            faces.push(bakedFaceOffset(waterFace, x, y, z, shadeFace(waterFace, x, y, z)));
+            // The water in a waterlogged cell is a source, so it stands at the
+            // same 8/9 as any other -- unless there is more water above it.
+            const flooded = loweredFace(waterFace, holdsWater(x, y + 1, z) ? 1 : 8 / 9);
+            faces.push(bakedFaceOffset(flooded, x, y, z, shadeFace(flooded, x, y, z)));
           }
         }
 
@@ -413,6 +475,7 @@ export async function culledFaces(
           continue;
         }
 
+        const fluid = fluidEntry[paletteIndex];
         for (const [faceName, offset] of Object.entries(DIRECTIONS)) {
           const [dx, dy, dz] = offset;
           const nx = x + dx;
@@ -491,7 +554,20 @@ export async function culledFaces(
           if (bakedFace === undefined) {
             continue;
           }
-          faces.push(bakedFaceOffset(bakedFace, x, y, z, shadeFace(bakedFace, x, y, z)));
+          /*
+           * A fluid stands as tall as its `level` says, and used to fill the
+           * cell whatever it said.
+           *
+           * `level` was read, shown in the inspector and written back, and
+           * changed nothing on screen -- so a stream of water at level 5 was a
+           * solid block of it, and the top of every pond was flush with the
+           * block above instead of the small step down that makes a surface
+           * read as a surface.
+           */
+          const height =
+            fluid === null ? 1 : fluidHeight(entry, fluidAt(x, y + 1, z) === fluid);
+          const shaped = loweredFace(bakedFace, height);
+          faces.push(bakedFaceOffset(shaped, x, y, z, shadeFace(shaped, x, y, z)));
         }
       }
     }

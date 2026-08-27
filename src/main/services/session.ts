@@ -68,6 +68,7 @@ import {
 export { NotSquareError, type RegionTransform };
 import { loadStructure } from "../pipeline/loader.js";
 import type { PaletteEntry } from "../pipeline/types.js";
+import { hasProperty } from "../../shared/block_states.js";
 import { buildDocumentPreview, type DocumentPreviewOptions } from "./preview.js";
 import type { ChunkMeshCache } from "../pipeline/chunked_mesh.js";
 import { saveDocument, type WriteResult } from "./writers.js";
@@ -316,6 +317,38 @@ function doubleSlabTarget(
 }
 
 /**
+ * A block placed into water comes out waterlogged.
+ *
+ * That is what the game does — a fence, a slab or a stair put into a pond
+ * displaces nothing, it floods — and doing it here is what makes the property
+ * reachable without opening the inspector for every block of a jetty.
+ *
+ * Three guards, and each of them is a way it could be wrong:
+ *
+ * - **Only if the block can hold it.** `hasProperty` asks the registry, so a
+ *   stone block dropped in a pond does not come back carrying a state that no
+ *   version of it has.
+ * - **Only if the request did not say.** A caller that spelled `waterlogged`
+ *   out — the inspector, a paste, an agent tool — meant it, and this is a
+ *   default rather than a correction.
+ * - **Only water.** Lava is not a fluid anything is waterlogged in, and a cell
+ *   holding a *waterlogged* block counts, because that cell is water too.
+ */
+function floodedPlacement(
+  doc: SchematicDocument,
+  request: { x: number; y: number; z: number },
+  entry: PaletteEntry,
+): PaletteEntry {
+  if (entry.properties.waterlogged !== undefined) return entry;
+  if (!hasProperty(entry.namespacedName, "waterlogged")) return entry;
+  const existing = getBlock(doc, request.x, request.y, request.z);
+  const flooded =
+    existing.namespacedName === "minecraft:water" || existing.properties.waterlogged === "true";
+  if (!flooded) return entry;
+  return { ...entry, properties: { ...entry.properties, waterlogged: "true" } };
+}
+
+/**
  * The two cells a bed occupies, or `null` when this is not a bed being laid.
  *
  * A bed is two blocks in the game and was one here: placing it wrote a lone
@@ -396,7 +429,7 @@ export function applyEdit(session: DocumentSession, request: EditRequest): numbe
    * the same answer a fill dragged under the floor already gives.
    */
   if (request.kind === "setBlock") {
-    const entry = toEntry(request.block);
+    const entry = floodedPlacement(doc, request, toEntry(request.block));
 
     /*
      * Two slabs meeting in one cell are one double slab.

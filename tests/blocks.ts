@@ -1205,6 +1205,212 @@ if (pack === null) {
   equal("a still texture is not animated", byKey("minecraft:block/stone"), undefined);
 }
 
+// --- a fluid stands as tall as its level ------------------------------------
+//
+// `level` was read, shown in the inspector and written back to the file, and
+// changed nothing on screen: a stream at level 5 was a solid block of water,
+// and the top of every pond was flush with the block above instead of the small
+// step down that makes a surface read as a surface.
+//
+// Vanilla's rule is `(8 - level) / 9` for 0..7 and a full cell for 8 and up,
+// which is "falling". Stated as fractions rather than decimals because the
+// ninths are the whole point and 0.888… is not something anyone can check.
+console.log("\n--- a fluid stands as tall as its level ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  /** The height of the fluid's top surface in the cell at y=0. */
+  const surfaceOf = async (palette: PaletteEntry[], voxels: number[], maxY: number) => {
+    const struct: StructureData = {
+      bounds: { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY, maxZ: 0 },
+      palette,
+      voxels: new Int32Array(voxels),
+    };
+    const faces = await culledFaces(struct, baker);
+    const up = faces.filter((f) => f.normal[1] === 1);
+    // Positions are float32, so 8/9 comes back a few bits off exactly.
+    return up.length === 0 ? null : Math.round(up[0].positions[1] * 1e4) / 1e4;
+  };
+  const water = (level: string) => block("water", { level });
+  for (const [level, ninths] of [
+    ["0", 8],
+    ["1", 7],
+    ["4", 4],
+    ["7", 1],
+  ] as const) {
+    equal(
+      `water at level ${level} stands ${ninths}/9 tall`,
+      await surfaceOf([block("air"), water(level)], [1], 0),
+      Math.round((ninths / 9) * 1e4) / 1e4,
+    );
+  }
+  // 8 and above are the falling states, and a falling fluid fills its cell.
+  equal("a falling fluid fills the cell", await surfaceOf([block("air"), water("12")], [1], 0), 1);
+  equal(
+    "lava reads the same property the same way",
+    await surfaceOf([block("air"), block("lava", { level: "3" })], [1], 0),
+    Math.round((5 / 9) * 1e4) / 1e4,
+  );
+  /*
+   * ...and anything with the same fluid above it is full height whatever its
+   * level says. Without that every layer of a pool would stand 8/9 tall with a
+   * gap over it, and a deep pond would come out as stripes.
+   */
+  {
+    const struct: StructureData = {
+      bounds: { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 1, maxZ: 0 },
+      palette: [block("air"), water("0")],
+      voxels: new Int32Array([1, 1]),
+    };
+    const faces = await culledFaces(struct, baker);
+    const sides = faces.filter((f) => f.normal[1] === 0 && f.positions[1] < 1);
+    const lower = sides.filter((f) => Math.max(...[1, 4, 7, 10].map((i) => f.positions[i])) === 1);
+    check(
+      "a layer with water above it reaches the cell's ceiling",
+      lower.length > 0 && lower.length === sides.length,
+      `${lower.length} of ${sides.length}`,
+    );
+  }
+  /*
+   * And the UVs come down with them.
+   *
+   * `boxFaceGeometry` gives a side face `v = 1 - y`, so a top edge left at
+   * `v = 0` while its vertices moved would stretch the whole tile over the
+   * shorter face instead of cropping it — a full block of water squashed into
+   * four ninths, which is the same picture from a distance and wrong up close.
+   */
+  {
+    const struct: StructureData = {
+      bounds: { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 },
+      palette: [block("air"), water("4")],
+      voxels: new Int32Array([1]),
+    };
+    const faces = await culledFaces(struct, baker);
+    const side = faces.find((f) => f.normal[1] === 0);
+    const topV = side === undefined ? null : Math.min(side.uvs[1], side.uvs[3], side.uvs[5], side.uvs[7]);
+    equal(
+      "a lowered side crops its texture rather than squashing it",
+      topV === null ? null : Math.round(topV * 1e4) / 1e4,
+      Math.round((5 / 9) * 1e4) / 1e4,
+    );
+  }
+  // And the sides come down with the top, or the block would be a full cube
+  // wearing a lowered lid.
+  {
+    const struct: StructureData = {
+      bounds: { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 },
+      palette: [block("air"), water("4")],
+      voxels: new Int32Array([1]),
+    };
+    const faces = await culledFaces(struct, baker);
+    const sides = faces.filter((f) => f.normal[1] === 0);
+    check(
+      "its sides stop where its surface does",
+      sides.length === 4 &&
+        sides.every(
+          (f) =>
+            Math.round(Math.max(...[1, 4, 7, 10].map((i) => f.positions[i])) * 1e4) / 1e4 ===
+            Math.round((4 / 9) * 1e4) / 1e4,
+        ),
+    );
+  }
+}
+
+// --- a bed's two halves meet without fighting -------------------------------
+//
+// The two share one geometry here where vanilla has two models, so the foot was
+// turned 180 degrees to get its outer end to the far side. But the textures are
+// named in the *unrotated* bed's own terms — `red_bed_foot_east` is the east
+// side of a bed lying head-to-north, whichever way it is turned — and
+// `bedCandidates` undoes `facing` and nothing else. The geometry was half a turn
+// ahead of the lookup: the foot's sides came out mirrored and its ends swapped.
+console.log("\n--- a bed's two halves meet without fighting ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const bedFaces = async (part: string, facing: string) =>
+    (await baker.bakeBlockstate(block("red_bed", { part, facing }))).extraFaces;
+  const at = (faces: readonly BakedFace[], axis: 0 | 1 | 2, sign: number, plane: number) =>
+    faces.filter(
+      (f) => f.normal[axis] === sign && Math.abs(f.positions[axis] - plane) < 1e-6,
+    );
+
+  /*
+   * Nothing is drawn at the joint. Both halves used to put a face there, with
+   * an *end* texture on it — `bed_head_north` against `red_bed_foot_south`,
+   * coincident and z-fighting across the middle of every bed.
+   */
+  const head = await bedFaces("head", "north");
+  const foot = await bedFaces("foot", "north");
+  equal("the head draws nothing at the joint", at(head, 2, 1, 1).length, 0);
+  equal("...and neither does the foot", at(foot, 2, -1, 0).length, 0);
+
+  // Four legs to a bed, two to a half. Both halves used to carry the whole set,
+  // which put two of them in the middle where the blocks meet.
+  const legsOf = (faces: readonly BakedFace[]) =>
+    new Set(
+      faces
+        .filter((f) => f.normal[1] === -1 && f.positions[1] === 0)
+        .map((f) => `${f.positions[0]},${f.positions[2]}`),
+    ).size;
+  equal("a head has two legs", legsOf(head), 2);
+  equal("...and so has a foot", legsOf(foot), 2);
+  // At its own end: the head's are under the headboard.
+  check(
+    "the head's legs are at its outer end",
+    head
+      .filter((f) => f.normal[1] === -1 && f.positions[1] === 0)
+      .every((f) => f.positions[2] < 0.5),
+  );
+  check(
+    "the foot's are at its own",
+    foot
+      .filter((f) => f.normal[1] === -1 && f.positions[1] === 0)
+      .every((f) => f.positions[2] > 0.5),
+  );
+
+  /*
+   * And the sides are not mirrored. This is the half-turn showing: with it, the
+   * foot's world-east face was the model's *west*, so the two halves of one bed
+   * wore each other's sides.
+   */
+  const sideKey = (faces: readonly BakedFace[], sign: number) => {
+    const found = faces.find((f) => f.normal[0] === sign && f.positions[1] > 0.15);
+    return found?.textureKey ?? null;
+  };
+  equal("the head's east side is the east one", sideKey(head, 1), "minecraft:block/red_bed_head_east");
+  equal("...and the foot's east side too", sideKey(foot, 1), "minecraft:block/red_bed_foot_east");
+  equal("the head's west side is the west one", sideKey(head, -1), "minecraft:block/red_bed_head_west");
+  equal("...and the foot's west side too", sideKey(foot, -1), "minecraft:block/red_bed_foot_west");
+  /*
+   * ...and each half shows exactly one end, its own.
+   *
+   * This is the other half of the joint fault and the part that reads as "the
+   * head is facing the wrong way". `red_bed_head_south` does not exist, because
+   * that end of the head is never seen — so the joint face fell back through
+   * the candidate list to `bed_head_north` and the head block came out with a
+   * headboard at **both** ends, z-fighting with the foot's own end texture in
+   * the middle of the bed.
+   */
+  const endKeys = (faces: readonly BakedFace[]) =>
+    faces
+      .filter((f) => f.normal[1] === 0 && f.normal[0] === 0 && f.positions[1] > 0.15)
+      .map((f) => f.textureKey);
+  equal("a head shows one end, the headboard", endKeys(head), ["minecraft:block/bed_head_north"]);
+  equal("a foot shows one end, its own", endKeys(foot), ["minecraft:block/red_bed_foot_south"]);
+
+  /*
+   * The ends, at a facing that actually rotates. `bed_head_north` is the
+   * headboard whichever way the bed lies, so an east-facing head shows it on
+   * its world-*east* face — which is the check that the geometry and the
+   * texture lookup are turning together.
+   */
+  const eastHead = await bedFaces("head", "east");
+  const outer = eastHead.find((f) => f.normal[0] === 1 && f.positions[1] > 0.15);
+  equal("an east-facing head shows its headboard east", outer?.textureKey, "minecraft:block/bed_head_north");
+  equal("...and nothing at the joint on its west", at(eastHead, 0, -1, 0).filter((f) => f.positions[1] > 0.15).length, 0);
+}
+
 // --- potted plants ----------------------------------------------------------
 //
 // Both halves are needed and neither is enough on its own. With no texture rule
@@ -2244,7 +2450,9 @@ if (pack === null) {
 
   // 15. Beds stopped being block entities in 1.21.9; the geometry survived the
   // move and the unwrap did not.
-  check("a bed is a mattress on four legs", boxCount("red_bed", { part: "head" }) === 5);
+  // Two legs to a half, four to a bed: both halves used to carry the whole set,
+  // which put two of them in the middle where the blocks meet.
+  check("a bed half is a mattress on two legs", boxCount("red_bed", { part: "head" }) === 3);
   equal(
     "the foot's outer end is its own texture",
     await bakedKey("red_bed", { part: "foot", facing: "north" }),

@@ -116,6 +116,15 @@ click that meant "place beside it" would destroy the slab already there. A fill
 carries no `against`, which is what keeps this a click gesture rather than
 something that halves a filled region.
 
+**A block placed into water comes out waterlogged.** That is what the game does
+— a fence, a slab or a stair put into a pond displaces nothing, it floods — and
+`floodedPlacement` is what makes the property reachable without opening the
+inspector for every block of a jetty. Three guards, each a way it could be
+wrong: only if `hasProperty` says the block can hold it, so stone does not come
+back carrying a state no version of it has; only if the request did not spell it
+out, because a caller that did meant it; and only water, where a cell holding a
+*waterlogged* block counts, since that cell is water too.
+
 **A bed is two blocks, and laying one places both.** A lone foot is a state
 the game cannot hold — it drops as an item the moment anything updates it, and
 until then it draws as half a bed — so `applyEdit`'s `setBlock` arm writes the
@@ -1671,6 +1680,15 @@ knowing:
   rather than the right part — which is still the whole of what was wrong: with
   coordinate-derived UVs one of a hanging sign's two chains drew the plank
   field and the other the metal, on the same sign.
+- **A bed's two halves meet at a plane neither of them draws.** Both used to put
+  a face there, and `red_bed_head_south` does not exist — that end of the head is
+  never seen — so the joint fell back through the candidate list to
+  `bed_head_north` and the head came out with a **headboard at both ends**,
+  z-fighting with the foot's own end texture across the middle of the bed. That
+  is the "badly stitched, and the head is facing the wrong way" report, and it is
+  two faces where there should be none. Each half also carries **two** legs, at
+  its own end: both used to carry the whole set of four, which put two of them
+  standing in the middle where the blocks meet.
 - **Beds and signs used to be in that list and are not any more.** 1.21.9 moved
   them onto ordinary per-face block textures — `red_bed_head_up`,
   `block/oak_sign` — and the `entity/bed/<colour>` and `entity/signs/<wood>`
@@ -1722,6 +1740,25 @@ not a fog, so a pond hides the sand under its far side), drops **`alphaTest`**
 (a blended pass that discarded at 0.5 would throw away the pixels it exists to
 draw), and gets **the same `shadeWithBakedLight` injection**, or water would be
 the one surface in the build that ignored the sun and the torches.
+
+**A fluid stands as tall as its `level`, and used to fill its cell.** Vanilla's
+rule is `(8 - level) / 9` for 0..7 and a full cell for 8 and above, which is
+*falling* — so a source with air over it sits at 8/9, the small step down that
+makes the top of a pond read as a surface. The property was being read, shown in
+the inspector and written back while changing nothing on screen.
+
+It is done in `mesher.ts` by lowering the faces, not by giving the fluid a
+shorter *shape*, and that is the whole reason it is there rather than in
+`block_shapes.ts`: a shape of kind `boxes` leaves the culled path entirely — its
+faces are `extraFaces`, which never cull — and an ocean would then mesh every one
+of its own internal faces. `loweredFace` moves only the vertices on the cell's
+ceiling, and moves their `v` with them, because a side face is `v = 1 - y` and a
+top edge left at `v = 0` would stretch the whole tile over the shorter face
+instead of cropping it.
+
+**Anything with the same fluid above it is full height whatever its level.**
+Without that every layer of a pool would stand 8/9 tall with a gap over it, and
+a deep pond would come out as stripes.
 
 **`waterlogged` puts water in the cell, and used to put nothing.** It is how the
 game floods a cell that already holds a fence or a slab or a stair; this app

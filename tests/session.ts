@@ -1940,5 +1940,65 @@ console.log("\n--- a bed is two blocks ---");
   }
 }
 
+/*
+ * A block placed into water comes out waterlogged.
+ *
+ * That is what the game does — a fence, a slab or a stair put into a pond
+ * displaces nothing, it floods — and doing it here is what makes the property
+ * reachable without opening the inspector for every block of a jetty.
+ */
+console.log("\n--- placing into water floods the block ---");
+{
+  const flood = (session: ReturnType<typeof newDocument>, x: number) =>
+    applyEdit(session, {
+      kind: "setBlock",
+      x,
+      y: 0,
+      z: 0,
+      block: { namespacedName: "minecraft:water", properties: { level: "0" } },
+    });
+  const put = (
+    session: ReturnType<typeof newDocument>,
+    x: number,
+    name: string,
+    properties: Record<string, string> = {},
+  ) =>
+    applyEdit(session, {
+      kind: "setBlock",
+      x,
+      y: 0,
+      z: 0,
+      block: { namespacedName: `minecraft:${name}`, properties },
+    });
+  const loggedAt = (session: ReturnType<typeof newDocument>, x: number) =>
+    getBlock(session.doc, x, 0, 0).properties.waterlogged ?? null;
+
+  const session = newDocument({ width: 6, height: 2, length: 2 });
+  flood(session, 0);
+  put(session, 0, "oak_fence");
+  equal("a fence placed in water is waterlogged", loggedAt(session, 0), "true");
+
+  put(session, 1, "oak_fence");
+  equal("...and one placed on dry land is not", loggedAt(session, 1), null);
+
+  // Only blocks that can hold it. `hasProperty` asks the registry, so stone
+  // does not come back carrying a state no version of it has.
+  flood(session, 2);
+  put(session, 2, "stone");
+  equal("stone dropped in a pond stays stone", loggedAt(session, 2), null);
+
+  // A caller that spelled it out meant it: this is a default, not a correction.
+  flood(session, 3);
+  put(session, 3, "oak_fence", { waterlogged: "false" });
+  equal("an explicit false is left alone", loggedAt(session, 3), "false");
+
+  // A cell holding a waterlogged block is water too, which is what makes a
+  // second fence beside the first behave like the first.
+  flood(session, 4);
+  put(session, 4, "oak_slab");
+  put(session, 4, "oak_stairs");
+  equal("replacing a flooded block keeps the water", loggedAt(session, 4), "true");
+}
+
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

@@ -464,19 +464,60 @@ function unwrapCube(
  */
 function bed(entry: PaletteEntry): BlockShape {
   const head = entry.properties.part !== "foot";
-  const legs: Box[] = [
-    [0, 0, 0, 3, 3, 3],
-    [13, 0, 0, 16, 3, 3],
-    [0, 0, 13, 3, 3, 16],
-    [13, 0, 13, 16, 3, 16],
-  ];
+  /*
+   * Two legs, at the half's *outer* end, and there used to be four on each.
+   *
+   * A bed has four legs and this gave it eight: both halves carried the whole
+   * set, so a pair had two legs standing in the middle where the two blocks
+   * meet. Vanilla's `bed_head` and `bed_foot` are separate models and each has
+   * the two at its own end.
+   */
+  const legs: Box[] = head
+    ? [
+        [0, 0, 0, 3, 3, 3],
+        [13, 0, 0, 16, 3, 3],
+      ]
+    : [
+        [0, 0, 13, 3, 3, 16],
+        [13, 0, 13, 16, 3, 16],
+      ];
+  /*
+   * ...and the joint is not drawn, on either half.
+   *
+   * The two halves meet at one plane and both were putting a face there, with
+   * an *end* texture on it -- `bed_head_north` against `red_bed_foot_south`,
+   * coincident and z-fighting across the middle of every bed. That is the
+   * "badly stitched" report, and it is two faces where there should be none.
+   *
+   * Named before the rotation, so `rotateShapeBox` carries it: for the head the
+   * joint is at the model's south, for the foot at its north.
+   */
+  const joint = head ? "south" : "north";
+  /*
+   * **One rotation for both halves**, where the foot used to get an extra
+   * half-turn.
+   *
+   * The two share one geometry here where vanilla has two models, and turning
+   * the foot 180 degrees was how its legs got to the far end. Stating the legs
+   * and the joint per half does the same job with no rotation, and it is worth
+   * preferring only because the `omit` above can then be read in the half's own
+   * terms rather than in the model's.
+   *
+   * It is **not** where the fault was, which is worth writing down because it
+   * was the first place looked. A half-turn about y maps the model's west face
+   * onto the world's east, and `boxFaceGeometry` gives a west face `u = 1 - z`
+   * against an east face's `u = z` -- so the rotation's flip and the face's own
+   * cancel, and the sides came out identical either way. Sabotaging this back
+   * to the half-turn fails the leg and joint checks below and nothing about the
+   * sides, which is the honest answer.
+   */
   return transform(
     [
-      { box: [0, 3, 0, 16, 9, 16] },
+      { box: [0, 3, 0, 16, 9, 16], omit: [joint] },
       // A leg's top is under the mattress and would z-fight with its floor.
       ...legs.map((box) => ({ box, omit: ["up"] })),
     ],
-    northFacingSteps(entry) + (head ? 0 : 2),
+    northFacingSteps(entry),
     false,
   );
 }

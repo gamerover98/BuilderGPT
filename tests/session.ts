@@ -61,7 +61,7 @@ import {
   takeCheckpoint,
   useCheckpointDirectory,
 } from "../src/main/services/checkpoints.js";
-import { isDirty } from "../src/main/domain/history.js";
+import { isDirty, undo } from "../src/main/domain/history.js";
 import { anchorOf, countBlocks, createDocument, documentFromLoaded } from "../src/main/domain/document.js";
 import { UnrepresentableBlocksError } from "../src/main/services/writers.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
@@ -1837,6 +1837,107 @@ console.log("\n--- every material is reported ---");
     "and air is not a material",
     palette.every((entry) => !entry.block.startsWith("minecraft:air")),
   );
+}
+
+/*
+ * A bed is two blocks, and was being placed as one.
+ *
+ * A lone foot is a state the game cannot hold: it drops as an item the moment
+ * anything updates it, and until then it draws as half a bed. The head goes one
+ * cell along `facing`, which is where the camera was looking when the block was
+ * picked up -- so all of this is `applyEdit`'s, not the renderer's.
+ */
+console.log("\n--- a bed is two blocks ---");
+{
+  const bedAt = (
+    session: ReturnType<typeof newDocument>,
+    x: number,
+    z: number,
+    facing: string,
+  ): number =>
+    applyEdit(session, {
+      kind: "setBlock",
+      x,
+      y: 0,
+      z,
+      block: { namespacedName: "minecraft:red_bed", properties: { facing } },
+    });
+  const nameAt = (session: ReturnType<typeof newDocument>, x: number, y: number, z: number) => {
+    const at = getBlock(session.doc, x, y, z);
+    return at === null ? null : `${at.namespacedName}:${at.properties.part ?? "-"}`;
+  };
+
+  {
+    const session = newDocument({ width: 5, height: 3, length: 5 });
+    equal("laying a bed places both halves", bedAt(session, 2, 2, "north"), 2);
+    equal("the clicked cell is the foot", nameAt(session, 2, 0, 2), "minecraft:red_bed:foot");
+    equal(
+      "...and the head is one cell along the facing",
+      nameAt(session, 2, 0, 1),
+      "minecraft:red_bed:head",
+    );
+    // One transaction, so one Ctrl+Z takes the bed back rather than half of it.
+    undo(session.doc, session.history);
+    equal("one undo takes the whole bed", nameAt(session, 2, 0, 2), "minecraft:air:-");
+    equal("...both halves of it", nameAt(session, 2, 0, 1), "minecraft:air:-");
+  }
+
+  // The other three facings, because a table of steps is exactly the thing to
+  // get one sign wrong in and never notice on the axis you happened to test.
+  for (const [facing, dx, dz] of [
+    ["south", 0, 1],
+    ["west", -1, 0],
+    ["east", 1, 0],
+  ] as const) {
+    const session = newDocument({ width: 5, height: 3, length: 5 });
+    bedAt(session, 2, 2, facing);
+    equal(
+      `facing ${facing} puts the head one cell that way`,
+      nameAt(session, 2 + dx, 0, 2 + dz),
+      "minecraft:red_bed:head",
+    );
+  }
+
+  {
+    // Blocked: the game does not place the bed, and neither does this. Nothing
+    // at all is written -- not even the foot, which is the half that would
+    // otherwise be left behind as a block the game cannot hold.
+    const session = newDocument({ width: 5, height: 3, length: 5 });
+    applyEdit(session, {
+      kind: "setBlock",
+      x: 2,
+      y: 0,
+      z: 1,
+      block: { namespacedName: "minecraft:stone" },
+    });
+    equal("a blocked head refuses the whole bed", bedAt(session, 2, 2, "north"), 0);
+    equal("...leaving the foot's cell empty", nameAt(session, 2, 0, 2), "minecraft:air:-");
+  }
+
+  {
+    // At the edge it grows, exactly as a single block does: the region the
+    // growth is measured against spans both cells.
+    const session = newDocument({ width: 5, height: 3, length: 5 });
+    equal("a bed laid at the edge makes room", bedAt(session, 2, 0, "north"), 2);
+    equal("...by growing the document", session.doc.length, 6);
+    equal("...with the head in the new cell", nameAt(session, 2, 0, 0), "minecraft:red_bed:head");
+  }
+
+  {
+    // Placing one half on purpose is somebody else's business -- the inspector,
+    // a paste, an agent tool. Only a request with no `part`, or `foot`, means
+    // "lay a bed".
+    const session = newDocument({ width: 5, height: 3, length: 5 });
+    const changed = applyEdit(session, {
+      kind: "setBlock",
+      x: 2,
+      y: 0,
+      z: 2,
+      block: { namespacedName: "minecraft:red_bed", properties: { facing: "north", part: "head" } },
+    });
+    equal("an explicit head is placed alone", changed, 1);
+    equal("...with nothing beside it", nameAt(session, 2, 0, 1), "minecraft:air:-");
+  }
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

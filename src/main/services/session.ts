@@ -316,6 +316,63 @@ function doubleSlabTarget(
 }
 
 /**
+ * The two cells a bed occupies, or `null` when this is not a bed being laid.
+ *
+ * A bed is two blocks in the game and was one here: placing it wrote a lone
+ * foot, which is a state the game cannot hold — it drops as an item the moment
+ * anything updates it, and until then it renders as half a bed. The head goes
+ * one cell along `facing`, which `placementState` has already set from where
+ * the camera was looking.
+ *
+ * **Nothing is placed if the head has nowhere to go.** That is the game's rule
+ * and it is the safe half of it: refusing over a flower is a smaller wrong than
+ * destroying whatever was there, and the block in the way is on screen, so the
+ * silence says as much as a message would. `null` for a cell outside the
+ * document is *not* a refusal — a bed laid at the edge grows it, exactly as a
+ * single block does.
+ *
+ * A request that already names `part=head` is somebody placing one half on
+ * purpose — the inspector, a paste, a tool — and is left alone.
+ */
+function bedPlacement(
+  doc: SchematicDocument,
+  request: { x: number; y: number; z: number },
+  entry: PaletteEntry,
+): { head: { x: number; y: number; z: number }; foot: PaletteEntry; headEntry: PaletteEntry } | null {
+  if (!entry.namespacedName.endsWith("_bed")) return null;
+  if (entry.properties.part === "head") return null;
+
+  const facing = entry.properties.facing ?? "north";
+  const step = BED_STEP[facing];
+  if (step === undefined) return null;
+
+  const head = { x: request.x + step[0], y: request.y, z: request.z + step[1] };
+  const inDocument =
+    head.x >= 0 &&
+    head.y >= 0 &&
+    head.z >= 0 &&
+    head.x < doc.width &&
+    head.y < doc.height &&
+    head.z < doc.length;
+  if (inDocument && getBlock(doc, head.x, head.y, head.z).namespacedName !== "minecraft:air") {
+    return null;
+  }
+  return {
+    head,
+    foot: { ...entry, properties: { ...entry.properties, part: "foot" } },
+    headEntry: { ...entry, properties: { ...entry.properties, part: "head" } },
+  };
+}
+
+/** One cell along each horizontal facing, as `[dx, dz]`. */
+const BED_STEP: Readonly<Record<string, readonly [number, number]>> = {
+  north: [0, -1],
+  south: [0, 1],
+  west: [-1, 0],
+  east: [1, 0],
+};
+
+/**
  * Applies one request as one undoable step.
  *
  * The label is what the undo menu will say, so it is built from the request
@@ -366,13 +423,29 @@ export function applyEdit(session: DocumentSession, request: EditRequest): numbe
         tx.setBlock(merged.x, merged.y, merged.z, merged.entry) ? 1 : 0,
       );
     }
+    /*
+     * A bed is two blocks, and was being placed as one.
+     *
+     * Both halves in one transaction, so Ctrl+Z takes the whole bed back --
+     * two edits would leave you undoing a bed one half at a time, and a lone
+     * half is a state the game cannot hold. The region below spans both cells
+     * so the growth covers the head as well: a bed laid against the edge of the
+     * document makes room for itself exactly as a single block does.
+     */
+    const bed = bedPlacement(doc, request, entry);
+    if (bed === null && entry.namespacedName.endsWith("_bed") &&
+        entry.properties.part !== "head") {
+      // The head has a block in it. The game does not place the bed either.
+      return 0;
+    }
+
     const cell = {
-      minX: request.x,
-      minY: request.y,
-      minZ: request.z,
-      maxX: request.x,
-      maxY: request.y,
-      maxZ: request.z,
+      minX: Math.min(request.x, bed?.head.x ?? request.x),
+      minY: Math.min(request.y, bed?.head.y ?? request.y),
+      minZ: Math.min(request.z, bed?.head.z ?? request.z),
+      maxX: Math.max(request.x, bed?.head.x ?? request.x),
+      maxY: Math.max(request.y, bed?.head.y ?? request.y),
+      maxZ: Math.max(request.z, bed?.head.z ?? request.z),
     };
     /*
      * Breaking is `setBlock` with air, and growing to make room for air would
@@ -393,6 +466,19 @@ export function applyEdit(session: DocumentSession, request: EditRequest): numbe
       // Resize first, for the reason the fill below states: a block delta
       // recorded before it would be an index into the old shape.
       if (growth !== null) tx.resize(growth.size, growth.shift);
+      if (bed !== null) {
+        const [sx, sy, sz] = growth?.shift ?? [0, 0, 0];
+        const foot = tx.setBlock(request.x + sx, request.y + sy, request.z + sz, bed.foot) ? 1 : 0;
+        const head = tx.setBlock(
+          bed.head.x + sx,
+          bed.head.y + sy,
+          bed.head.z + sz,
+          bed.headEntry,
+        )
+          ? 1
+          : 0;
+        return foot + head;
+      }
       return tx.setBlock(at.minX, at.minY, at.minZ, entry) ? 1 : 0;
     });
   }

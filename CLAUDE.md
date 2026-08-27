@@ -116,6 +116,24 @@ click that meant "place beside it" would destroy the slab already there. A fill
 carries no `against`, which is what keeps this a click gesture rather than
 something that halves a filled region.
 
+**A bed is two blocks, and laying one places both.** A lone foot is a state
+the game cannot hold — it drops as an item the moment anything updates it, and
+until then it draws as half a bed — so `applyEdit`'s `setBlock` arm writes the
+head one cell along `facing`, which is where the camera was looking when the
+block was picked up. Both in **one transaction**, or Ctrl+Z would take a bed
+back a half at a time.
+
+**Nothing is placed if the head has nowhere to go.** That is the game's rule and
+it is the safe half of it: refusing over a flower is a smaller wrong than
+destroying what was there, and the block in the way is on screen, so the silence
+says as much as a message would. A cell *outside* the document is not a
+refusal — the region the growth is measured against spans both cells, so a bed
+laid at the edge makes room exactly as a single block does.
+
+A request that already names `part=head` is somebody placing one half on
+purpose — the inspector, a paste, an agent tool — and is left alone. Only an
+absent `part`, or `foot`, means "lay a bed".
+
 **Breaking never grows.** A break is `setBlock` with air, and growing to make
 room for air is a resize and nothing else — the same reason `replace` does not.
 Nothing sends a break from outside the box today, because a break comes from a

@@ -1362,6 +1362,37 @@ which was visibly wrong first:
   it and then replaced the whole map, so a slower response erased a faster one's
   work.
 
+**Every texture keeps its own resolution in the atlas, and one fixed tile size
+was the fault.** `buildAtlas` resized everything to a single square — 32 in the
+Python original, then 64 here — which is right exactly while every texture is
+the same size. Ordinary block textures in the bundled pack are 64×64 and passed
+through untouched; a **chest sheet is 256×256** and a sign sheet 128×128,
+because a block-entity sheet carries a whole model's parts rather than one face.
+Those were subsampled 4:1 and 2:1 on the way in.
+
+What that costs is worse than "a bit soft", and worse than vanilla: nearest
+subsampling of a 4× sheet keeps one pixel in sixteen of art drawn at 4×, so the
+result is not the 16× texture the pack was made from but an arbitrary sample of
+the 64× one. A chest's plank lines and the border round its lid landed or missed
+by a pixel — chests came out both chunkier *and* patchier than the blocks beside
+them, which is what "the texture is not sewn on properly" looks like.
+
+Per-key UV rects are what made the fix cheap: the mesher looks each texture's
+rect up by name and never assumed they were the same size, so only the packing
+changed — shelves of descending size, ordered by size then by key, so the layout
+is a function of the *set* and not of the order the baker decoded them in.
+`tests/blocks.ts` feeds the same textures in reverse and requires the same
+answer; building twice from one object proves nothing, because `Object.keys` and
+`Array.sort` are both stable and would agree with a packer that had no ordering
+rule at all.
+
+The atlas goes from 20.8 MB to 27.6 MB over the whole 920-block set, and packs
+in the same ~130 ms. It is sent only when its version moves — `MeshPayload`
+carries `atlas: MeshAtlas | null` and the renderer hands back the version it
+holds — so that is a cost per atlas, not per edit. `MAX_TILE` caps one texture
+at 256: the ender dragon's sheet is 1024×1024, and a dragon head is one small
+block.
+
 **The atlas grows as blocks are meshed, and its version *is* the texture count.**
 That is the fault behind "the icons are wrong until I scroll", and it was in
 main, not the renderer: the baker decodes a texture the first time a block asks

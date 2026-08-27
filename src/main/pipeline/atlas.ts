@@ -115,21 +115,61 @@ function pasteInto(dest: RgbaImage, src: RgbaImage, x: number, y: number): void 
 }
 
 /**
+ * The smallest tile the half-pixel inset still makes sense on, and the largest
+ * one a single texture may claim.
+ *
+ * The floor is not decoration: the rect is inset half a pixel at each edge, so
+ * a one-pixel tile would come out with `u0 > u1` and draw mirrored. The cap is
+ * what stops one enormous sheet in some pack deciding the size of the atlas.
+ */
+const MIN_TILE = 16;
+const MAX_TILE = 256;
+/** The blank returned for an empty input. Its size is not part of the contract. */
+const FALLBACK_TILE = 64;
+
+/** The square a texture is drawn into: its own resolution, within reason. */
+function tileSizeFor(image: RgbaImage, maxTile: number): number {
+  return Math.min(maxTile, Math.max(MIN_TILE, image.width, image.height));
+}
+
+/**
  * Ported from `build_atlas` (atlas.py:12-61).
  *
  * Packs a set of per-key images into a single atlas, applying edge-clamped
  * padding per tile to avoid bleed when the resulting atlas is sampled with
  * bilinear/mipmapped filtering, and returns the UV rect (half-pixel-inset,
  * per atlas.py:54-58) for each key.
+ *
+ * ## Every texture keeps its own resolution, and one fixed size was the fault
+ *
+ * This resized *everything* to a single square — atlas.py's 32, then 64 here —
+ * which is right exactly while every texture is the same size. Ordinary block
+ * textures in the bundled pack are 64x64 and passed through untouched; a
+ * **chest sheet is 256x256** and a sign sheet 128x128, because a block-entity
+ * sheet carries a whole model's parts rather than one face. Those were
+ * subsampled 4:1 and 2:1 on the way in.
+ *
+ * What that costs is worse than "a bit soft", and worse than vanilla: nearest
+ * subsampling of a 4x sheet keeps one pixel in sixteen of art drawn at 4x, so
+ * the result is not the 16x texture the pack was made from but an arbitrary
+ * sample of the 64x one. A chest's plank lines and the border round its lid
+ * landed or missed by a pixel, which is why chests came out both chunkier and
+ * patchier than the blocks standing beside them.
+ *
+ * Per-key UV rects are what make the fix cheap: the mesher looks each texture's
+ * rect up by name and never assumed they were the same size, so only the
+ * packing changed. Tiles go into shelves of descending size, ordered by size
+ * then by key, so the layout is a function of the *set* of textures and not of
+ * the order the baker happened to decode them — `services/block_icons.ts`
+ * requires two runs over the same set to produce identical UVs.
+ *
+ * Bleed is less of a constraint than it reads as: both consumers sample the
+ * atlas with `NearestFilter` and no mipmaps, so the padding is a margin against
+ * a future change of filter rather than something in use.
  */
 export function buildAtlas(
   images: Record<string, RgbaImage>,
-  // Raised from atlas.py's 32. The bundled pack is 64x, so 32 threw away half
-  // of every texture before it was ever drawn; and block-entity sheets (a bed,
-  // a chest) address themselves in 1/16ths, which at 32px left two pixels per
-  // cell. 64 matches the pack natively and still packs ~100 textures into a
-  // sub-megapixel atlas.
-  tileSize = 64,
+  maxTile = MAX_TILE,
   padding = 6,
 ): AtlasResult {
   const keys = Object.keys(images);
@@ -140,35 +180,53 @@ export function buildAtlas(
     // exact rect (0.0, 0.0, 1.0, 1.0) verbatim; this is an intentional
     // fallback contract, not a bug, and downstream/external callers may
     // depend on the exact values.
-    const blank = createFilledRgba(tileSize, tileSize, 255, 255, 255, 255);
+    const blank = createFilledRgba(FALLBACK_TILE, FALLBACK_TILE, 255, 255, 255, 255);
     const uvRects: Record<string, UVRect> = { default: [0.0, 0.0, 1.0, 1.0] };
     return { image: blank, uvRects };
   }
 
-  const count = keys.length;
-  const columns = Math.ceil(Math.sqrt(count));
-  const rows = Math.ceil(count / columns);
-  // Each texture tile gains mirrored padding to avoid bleeding when sampling.
-  const stride = tileSize + padding * 2;
-  const width = columns * stride;
-  const height = rows * stride;
+  const tiles = keys
+    .map((key) => ({ key, size: tileSizeFor(images[key], maxTile) }))
+    .sort((a, b) => b.size - a.size || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+
+  // A roughly square sheet: the total area rounded up, but never narrower than
+  // the widest tile, which would leave that one nowhere to go.
+  const area = tiles.reduce((sum, tile) => sum + (tile.size + padding * 2) ** 2, 0);
+  const width = Math.max(tiles[0].size + padding * 2, Math.ceil(Math.sqrt(area)));
+
+  const placed: Array<{ key: string; size: number; x: number; y: number }> = [];
+  let penX = 0;
+  let penY = 0;
+  let shelfHeight = 0;
+  for (const tile of tiles) {
+    const stride = tile.size + padding * 2;
+    if (penX > 0 && penX + stride > width) {
+      penX = 0;
+      penY += shelfHeight;
+      shelfHeight = 0;
+    }
+    placed.push({ ...tile, x: penX, y: penY });
+    penX += stride;
+    shelfHeight = Math.max(shelfHeight, stride);
+  }
+  const height = penY + shelfHeight;
+
   const atlas = createBlankRgba(width, height);
   const uvRects: Record<string, UVRect> = {};
 
-  for (let idx = 0; idx < keys.length; idx++) {
-    const key = keys[idx];
-    let tile = resizeNearest(images[key], tileSize, tileSize);
+  for (const { key, size, x, y } of placed) {
+    const source = images[key];
+    let tile =
+      source.width === size && source.height === size ? source : resizeNearest(source, size, size);
     if (padding > 0) {
       tile = padEdge(tile, padding);
     }
-    const x = (idx % columns) * stride;
-    const y = Math.floor(idx / columns) * stride;
     pasteInto(atlas, tile, x, y);
 
     const innerLeft = x + padding;
     const innerTop = y + padding;
-    const innerRight = innerLeft + tileSize;
-    const innerBottom = innerTop + tileSize;
+    const innerRight = innerLeft + size;
+    const innerBottom = innerTop + size;
     const halfPx = 0.5;
     const u0 = (innerLeft + halfPx) / width;
     const v0 = (innerTop + halfPx) / height;

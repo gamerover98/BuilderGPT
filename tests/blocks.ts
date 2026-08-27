@@ -682,6 +682,62 @@ if (pack === null) {
   );
 }
 
+// --- the atlas keeps each texture's own resolution ---------------------------
+//
+// `buildAtlas` used to resize everything to one square, which is right exactly
+// while every texture is the same size. Ordinary block textures in the bundled
+// pack are 64x64 and passed through untouched; a **chest sheet is 256x256**,
+// because a block-entity sheet carries a whole model's parts rather than one
+// face. Those were subsampled 4:1 on the way in.
+//
+// And nearest subsampling of a 4x sheet is not the 16x texture the pack was
+// made from — it keeps one pixel in sixteen of art drawn at 4x. A chest's plank
+// lines and the border round its lid landed or missed by a pixel, so chests
+// came out both chunkier and patchier than the blocks beside them. Stated in
+// atlas pixels, because that is the thing that was being thrown away.
+console.log("\n--- the atlas keeps each texture's own resolution ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  await baker.bakeBlockstate(block("chest", { facing: "north" }));
+  await baker.bakeBlockstate(block("oak_planks"));
+  const atlas = buildAtlas(baker.textures);
+  // The rect is inset half a pixel at each edge, so it spans size - 1 pixels.
+  const spanOf = (key: string): number | null => {
+    const rect = atlas.uvRects[key];
+    return rect === undefined ? null : Math.round((rect[2] - rect[0]) * atlas.image.width);
+  };
+  equal(
+    "a 256px chest sheet gets 256 pixels of atlas",
+    spanOf("minecraft:entity/chest/normal"),
+    255,
+  );
+  equal("...and a 64px block texture still gets 64", spanOf("minecraft:block/oak_planks"), 63);
+  /*
+   * ...and the layout is a function of the set, not of the order the baker
+   * happened to decode them in.
+   *
+   * Fed the **same textures in a different order**, deliberately: building
+   * twice from the same object proves nothing, because `Object.keys` and
+   * `Array.sort` are both stable and would agree with a packer that had no
+   * ordering rule at all. `services/block_icons.ts` meshes every block against
+   * one atlas and requires two runs to produce identical UVs, and what would
+   * break that is one more texture having been decoded first.
+   */
+  const reversed: Record<string, (typeof baker.textures)[string]> = {};
+  for (const key of Object.keys(baker.textures).reverse()) reversed[key] = baker.textures[key];
+  const again = buildAtlas(reversed);
+  equal(
+    "the same set in another order packs to the same atlas",
+    [again.image.width, again.image.height],
+    [atlas.image.width, atlas.image.height],
+  );
+  const moved = Object.keys(atlas.uvRects).filter(
+    (k) => JSON.stringify(again.uvRects[k]) !== JSON.stringify(atlas.uvRects[k]),
+  );
+  equal("...and every key lands in the same place", moved, []);
+}
+
 // --- every texture name a rule can produce exists ---------------------------
 //
 // The check above catches a block with *no* texture at all. This one catches

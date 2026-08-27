@@ -581,6 +581,55 @@ function parseHexColor(value: string): [number, number, number] {
  * square by convention, so a height that is an exact multiple of the width is
  * the animation layout and nothing else.
  */
+export interface TextureAnimation {
+  /** The frames in play order, each one square and the size of the tile. */
+  readonly frames: readonly RgbaImage[];
+  /** Minecraft ticks per frame. A tick is 50ms; vanilla's default is 1. */
+  readonly frameTime: number;
+}
+
+/**
+ * Cuts a stacked strip into its frames, in the order the `.mcmeta` asks for.
+ *
+ * `firstAnimationFrame` below takes frame 0 and is what goes in the atlas; this
+ * keeps the rest, so the viewer can put a different one there ten times a
+ * second. The strip is the source of truth for *what* the frames are and the
+ * `.mcmeta` only for their order and speed — an absent or unreadable one leaves
+ * the natural order at vanilla's default of one tick.
+ *
+ * `frames` entries are either a bare index or `{index, time}`; the per-frame
+ * time is deliberately not honoured, because a single interval is the whole of
+ * what the viewer's clock can express and getting it wrong per frame would be a
+ * subtler lie than a uniform one. `interpolate` is likewise ignored: it blends
+ * between frames, and every texture in this app is sampled with NEAREST.
+ */
+function cutAnimation(strip: RgbaImage, meta: unknown): TextureAnimation | null {
+  const count = Math.floor(strip.height / strip.width);
+  if (count < 2) return null;
+  const size = strip.width;
+  const bytes = size * size * 4;
+  const all: RgbaImage[] = [];
+  for (let i = 0; i < count; i += 1) {
+    all.push({ width: size, height: size, data: strip.data.slice(i * bytes, (i + 1) * bytes) });
+  }
+
+  const animation = (meta as { animation?: { frametime?: unknown; frames?: unknown } } | null)
+    ?.animation;
+  const stated = Number(animation?.frametime);
+  const frameTime = Number.isFinite(stated) && stated > 0 ? Math.round(stated) : 1;
+
+  const order = animation?.frames;
+  if (!Array.isArray(order) || order.length === 0) {
+    return { frames: all, frameTime };
+  }
+  const chosen: RgbaImage[] = [];
+  for (const item of order) {
+    const index = typeof item === "number" ? item : Number((item as { index?: unknown })?.index);
+    if (Number.isInteger(index) && index >= 0 && index < all.length) chosen.push(all[index]);
+  }
+  return chosen.length > 0 ? { frames: chosen, frameTime } : { frames: all, frameTime };
+}
+
 function firstAnimationFrame(image: RgbaImage): RgbaImage {
   const { width, height } = image;
   if (height <= width || height % width !== 0) {
@@ -782,6 +831,8 @@ export class ResourcePackTextures {
   // RULEBOOK §1 "Internal keyed-collection type" row: Record, not Map — this
   // dict is one of the row's own named examples ("texture ... caches").
   private readonly cache: Record<string, RgbaImage> = {};
+  /** The frames of every animated texture decoded so far, by key. */
+  readonly animationCache: Record<string, TextureAnimation> = {};
   private readonly missing = new Set<string>();
 
   private constructor(sources: ResourcePackSource[]) {
@@ -863,11 +914,42 @@ export class ResourcePackTextures {
           // pngjs decode only — PNG.sync.read always decodes to RGBA8,
           // matching the source's `img.convert("RGBA")`.
           const png = PNG.sync.read(Buffer.from(data));
-          rgba = firstAnimationFrame({
+          const strip: RgbaImage = {
             width: png.width,
             height: png.height,
             data: new Uint8Array(png.data),
-          });
+          };
+          rgba = firstAnimationFrame(strip);
+          if (rgba !== strip) {
+            // Only a strip has more than one frame, and only then is the
+            // `.mcmeta` worth a read -- it exists for exactly this and for
+            // nothing else this app looks at.
+            const meta = await source.readBytes(`${relPath}.mcmeta`);
+            let parsed: unknown = null;
+            if (meta !== null) {
+              try {
+                parsed = JSON.parse(Buffer.from(meta).toString("utf-8"));
+              } catch {
+                // A pack with a malformed `.mcmeta` still has usable frames;
+                // the natural order at one tick is the honest default.
+              }
+            }
+            const cut = cutAnimation(strip, parsed);
+            if (cut !== null) {
+              this.animationCache[textureKey] = cut;
+              /*
+               * The atlas gets the first frame **in play order**, which is not
+               * always the first in the strip: lava's `.mcmeta` reorders 20
+               * source frames into a 38-frame sequence and prismarine's turns 4
+               * into 22. Taking the strip's frame 0 would leave the atlas
+               * showing something the animation never starts on — visible for
+               * the moment before the first blit, and, worse, a second answer
+               * to "what is in that tile" for anything that reads the atlas
+               * back.
+               */
+              rgba = cut.frames[0];
+            }
+          }
         } catch {
           continue;
         }
@@ -900,6 +982,9 @@ export class ModelBaker {
   private readonly textureCache: Record<string, RgbaImage> = {};
   /** Memo for `alphaOf`; a texture's alpha does not change once decoded. */
   private readonly opaqueTextures = new Map<string, "opaque" | "cutout" | "translucent">();
+  /** Tinted copies of the animated textures, and the keys already done. */
+  private readonly animationCache: Record<string, TextureAnimation> = {};
+  private readonly tintedAnimations = new Set<string>();
   private readonly textureSource: ResourcePackTextures;
 
   private readonly biomeTint: readonly [number, number, number];
@@ -934,6 +1019,24 @@ export class ModelBaker {
 
   get textures(): Readonly<Record<string, RgbaImage>> {
     return this.textureCache;
+  }
+
+  /**
+   * The frames of every animated texture the baker has decoded, by texture key.
+   *
+   * The *atlas* holds frame 0 and always will — packing 32 frames of water into
+   * a square tile would either grow the atlas thirty-twofold or leave each frame
+   * eleven pixels across. What moves is a small blit into the atlas texture on
+   * the GPU, so the frames travel beside it and the viewer puts one of them in
+   * place ten times a second.
+   *
+   * Keyed the same way the atlas is, so a caller can look each one's tile up in
+   * `uvRects` and know where to write.
+   */
+  get animations(): Readonly<Record<string, TextureAnimation>> {
+    // The source's own frames, with the tinted ones laid over them: `water_still`
+    // reaches the atlas coloured by the biome, and its frames have to match.
+    return { ...this.textureSource.animationCache, ...this.animationCache };
   }
 
   /**
@@ -1654,10 +1757,25 @@ export class ModelBaker {
     // of colour: the mesh carries no per-vertex tint and the glTF material has
     // no second colour input.
     const kind = tintKindFor(textureKey);
-    this.textureCache[textureKey] =
-      kind === null
-        ? texture
-        : applyTint(texture, kind === "water" ? this.waterTint : this.biomeTint);
+    const tint = kind === null ? null : kind === "water" ? this.waterTint : this.biomeTint;
+    this.textureCache[textureKey] = tint === null ? texture : applyTint(texture, tint);
+    /*
+     * ...and every frame of it, if it moves.
+     *
+     * Water is the block that needs both: it is tinted by the biome *and* it is
+     * 32 frames. The tint is applied here rather than at draw time so the atlas
+     * is the single source of colour — which means the frames the viewer blits
+     * into it have to arrive already tinted, or the water would come out the
+     * biome's colour for one instant and grey for every frame after.
+     */
+    const animation = this.textureSource.animationCache[textureKey];
+    if (tint !== null && animation !== undefined && !this.tintedAnimations.has(textureKey)) {
+      this.tintedAnimations.add(textureKey);
+      this.animationCache[textureKey] = {
+        frameTime: animation.frameTime,
+        frames: animation.frames.map((frame) => applyTint(frame, tint)),
+      };
+    }
     return true;
   }
 }

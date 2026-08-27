@@ -28,11 +28,11 @@ import {
   type PreviewSettings,
 } from "../../shared/settings.js";
 import { buildAtlas } from "../pipeline/atlas.js";
-import type { MeshPayload } from "../../shared/ipc.js";
+import type { AtlasAnimation, MeshPayload } from "../../shared/ipc.js";
 import { loadStructure } from "../pipeline/loader.js";
 import type { SchematicFormat } from "../pipeline/loader_formats.js";
 import { buildMesh, culledFaces } from "../pipeline/mesher.js";
-import { ModelBaker } from "../pipeline/model_baker.js";
+import { ModelBaker, type TextureAnimation } from "../pipeline/model_baker.js";
 import { normalizePalette } from "../pipeline/translate.js";
 import {
   paletteEntryCacheKey,
@@ -118,12 +118,52 @@ function boundsOf(pieces: readonly MeshBuffers[]): {
   };
 }
 
+/**
+ * Where each moving texture's tile sits in the atlas, and its frames.
+ *
+ * The position is read back out of the UV rect rather than returned by the
+ * packer, because the rect is the only thing that survives into the payload and
+ * two sources for one number is how they come to disagree. It is exact: the
+ * rect is the tile inset half a pixel at each edge, so the tile spans
+ * `(u1 - u0) * width + 1` pixels starting at `u0 * width - 0.5`.
+ *
+ * A texture whose frames are not the size of its tile is skipped rather than
+ * resized. That happens only past `MAX_TILE` — a 512px animated sheet in some
+ * pack — and leaving it on frame 0 is what the app did before any of this.
+ */
+export function atlasAnimations(
+  atlas: ReturnType<typeof buildAtlas>,
+  animations: Readonly<Record<string, TextureAnimation>>,
+): AtlasAnimation[] {
+  const out: AtlasAnimation[] = [];
+  const { width, height } = atlas.image;
+  for (const [key, animation] of Object.entries(animations)) {
+    const rect = atlas.uvRects[key];
+    if (rect === undefined) continue;
+    const size = Math.round((rect[2] - rect[0]) * width) + 1;
+    if (animation.frames.some((frame) => frame.width !== size || frame.height !== size)) continue;
+    const bytes = size * size * 4;
+    const frames = new Uint8Array(bytes * animation.frames.length);
+    animation.frames.forEach((frame, index) => frames.set(frame.data, index * bytes));
+    out.push({
+      x: Math.round(rect[0] * width - 0.5),
+      y: Math.round(rect[1] * height - 0.5),
+      size,
+      frames,
+      frameCount: animation.frames.length,
+      frameTime: animation.frameTime,
+    });
+  }
+  return out;
+}
+
 /** Geometry and pixels, in the shape the renderer draws from. */
 function toMeshPayload(
   pieces: readonly MeshBuffers[],
   keys: readonly number[],
   atlas: ReturnType<typeof buildAtlas>,
   version: number,
+  animations: Readonly<Record<string, TextureAnimation>>,
 ): MeshPayload {
   return {
     chunks: pieces.map((piece, index) => ({
@@ -145,6 +185,7 @@ function toMeshPayload(
       height: atlas.image.height,
       pixels: atlas.image.data,
       version,
+      animations: atlasAnimations(atlas, animations),
     },
     atlasVersion: version,
   };
@@ -470,7 +511,7 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
   const bounds = boundsOf([mesh]);
 
   const result: CachedPreview = {
-    mesh: toMeshPayload([mesh], [0], atlas, version),
+    mesh: toMeshPayload([mesh], [0], atlas, version, baker.animations),
     center: bounds.center,
     size: bounds.size,
     format: structure.format,
@@ -631,7 +672,7 @@ export async function buildDocumentPreview(
   }
   const bounds = boundsOf(chunked.pieces);
   return {
-    mesh: toMeshPayload(chunked.pieces, chunked.pieceKeys, atlas, version),
+    mesh: toMeshPayload(chunked.pieces, chunked.pieceKeys, atlas, version, cached.baker.animations),
     center: bounds.center,
     size: bounds.size,
     meshCache: chunked.cache,

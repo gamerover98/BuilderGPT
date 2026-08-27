@@ -551,6 +551,37 @@ export interface MeshAtlas {
    * this is unchanged, so an edit does not re-upload a megabyte of pixels.
    */
   version: number;
+  /**
+   * The textures that move, and their frames.
+   *
+   * The atlas itself holds frame 0 and always will: packing 32 frames of water
+   * into a square tile would either grow the atlas thirty-twofold or leave each
+   * frame eleven pixels across. So the frames ride beside it and the viewer
+   * blits one into the atlas texture on the GPU as the clock moves — a
+   * sub-image upload of one tile, not of the atlas.
+   *
+   * They travel with the atlas and are therefore bound to its version, which is
+   * what keeps this off the per-edit path: an edit re-sends neither.
+   */
+  animations: AtlasAnimation[];
+}
+
+/** One moving texture: where its tile is, and every frame of it. */
+export interface AtlasAnimation {
+  /** The tile's top-left pixel in the atlas, inside the padding. */
+  x: number;
+  y: number;
+  /** The tile's side in pixels. Every frame is this square. */
+  size: number;
+  /** The frames end to end, `size * size * 4` bytes each, in play order. */
+  frames: Uint8Array;
+  frameCount: number;
+  /**
+   * Minecraft ticks per frame, from the texture's `.mcmeta`. A tick is 50ms,
+   * so water's 2 is ten frames a second and prismarine's 300 is one every
+   * fifteen seconds — which is the shimmer, and is why this is not a constant.
+   */
+  frameTime: number;
 }
 
 export interface MeshPayload {

@@ -19,6 +19,7 @@
   import { onMount, untrack } from "svelte";
   import type {
     ChunkGeometry,
+    AtlasAnimation,
     MeshAtlas,
     MeshPayload,
     PackTexture,
@@ -1669,6 +1670,10 @@ import { isTyping } from "./typing.js";
           controls?.update();
         }
         updateBlockHighlight(performance.now());
+        // Clocked on wall time, not on frames: the game states its animations
+        // in ticks of 50ms, and a 144Hz display must not run the water four
+        // times too fast.
+        playAnimations(performance.now());
         updateHover(performance.now());
         updateBuildGrid(performance.now());
         if (renderer && scene && camera) {
@@ -2483,7 +2488,83 @@ import { isTyping } from "./typing.js";
     next.needsUpdate = true;
     texture = next;
     textureVersion = atlas.version;
+    adoptAnimations(atlas);
     return next;
+  }
+
+  /**
+   * The textures that move, and where in the atlas to put each frame.
+   *
+   * The atlas holds frame 0 and always will: 32 frames of water in a square
+   * tile would either grow it thirty-twofold or leave each frame eleven pixels
+   * across. So the frames arrive beside it and one is blitted into the atlas
+   * texture per tick — `copyTextureToTexture` is a sub-image upload of one
+   * tile, not of the 27MB sheet, which is what makes this affordable at all.
+   *
+   * One scratch `DataTexture` per animation, reused: it is the size of a tile
+   * and its data array is overwritten in place, so playing a frame allocates
+   * nothing.
+   */
+  interface PlayingTexture {
+    readonly animation: AtlasAnimation;
+    readonly scratch: THREE.DataTexture;
+    /** The frame currently uploaded, so a tick that changes nothing does nothing. */
+    shown: number;
+  }
+  let playing: PlayingTexture[] = [];
+
+  function adoptAnimations(atlas: MeshAtlas): void {
+    for (const item of playing) item.scratch.dispose();
+    playing = atlas.animations.map((animation) => {
+      const scratch = new THREE.DataTexture(
+        new Uint8Array(animation.size * animation.size * 4),
+        animation.size,
+        animation.size,
+        THREE.RGBAFormat,
+      );
+      // The same sampling the atlas gets, because these pixels become part of
+      // it: a mismatch here would be a tile that filters differently from
+      // every other one.
+      scratch.magFilter = THREE.NearestFilter;
+      scratch.minFilter = THREE.NearestFilter;
+      scratch.generateMipmaps = false;
+      scratch.colorSpace = THREE.SRGBColorSpace;
+      return { animation, scratch, shown: -1 };
+    });
+  }
+
+  /**
+   * Puts the right frame of every moving texture into the atlas.
+   *
+   * Driven from the render loop and clocked on wall time, not on frames: the
+   * game's animations are stated in ticks and a tick is 50ms, so a 144Hz
+   * display must not run the water four times too fast. `frameTime` comes from
+   * each texture's own `.mcmeta` — water is 2 ticks and prismarine is 300,
+   * which is the difference between a ripple and a shimmer.
+   *
+   * Nothing is uploaded for a texture already showing the right frame, which is
+   * most ticks for most of them.
+   */
+  function playAnimations(nowMs: number): void {
+    if (!renderer || !texture || playing.length === 0) return;
+    const ticks = nowMs / 50;
+    for (const item of playing) {
+      const { animation, scratch } = item;
+      const index = Math.floor(ticks / animation.frameTime) % animation.frameCount;
+      if (index === item.shown) continue;
+      const bytes = animation.size * animation.size * 4;
+      (scratch.image.data as Uint8Array).set(
+        animation.frames.subarray(index * bytes, (index + 1) * bytes),
+      );
+      scratch.needsUpdate = true;
+      renderer.copyTextureToTexture(
+        scratch,
+        texture,
+        null,
+        new THREE.Vector2(animation.x, animation.y),
+      );
+      item.shown = index;
+    }
   }
 
   /** Which chunk each mesh under `loaded` is, so a delta can find it. */

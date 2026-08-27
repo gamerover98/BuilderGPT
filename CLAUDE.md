@@ -1861,6 +1861,38 @@ ever: dirtiness is *observed*, not announced — a caller that had to remember t
 say "and the light reached this far" would forget, and the chunk that stayed
 dark would be a bug nobody could reproduce.
 
+**Animated textures are blitted into the atlas, not packed into it.** Water is
+32 frames, lava 38, fire 32; a square tile holding all of them would either grow
+the atlas thirty-twofold or leave each frame eleven pixels across. So the atlas
+keeps **one** frame, `MeshAtlas.animations` carries the rest beside it, and the
+viewer calls `copyTextureToTexture` once per texture per tick — a sub-image
+upload of one tile, not of the 27MB sheet. One scratch `DataTexture` per
+animation is reused, so playing a frame allocates nothing, and a texture already
+showing the right frame is skipped.
+
+Four things about it are load-bearing:
+
+- **The clock is wall time, not frames.** The game states animation speeds in
+  ticks of 50ms; driven per frame, a 144Hz display would run the water four
+  times too fast.
+- **`frameTime` comes from each texture's own `.mcmeta`.** Water is 2 ticks and
+  prismarine is 300 — a ripple and a shimmer. A constant would make them the
+  same block. The `.mcmeta` is read only for a texture whose *shape* already
+  says it is a strip, so the detection rule is unchanged and no still texture
+  costs a file lookup.
+- **The atlas holds the first frame in play order**, not the strip's frame 0.
+  Lava's `.mcmeta` reorders 20 source frames into a sequence of 38 and
+  prismarine's turns 4 into 22, so the two are different pictures — and the
+  payload's tile position is *derived from the UV rect*, which means
+  `tests/blocks.ts` can check it by requiring the pixels already in the atlas at
+  that position to be frame 0. Off by a row, a column or a tile and they are
+  not.
+- **The frames are tinted with the tile.** Water is the block that needs both:
+  biome-tinted *and* animated. The tint is applied at bake time so the atlas is
+  the single source of colour, so frames that arrived untinted would show the
+  biome's water for one instant and grey for every frame after. That is exactly
+  what the position check caught.
+
 **The sun and the moon come out of the resource pack, as pixels.** They live
 at `textures/environment/`, nowhere near the block textures and never asked for
 by anything that meshes — so `services/sky_textures.ts` reads them directly and

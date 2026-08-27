@@ -35,6 +35,7 @@ import {
 } from "../src/main/pipeline/model_baker.js";
 import { buildMesh, culledFaces } from "../src/main/pipeline/mesher.js";
 import { buildAtlas } from "../src/main/pipeline/atlas.js";
+import { atlasAnimations } from "../src/main/services/preview.js";
 import type { BakedFace, PaletteEntry, StructureData } from "../src/main/pipeline/types.js";
 import { paletteEntryCacheKey, paletteEntryIsAir } from "../src/main/pipeline/types.js";
 import { connectedState } from "../src/shared/block_connections.js";
@@ -1142,6 +1143,66 @@ if (pack === null) {
     // Five for the fence's water, and the water block's own five.
     10,
   );
+}
+
+// --- textures that move ------------------------------------------------------
+//
+// The atlas holds frame 0 and always will: 32 frames of water in a square tile
+// would either grow the atlas thirty-twofold or leave each frame eleven pixels
+// across. So the frames travel beside it and the viewer blits one into the
+// atlas texture per tick.
+//
+// That makes the *position* of each tile a number the payload has to carry, and
+// it is derived from the UV rect rather than returned by the packer — one
+// source, because two would come to disagree. The check is the one that
+// matters: the pixels already in the atlas at that position must be frame 0.
+// Off by a row, a column or a tile and they are not.
+console.log("\n--- textures that move ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  for (const name of ["water", "lava", "sea_lantern", "prismarine"]) {
+    await baker.bakeBlockstate(block(name));
+  }
+  await baker.bakeBlockstate(block("stone"));
+  const atlas = buildAtlas(baker.textures);
+  const animations = atlasAnimations(atlas, baker.animations);
+  check(`the moving textures are found (${animations.length})`, animations.length >= 4);
+
+  let misplaced = 0;
+  for (const animation of animations) {
+    const bytes = animation.size * animation.size * 4;
+    for (let row = 0; row < animation.size; row += 1) {
+      const from = ((animation.y + row) * atlas.image.width + animation.x) * 4;
+      for (let i = 0; i < animation.size * 4; i += 1) {
+        if (atlas.image.data[from + i] !== animation.frames[row * animation.size * 4 + i]) {
+          misplaced += 1;
+          break;
+        }
+      }
+    }
+    if (bytes * animation.frameCount !== animation.frames.length) misplaced += 1;
+  }
+  equal("every one names the tile the atlas already drew", misplaced, 0);
+
+  const byKey = (key: string) => baker.animations[key];
+  // Straight from each texture's own `.mcmeta`, which is the only reason
+  // prismarine shimmers once every fifteen seconds and water ripples ten times
+  // a second. A constant here would make them the same block.
+  equal("water runs at the mcmeta's two ticks", byKey("minecraft:block/water_still")?.frameTime, 2);
+  equal(
+    "...and prismarine at its three hundred",
+    byKey("minecraft:block/prismarine")?.frameTime,
+    300,
+  );
+  check(
+    "an animation has more than one frame by definition",
+    animations.every((a) => a.frameCount > 1),
+  );
+  // A still texture must not become an animation: `stone` is one frame and the
+  // strip test is a shape test, so a square texture can never be mistaken for
+  // a stack of them.
+  equal("a still texture is not animated", byKey("minecraft:block/stone"), undefined);
 }
 
 // --- potted plants ----------------------------------------------------------

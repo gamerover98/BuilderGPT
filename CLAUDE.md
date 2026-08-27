@@ -1617,6 +1617,44 @@ knowing:
   block above it that cannot be removed". `facingNormal` in `block_hover.ts`
   turns the normal to face the ray first; a front hit is returned unchanged, so
   it cannot alter an answer that was already right.
+- **Which way round a texture goes is vanilla's rule, not this app's, and it
+  was the mirror of it on all six faces.** `boxFaceGeometry` now reproduces
+  `BlockElement.uvsByFace` — `u = 16 - x` on north, `x` on south, `z` on west,
+  `16 - z` on east; `v = z` on up and `16 - z` on down — which is one sentence
+  said six ways: **seen from outside the block, U runs to the viewer's right and
+  V downward**, north at the top of a top face, south at the top of a bottom one.
+
+  It is not a convention this app may choose. Every texture in the game is
+  *painted* to it, and every `uv` window in `block_shapes.ts` was transcribed
+  under it — the flower pot's `north: [10, 10, 11, 16]` on a box spanning
+  `x 5..6` is only `16 - x` and nothing else.
+
+  The reason it survived is worth more than the fix: a Minecraft texture is
+  almost always symmetric or noise, so a mirrored plank, ore or brick is a
+  mirrored plank, ore or brick. It surfaced three separate times as a report
+  about a *block* — a bed whose pillow sat at the joint instead of under the
+  headboard, bed legs drawn as two cards because their side faces sampled the
+  empty end of their own strip, and a chest that would not come out right
+  however its windows were rearranged — and each time the block got the blame
+  and the block was innocent.
+
+  Three things travel with it. `windowUvsFrom` has to be turned round too, or a
+  shape carrying both a stated window and a derived face comes out with some of
+  its boxes mirrored and the rest not. **A box that does not span its axis now
+  samples a different region** on north, west and down — which is exactly what
+  put a bed leg's window on the blank end of its strip. And `rotateWindowUvs`'s
+  direction is decided by that corner order rather than by anything in it, so a
+  `rotation: 90` transcribed from vanilla used to come out as vanilla's 270: a
+  half-turn, invisible on the anvil's and the grindstone's bands, corrected by
+  the same edit because it is the same fact.
+
+  `tests/blocks.ts` states the rule geometrically on all six faces of a cube and
+  again on the shapes that use windows, and then states it **in pixels** on the
+  one texture in the game that can be read the wrong way round: the light block
+  wears its own level as a number, and mirrored the 7 reads backwards. There is
+  deliberately nothing there about the chest — `entity/chest/normal.png` is
+  left-right symmetric on every face it draws, so a check written on it fails
+  when the mapping changes without either arrangement being wrong.
 - **A texture that lands outside its tile is clamped, not refused.** The atlas
   smears the edge pixels across the face, which reads as a badly drawn texture
   rather than as a window that missed — so `tests/blocks.ts` walks every offered

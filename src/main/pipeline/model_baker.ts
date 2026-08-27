@@ -456,6 +456,41 @@ export const SPECIAL_FACE_RULES: Record<string, SpecialFaceRule> = {
  * Deriving UVs from the box coordinates rather than a fixed 0..1 quad is what
  * keeps a slab's side showing the bottom half of its texture instead of the
  * whole tile squashed into half the height.
+ *
+ * ## The horizontal half of that rule, which was wrong on all six faces
+ *
+ * These are vanilla's `BlockElement.uvsByFace`, which is not a convention this
+ * app may choose: it is the one every texture in the game is *painted* to, and
+ * the one every `uv` window in `block_shapes.ts` was transcribed under.
+ *
+ * | face | U | V |
+ * |---|---|---|
+ * | north | `16 - x` | `16 - y` |
+ * | south | `x` | `16 - y` |
+ * | west | `z` | `16 - y` |
+ * | east | `16 - z` | `16 - y` |
+ * | up | `x` | `z` |
+ * | down | `x` | `16 - z` |
+ *
+ * Said once instead of six times: seen from outside the block, U runs to the
+ * viewer's right and V downward, with north at the top of a top face and south
+ * at the top of a bottom one.
+ *
+ * Every one of them used to be the mirror of that, and the *reason it lasted*
+ * is the thing to remember: a Minecraft texture is nearly always symmetric or
+ * noise, so a mirrored plank, ore or brick is a mirrored plank, ore or brick.
+ * It surfaced three times as a report about something else — a bed whose pillow
+ * sat at the joint instead of under the headboard, bed legs whose side faces
+ * landed on the transparent part of their own strip, and a chest that would not
+ * come out right however its windows were rearranged — and each time the block
+ * got the blame. `tests/blocks.ts` states it on the one texture in the game
+ * that can be read: the light block wears its level as a number.
+ *
+ * Two things follow from it that are easy to miss. A box that does not span its
+ * axis samples a *different region* on north, west and down than it did — that
+ * is what put a bed leg's window on the empty end of its strip. And
+ * `windowUvsFrom` has to be turned round with it, or a shape carrying both
+ * kinds of face comes out with some of its boxes mirrored and the rest not.
  */
 interface FaceGeometry {
   readonly positions: Float32Array;
@@ -472,32 +507,32 @@ function boxFaceGeometry(
   return {
     north: {
       positions: quad(x0, y0, z0, x1, y0, z0, x1, y1, z0, x0, y1, z0),
-      uvs: uv(x0, 1 - y0, x1, 1 - y0, x1, 1 - y1, x0, 1 - y1),
+      uvs: uv(1 - x0, 1 - y0, 1 - x1, 1 - y0, 1 - x1, 1 - y1, 1 - x0, 1 - y1),
       normal: [0, 0, -1],
     },
     south: {
       positions: quad(x1, y0, z1, x0, y0, z1, x0, y1, z1, x1, y1, z1),
-      uvs: uv(1 - x1, 1 - y0, 1 - x0, 1 - y0, 1 - x0, 1 - y1, 1 - x1, 1 - y1),
+      uvs: uv(x1, 1 - y0, x0, 1 - y0, x0, 1 - y1, x1, 1 - y1),
       normal: [0, 0, 1],
     },
     west: {
       positions: quad(x0, y0, z1, x0, y0, z0, x0, y1, z0, x0, y1, z1),
-      uvs: uv(1 - z1, 1 - y0, 1 - z0, 1 - y0, 1 - z0, 1 - y1, 1 - z1, 1 - y1),
+      uvs: uv(z1, 1 - y0, z0, 1 - y0, z0, 1 - y1, z1, 1 - y1),
       normal: [-1, 0, 0],
     },
     east: {
       positions: quad(x1, y0, z0, x1, y0, z1, x1, y1, z1, x1, y1, z0),
-      uvs: uv(z0, 1 - y0, z1, 1 - y0, z1, 1 - y1, z0, 1 - y1),
+      uvs: uv(1 - z0, 1 - y0, 1 - z1, 1 - y0, 1 - z1, 1 - y1, 1 - z0, 1 - y1),
       normal: [1, 0, 0],
     },
     down: {
       positions: quad(x0, y0, z1, x1, y0, z1, x1, y0, z0, x0, y0, z0),
-      uvs: uv(x0, z1, x1, z1, x1, z0, x0, z0),
+      uvs: uv(x0, 1 - z1, x1, 1 - z1, x1, 1 - z0, x0, 1 - z0),
       normal: [0, -1, 0],
     },
     up: {
       positions: quad(x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1),
-      uvs: uv(x0, 1 - z0, x1, 1 - z0, x1, 1 - z1, x0, 1 - z1),
+      uvs: uv(x0, z0, x1, z0, x1, z1, x0, z1),
       normal: [0, 1, 0],
     },
   };
@@ -694,10 +729,24 @@ function applyTint(image: RgbaImage, tint: readonly [number, number, number]): R
  * A vanilla model's explicit `uv` window, `[u0, v0, u1, v1]` in the tile's
  * 0..16 space with V already running downward, expanded to the four corners in
  * the same vertex order `boxFaceGeometry` emits.
+ *
+ * **It has to agree with the derived UVs face by face**, which is why it takes
+ * the direction. A window is stated the way vanilla states one — `u0` is the
+ * *left* edge of the picture as somebody outside the block sees it — and the
+ * corner of the box that lands on is not the same for all six faces: on the
+ * four sides the picture's left is the box's far corner along the face's own
+ * axis, and on the top and the bottom it is `x0`. Applying one order to
+ * everything is what put a window on backwards relative to the coordinate-
+ * derived UVs beside it in the same shape.
  */
-function windowUvsFrom(window: readonly [number, number, number, number]): Float32Array {
+function windowUvsFrom(
+  face: string,
+  window: readonly [number, number, number, number],
+): Float32Array {
   const [u0, v0, u1, v1] = window.map((n) => n / 16) as [number, number, number, number];
-  return new Float32Array([u0, v1, u1, v1, u1, v0, u0, v0]);
+  return face === "up" || face === "down"
+    ? new Float32Array([u0, v0, u1, v0, u1, v1, u0, v1])
+    : new Float32Array([u1, v1, u0, v1, u0, v0, u1, v0]);
 }
 
 /**
@@ -712,6 +761,14 @@ function windowUvsFrom(window: readonly [number, number, number, number]): Float
  * It matters wherever the window's aspect does not match the face's: the anvil
  * states its foot's west face as a 4x12 window on a face that is 12 wide and 4
  * tall, and without the turn that window is stretched across the face sideways.
+ *
+ * **Which way it turns is decided by `windowUvsFrom`, not by anything here.**
+ * A shift is only a rotation once you know which way round the four corners
+ * already run, and they used to run the other way — so a `rotation: 90`
+ * transcribed from a vanilla model came out as vanilla's 270. That is a
+ * half-turn of the picture, which on the anvil's and the grindstone's bands is
+ * invisible, so it was never going to be reported. Both were corrected by the
+ * same edit, because both are the same fact stated once.
  */
 function rotateWindowUvs(uvs: Float32Array, degrees: number): Float32Array {
   const quarters = ((Math.round(degrees / 90) % 4) + 4) % 4;
@@ -1354,7 +1411,7 @@ export class ModelBaker {
         // the picture within the face, which is a different thing from turning
         // the box and is why both are carried.
         uvs: window
-          ? rotateWindowUvs(windowUvsFrom(window), turn ?? 0)
+          ? rotateWindowUvs(windowUvsFrom(name, window), turn ?? 0)
           : rotateWindowUvs(definition.uvs.slice(), turn ?? 0),
         normal: definition.normal,
         textureKey: key,

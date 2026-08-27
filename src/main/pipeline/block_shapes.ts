@@ -461,6 +461,16 @@ function unwrapCube(
  * which is what `bedCandidates` undoes when it maps a world face back into the
  * model's own axes; the foot is the same shape turned 180 degrees so the two
  * halves meet head-to-foot.
+ *
+ * Nothing here decides where the *pillow* lands, and that is the point: a bed
+ * is the block that finally made the mirrored UV convention legible, because
+ * `<colour>_bed_head_up` is white over the half of its tile the model calls
+ * north and black over the other. Read backwards it put the pillow at the joint
+ * — a white patch in the middle of the bed with the headboard beyond it — and
+ * every leg's two side faces sampled the empty end of their own strip, so each
+ * leg drew as two cards rather than a post. The fix is in
+ * `model_baker.ts`'s `boxFaceGeometry`; this file needed no change at all,
+ * which is why the fault looked like a bed for three rounds of looking at it.
  */
 function bed(entry: PaletteEntry): BlockShape {
   const head = entry.properties.part !== "foot";

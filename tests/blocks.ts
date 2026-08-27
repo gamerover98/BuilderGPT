@@ -102,6 +102,37 @@ console.log("=== Schematic AI Studio block geometry ===\n");
 const pack = await findBundledResourcePack();
 const baker = await ModelBaker.create(null, pack);
 
+/**
+ * The texel a point on a face's own plane samples.
+ *
+ * Reading the picture back out in *world* coordinates is what makes an
+ * orientation check legible: "the pillow is over the outer half" is a sentence
+ * about the block, where the four uv pairs that produce it are not.
+ */
+function texelOn(
+  face: BakedFace,
+  point: readonly [number, number, number],
+): { alpha: number; luminance: number } {
+  const at = (i: number, axis: number) => face.positions[i * 3 + axis];
+  const edge = (i: number) => [0, 1, 2].map((axis) => at(i, axis) - at(0, axis));
+  const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const across = edge(1);
+  const down = edge(3);
+  const from = [0, 1, 2].map((axis) => point[axis] - at(0, axis));
+  const s = dot(from, across) / dot(across, across);
+  const t = dot(from, down) / dot(down, down);
+  const u = face.uvs[0] + (face.uvs[2] - face.uvs[0]) * s + (face.uvs[6] - face.uvs[0]) * t;
+  const v = face.uvs[1] + (face.uvs[3] - face.uvs[1]) * s + (face.uvs[7] - face.uvs[1]) * t;
+  const image = baker.textures[face.textureKey];
+  const x = Math.min(image.width - 1, Math.max(0, Math.floor(u * image.width)));
+  const y = Math.min(image.height - 1, Math.max(0, Math.floor(v * image.height)));
+  const i = (y * image.width + x) * 4;
+  return {
+    alpha: image.data[i + 3],
+    luminance: image.data[i] * 0.3 + image.data[i + 1] * 0.59 + image.data[i + 2] * 0.11,
+  };
+}
+
 // --- texture orientation ----------------------------------------------------
 //
 // The defect: `_UNIT_UVS` put V=0 at the world *bottom* of a face, but glTF
@@ -126,6 +157,130 @@ console.log("--- texture orientation ---");
     check("the bottom of a face samples the bottom of its tile (V=1)", vAtBottom === 1);
   }
 }
+
+// --- which way round a texture goes -----------------------------------------
+//
+// The check above is the vertical half of the rule, and it held while the
+// horizontal half was wrong on **every face of every block**. The app mirrored
+// each one against vanilla's `uvsByFace`, which reads `u = 16 - x` on north,
+// `u = x` on south, `u = z` on west, `u = 16 - z` on east, `v = z` on up and
+// `v = 16 - z` on down.
+//
+// A mirror is invisible on nearly everything in the game — a plank, a stone, an
+// ore is either symmetric or noise — which is how it survived. Where it showed,
+// it showed as a report about something else: a bed whose pillow sat at the
+// joint instead of under the headboard, a double chest bordered down its middle
+// and open at its outer ends, and every bed leg's side faces landing on the
+// transparent part of their own strip.
+//
+// So the rule is stated here in the terms a texture is *painted* to: seen from
+// outside the block, U runs to the viewer's right and V downward. On the top
+// and the bottom the viewer's "up" is north and south respectively, which is
+// the convention every top texture in the game is drawn to.
+console.log("\n--- which way round a texture goes ---");
+{
+  const outside: Record<string, { right: readonly number[]; up: readonly number[] }> = {
+    north: { right: [-1, 0, 0], up: [0, 1, 0] },
+    south: { right: [1, 0, 0], up: [0, 1, 0] },
+    west: { right: [0, 0, 1], up: [0, 1, 0] },
+    east: { right: [0, 0, -1], up: [0, 1, 0] },
+    up: { right: [1, 0, 0], up: [0, 0, -1] },
+    down: { right: [1, 0, 0], up: [0, 0, 1] },
+  };
+  const facing = (face: BakedFace) => {
+    const [x, y, z] = face.normal;
+    if (x !== 0) return x === 1 ? "east" : "west";
+    if (y !== 0) return y === 1 ? "up" : "down";
+    return z === 1 ? "south" : "north";
+  };
+  /** Whether one face reads the right way round on both axes. */
+  const readsRight = (face: BakedFace): [boolean, boolean] => {
+    const axes = outside[facing(face)];
+    const along = (dir: readonly number[], i: number) =>
+      face.positions[i * 3] * dir[0] +
+      face.positions[i * 3 + 1] * dir[1] +
+      face.positions[i * 3 + 2] * dir[2];
+    const furthest = (dir: readonly number[]) =>
+      [0, 1, 2, 3].reduce((best, i) => (along(dir, i) > along(dir, best) ? i : best), 0);
+    const us = [0, 1, 2, 3].map((i) => face.uvs[i * 2]);
+    const vs = [0, 1, 2, 3].map((i) => face.uvs[i * 2 + 1]);
+    return [
+      us[furthest(axes.right)] === Math.max(...us),
+      vs[furthest(axes.up)] === Math.min(...vs),
+    ];
+  };
+
+  const cube = await baker.bakeBlockstate(block("stone"));
+  for (const name of Object.keys(outside)) {
+    const face = cube.faces[name];
+    if (face === undefined) {
+      check(`a cube has a ${name} face`, false);
+      continue;
+    }
+    const [horizontal, vertical] = readsRight(face);
+    check(`${name}: U runs to the viewer's right`, horizontal);
+    check(`${name}: ...and V downward from the top`, vertical);
+  }
+
+  /*
+   * ...and a stated window has to agree with the derived UVs face by face, or
+   * a shape that uses both — which most of the hand-transcribed ones do — comes
+   * out with some of its boxes mirrored and the rest not. The flower pot is the
+   * proof that the rule above is vanilla's own and not merely self-consistent:
+   * its windows are transcribed verbatim, and `north: [10, 10, 11, 16]` on a
+   * box spanning x 5..6 is only `16 - x`.
+   */
+  for (const name of ["flower_pot", "torch", "lantern", "brewing_stand", "oak_stairs"]) {
+    const baked = await baker.bakeBlockstate(block(name));
+    const faces = [...Object.values(baked.faces), ...baked.extraFaces];
+    const wrong = faces.filter((face) => readsRight(face).includes(false));
+    check(
+      `every face of ${name} reads the right way round (${faces.length})`,
+      wrong.length === 0,
+      `${wrong.length} do not`,
+    );
+  }
+}
+
+// --- a texture with a right way up ------------------------------------------
+//
+// The rule above is geometry and could be restated wrongly in both places at
+// once, so here is the same thing in pixels, on the one block in the game whose
+// texture is chiral: `light` wears its own level as a **number**. Mirrored, the
+// 7 reads backwards — which is what every block in the app was doing, and what
+// no amount of staring at cobblestone would ever have shown.
+console.log("\n--- a texture with a right way up ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  // `light_07`'s digit is drawn in the top-left corner of its tile: the bar
+  // across the top of the 7 reaches the left edge, and the right edge of that
+  // row is empty. Seen from the south, the left of the picture is the west.
+  const lit = await baker.bakeBlockstate(block("light", { level: "7" }));
+  const south = [...Object.values(lit.faces), ...lit.extraFaces].find((f) => f.normal[2] === 1);
+  check("the light block bakes a south face", south !== undefined);
+  if (south !== undefined) {
+    equal("it is the numbered texture", south.textureKey, "minecraft:item/light_07");
+    check("the 7's bar is on the west", texelOn(south, [0.1, 0.98, 1]).alpha > 128);
+    check("...and nothing is drawn opposite it", texelOn(south, [0.9, 0.98, 1]).alpha < 128);
+  }
+}
+/*
+ * There is deliberately nothing here about the chest, and that is worth writing
+ * down because it is the block this rule was first checked against.
+ *
+ * `entity/chest/normal.png` is left-right symmetric on every face it draws: the
+ * four side strips are the same planks, the lock notch is centred, and the one
+ * asymmetric mark in a strip is the dark line at its last column — the vertical
+ * shadow where two faces meet. Every strip carries it at the same end, so
+ * whichever way round the strips are read, each of the four corners is drawn
+ * exactly once and the picture is identical.
+ *
+ * A check written on those columns fails when the mapping changes and would
+ * therefore look like a good tripwire. It is not: it fails on both arrangements
+ * being different rather than on one being wrong, which is a check that bites
+ * without being true.
+ */
 
 // --- the light block --------------------------------------------------------
 //
@@ -1409,6 +1564,42 @@ if (pack === null) {
   const outer = eastHead.find((f) => f.normal[0] === 1 && f.positions[1] > 0.15);
   equal("an east-facing head shows its headboard east", outer?.textureKey, "minecraft:block/bed_head_north");
   equal("...and nothing at the joint on its west", at(eastHead, 0, -1, 0).filter((f) => f.positions[1] > 0.15).length, 0);
+
+  /*
+   * And the pillow is over the head's **outer** half, which is the part that
+   * was reported and the part the checks above could not see: they are about
+   * which texture goes on which face, and this one was mirrored *within* the
+   * face. `black_bed_head_up` is white over the half of its tile the model
+   * calls north and black over the other, so a mirrored V put the pillow at the
+   * joint — a white patch in the middle of the bed with the headboard beyond it.
+   *
+   * Black rather than red because a red bed's mattress and its pillow are both
+   * light: the difference has to be legible in one number.
+   */
+  const headTop = (await baker.bakeBlockstate(block("black_bed", { part: "head", facing: "north" })))
+    .extraFaces.find((f) => f.normal[1] === 1);
+  check("a bed head has a top", headTop !== undefined);
+  if (headTop !== undefined) {
+    equal("...wearing its own texture", headTop.textureKey, "minecraft:block/black_bed_head_up");
+    const outerHalf = texelOn(headTop, [0.5, headTop.positions[1], 0.25]).luminance;
+    const jointHalf = texelOn(headTop, [0.5, headTop.positions[1], 0.75]).luminance;
+    check("the pillow is over the outer half", outerHalf > 200, `${outerHalf}`);
+    check("...and the mattress over the joint", jointHalf < 60, `${jointHalf}`);
+  }
+
+  /*
+   * A leg's four side faces used to land on the transparent part of their own
+   * strip, so each leg drew as two cards rather than a post. `head_west` paints
+   * its leg at the low end of the tile and `head_east` at the high one; U
+   * mirrored, both boxes read the other end and found nothing.
+   */
+  const legSides = (await baker.bakeBlockstate(block("black_bed", { part: "head", facing: "north" })))
+    .extraFaces.filter((f) => f.normal[1] === 0 && f.normal[0] !== 0 && f.positions[1] < 0.15);
+  equal("a head's two legs have four side faces", legSides.length, 4);
+  const blank = legSides.filter(
+    (f) => texelOn(f, [f.positions[0], 0.09, 0.09]).alpha < 128,
+  );
+  equal("...and every one of them is drawn", blank.length, 0);
 }
 
 // --- potted plants ----------------------------------------------------------

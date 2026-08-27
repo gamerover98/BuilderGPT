@@ -50,6 +50,21 @@ export interface ShapeBox {
    */
   readonly texture?: string;
   /**
+   * A texture per face, for a box whose sides do not all wear the same one.
+   *
+   * `texture` covers "this box is made of something else"; this covers "and
+   * its ends are made of a third thing". A grindstone's wheel is the case that
+   * needed it — `#round` on the two flat faces and `#side` on the rim, from
+   * one element of one vanilla model — and the anvil's block is the other:
+   * `#body` all round with `#top` on the face the hammer lands on.
+   *
+   * Before it, the only per-face rule was `SPECIAL_FACE_RULES`, which is keyed
+   * on the *block*: saying "up is anvil_top" there puts the anvil's top on the
+   * up face of every box in the anvil, including the ledge round its foot,
+   * which vanilla textures with the body.
+   */
+  readonly textures?: Readonly<Record<string, string>>;
+  /**
    * Explicit texture windows per face.
    *
    * UVs are normally derived from the box coordinates, which is right for
@@ -60,6 +75,15 @@ export interface ShapeBox {
    * windows are transcribed from the vanilla model.
    */
   readonly uv?: Readonly<Record<string, UvWindow>>;
+  /**
+   * A vanilla face's `rotation`: the texture turned clockwise within the face,
+   * in whole quarter-turns. It is a property of the *window*, not of the box —
+   * the anvil states its foot's west face as `[0, 2, 4, 14]` rotated 90°, a
+   * window that is 4 wide and 12 tall wrapped onto a face that is 12 wide and
+   * 4 tall — so a window without its rotation addresses the right pixels and
+   * lays them across the face sideways.
+   */
+  readonly uvRotation?: Readonly<Record<string, number>>;
   /**
    * Faces to leave out because another box of the same block covers them. Two
    * coincident faces z-fight, which is what a chest's lid resting exactly on
@@ -123,16 +147,25 @@ const ROTATED_FACE: Readonly<Record<string, string>> = {
   down: "down",
 };
 
-function rotateUv(
-  uv: Readonly<Record<string, UvWindow>> | undefined,
+/**
+ * Carries anything keyed by face name through the model's `y` rotation.
+ *
+ * The values are untouched: a window, a texture name and a quarter-turn count
+ * all describe the face they are attached to, and the rotation only moves which
+ * face that is. Written once rather than three times because the three maps on
+ * a `ShapeBox` have to move together — a texture that stayed put while its
+ * window turned would be a fault nothing in the app could notice.
+ */
+function rotateFaceMap<T>(
+  map: Readonly<Record<string, T>> | undefined,
   steps: number,
-): Readonly<Record<string, UvWindow>> | undefined {
-  if (!uv) return undefined;
-  let current = uv;
+): Readonly<Record<string, T>> | undefined {
+  if (!map) return undefined;
+  let current = map;
   for (let i = 0; i < ((steps % 4) + 4) % 4; i += 1) {
-    const next: Record<string, UvWindow> = {};
-    for (const [face, window] of Object.entries(current)) {
-      next[ROTATED_FACE[face] ?? face] = window;
+    const next: Record<string, T> = {};
+    for (const [face, value] of Object.entries(current)) {
+      next[ROTATED_FACE[face] ?? face] = value;
     }
     current = next;
   }
@@ -166,7 +199,9 @@ function rotateShapeBox(entry: ShapeBox, steps: number): ShapeBox {
   return {
     ...entry,
     box: rotateBoxY(entry.box, steps),
-    uv: rotateUv(entry.uv, steps),
+    uv: rotateFaceMap(entry.uv, steps),
+    textures: rotateFaceMap(entry.textures, steps),
+    uvRotation: rotateFaceMap(entry.uvRotation, steps),
     rotation: rotateBoxRotation(entry.rotation, steps),
     omit,
   };
@@ -358,12 +393,24 @@ function unwrapCube(
   dx: number,
   dy: number,
   dz: number,
+  /**
+   * The sheet's own width, in its own texels.
+   *
+   * The windows below are stated in sheet texels and `UvWindow` is in
+   * sixteenths of the tile, so the two only agree once the sheet's size is
+   * known. It was hardcoded as 64 — right for every sheet this function had
+   * been used on, and wrong the moment a 32-wide one arrived: a sign's board
+   * came out wearing a quarter of its own sheet blown up to fill the face,
+   * which reads as a plank and is why it nearly passed.
+   */
+  sheet = 64,
 ): Record<string, UvWindow> {
+  const scale = 16 / sheet;
   const w = (x: number, y: number, width: number, height: number): UvWindow => [
-    x / 4,
-    y / 4,
-    (x + width) / 4,
-    (y + height) / 4,
+    x * scale,
+    y * scale,
+    (x + width) * scale,
+    (y + height) * scale,
   ];
   /*
    * The four side strips run **bottom-up**, and the lock says so.
@@ -385,10 +432,10 @@ function unwrapCube(
    * mechanism vanilla's own models use to mirror one.
    */
   const side = (x: number, y: number, width: number, height: number): UvWindow => [
-    x / 4,
-    (y + height) / 4,
-    (x + width) / 4,
-    y / 4,
+    x * scale,
+    (y + height) * scale,
+    (x + width) * scale,
+    y * scale,
   ];
   return {
     down: w(u + dz, v, dx, dz),
@@ -477,7 +524,26 @@ function chest(entry: PaletteEntry): BlockShape {
   const type = entry.properties.type;
   const wide = type === "left" || type === "right";
   const width = wide ? 15 : 14;
-  const body = unwrapCube(0, 19, width, 10, 14);
+  /*
+   * The body is **nine** rows tall, not ten, and the tenth is the seam.
+   *
+   * A chest is 14 tall and its two strips are 10 and 5, which is 15 -- so one
+   * row is spent twice, and the sheet says which. The body's last row and the
+   * lid's first are *byte-identical*: at every column of the front strip,
+   * `46 48 48 46 46 36 36 36 48 46 46 48 48 59`. That is the dark line where
+   * the lid meets the body, painted once and read by both boxes.
+   *
+   * Drawn as vanilla states them the two boxes overlap over that row and their
+   * four side faces are coplanar there. In the game the z-fight is invisible
+   * because both surfaces are the same pixels; here it was a dotted black line
+   * across every chest in the build, because the atlas resamples each window
+   * separately and the two stop agreeing to the texel.
+   *
+   * So the body stops at 9 and the lid keeps the seam. Nothing is squashed and
+   * nothing is invented: both strips still map one row to one unit, and the
+   * only row dropped is the one that was drawn twice.
+   */
+  const body = unwrapCube(0, 19, width, 9, 14);
   const lid = unwrapCube(0, 0, width, 5, 14);
   /*
    * The seam faces the partner: `left` is joined clockwise of its facing, which
@@ -505,13 +571,37 @@ function chest(entry: PaletteEntry): BlockShape {
    * face before the half-turn puts it east.
    */
   const inner = wide ? [type === "left" ? "west" : "east"] : [];
+  /*
+   * The lock: the latch on the front, straddling the joint.
+   *
+   * It was simply missing -- the sheet has it at (0,0), 2x4x1, and the notch it
+   * leaves in the two front strips was being drawn with nothing standing in it.
+   * Four rows centred on the joint puts it at 7..11, which is where the notch
+   * is: the dark core sits at the body's rows 40-41 and the lid's 15-16.
+   *
+   * A double half's latch is **one** wide, because vanilla's is two wide
+   * centred on the pair and each half carries the half of it that is on its
+   * own side of the seam. The sheets say so on their own: `normal_left` leaves
+   * its lock's west window blank and `normal_right` its east, which is the
+   * same face `inner` already names for the chest itself.
+   *
+   * `north` goes, on all three: it lies in the plane of the chest's own front.
+   */
+  const lockWide = wide ? 1 : 2;
+  const lockX0 = wide ? (type === "left" ? 0 : 15) : 7;
+  const lock = unwrapCube(0, 0, lockWide, 4, 1);
   return transform(
     [
       // The body's top and the lid's underside are coincident planes, and the
       // body's top window is the chest's dark *interior* -- left in, they
       // z-fight and the seam flickers black.
-      { box: [x0, 0, 1, x1, 10, 15], uv: body, omit: ["up", ...inner] },
+      { box: [x0, 0, 1, x1, 9, 15], uv: body, omit: ["up", ...inner] },
       { box: [x0, 9, 1, x1, 14, 15], uv: lid, omit: ["down", ...inner] },
+      {
+        box: [lockX0, 7, 15, lockX0 + lockWide, 11, 16],
+        uv: lock,
+        omit: ["north", ...inner],
+      },
     ],
     southFacingSteps(entry),
     false,
@@ -792,18 +882,86 @@ function chain(entry: PaletteEntry): BlockShape {
  * the side.
  */
 const FLOWER_POT: readonly ShapeBox[] = [
-  { box: [5, 0, 5, 6, 6, 11], texture: "flower_pot" },
-  { box: [10, 0, 5, 11, 6, 11], texture: "flower_pot" },
-  { box: [6, 0, 5, 10, 6, 6], texture: "flower_pot" },
-  { box: [6, 0, 10, 10, 6, 11], texture: "flower_pot" },
-  { box: [6, 0, 6, 10, 4, 10], texture: "dirt" },
+  {
+    box: [5, 0, 5, 6, 6, 11],
+    texture: "flower_pot",
+    uv: {
+      down: [5, 5, 6, 11],
+      up: [5, 5, 6, 11],
+      north: [10, 10, 11, 16],
+      south: [5, 10, 6, 16],
+      west: [5, 10, 11, 16],
+      east: [5, 10, 11, 16],
+    },
+  },
+  {
+    box: [10, 0, 5, 11, 6, 11],
+    texture: "flower_pot",
+    uv: {
+      down: [10, 5, 11, 11],
+      up: [10, 5, 11, 11],
+      north: [5, 10, 6, 16],
+      south: [10, 10, 11, 16],
+      west: [5, 10, 11, 16],
+      east: [5, 10, 11, 16],
+    },
+  },
+  {
+    box: [6, 0, 5, 10, 6, 6],
+    texture: "flower_pot",
+    uv: { down: [6, 10, 10, 11], up: [6, 5, 10, 6], north: [6, 10, 10, 16], south: [6, 10, 10, 16] },
+    // The two ends butt against the tall staves either side of them.
+    omit: ["west", "east"],
+  },
+  {
+    box: [6, 0, 10, 10, 6, 11],
+    texture: "flower_pot",
+    uv: { down: [6, 5, 10, 6], up: [6, 10, 10, 11], north: [6, 10, 10, 16], south: [6, 10, 10, 16] },
+    omit: ["west", "east"],
+  },
+  {
+    // The soil. Its underside is the pot's floor and wears the pot; its four
+    // sides are inside the pot's walls, which is where vanilla leaves them out
+    // and where drawing them would z-fight with the staves.
+    box: [6, 0, 6, 10, 4, 10],
+    texture: "flower_pot",
+    textures: { up: "dirt" },
+    uv: { down: [6, 12, 10, 16], up: [6, 6, 10, 10] },
+    omit: ["north", "south", "west", "east"],
+  },
 ];
 
+/**
+ * The plant in the pot: two crossed planes, from `flower_pot_cross.json`.
+ *
+ * They are **4 to 16**, and they were 6 to 22 — six units above the block, on a
+ * plane whose derived UVs then ran from `v = 0.625` to `v = -0.375`. Past the
+ * edge of the tile the atlas clamps, so the top third of every potted flower in
+ * the game was the top row of its own texture smeared upwards: a stem that
+ * grows out of the block and fades into a stripe.
+ *
+ * The window is vanilla's `[0, 0, 16, 16]` and has to be stated, because the
+ * plane is 12 units tall and the plant's picture fills its whole tile —
+ * coordinate-derived UVs would show the top three quarters of it.
+ */
+const POT_PLANT_UV: Readonly<Record<string, UvWindow>> = {
+  north: [0, 0, 16, 16],
+  south: [0, 0, 16, 16],
+  west: [0, 0, 16, 16],
+  east: [0, 0, 16, 16],
+};
+
 function pottedPlant(): BlockShape {
+  const spin: BoxRotation = { origin: [8, 8, 8], axis: "y", angle: 45 };
   return boxes(
     ...FLOWER_POT,
-    { box: [4.8, 6, 8, 11.2, 22, 8], rotation: { origin: [8, 8, 8], axis: "y", angle: 45 } },
-    { box: [8, 6, 4.8, 8, 22, 11.2], rotation: { origin: [8, 8, 8], axis: "y", angle: 45 } },
+    // Vanilla writes these 2.6..13.4 with `rescale: true`, which grows the
+    // rotated plane back out to the block's diagonal. There is no rescale
+    // here, so the plane is written at its rescaled width instead: 0..16
+    // turned 45 degrees reaches 8 +/- 8/sqrt(2), which is what `kind: "cross"`
+    // already builds and what vanilla's rescale arrives at.
+    { box: [0, 4, 8, 16, 16, 8], rotation: spin, uv: POT_PLANT_UV },
+    { box: [8, 4, 0, 8, 16, 16], rotation: spin, uv: POT_PLANT_UV },
   );
 }
 
@@ -833,23 +991,99 @@ function brewingStand(): BlockShape {
  *
  * It was the wheel alone -- one box, floating -- which is the half of the model
  * that does not tell you what the block is. The legs take `dark_oak_log`
- * whatever the pack, exactly as vanilla's model does, and the pivots their own
- * texture; the wheel keeps the block's, which resolves `grindstone_side`.
+ * whatever the pack, exactly as vanilla's model does.
+ *
+ * ## The wheel has two textures and used to wear one
+ *
+ * `#round` is the wheel seen face-on -- the circular stone -- and `#side` is
+ * its rim. Drawing the whole wheel in `#side` is what turned the one part of
+ * the block anybody recognises into a blank slab, and it is the same class of
+ * fault as the anvil's: a block whose model names three textures cannot be
+ * served by a function that guesses one from its name.
+ *
+ * ## Authored facing north
+ *
+ * `face=floor,facing=north` carries no rotation in the blockstate, so this is
+ * `northFacingSteps` and was `facingSteps` -- a quarter-turn out, which on a
+ * symmetric shape is invisible and on this one puts the wheel across the run.
+ * `face=wall` and `face=ceiling` also carry an `x` rotation, which this file
+ * has no way to express; those two still draw as a floor grindstone.
+ *
+ * Every window below is vanilla's, and so is every omission: the legs have no
+ * top (the pivot sits on it) and each pivot has no face toward the wheel.
  */
-function grindstone(entry: PaletteEntry): BlockShape {
-  const leg = (x0: number, x1: number): ShapeBox => ({
-    box: [x0, 0, 6, x1, 7, 10],
+const GRINDSTONE_PARTS: readonly ShapeBox[] = [
+  {
+    box: [12, 0, 6, 14, 7, 10],
     texture: "dark_oak_log",
-  });
-  const pivot = (x0: number, x1: number): ShapeBox => ({
-    box: [x0, 7, 5, x1, 13, 11],
+    uv: {
+      north: [2, 9, 4, 16],
+      east: [10, 16, 6, 9],
+      south: [12, 9, 14, 16],
+      west: [6, 9, 10, 16],
+      down: [12, 6, 14, 10],
+    },
+    omit: ["up"],
+  },
+  {
+    box: [2, 0, 6, 4, 7, 10],
+    texture: "dark_oak_log",
+    uv: {
+      north: [12, 9, 14, 16],
+      east: [10, 16, 6, 9],
+      south: [2, 9, 4, 16],
+      west: [6, 9, 10, 16],
+      down: [2, 6, 4, 10],
+    },
+    omit: ["up"],
+  },
+  {
+    box: [12, 7, 5, 14, 13, 11],
     texture: "grindstone_pivot",
-  });
-  return transform(
-    [leg(12, 14), leg(2, 4), pivot(12, 14), pivot(2, 4), { box: [4, 4, 2, 12, 16, 14] }],
-    facingSteps(entry),
-    false,
-  );
+    uv: {
+      north: [6, 0, 8, 6],
+      east: [0, 0, 6, 6],
+      south: [6, 0, 8, 6],
+      up: [8, 0, 10, 6],
+      down: [8, 0, 10, 6],
+    },
+    omit: ["west"],
+  },
+  {
+    box: [2, 7, 5, 4, 13, 11],
+    texture: "grindstone_pivot",
+    uv: {
+      north: [6, 0, 8, 6],
+      south: [6, 0, 8, 6],
+      west: [0, 0, 6, 6],
+      up: [8, 0, 10, 6],
+      down: [8, 0, 10, 6],
+    },
+    omit: ["east"],
+  },
+  {
+    box: [4, 4, 2, 12, 16, 14],
+    textures: {
+      north: "grindstone_round",
+      south: "grindstone_round",
+      east: "grindstone_side",
+      west: "grindstone_side",
+      up: "grindstone_round",
+      down: "grindstone_round",
+    },
+    uv: {
+      north: [0, 0, 8, 12],
+      south: [0, 0, 8, 12],
+      east: [0, 0, 12, 12],
+      west: [0, 0, 12, 12],
+      up: [0, 0, 8, 12],
+      down: [0, 0, 8, 12],
+    },
+  },
+];
+
+function grindstone(entry: PaletteEntry): BlockShape {
+  return transform(GRINDSTONE_PARTS, northFacingSteps(entry), false);
 }
 
 /**
@@ -859,16 +1093,92 @@ function grindstone(entry: PaletteEntry): BlockShape {
  * Authored **facing south** -- its blockstate gives `facing=south` no rotation,
  * which is worth reading off the file rather than guessing, because the anvil
  * is not symmetric and a quarter-turn puts its long axis across the run.
+ *
+ * ## Two textures, and one of them is the whole point of the block
+ *
+ * `#body` is `block/anvil` on every face but one, and `#top` -- `anvil_top`,
+ * `chipped_anvil_top`, `damaged_anvil_top` -- is the face the hammer lands on.
+ * **That face is the only difference between the three anvils**, so a block
+ * that does not state it draws all three identically.
+ *
+ * Naming them here rather than leaving it to `cubeFaceTextures` is not a
+ * refinement, it is the fix. That function guesses from the block's name, and
+ * `chipped_anvil` has exactly one texture in the pack: `chipped_anvil_top`. So
+ * it answered that for all six faces and a chipped anvil came out as a solid
+ * shape wearing the picture of its own dented top, base included.
+ *
+ * ## Its windows are the model's, and they are rotated
+ *
+ * `anvil.png` is a *sheet* rather than a full-block tile -- the foot's band,
+ * the waist and the block are cut from different parts of it -- so the windows
+ * are transcribed, and several carry vanilla's `rotation`: the west face of the
+ * foot is a 4-wide, 12-tall window laid onto a face 12 wide and 4 tall. The
+ * reversed pairs (`east: [4, 2, 0, 14]`) are vanilla mirroring a face, which
+ * `windowUvsFrom` reproduces by doing no ordering check.
+ *
+ * Faces vanilla omits are omitted: the waist has no top or bottom and the
+ * step above it no bottom, because in each case the next box covers it.
  */
-const ANVIL_PARTS: Box[] = [
-  [2, 0, 2, 14, 4, 14],
-  [4, 4, 3, 12, 5, 13],
-  [6, 5, 4, 10, 10, 12],
-  [3, 10, 0, 13, 16, 16],
+const ANVIL_PARTS: readonly ShapeBox[] = [
+  {
+    box: [2, 0, 2, 14, 4, 14],
+    uv: {
+      down: [2, 2, 14, 14],
+      up: [2, 2, 14, 14],
+      north: [2, 12, 14, 16],
+      south: [2, 12, 14, 16],
+      west: [0, 2, 4, 14],
+      east: [4, 2, 0, 14],
+    },
+    uvRotation: { down: 180, up: 180, west: 90, east: 270 },
+  },
+  {
+    box: [4, 4, 3, 12, 5, 13],
+    uv: {
+      up: [4, 3, 12, 13],
+      north: [4, 11, 12, 12],
+      south: [4, 11, 12, 12],
+      west: [4, 3, 5, 13],
+      east: [5, 3, 4, 13],
+    },
+    uvRotation: { up: 180, west: 90, east: 270 },
+    omit: ["down"],
+  },
+  {
+    box: [6, 5, 4, 10, 10, 12],
+    uv: {
+      north: [6, 6, 10, 11],
+      south: [6, 6, 10, 11],
+      west: [5, 4, 10, 12],
+      east: [10, 4, 5, 12],
+    },
+    uvRotation: { west: 90, east: 270 },
+    omit: ["up", "down"],
+  },
+  {
+    box: [3, 10, 0, 13, 16, 16],
+    uv: {
+      down: [3, 0, 13, 16],
+      up: [3, 0, 13, 16],
+      north: [3, 0, 13, 6],
+      south: [3, 0, 13, 6],
+      west: [10, 0, 16, 16],
+      east: [16, 0, 10, 16],
+    },
+    uvRotation: { down: 180, up: 180, west: 90, east: 270 },
+  },
 ];
 
 function anvil(entry: PaletteEntry): BlockShape {
-  return transform(ANVIL_PARTS, southFacingSteps(entry), false);
+  const name = entry.namespacedName.slice(entry.namespacedName.indexOf(":") + 1);
+  const parts = ANVIL_PARTS.map((part, index) => ({
+    ...part,
+    texture: "anvil",
+    // Only the last box has a top face anyone sees, and it is the one that
+    // says which of the three anvils this is.
+    textures: index === ANVIL_PARTS.length - 1 ? { up: `${name}_top` } : undefined,
+  }));
+  return transform(parts, southFacingSteps(entry), false);
 }
 
 /**
@@ -1007,6 +1317,63 @@ function vine(entry: PaletteEntry): BlockShape {
  * The shape is the half that was visibly wrong, and it is the half that can be
  * fixed without inventing anything.
  */
+/**
+ * The sign sheets are **32 wide**, and their parts are unwrapped on them.
+ *
+ * The comment above used to say the layout "does not match any unwrap this
+ * file could derive with confidence", and the reason it did not was arithmetic:
+ * `unwrapCube` assumed a 64-wide sheet, so every window it produced on a 32-wide
+ * one covered a quarter of what it named. Told the width, it lands.
+ *
+ * The hanging sign's board settles it, because four independent numbers agree
+ * with one box. `oak_hanging_sign.png` has exactly one 14-wide patch at
+ * `(2, 14)-(16, 16)` and one 32-wide band at `(0, 16)-(32, 26)`, and
+ * `unwrapCube(0, 14, 14, 10, 2)` puts `down` at `(2, 14)` 14 wide, and the four
+ * sides in a band `2 * (14 + 2) = 32` wide and `dy = 10` tall. Nothing was
+ * chosen to make that come out; it is where the paint is.
+ *
+ * The standing sign's board is the same reasoning with one number left over:
+ * its side band is 26 wide, which is `2 * (11 + 2)`, and its cap band is two
+ * rows tall, which is `dz = 2` — but the caps run from 0 rather than from
+ * `dz`, and 24 columns rather than 22. So `dx = 11` is what the band widths
+ * say and the two extra columns are unexplained. It is stated here rather than
+ * smoothed over: the board lands in the plank field either way, and the
+ * difference between this and a neighbouring fit is a column.
+ *
+ * The bar, the post and the chains are approximations of a different kind:
+ * a window over the right *material* rather than a transcription of the right
+ * part. Before them the chains sampled whatever a box's coordinates happened
+ * to point at, which for one of the two was the plank field — a wooden chain
+ * beside a metal one, on the same sign.
+ */
+const SIGN_SHEET = 32;
+const SIGN_BOARD = unwrapCube(0, 0, 11, 12, 2, SIGN_SHEET);
+const SIGN_POST = unwrapCube(28, 0, 1, 13, 1, SIGN_SHEET);
+const HANGING_BOARD = unwrapCube(0, 14, 14, 10, 2, SIGN_SHEET);
+const HANGING_BAR = unwrapCube(0, 0, 8, 2, 4, SIGN_SHEET);
+
+/** A window on the sheet, in its own texels, for the sides of a box. */
+function sheetWindow(x: number, y: number, w: number, h: number): UvWindow {
+  const scale = 16 / SIGN_SHEET;
+  // v descends, exactly as `unwrapCube`'s side strips do: the sheet's first
+  // row is the box's bottom edge.
+  return [x * scale, (y + h) * scale, (x + w) * scale, y * scale];
+}
+
+/**
+ * The chain links, from the metal art in the sheet's top-right corner.
+ *
+ * Two 2x4 sticks against a 5x6 patch of chain: not the transcription the board
+ * gets, but the right material on the right part, which is the whole of what
+ * was wrong.
+ */
+const HANGING_CHAIN: Readonly<Record<string, UvWindow>> = {
+  north: sheetWindow(21, 7, 5, 6),
+  south: sheetWindow(21, 7, 5, 6),
+  east: sheetWindow(21, 7, 5, 6),
+  west: sheetWindow(21, 7, 5, 6),
+};
+
 function standingSign(entry: PaletteEntry): BlockShape {
   // `rotation` is 0..15 around the compass; the boards are square in plan, so
   // the sixteenth-turns land on the nearest quarter.
@@ -1014,8 +1381,8 @@ function standingSign(entry: PaletteEntry): BlockShape {
   const steps = Number.isFinite(sixteenths) ? Math.round(sixteenths / 4) : 0;
   return transform(
     [
-      [0, 9, 7, 16, 16, 9],
-      [7, 0, 7, 9, 9, 9],
+      { box: [0, 9, 7, 16, 16, 9], uv: SIGN_BOARD },
+      { box: [7, 0, 7, 9, 9, 9], uv: SIGN_POST, omit: ["up"] },
     ],
     steps,
     false,
@@ -1024,21 +1391,28 @@ function standingSign(entry: PaletteEntry): BlockShape {
 
 /** A board flat on the wall, at the height a sign sits rather than floor to ceiling. */
 function wallSign(entry: PaletteEntry): BlockShape {
-  return transform([[0, 4, 14, 16, 12, 16]], facingSteps(entry) + 2, false);
+  return transform(
+    [{ box: [0, 4, 14, 16, 12, 16], uv: SIGN_BOARD }],
+    facingSteps(entry) + 2,
+    false,
+  );
 }
 
 /** A board on a bar, hanging clear of whatever is above it. */
 function hangingSign(entry: PaletteEntry): BlockShape {
   const attached = entry.properties.attached === "true";
-  const parts: Box[] = [
+  const parts: ShapeBox[] = [
     // The board.
-    [1, 0, 7, 15, 10, 9],
+    { box: [1, 0, 7, 15, 10, 9], uv: HANGING_BOARD },
     // The bar it hangs from, and the two chains, or the one plate that
     // replaces them when it is bolted straight to the block above.
-    [1, 14, 6, 15, 16, 10],
+    { box: [1, 14, 6, 15, 16, 10], uv: HANGING_BAR },
   ];
   if (!attached) {
-    parts.push([3, 10, 7.5, 5, 14, 8.5], [11, 10, 7.5, 13, 14, 8.5]);
+    parts.push(
+      { box: [3, 10, 7.5, 5, 14, 8.5], uv: HANGING_CHAIN },
+      { box: [11, 10, 7.5, 13, 14, 8.5], uv: HANGING_CHAIN },
+    );
   }
   const sixteenths = Number(entry.properties.rotation ?? "0");
   const steps = Number.isFinite(sixteenths) ? Math.round(sixteenths / 4) : 0;

@@ -369,13 +369,64 @@ console.log("\n--- shapes ---");
     [...keysOf(bedHead)].join(" "),
   );
 
-  // The chest's lid rests exactly on its body; two coincident planes z-fight,
-  // and the body's top window is the chest's dark interior.
+  /*
+   * The chest's lid rests on its body, and the joint has to be a single plane.
+   *
+   * Two things meet here. The lid's underside and the body's top are coincident
+   * and both are omitted -- the body's top window is the chest's dark interior,
+   * so drawn it flickers black through the lid. And the two boxes must not
+   * *overlap*: vanilla's are 10 and 5 rows tall in a chest 14 tall, so one row
+   * is spent twice, and drawn as stated the four side faces are coplanar over
+   * it. In the game that z-fight is invisible because both surfaces are the
+   * same pixels; here the atlas resamples each window on its own and it came
+   * out as a dotted black line across every chest in the build.
+   */
   const chestBlock = await baker.bakeBlockstate(block("chest", { facing: "north", type: "single" }));
-  const upFaces = chestBlock.extraFaces.filter((f) => f.normal[1] === 1);
-  equal("a chest draws one top face, not two", upFaces.length, 1);
-  const downFaces = chestBlock.extraFaces.filter((f) => f.normal[1] === -1);
-  equal("and one bottom face", downFaces.length, 1);
+  const topOf = (f: BakedFace) => Math.max(f.positions[1], f.positions[4], f.positions[7], f.positions[10]);
+  const bottomOf = (f: BakedFace) => Math.min(f.positions[1], f.positions[4], f.positions[7], f.positions[10]);
+  const upFaces = chestBlock.extraFaces.filter((f) => f.normal[1] === 1 && topOf(f) === 14 / 16);
+  equal("a chest draws one face at its top, not two", upFaces.length, 1);
+  const downFaces = chestBlock.extraFaces.filter((f) => f.normal[1] === -1 && bottomOf(f) === 0);
+  equal("and one at its bottom", downFaces.length, 1);
+  equal(
+    "nothing is drawn at the joint, from either side",
+    chestBlock.extraFaces.filter((f) => f.normal[1] !== 0 && topOf(f) === 9 / 16).length,
+    0,
+  );
+  {
+    /*
+     * The lid and the body may touch and may not overlap: a side face of one
+     * must not share a y with a side face of the other.
+     *
+     * The lock is left out by its width. It sits on the front and straddles the
+     * joint on purpose -- that is what a latch is -- so it overlaps both, and
+     * including it would make this check unsatisfiable rather than strict.
+     */
+    const widthOf = (f: BakedFace) => {
+      const xs = [f.positions[0], f.positions[3], f.positions[6], f.positions[9]];
+      const zs = [f.positions[2], f.positions[5], f.positions[8], f.positions[11]];
+      return Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...zs) - Math.min(...zs));
+    };
+    const sides = chestBlock.extraFaces.filter((f) => f.normal[1] === 0 && widthOf(f) > 0.5);
+    const spans = [...new Set(sides.map((f) => `${bottomOf(f)}:${topOf(f)}`))].map((s) =>
+      s.split(":").map(Number),
+    );
+    const overlaps = spans.some(([a0, a1]) =>
+      spans.some(([b0, b1]) => (a0 !== b0 || a1 !== b1) && a0 < b1 && b0 < a1),
+    );
+    check("the lid and the body do not overlap", !overlaps, JSON.stringify(spans));
+  }
+  /*
+   * And the lock, which was simply not drawn: the sheet has it at (0,0), the
+   * notch it leaves is painted into both front strips, and there was nothing
+   * standing in it. It is the one part of a chest that is not a plank.
+   */
+  {
+    const proud = chestBlock.extraFaces.filter(
+      (f) => f.normal[2] === -1 && Math.min(f.positions[2], f.positions[5]) === 0,
+    );
+    check("a chest has a lock, standing proud of its front", proud.length === 1);
+  }
 
   const beacon = await baker.bakeBlockstate(block("beacon"));
   const keys = new Set(beacon.extraFaces.map((f) => f.textureKey));
@@ -588,6 +639,7 @@ if (pack === null) {
   );
   const ids = [...parseBlockList(readFileSync(listPath, "utf8"))];
   const unresolved: string[] = [];
+  const offTile: string[] = [];
   for (const id of ids) {
     const entry: PaletteEntry = { namespacedName: id, properties: {} };
     // Air is every empty cell in the document and is never drawn; it has no
@@ -597,6 +649,10 @@ if (pack === null) {
     if (baked.textureKey === paletteEntryCacheKey(entry)) {
       unresolved.push(id.replace("minecraft:", ""));
     }
+    const all: BakedFace[] = [...Object.values(baked.faces), ...baked.extraFaces];
+    if (all.some((f) => [...f.uvs].some((n) => n < -1e-6 || n > 1 + 1e-6))) {
+      offTile.push(id.replace("minecraft:", ""));
+    }
   }
   check(
     `all ${ids.length} offered ids resolve a real texture`,
@@ -604,6 +660,25 @@ if (pack === null) {
     unresolved.length === 0
       ? undefined
       : `${unresolved.length} fall back to the hashed-colour cube: ${unresolved.join(" ")}`,
+  );
+  /*
+   * ...and every one of them samples inside its own tile.
+   *
+   * Derived UVs cannot fail this: they come from box coordinates, which are
+   * already 0..16. An explicit window can, and does so silently -- the atlas
+   * clamps, so the face draws the tile's edge pixels smeared across it, which
+   * reads as a badly drawn texture rather than as a window that missed.
+   *
+   * The way it happens is arithmetic, not typing. `unwrapCube` states its
+   * windows in the *sheet's* texels and had the sheet's width baked in at 64;
+   * handed a 32-wide sign sheet it produced windows that named the right place
+   * and covered a quarter of it, and handed the same sheet with a 16-wide part
+   * on it, windows that ran off the end.
+   */
+  check(
+    "...and none of them samples outside its own tile",
+    offTile.length === 0,
+    offTile.length === 0 ? undefined : `${offTile.length} run off the tile: ${offTile.join(" ")}`,
   );
 }
 
@@ -815,10 +890,19 @@ if (pack === null) {
   check("the pot is drawn from flower_pot", keys.has("minecraft:block/flower_pot"));
   check("its soil is dirt", keys.has("minecraft:block/dirt"));
   check("and the plant is the plant", keys.has("minecraft:block/poppy"));
-  check(
-    "the plant reaches above the pot, as vanilla's does",
-    Math.max(...allVertices(potted).map((v) => v[1])) > 1,
-  );
+  /*
+   * The plant fills the block and stops there.
+   *
+   * It used to run to y = 22/16, on a comment claiming vanilla's does too.
+   * Vanilla's is `[2.6, 4, 8] to [13.4, 16, 8]`: it stops at the block's top.
+   * Six units of overshoot is not just a stem poking through the floor above —
+   * the plane's derived UVs ran to `v = -0.375`, off the tile, where the atlas
+   * clamps, so the top third of every potted flower was one row of its own
+   * texture smeared upward.
+   */
+  const ys = allVertices(potted).map((v) => v[1]);
+  equal("the plant fills the block and stops at its top", Math.max(...ys), 1);
+  equal("...standing in the soil rather than on it", Math.min(...ys), 0);
 }
 
 // --- trapdoor ---------------------------------------------------------------
@@ -1477,7 +1561,11 @@ if (pack === null) {
    * column at the far end of each part. A re-inversion swaps which of the two
    * is the notch, so the pair has to disagree in this direction specifically.
    */
-  const frontFaces = singleChest.extraFaces.filter((f) => f.normal[2] === -1);
+  // The lock is on the front too, and stands a unit proud of it; the two
+  // wanted here are the parts of the chest itself.
+  const frontFaces = singleChest.extraFaces.filter(
+    (f) => f.normal[2] === -1 && f.positions[2] === 1 / 16,
+  );
   equal("the front is two parts, lid and body", frontFaces.length, 2);
   const sampleFace = (face: BakedFace, fx: number, fy: number): number => {
     const tex = baker.textures[face.textureKey];
@@ -1512,9 +1600,11 @@ if (pack === null) {
   equal("a double half draws no face toward its partner", windowOf(leftChest, 0, 1), null);
   const rightChest = await baker.bakeBlockstate(block("chest", { facing: "north", type: "right" }));
   equal("...on the other side for the other half", windowOf(rightChest, 0, -1), null);
+  // One face each from the body, the lid and the lock: all three sit against
+  // the partner, and all three would z-fight with its own.
   check(
-    "so a half has two fewer faces than a single chest",
-    leftChest.extraFaces.length === singleChest.extraFaces.length - 2,
+    "so a half has three fewer faces than a single chest",
+    leftChest.extraFaces.length === singleChest.extraFaces.length - 3,
     `${leftChest.extraFaces.length} vs ${singleChest.extraFaces.length}`,
   );
 
@@ -1536,6 +1626,120 @@ if (pack === null) {
   check("a grindstone has its legs and pivots back", boxCount("grindstone", { facing: "north" }) === 5);
   for (const name of ["anvil", "chipped_anvil", "damaged_anvil"]) {
     check(`${name} is an anvil, not a cube`, boxCount(name, { facing: "north" }) === 4);
+  }
+
+  /*
+   * ...and having the right shape is not having the right textures.
+   *
+   * Both blocks name more than one in their vanilla model and neither can be
+   * served by `cubeFaceTextures`, which guesses from the block's *name*. Both
+   * failed in the way that guess fails, and both failures were invisible from
+   * inside the app because the result is a plausible block in the right shape.
+   */
+  const facesOf = async (name: string, props: Record<string, string> = {}) => {
+    const baked = await baker.bakeBlockstate(block(name, props));
+    return baked.extraFaces;
+  };
+
+  /*
+   * A chipped anvil differs from an anvil in **one face**. There is no
+   * `chipped_anvil` texture and no `chipped_anvil_side`, so the guess found
+   * `chipped_anvil_top` and answered it for all six: the whole block, base
+   * included, wore the picture of its own dented top.
+   */
+  for (const name of ["anvil", "chipped_anvil", "damaged_anvil"]) {
+    const faces = await facesOf(name, { facing: "north" });
+    const keys = new Set(faces.map((f) => f.textureKey));
+    equal(
+      `${name} is body plus one top`,
+      [...keys].sort(),
+      ["minecraft:block/anvil", `minecraft:block/${name}_top`].sort(),
+    );
+    // And the top is on the top -- one face, the one at y = 16.
+    const wearing = faces.filter((f) => f.textureKey === `minecraft:block/${name}_top`);
+    equal(`...and the top is the face the hammer lands on`, wearing.length, 1);
+    check(
+      "...which is at the anvil's own top",
+      wearing[0] !== undefined && Math.max(...[1, 4, 7, 10].map((i) => wearing[0].positions[i])) === 1,
+    );
+  }
+  /*
+   * Two anvils that draw identically are two anvils nobody can tell apart, and
+   * that is what the guess produced from the other end: `anvil` resolved
+   * `anvil_top` for its up faces and `chipped_anvil` resolved
+   * `chipped_anvil_top` for everything, so they differed everywhere except
+   * where it means something.
+   */
+  {
+    const a = new Set((await facesOf("anvil", { facing: "north" })).map((f) => f.textureKey));
+    const b = new Set((await facesOf("chipped_anvil", { facing: "north" })).map((f) => f.textureKey));
+    equal("the three anvils share a body", [...a].filter((k) => b.has(k)), ["minecraft:block/anvil"]);
+  }
+
+  /*
+   * The anvil is also the only block in the app that needs a face `rotation`,
+   * and it needs it for a reason a check can state: vanilla gives its foot's
+   * west face the window `[0, 2, 4, 14]` — four wide and twelve tall — on a
+   * face that is twelve wide and four tall. Applied flat, that window is the
+   * right pixels laid across the face sideways.
+   *
+   * Rotated, the four corners are read in a shifted order, and the signature of
+   * that is exactly this: two vertices at the same height no longer share a
+   * `v`. Unrotated they always do, whatever the window is, so the check cannot
+   * pass by accident.
+   */
+  {
+    const faces = await facesOf("anvil", { facing: "south" });
+    const foot = faces.filter((f) => f.normal[0] === -1).sort((a, b) => a.positions[1] - b.positions[1])[0];
+    check("the anvil's foot has a west face", foot !== undefined);
+    if (foot) {
+      const level = [0, 1, 2, 3].filter((i) => foot.positions[i * 3 + 1] === foot.positions[1]);
+      const vs = new Set(level.map((i) => foot.uvs[i * 2 + 1]));
+      check(
+        "...whose window is turned, not stretched across it",
+        level.length >= 2 && vs.size > 1,
+        `${level.length} vertices level, ${vs.size} distinct v`,
+      );
+    }
+  }
+
+  /*
+   * A grindstone's wheel has two textures and wore one. `#round` is the narrow
+   * face and `#side` is the disc -- the part anybody would point at to say what
+   * the block is -- and the whole wheel was drawn in `#round`'s neighbour,
+   * because that is what the block's name resolves to.
+   */
+  {
+    const faces = await facesOf("grindstone", { facing: "north", face: "floor" });
+    const keys = new Set(faces.map((f) => f.textureKey));
+    for (const wanted of ["grindstone_round", "grindstone_side", "grindstone_pivot", "dark_oak_log"]) {
+      check(`a grindstone wears ${wanted}`, keys.has(`minecraft:block/${wanted}`), [...keys].join(" "));
+    }
+    const disc = faces.filter((f) => f.textureKey === "minecraft:block/grindstone_side");
+    equal("the disc is on the wheel's two wide faces", disc.length, 2);
+  }
+  /*
+   * ...and it turns with the block.
+   *
+   * Checked at every facing rather than at one, because at `north` the model
+   * is unrotated: a per-face texture map that failed to turn with its box
+   * would be right there and wrong everywhere else, which is the shape of bug
+   * that ships. The wheel's axis is across the facing, so the disc's normal is
+   * the other horizontal one.
+   */
+  for (const [facing, discAxis] of [
+    ["north", 0],
+    ["east", 2],
+    ["south", 0],
+    ["west", 2],
+  ] as const) {
+    const faces = await facesOf("grindstone", { facing, face: "floor" });
+    const disc = faces.filter((f) => f.textureKey === "minecraft:block/grindstone_side");
+    check(
+      `a ${facing}-facing grindstone shows its disc across the run`,
+      disc.length === 2 && disc.every((f) => Math.abs(f.normal[discAxis]) === 1),
+      disc.map((f) => f.normal.join(",")).join(" | "),
+    );
   }
 
   // 5, 6. Blocks the app did not offer at all until the registry generated the
@@ -1626,6 +1830,88 @@ if (pack === null) {
   );
   check("the bare `sign` stands", boxCount("sign") === 2);
   check("...and the bare `wall_sign` does not", boxCount("wall_sign", { facing: "north" }) === 1);
+
+  /*
+   * ...and the board has to land on the board.
+   *
+   * A sign's texture is a *sheet* -- the board, the post and, on a hanging
+   * sign, the chain links -- and the shapes took coordinate-derived UVs over
+   * the whole of it, so what a face showed was whatever its own coordinates
+   * happened to point at. On a hanging sign that put the dark metal of the
+   * chains across the middle of the board and gave one of the two chains the
+   * plank field: a wooden chain beside a metal one, on the same sign.
+   *
+   * The check is on the pixels rather than on the numbers, because a window
+   * that is off by a column is not worth failing a build over and a window on
+   * the wrong *part* always is. The chain art is near-black navy against a
+   * plank field that never goes near it.
+   */
+  const darkestOn = (face: BakedFace): number => {
+    const tex = baker.textures[face.textureKey];
+    const us = [face.uvs[0], face.uvs[2], face.uvs[4], face.uvs[6]];
+    const vs = [face.uvs[1], face.uvs[3], face.uvs[5], face.uvs[7]];
+    let darkest = 255;
+    for (let i = 0; i <= 8; i += 1) {
+      for (let j = 0; j <= 8; j += 1) {
+        const u = Math.min(...us) + ((Math.max(...us) - Math.min(...us)) * i) / 8;
+        const v = Math.min(...vs) + ((Math.max(...vs) - Math.min(...vs)) * j) / 8;
+        const x = Math.min(tex.width - 1, Math.max(0, Math.floor(u * tex.width)));
+        const y = Math.min(tex.height - 1, Math.max(0, Math.floor(v * tex.height)));
+        const k = (tex.width * y + x) << 2;
+        if (tex.data[k + 3] < 8) continue;
+        const lum = tex.data[k] * 0.299 + tex.data[k + 1] * 0.587 + tex.data[k + 2] * 0.114;
+        darkest = Math.min(darkest, lum);
+      }
+    }
+    return darkest;
+  };
+  const widestFace = (baked: BakedBlock, axis: 0 | 2, sign: number): BakedFace | undefined => {
+    const candidates = baked.extraFaces.filter((f) => f.normal[axis] === sign);
+    const spread = (f: BakedFace) => {
+      const xs = [0, 3, 6, 9].map((i) => f.positions[i]);
+      return Math.max(...xs) - Math.min(...xs);
+    };
+    return [...candidates].sort((a, b) => spread(b) - spread(a))[0];
+  };
+  for (const [name, props] of [
+    ["oak_sign", { rotation: "0" }],
+    ["oak_wall_sign", { facing: "north" }],
+    ["oak_hanging_sign", { attached: "false" }],
+  ] as const) {
+    const baked = await baker.bakeBlockstate(block(name, props));
+    const board = widestFace(baked, 2, -1);
+    check(`${name} draws a board`, board !== undefined);
+    if (board) {
+      const darkest = darkestOn(board);
+      check(
+        `...on the plank field, not across the chains`,
+        darkest > 90,
+        `darkest sample ${darkest.toFixed(0)}`,
+      );
+    }
+  }
+  /*
+   * And the hanging sign's board is the one fit the sheet settles outright:
+   * `oak_hanging_sign.png` has exactly one 14-wide patch at (2,14) and one
+   * 32-wide band at (0,16), which is `unwrapCube(0, 14, 14, 10, 2)` on a
+   * 32-wide sheet and nothing else. Stated in sheet texels, because that is
+   * where the evidence is.
+   */
+  {
+    const baked = await baker.bakeBlockstate(block("oak_hanging_sign", { attached: "false" }));
+    const board = widestFace(baked, 2, -1);
+    const texels = (values: number[]) => [Math.min(...values) * 32, Math.max(...values) * 32];
+    equal(
+      "the hanging board's front is the sheet's north window",
+      board === undefined ? null : texels([board.uvs[0], board.uvs[2], board.uvs[4], board.uvs[6]]),
+      [2, 16],
+    );
+    equal(
+      "...over the side band, not the caps",
+      board === undefined ? null : texels([board.uvs[1], board.uvs[3], board.uvs[5], board.uvs[7]]),
+      [16, 26],
+    );
+  }
 
   // 15. Beds stopped being block entities in 1.21.9; the geometry survived the
   // move and the unwrap did not.

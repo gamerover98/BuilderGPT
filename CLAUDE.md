@@ -1519,6 +1519,75 @@ knowing:
   `block_shapes.ts` reproduces that layout. Banners and shulker boxes stay on
   a dyed-wool stand-in — their sheets need layer composition this code does not
   do.
+- **`unwrapCube` needs the sheet's width, and it used to assume 64.** Its
+  windows are stated in the *sheet's* texels while `UvWindow` is in sixteenths
+  of the tile, so the two only agree once the size is known. Right for every
+  sheet it had been used on and wrong the moment a 32-wide one arrived: a sign's
+  board came out wearing a quarter of its own sheet blown up to fill the face,
+  which reads as a plank and is why it nearly passed review.
+- **A texture that lands outside its tile is clamped, not refused.** The atlas
+  smears the edge pixels across the face, which reads as a badly drawn texture
+  rather than as a window that missed — so `tests/blocks.ts` walks every offered
+  id and fails on any face whose UVs leave `0..1`. It found 38 potted plants on
+  the first run: their crossed planes ran to `y = 22/16`, six units above the
+  block, so the top third of every potted flower was one row of its own texture
+  smeared upwards. Derived UVs cannot fail this — they come from box
+  coordinates, which are already inside the tile — so it is a check on
+  transcription, and transcription is exactly where the arithmetic goes wrong.
+- **A box may name a texture per face, and some blocks are unusable without
+  it.** `SPECIAL_FACE_RULES` is keyed on the *block*, so "up is `anvil_top`"
+  there puts the anvil's top on the up face of every box in the anvil, the ledge
+  round its foot included. `ShapeBox.textures` is keyed on the box, which is
+  what a vanilla element states. The grindstone's wheel is the case that needed
+  it — `#round` on the narrow faces and `#side`, the disc, on the wide ones,
+  from one element of one model — and the anvil is the other.
+
+  The anvil is also the sharper lesson, because the guess it displaced was
+  *catastrophic and looked fine*. `cubeFaceTextures` works from the block's
+  name, and `chipped_anvil` has exactly one texture in the pack:
+  `chipped_anvil_top`. So it answered that for all six faces and a chipped
+  anvil came out as a solid shape wearing the picture of its own dented top,
+  base included — while the plain `anvil` resolved `anvil` plus `anvil_top`.
+  The three anvils differ in **one face**, and that face was the only one they
+  had in common.
+- **`ShapeBox.uvRotation` is vanilla's face `rotation`, and it is not the box
+  turning.** The anvil states its foot's west face as `[0, 2, 4, 14]` — four
+  wide, twelve tall — on a face twelve wide and four tall; without the turn the
+  window names the right pixels and lays them across the face sideways. Vanilla
+  implements it by shifting which corner of the window each vertex reads, so
+  `rotateWindowUvs` is a cyclic shift of four pairs and touches no coordinate.
+  Its signature is what `tests/blocks.ts` checks: rotated, two vertices at the
+  same height no longer share a `v`; unrotated they always do.
+- **The chest's two strips are fifteen rows in a block fourteen tall, and the
+  fifteenth is the seam.** The body's last row and the lid's first are
+  byte-identical — `46 48 48 46 46 36 36 36 48 46 46 48 48 59` across the whole
+  front — because they are the dark line where the lid meets the body, painted
+  once and read by both boxes. Drawn as vanilla states them the two boxes
+  overlap over that row with four coplanar side faces; in the game the z-fight
+  is invisible because both surfaces are the same pixels, and here it was a
+  dotted black line across every chest, because the atlas resamples each window
+  on its own and the two stop agreeing to the texel. So the body stops at 9 and
+  the lid keeps the seam: nothing squashed, nothing invented, and the only row
+  dropped is the one that was drawn twice.
+
+  The **lock** is a separate box and was simply missing — the sheet has it at
+  `(0,0)`, 2×4×1, and the notch it leaves in both front strips had nothing
+  standing in it. A double half's is **one** wide, because vanilla's is two wide
+  centred on the pair; the sheets say so themselves, `normal_left` leaving its
+  lock's west window blank and `normal_right` its east, which is the same face
+  `inner` already names for the chest.
+- **The sign sheets are 32 wide and their parts are unwrapped on them**, which
+  the comment there used to deny — the layout looked underivable because
+  `unwrapCube` was reading it at the wrong scale. The hanging sign's board
+  settles it outright: `oak_hanging_sign.png` has exactly one 14-wide patch at
+  `(2,14)` and one 32-wide band at `(0,16)`, which is
+  `unwrapCube(0, 14, 14, 10, 2)` and nothing else. The standing sign's board is
+  the same reasoning with one number left over, and that is written down beside
+  it rather than smoothed over. The bar, the post and the chains are
+  approximations of a different kind — a window over the right *material*
+  rather than the right part — which is still the whole of what was wrong: with
+  coordinate-derived UVs one of a hanging sign's two chains drew the plank
+  field and the other the metal, on the same sign.
 - **Beds and signs used to be in that list and are not any more.** 1.21.9 moved
   them onto ordinary per-face block textures — `red_bed_head_up`,
   `block/oak_sign` — and the `entity/bed/<colour>` and `entity/signs/<wood>`

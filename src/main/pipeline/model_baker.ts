@@ -644,6 +644,33 @@ function windowUvsFrom(window: readonly [number, number, number, number]): Float
 }
 
 /**
+ * A vanilla face's `rotation`, applied to the four corners a window produced.
+ *
+ * Vanilla turns the *texture* within the face by shifting which corner of the
+ * window each vertex reads (`BlockFaceUV.getShiftedIndex`), and that is exactly
+ * a cyclic shift of the four pairs above — the window itself does not move. So
+ * one quarter-turn of the assignment is one quarter-turn of the picture, and no
+ * arithmetic on the coordinates is involved at all.
+ *
+ * It matters wherever the window's aspect does not match the face's: the anvil
+ * states its foot's west face as a 4x12 window on a face that is 12 wide and 4
+ * tall, and without the turn that window is stretched across the face sideways.
+ */
+function rotateWindowUvs(uvs: Float32Array, degrees: number): Float32Array {
+  const quarters = ((Math.round(degrees / 90) % 4) + 4) % 4;
+  if (quarters === 0) {
+    return uvs;
+  }
+  const out = new Float32Array(8);
+  for (let corner = 0; corner < 4; corner += 1) {
+    const from = (corner + quarters) % 4;
+    out[corner * 2] = uvs[from * 2];
+    out[corner * 2 + 1] = uvs[from * 2 + 1];
+  }
+  return out;
+}
+
+/**
  * Thin wrapper around either a directory or `.zip` resource pack.
  * Ported from `_ResourcePackSource` (model_baker.py:74-100). Not exported —
  * module-private, matching the Python leading-underscore convention.
@@ -997,10 +1024,26 @@ export class ModelBaker {
         part.box[5] / 16,
       ];
       const boxKey = await this.resolveBoxTexture(part.texture, primaryKey);
-      // A box with its own texture uses it on every face; a face override map
-      // aimed at the block's own textures would not apply to it.
-      const boxFaceKeys = part.texture === undefined ? faceKeys : {};
-      const all = ModelBaker.boxFaces(scaled, boxKey, boxFaceKeys, part.uv);
+      /*
+       * A box that names its own textures answers for every face of itself,
+       * and the block-level map is dropped.
+       *
+       * That map comes from `cubeFaceTextures`, which guesses from the block's
+       * name: for `chipped_anvil` the only texture that exists is
+       * `chipped_anvil_top`, so it answered that for *all six* faces and the
+       * whole anvil came out wearing the picture of its own dented top. A box
+       * that has been transcribed from the real model knows better than a
+       * guess, so where it speaks the guess is not consulted.
+       */
+      let boxFaceKeys: Record<string, string> = {};
+      if (part.textures !== undefined) {
+        for (const [face, name] of Object.entries(part.textures)) {
+          boxFaceKeys[face] = await this.resolveBoxTexture(name, boxKey);
+        }
+      } else if (part.texture === undefined) {
+        boxFaceKeys = faceKeys;
+      }
+      const all = ModelBaker.boxFaces(scaled, boxKey, boxFaceKeys, part.uv, part.uvRotation);
       for (const name of part.omit ?? []) {
         delete all[name];
       }
@@ -1081,6 +1124,7 @@ export class ModelBaker {
     textureKey: string,
     faceOverrides?: Record<string, string>,
     uvOverrides?: Readonly<Record<string, UvWindow>>,
+    uvRotations?: Readonly<Record<string, number>>,
   ): Record<string, BakedFace> {
     const faces: Record<string, BakedFace> = {};
     /*
@@ -1126,12 +1170,17 @@ export class ModelBaker {
         key = textureKey;
       }
       const window = uvOverrides?.[name];
+      const turn = uvRotations?.[name];
       faces[name] = {
         positions: definition.positions.slice(),
         // An explicit window replaces the coordinate-derived UVs entirely: it
         // is given in the tile's own 0..16 space, in glTF's V-down convention,
-        // exactly as a vanilla model states it.
-        uvs: window ? windowUvsFrom(window) : definition.uvs.slice(),
+        // exactly as a vanilla model states it. A `rotation` beside it turns
+        // the picture within the face, which is a different thing from turning
+        // the box and is why both are carried.
+        uvs: window
+          ? rotateWindowUvs(windowUvsFrom(window), turn ?? 0)
+          : rotateWindowUvs(definition.uvs.slice(), turn ?? 0),
         normal: definition.normal,
         textureKey: key,
       };

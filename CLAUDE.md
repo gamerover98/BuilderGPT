@@ -615,7 +615,7 @@ what the inventory never offered. That is the same failure the hand-written
 `DEFAULT_STATE` had, one layer down, and it is the argument for generating a set
 rather than curating one.
 
-**Three vendored datasets, three generators, three skills.** The pattern is the
+**Four vendored datasets, four generators, four skills.** The pattern is the
 same each time and it is the one to copy: the answers are looked up, recorded
 with where they came from, and the generator replaces only the rows between two
 markers. Running with nothing new must change no bytes — if it rewrites the file
@@ -625,16 +625,27 @@ every time, the ordering or the formatting has drifted and *that* is the bug.
 |---|---|---|
 | `resources/mc_versions.json` | `gen-mc-versions.mjs` | `mc-versions` |
 | `resources/block_states.json` | `gen-block-states.mjs` | `mc-blockstates` |
+| `resources/block_properties.json` | `gen-block-properties.mjs` | `mc-blockproperties` |
 | `block_id_list.txt` | `gen-block-list.mjs` | `mc-block-models` (for what the ids must draw as) |
 
 The skills' trust rules deliberately differ, and the difference is the point.
 `mc-versions` buys trust with **two independent sources that agree**, because a
 transposed digit in a DataVersion is undetectable by any local check — the file
 saves, opens, and misbehaves in game. A wrong property name or texture name is
-**mechanically detectable**, so those two skills' job is to keep the tripwire
+**mechanically detectable**, so those skills' job is to keep the tripwire
 honest rather than to count sources. Corroboration still applies where no
 machine can check: the *history*, which is prose on a wiki page and appears in
 no dataset.
+
+`mc-blockproperties` is the `mc-versions` rule arrived at from the other
+direction, and it is the one to be most careful with. Its content is **prose**
+— what a property is *for* — which fails no check anywhere, ever: the file
+saves, the block is placed, the picture is right, and a model reads the sentence
+and builds the wrong thing on the strength of it. So corroboration, and where
+two sources disagree the game's own registry is a genuine arbiter. It settled
+one already: minecraft.wiki's `Block_states` page says sign and banner
+`rotation` changed default from 0 to 8 in 26.1 while its own `Sign` page says
+the default has always been 0, and the vendored 26.2 registry says `8`.
 
 **There are two ways into a document and neither is a panel.** The File menu and
 the start screen — the card the empty viewport shows. That is the answer to a
@@ -1245,6 +1256,55 @@ with, not what a block may hold.
 `orientPlacement` stays hand-written and must. It asks where the camera was, and
 no dataset knows that.
 
+**A block named by a model is born in the same state as one placed by a click.**
+`placementState` has filled in a placed block's properties since that table
+landed, and it ran in exactly one place — `App.svelte`, at the click. Every
+other way a block gets written named the id and stopped, so an MCP client, the
+in-app agent and a build script all interned `minecraft:campfire` with an empty
+property bag: no `facing`, no `lit`, no `signal_fire`.
+
+Nothing downstream notices, which is why it needed a check rather than a bug
+report. The writers write what they are given, the mesher ignores what it does
+not recognise, and the game fills in whatever the file left out — so the picture
+is right, the file is loadable, and the fault surfaces two steps away, as an
+inspector with nothing in it on a block with four properties.
+
+`toPlacedEntry` in `agent/tools.ts` is the fix and there are **two** functions
+where there was one, because half the callers are not placing anything.
+`replace_blocks` reads `from` as a **pattern**: `Recorder.replace` interns it and
+matches on the palette index, so a default written onto that side turns "take
+out the campfires" into "take out the ones that happen to face north and be
+alight" — which finds a fraction of them and reports a healthy `changed` for
+those. That is the failure the tool's own zero-result note already warns about,
+arriving as the fix for a different bug. So `set_block`, `fill_region`,
+`replace_blocks`' **`to`** and `run_build_script` place; `from` parses.
+
+There is no orientation half here and there must not be: `orientPlacement` asks
+where the camera was looking, and a tool call has no camera.
+
+Writing more properties changes what the MCEdit writer can match exactly, and so
+what it reports as `degraded`. That is already why `waterlogged` is excluded
+from the defaults, so this inherits that policy rather than opening a second one.
+
+**And the agent can now ask what a block's states are, which is what stops it
+guessing.** `describe_block` is in `TOOL_SPECS`, so the in-app agent gets it
+too — it had the identical problem — and MCP gets it through `describeTools()`
+with no new table, which is the only placement that satisfies `tests/mcp.ts`'s
+both-sides rule unchanged. It is the one tool here that is not a question about
+the open document.
+
+Its answer carries `placedAs`, which is the question underneath the question:
+"what properties does a campfire have" is asked in order to find out what will
+actually be written, and that is one string. It is built **by `toPlacedEntry`**
+rather than describing what it does, so it cannot drift — and `tests/mcp.ts`
+composes the two, placing a block and requiring the cell to equal what the tool
+said. Both halves were separately true while every campfire came out bare.
+
+A property that is legal and is not part of a birth state reports `default:
+null` rather than the value it would otherwise take, or the answer would
+contradict its own `placedAs`. A bad id is reported per block rather than
+thrown, so one typo in a batch of sixteen does not cost the other fifteen.
+
 **And the state the *neighbours* decide is `shared/block_connections.ts`.**
 Stairs' `shape` used to be listed here as deliberately absent — "a corner is
 decided by the neighbours, which is a question about the document and not about
@@ -1289,6 +1349,40 @@ same channel as a placement, so a hand-typed `north=false` would be re-derived
 and overwritten *inside the same transaction that carried it*. With it, a typed
 state stands until something is placed beside it — which is what the game does,
 and what "editable afterwards" has to mean.
+
+**The inspector lists what a block *may* hold, not only what it happens to.**
+It listed the entry's own keys, which is right for a block that came out of a
+file and useless for one that arrived bare — so the panel that exists to let you
+point a campfire somewhere said "This block has no block states" about a block
+with four. The properties were never missing from the game; they were missing
+from the entry, and this is where somebody would have gone to fix that.
+
+`propertyRows` in `renderer/lib/inspector_rows.ts` is the rule, and it is the
+**union** of what the entry carries and what the registry says the block may
+hold. Both halves are load-bearing. The registry alone would drop a property the
+*file* carries that the block does not legally have — another tool wrote it, or
+the block was renamed under it — which is exactly the state somebody opens this
+panel to delete. The entry alone is what was wrong. A block the registry does
+not know contributes nothing, so an unknown block behaves precisely as it did
+before; an omission costs nothing.
+
+It is a plain module for `selection_drag.ts`'s reason: a rule written inside a
+`$derived.by` can only be grepped for, and this one has edge cases worth stating.
+
+**Empty means remove, and one place decides it.** There is no separate delete
+verb — clearing the field takes the property off, and the button beside a set
+row is a shortcut for clearing it. Two ways of saying "gone" is how they come to
+disagree, so `changeBlockProperty` in `App.svelte` holds the rule and the markup
+only calls it. Before this, clearing the box wrote `name: ""` — a property with
+an empty value, which is a state no block has and which the writers would have
+put into the file verbatim.
+
+Removing is a real thing to want rather than the inverse of adding: a partial
+state is legal in a schematic — the game fills the rest in from its own defaults
+— and it is how the MCEdit writer's exact-state match is kept clean, which is
+the same reasoning that keeps `waterlogged` out of what a placed block is born
+with. Removing something that was not there costs nothing, because
+`runTransaction` pushes no undo step for a recorder with no commands.
 
 One consequence worth knowing before it is reported as a bug: the pass
 **normalises**, so a lone staircase carrying `shape=inner_left` becomes

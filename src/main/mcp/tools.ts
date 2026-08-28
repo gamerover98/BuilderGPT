@@ -61,7 +61,15 @@ export interface McpToolDescriptor {
  * list is the ones that are *certainly* read-only and everything else is
  * treated as a write.
  */
-const READ_ONLY = new Set(["get_schematic_info", "get_palette", "get_region"]);
+const READ_ONLY = new Set([
+  "get_schematic_info",
+  "get_palette",
+  "get_region",
+  // Not about the open document at all -- it answers a question about
+  // Minecraft. It still belongs here rather than in a table of its own,
+  // because "does this write" is the only question this set asks.
+  "describe_block",
+]);
 
 /**
  * The tools a careful client should confirm before running.
@@ -75,7 +83,7 @@ const DESTRUCTIVE = new Set(["fill_region", "replace_blocks", "resize_document"]
 /**
  * Every tool, block-editing and file-level together.
  *
- * Two tables rather than one because they answer to different things: the nine
+ * Two tables rather than one because they answer to different things: the ten
  * come from `agent/tools.ts` and are shared with the in-app agent, while the
  * lifecycle verbs are MCP's alone -- the agent has no business opening a
  * different schematic while somebody is typing to it. A client sees one list,

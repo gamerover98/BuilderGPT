@@ -1485,3 +1485,14 @@ export function isKnownBlock(id: string): boolean {
 export function knownBlockCount(): number {
   return Object.keys(BLOCK_SHAPE).length;
 }
+
+/**
+ * Every block the table describes, by bare name.
+ *
+ * Exported so a suite can walk the registry rather than a copy of it. Reading
+ * `resources/block_states.json` instead would check the *data* and leave the
+ * generated table -- which is what the app actually reads -- unexamined.
+ */
+export function knownBlockNames(): readonly string[] {
+  return Object.keys(BLOCK_SHAPE);
+}

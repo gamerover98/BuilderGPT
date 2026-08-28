@@ -2386,18 +2386,45 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   async function changeBlockProperty(name: string, value: string): Promise<void> {
     if (!inspection || !inspectedAt) return;
     const at = inspectedAt;
-    const properties = { ...inspection.properties, [name]: value.trim() };
-    await runDocument(t("task.changingBlockState"), () =>
-      // `setState`, not `setBlock`: every ordinary write re-derives the states
-      // that depend on neighbours, so typing `north=false` here and sending it
-      // as a placement would have it overwritten inside the same transaction.
-      api().applyEdit({
-        kind: "setState",
-        x: at.x,
-        y: at.y,
-        z: at.z,
-        block: { namespacedName: inspection!.block, properties },
-      }),
+    /*
+     * Empty means remove, and this is the only place that decides so.
+     *
+     * The panel has no separate delete verb: clearing the field takes the
+     * property off, and the button beside a set row is a shortcut for clearing
+     * it. Two ways of saying "gone" is how they come to disagree about what an
+     * empty box means, and this one used to write `name: ""` -- a property with
+     * an empty value, which is a state no block has and which the writers would
+     * have put in the file verbatim.
+     *
+     * Removing a state is legitimate rather than merely the inverse of adding
+     * one: a partial state is legal in a schematic -- the game fills the rest in
+     * from its own defaults -- and it is how the MCEdit writer's exact-state
+     * match is kept clean, which is the same reasoning that keeps `waterlogged`
+     * out of what a placed block is born with.
+     *
+     * Removing something that was not there changes nothing, and costs nothing:
+     * `runTransaction` pushes no undo step for a recorder with no commands.
+     */
+    const next = value.trim();
+    const properties = { ...inspection.properties };
+    if (next === "") {
+      delete properties[name];
+    } else {
+      properties[name] = next;
+    }
+    await runDocument(
+      next === "" ? t("task.removingBlockState") : t("task.changingBlockState"),
+      () =>
+        // `setState`, not `setBlock`: every ordinary write re-derives the states
+        // that depend on neighbours, so typing `north=false` here and sending it
+        // as a placement would have it overwritten inside the same transaction.
+        api().applyEdit({
+          kind: "setState",
+          x: at.x,
+          y: at.y,
+          z: at.z,
+          block: { namespacedName: inspection!.block, properties },
+        }),
     );
     // No re-inspect here: `runDocument` already refreshes the inspected block.
   }

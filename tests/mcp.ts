@@ -34,7 +34,14 @@ import {
   withinRoot,
 } from "../src/main/mcp/policy.js";
 import { countBlocks, getBlock } from "../src/main/domain/document.js";
-import { closeDocument, currentSession, newDocument, undoEdit } from "../src/main/services/session.js";
+import { paletteEntryCacheKey } from "../src/main/pipeline/types.js";
+import {
+  applyEdit,
+  closeDocument,
+  currentSession,
+  newDocument,
+  undoEdit,
+} from "../src/main/services/session.js";
 import type { DocumentSession } from "../src/main/services/session.js";
 
 let failures = 0;
@@ -56,7 +63,15 @@ function equal(label: string, actual: unknown, expected: unknown): void {
   check(label, ok);
 }
 
-const ALLOWED = new Set(["minecraft:stone", "minecraft:oak_planks", "minecraft:air"]);
+const ALLOWED = new Set([
+  "minecraft:stone",
+  "minecraft:oak_planks",
+  "minecraft:air",
+  // Carries four properties, one of which is deliberately not part of what a
+  // placed block is born with -- which is the whole of what the default-state
+  // checks below are about.
+  "minecraft:campfire",
+]);
 
 /**
  * A `Lifecycle` whose effects are recorded rather than performed.
@@ -194,7 +209,14 @@ try {
     equal("every tool has a description and an object schema", bad.map((t) => t.name), []);
 
     equal("an unknown tool is not found", findTool("no_such_tool"), null);
-    check("the read-only ones are the getters", isReadOnly("get_region") && !isReadOnly("fill_region"));
+    check(
+      "the read-only ones are the getters",
+      isReadOnly("get_region") && !isReadOnly("fill_region"),
+    );
+    // ...and the one that is not about the document at all. It writes nothing,
+    // so making it queue behind every mutation would be a `get_region` waiting
+    // on a build script for no reason.
+    check("...and so is the block reference", isReadOnly("describe_block"));
 
     // `describeTools` reads the two tables and must not be a copy of either.
     equal(
@@ -290,7 +312,20 @@ try {
     // ones that take one, a coordinate for the ones that take that. Nothing
     // validates against the schema here, so the extras are ignored -- and the
     // point of the loop is what the tools *do*, not what they accept.
-    const region = { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 1, maxZ: 1, x: 0, y: 0, z: 0 };
+    const region = {
+      minX: 0,
+      minY: 0,
+      minZ: 0,
+      maxX: 1,
+      maxY: 1,
+      maxZ: 1,
+      x: 0,
+      y: 0,
+      z: 0,
+      // ...and a block list for the one read-only tool that is not about the
+      // document at all.
+      blocks: ["minecraft:stone"],
+    };
     for (const tool of describeTools().filter((t) => t.annotations.readOnlyHint)) {
       const spy = { changed: 0 };
       const at = session.history.undoStack.length;
@@ -311,6 +346,226 @@ try {
       equal(`...${tool.name} left the undo stack alone`, session.history.undoStack.length, at);
       equal(`...${tool.name} told the window nothing`, spy.changed, 0);
     }
+  }
+
+  // --- a block named by a tool is born in its state -------------------------
+  //
+  // `placementState` has filled in a placed block's properties since the
+  // generated table landed, and for a long time it ran in exactly one place --
+  // `App.svelte`, at the click. Every other way a block gets written named it
+  // and stopped, so an MCP client, the in-app agent and a build script all
+  // interned `minecraft:campfire` with an empty property bag.
+  //
+  // Nothing downstream notices, which is why this needs a check rather than a
+  // bug report: the writers write what they are given, the mesher ignores what
+  // it does not recognise, and the game fills in whatever the file left out. It
+  // surfaces two steps away, as an inspector with nothing in it.
+  console.log("\n--- a tool places a block in the state the game would give it ---");
+  {
+    const session = open();
+    const sink = { changed: 0 };
+
+    await callTool("set_block", { x: 1, y: 1, z: 1, block: "minecraft:campfire" }, options(sink));
+    const bare = getBlock(session.doc, 1, 1, 1);
+    equal("a bare id lands carrying its default state", bare?.properties.lit, "true");
+    equal("...all of it", bare?.properties.signal_fire, "false");
+    equal("...direction included", bare?.properties.facing, "north");
+    /*
+     * And not `waterlogged`, which is legal on a campfire and deliberately not
+     * part of what a new one is born with: `legacy_blocks.json`'s rows carry the
+     * connections and not that, and the MCEdit writer matches the exact state.
+     * Writing it here would turn a clean 1.12 save into a page of degraded
+     * reports, on every stair, slab, fence and pane in the build.
+     */
+    equal("...and nothing that is not part of a birth state", bare?.properties.waterlogged, undefined);
+
+    await callTool(
+      "set_block",
+      { x: 2, y: 1, z: 1, block: "minecraft:campfire[lit=false]" },
+      options(sink),
+    );
+    const spelled = getBlock(session.doc, 2, 1, 1);
+    equal("what the caller spelled out wins over the default", spelled?.properties.lit, "false");
+    equal("...and the rest is still filled in", spelled?.properties.signal_fire, "false");
+
+    // A fill is a placement too, and so is the `to` side of a replacement.
+    await callTool(
+      "fill_region",
+      { minX: 4, minY: 4, minZ: 4, maxX: 4, maxY: 4, maxZ: 4, block: "minecraft:campfire" },
+      options(sink),
+    );
+    equal("a fill places them the same way", getBlock(session.doc, 4, 4, 4)?.properties.lit, "true");
+
+    /*
+     * And a build script, which is the path that had its own way of writing a
+     * block: it called `parsePaletteEntry` directly rather than going through
+     * the parse the other tools share, so it would have been the one route left
+     * placing them bare.
+     */
+    await callTool(
+      "run_build_script",
+      {
+        code:
+          "function buildCreation(x, y, z) { safeSetBlock(5, 5, 5, 'minecraft:campfire'); }",
+      },
+      options(sink),
+    );
+    equal(
+      "a build script places them the same way too",
+      getBlock(session.doc, 5, 5, 5)?.properties.signal_fire,
+      "false",
+    );
+
+    /*
+     * The two halves composed, which is the point of the tool existing.
+     *
+     * `describe_block` says what will be written and `set_block` writes it.
+     * Both were separately true of the campfire that came out bare -- the tool
+     * would have described its properties correctly while the placement carried
+     * none of them -- so the claim worth checking is that the same function
+     * answers both, and `placedAs` is built by `toPlacedEntry` rather than
+     * describing what it does.
+     */
+    const answer = await callTool(
+      "describe_block",
+      { blocks: ["minecraft:campfire"] },
+      options(sink),
+    );
+    await callTool("set_block", { x: 3, y: 3, z: 3, block: "minecraft:campfire" }, options(sink));
+    equal(
+      "describe_block's placedAs is what set_block actually writes",
+      paletteEntryCacheKey(getBlock(session.doc, 3, 3, 3)),
+      (answer.result as { blocks: { placedAs: string }[] }).blocks[0].placedAs,
+    );
+  }
+
+  // --- but `from` is a pattern, not a placement -----------------------------
+  //
+  // The sharp edge of the change above, and the way it would have gone wrong.
+  // `Recorder.replace` interns `from` and matches on the palette *index*, so
+  // the state has to be identical -- which is what `replace_blocks`' own
+  // description and its zero-result note already say. Filling in the defaults
+  // on that side would quietly change which blocks a replacement finds: "take
+  // out the campfires" would take out the ones that happen to face north and be
+  // alight, and report a healthy count for those.
+  console.log("\n--- replace matches on what it was given ---");
+  {
+    const session = open();
+    const sink = { changed: 0 };
+
+    /*
+     * A schematic holding a campfire with no states at all. Two ordinary ways
+     * to get one: a file written by another tool, and the inspector, where
+     * removing every property is now something a person can do.
+     */
+    applyEdit(session, {
+      kind: "setState",
+      x: 0,
+      y: 0,
+      z: 0,
+      block: { namespacedName: "minecraft:campfire" },
+    });
+    equal(
+      "the fixture really is bare",
+      Object.keys(getBlock(session.doc, 0, 0, 0)?.properties ?? { a: "1" }).length,
+      0,
+    );
+
+    const outcome = await callTool(
+      "replace_blocks",
+      {
+        minX: 0,
+        minY: 0,
+        minZ: 0,
+        maxX: 7,
+        maxY: 7,
+        maxZ: 7,
+        from: "minecraft:campfire",
+        to: "minecraft:stone",
+      },
+      options(sink),
+    );
+    equal(
+      "a bare `from` still finds the bare block",
+      (outcome.result as { changed: number }).changed,
+      1,
+    );
+
+    // ...while `to` is a placement like any other.
+    await callTool(
+      "replace_blocks",
+      {
+        minX: 0,
+        minY: 0,
+        minZ: 0,
+        maxX: 7,
+        maxY: 7,
+        maxZ: 7,
+        from: "minecraft:stone",
+        to: "minecraft:campfire",
+      },
+      options(sink),
+    );
+    equal(
+      "...and `to` arrives in its full state",
+      getBlock(session.doc, 0, 0, 0)?.properties.lit,
+      "true",
+    );
+  }
+
+  // --- describing a block is not a question about the document --------------
+  console.log("\n--- describe_block ---");
+  {
+    const session = open();
+    const sink = { changed: 0 };
+    const outcome = await callTool(
+      "describe_block",
+      { blocks: ["minecraft:campfire", "minecraft:stone", "minecraft:beacon"] },
+      options(sink),
+    );
+    const blocks = (
+      outcome.result as {
+        blocks: {
+          block: string;
+          placeable: boolean;
+          properties: { name: string; default: string | null; description: string | null }[];
+        }[];
+      }
+    ).blocks;
+
+    equal("it answers about each block asked", blocks.length, 3);
+    equal(
+      "...naming the properties the game gives it",
+      blocks[0].properties.map((p) => p.name),
+      ["facing", "lit", "signal_fire", "waterlogged"],
+    );
+    check(
+      "...with a sentence about each",
+      blocks[0].properties.every((p) => (p.description ?? "").length > 0),
+      JSON.stringify(blocks[0].properties.map((p) => p.description)),
+    );
+    // A property that is legal and is not written on a new block reports no
+    // default, rather than the value it would have had -- which would
+    // contradict `placedAs`, where it does not appear.
+    equal(
+      "...and a legal property that is not part of a birth state has no default",
+      blocks[0].properties.find((p) => p.name === "waterlogged")?.default,
+      null,
+    );
+    equal("a block with no states says so", blocks[1].properties.length, 0);
+    // Reported per block rather than thrown, so one bad id in a batch of
+    // sixteen does not cost the answer for the other fifteen.
+    equal("a block this app cannot place is named, not thrown", blocks[2].placeable, false);
+    equal("...and asking changed nothing", sink.changed, 0);
+    equal("...and left the undo stack alone", session.history.undoStack.length, 0);
+
+    let raised: string | null = null;
+    try {
+      await callTool("describe_block", { blocks: [] }, options(sink));
+    } catch (err) {
+      raised = err instanceof Error ? err.message : String(err);
+    }
+    check("asking about nothing is refused", raised !== null, String(raised));
   }
 
   // --- mutations are serialised --------------------------------------------

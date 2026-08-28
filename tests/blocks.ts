@@ -47,10 +47,15 @@ import type { BakedFace, PaletteEntry, StructureData } from "../src/main/pipelin
 import { paletteEntryCacheKey, paletteEntryIsAir } from "../src/main/pipeline/types.js";
 import { connectedState } from "../src/shared/block_connections.js";
 import {
+  describeProperty,
+  documentedProperties,
+} from "../src/shared/block_properties.js";
+import {
   defaultStateFor,
   hasProperty,
   isKnownBlock,
   knownBlockCount,
+  knownBlockNames,
   legalValuesFor,
   propertiesOf,
 } from "../src/shared/block_states.js";
@@ -3742,6 +3747,84 @@ console.log("\n--- the block picker's search ---");
     searchBlocks(registry, "  stone  ")[0],
     "minecraft:stone",
   );
+}
+
+// ---------------------------------------------------------------------------
+// The property descriptions, against the game's own registry
+// ---------------------------------------------------------------------------
+//
+// `block_properties.json` says what a property *means*; `block_states.json`
+// says which properties exist and what values they take. Only the second is
+// the game's data, so the first is checked against it and never the other way
+// round.
+//
+// The generator already refuses an invented row, and this is the same claim
+// made where it can fail at build time rather than only when somebody
+// remembers to run a script -- the same reason `tests/formats.ts` walks the
+// tag paths that `shared/schematic.ts` names.
+console.log("\n--- block state descriptions ---");
+{
+  const registry = documentedProperties();
+
+  // Every described form has to be a form the game actually has. A plausible
+  // sentence about a property that is not in the game is the failure that
+  // matters here: it is served by `describe_block` to a model that will act on
+  // it, and nothing downstream would ever contradict it.
+  const invented: string[] = [];
+  const described = new Set<string>();
+  for (const [property, rows] of Object.entries(registry)) {
+    for (const row of rows) {
+      const key = `${property}[${row.values.join("|")}]`;
+      described.add(key);
+      const holder = knownBlockNames().find(
+        (name) => (legalValuesFor(name, property) ?? []).join(" ") === row.values.join(" "),
+      );
+      if (holder === undefined) invented.push(key);
+    }
+  }
+  equal("every described property form exists in the game's registry", invented, []);
+
+  // ...and stated from the other side, so a row cannot be quietly deleted. Not
+  // a coverage floor with a number in it: the count is what it is, and what
+  // this asserts is that no *form* went undescribed, which is the thing a
+  // refresh of the registry can silently create.
+  const undescribed = new Set<string>();
+  for (const name of knownBlockNames()) {
+    for (const property of propertiesOf(name)) {
+      const key = `${property}[${(legalValuesFor(name, property) ?? []).join("|")}]`;
+      if (!described.has(key)) undescribed.add(key);
+    }
+  }
+  equal("...and every form the registry has is described", [...undescribed].sort(), []);
+
+  /*
+   * The distinction the whole file is keyed on.
+   *
+   * A fence's `north` is a boolean and a wall's is `none|low|tall` -- the same
+   * name, different types, and `block_shapes.ts` has a `wall()` that knows it
+   * and a `fence()` that deliberately does not. Keyed by name alone the two
+   * would share one sentence, and the sentence would be wrong for one of them.
+   */
+  const fence = describeProperty("north", legalValuesFor("minecraft:oak_fence", "north") ?? []);
+  const wall = describeProperty("north", legalValuesFor("minecraft:brick_wall", "north") ?? []);
+  check("a fence's north is described", fence !== null);
+  check("...and so is a wall's", wall !== null);
+  check("...and they are not the same description", fence?.description !== wall?.description);
+  check(
+    "...with the wall's naming the version its type changed",
+    (wall?.versions ?? []).some((note) => note.version === "1.16"),
+    JSON.stringify(wall?.versions ?? []),
+  );
+
+  // Values must match exactly, or a lookup would answer with the nearest row
+  // that happens to share a name -- which is the failure above, arrived at
+  // through the front door.
+  equal(
+    "a value set the registry does not have is not described",
+    describeProperty("north", ["true", "false", "maybe"]),
+    null,
+  );
+  equal("...nor is a property nobody has heard of", describeProperty("nonsense", ["a"]), null);
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

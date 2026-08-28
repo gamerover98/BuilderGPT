@@ -65,6 +65,13 @@ import { parsePaletteEntry } from "../pipeline/loader_formats.js";
 import { paletteEntryCacheKey, type PaletteEntry } from "../pipeline/types.js";
 import { MAX_DOCUMENT_VOLUME, MAX_EDIT_VOLUME } from "../services/session.js";
 import { orderRegion } from "../domain/grow.js";
+import {
+  defaultStateFor,
+  isKnownBlock,
+  legalValuesFor,
+  propertiesOf,
+} from "../../shared/block_states.js";
+import { describeProperty } from "../../shared/block_properties.js";
 
 /**
  * The model names a turn or a reflection with two optional fields rather than a
@@ -88,6 +95,16 @@ function toTransform(args: { rotate?: number; mirror?: string }): RegionTransfor
 
 /** Cap on how much of the grid one `get_region` may return. */
 const MAX_REPORTED_BLOCKS = 2048;
+
+/**
+ * How many blocks one `describe_block` may ask about.
+ *
+ * A batch rather than one at a time because the question arrives in batches:
+ * anyone about to build a house wants the stairs, the slab, the door and the
+ * campfire before they start, and four round trips to learn four property lists
+ * is four chances to give up and guess instead.
+ */
+const MAX_DESCRIBED_BLOCKS = 16;
 
 const regionSchema = {
   type: "object",
@@ -119,6 +136,53 @@ function toEntry(block: string): PaletteEntry {
     throw new Error("a block id is required");
   }
   return parsePaletteEntry(trimmed.includes(":") ? trimmed : `minecraft:${trimmed}`);
+}
+
+/**
+ * The same id, in the state the game would give a block placed just now.
+ *
+ * ## Why a second function rather than a flag on the first
+ *
+ * Because half the callers are not placing anything. `replace_blocks` reads
+ * `from` as a **pattern**: `tx.replace` matches a palette entry exactly, so a
+ * default written onto it turns "take out the campfires" into "take out the
+ * campfires that happen to face north, are lit, and are not signal fires" --
+ * which finds a fraction of them and reports a cheerful `changed` count for the
+ * ones it did find. That is the failure `replace_blocks`'s own `note` already
+ * warns about, arriving this time as the fix for a different bug.
+ *
+ * So the two are named for what they are: one parses, one places.
+ *
+ * ## Why it is needed at all
+ *
+ * `placementState` has been doing this since the generated table landed, and it
+ * is called in exactly one place -- `App.svelte`, at the click. Every other way
+ * a block gets written named it and stopped: an MCP client, the in-app agent
+ * and a build script all interned `minecraft:campfire` with an empty property
+ * bag. Nothing here notices -- the writers write what they are given and the
+ * mesher ignores what it does not recognise -- and the file then reaches a game
+ * that fills the gaps with its own defaults, so the bug is invisible until
+ * somebody opens the inspector to change one and finds nothing to change.
+ *
+ * The explicit properties go **over** the defaults, for `placementState`'s
+ * reason: `minecraft:campfire[lit=false]` is an instruction and this is only a
+ * birth state.
+ *
+ * There is no orientation half here and there must not be. `orientPlacement`
+ * asks where the camera was looking, and a tool call has no camera.
+ *
+ * One consequence worth knowing: writing more properties changes what the
+ * MCEdit writer can match exactly, and so what it reports as `degraded`. That
+ * is already why `waterlogged` is left out of the defaults -- see
+ * `shared/block_states.ts` -- so this inherits that policy rather than opening
+ * a second one.
+ */
+function toPlacedEntry(block: string): PaletteEntry {
+  const entry = toEntry(block);
+  return {
+    namespacedName: entry.namespacedName,
+    properties: { ...defaultStateFor(entry.namespacedName), ...entry.properties },
+  };
 }
 
 export interface ToolContext {
@@ -333,6 +397,132 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
 
   {
+    /*
+     * The one tool here that is not about the open schematic.
+     *
+     * ## Why it exists
+     *
+     * Everything else in this table answers a question about *this* build.
+     * This one answers a question about Minecraft, and without it the model had
+     * to already know the answer. A block state is the part of a block that is
+     * not its name -- `facing`, `half`, `lit`, `signal_fire` -- and nothing in
+     * this app validates a property name: the writers write what they are
+     * given and the mesher ignores what it does not recognise. So a guess
+     * costs nothing *here* and produces a schematic that behaves differently
+     * in the game, a long way from anyone who could connect the two.
+     *
+     * The failure it was built for is quieter than a wrong guess, though. A
+     * model that names no properties at all gets a block in its default state,
+     * which looks right -- and then whoever opens the inspector to change the
+     * direction of that campfire finds a panel with nothing in it, because
+     * until `toPlacedEntry` the block was interned bare.
+     *
+     * ## Why the answer includes `placedAs`
+     *
+     * It is the question underneath the question. "What properties does a
+     * campfire have" is asked in order to find out what will actually be
+     * written, and that is one string. It is built by `toPlacedEntry` -- the
+     * same function `set_block` uses, not a description of it -- so it cannot
+     * drift from what a placement really does.
+     */
+    name: "describe_block",
+    description:
+      "What block states a block has, what values each one takes, what it means, and what state the block will actually be written in if you name none. Ask before placing anything with a direction, a shape or an on/off state — stairs, doors, slabs, trapdoors, campfires, buttons, walls — rather than guessing property names. Values are written inside the id, as minecraft:campfire[lit=false].",
+    schema: {
+      type: "object",
+      properties: {
+        blocks: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: MAX_DESCRIBED_BLOCKS,
+        },
+      },
+      required: ["blocks"],
+      additionalProperties: false,
+    },
+    async run(context, args: { blocks: string[] }, id) {
+      const asked = Array.isArray(args?.blocks) ? args.blocks : [];
+      if (asked.length === 0) {
+        throw new Error("Pass one or more block ids in `blocks`.");
+      }
+      if (asked.length > MAX_DESCRIBED_BLOCKS) {
+        throw new Error(
+          `Ask about at most ${MAX_DESCRIBED_BLOCKS} blocks at a time; you asked about ${asked.length}.`,
+        );
+      }
+      step(
+        context,
+        "describe_block",
+        asked.length === 1
+          ? `looking up ${String(asked[0])}`
+          : `looking up ${asked.length} block states`,
+        id,
+      );
+
+      const blocks = asked.map((each) => {
+        // Deliberately not `toPlacedEntry` for the *name*: an id the caller
+        // spelled with states already is still a question about the block, and
+        // stripping them is what lets `minecraft:oak_stairs[facing=east]` be
+        // asked about at all.
+        const entry = toEntry(each);
+        const name = entry.namespacedName;
+        const placed = toPlacedEntry(name);
+
+        const properties = propertiesOf(name).map((property) => {
+          const values = legalValuesFor(name, property) ?? [];
+          const doc = describeProperty(property, values);
+          const fallback = placed.properties[property];
+          return {
+            name: property,
+            values,
+            /*
+             * `null` rather than a value when the property is legal but is not
+             * written on a new block. `waterlogged` is the whole of that set
+             * today, and saying "default: false" for it would contradict
+             * `placedAs`, which does not carry it -- see `block_states.ts` for
+             * why it is left out.
+             */
+            default: fallback ?? null,
+            description: doc?.description ?? null,
+            ...(doc?.versions ? { versions: doc.versions } : {}),
+            ...(fallback === undefined
+              ? {
+                  note:
+                    "Legal, but not written on a newly placed block. Name it explicitly if you want it.",
+                }
+              : {}),
+          };
+        });
+
+        return {
+          block: name,
+          // Two different questions, and a block can fail either alone. A
+          // pre-Flattening spelling like `minecraft:grass` is placeable and has
+          // no entry in the state registry; a misspelling has neither.
+          placeable: context.allowedBlocks.has(name),
+          known: isKnownBlock(name),
+          placedAs: paletteEntryCacheKey(placed),
+          properties,
+          note: !context.allowedBlocks.has(name)
+            ? "This app cannot place that block — check the spelling."
+            : properties.length === 0
+              ? isKnownBlock(name)
+                ? "This block has no block states. Place it by name."
+                : "The state registry does not know this block, which is normal for a pre-Flattening spelling. It is placed exactly as named."
+              : undefined,
+        };
+      });
+
+      return {
+        blocks,
+        spelling:
+          "Pass states inside the id: minecraft:oak_stairs[facing=east,half=top]. Anything you leave out is written at the value shown in placedAs.",
+      };
+    },
+  },
+
+  {
     name: "get_region",
     description:
       "The blocks in a region, as a list of coordinates and block ids. Air is omitted. Defaults to the user's selection. Refuses regions too large to describe — narrow it, or use get_palette for an overview.",
@@ -384,7 +574,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
     },
     async run(context, args: Partial<RegionArgs> & { block: string }, id) {
       const { region, ...notes } = resolveRegion(context, args ?? {});
-      const entry = toEntry(args.block);
+      const entry = toPlacedEntry(args.block);
       checkBlockAllowed(context, entry);
       if (regionVolume(region) > MAX_EDIT_VOLUME) {
         throw new Error(`That region covers ${regionVolume(region)} blocks, more than one edit may touch.`);
@@ -410,8 +600,9 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
     },
     async run(context, args: Partial<RegionArgs> & { from: string; to: string }, id) {
       const { region, ...notes } = resolveRegion(context, args ?? {});
+      // `from` is a pattern and `to` is a placement -- see `toPlacedEntry`.
       const from = toEntry(args.from);
-      const to = toEntry(args.to);
+      const to = toPlacedEntry(args.to);
       checkBlockAllowed(context, to);
       step(
         context,
@@ -449,7 +640,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
       additionalProperties: false,
     },
     async run(context, args: { x: number; y: number; z: number; block: string }, id) {
-      const entry = toEntry(args.block);
+      const entry = toPlacedEntry(args.block);
       checkBlockAllowed(context, entry);
       step(context, "set_block", `placing ${entry.namespacedName} at (${args.x},${args.y},${args.z})`, id);
       const changed = context.tx.setBlock(args.x, args.y, args.z, entry);
@@ -589,7 +780,10 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
       const outcome = await executeJsBuild(String(args.code ?? ""), context.allowedBlocks);
       let changed = 0;
       for (const [x, y, z, blockData] of outcome.placements) {
-        if (context.tx.setBlock(x, y, z, parsePaletteEntry(blockData))) {
+        // Through `toPlacedEntry` like every other placement: a script that
+        // writes `safeSetBlock(x, y, z, "campfire")` means the same thing a
+        // `set_block` call does.
+        if (context.tx.setBlock(x, y, z, toPlacedEntry(blockData))) {
           changed += 1;
         }
       }
@@ -608,7 +802,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
 ];
 
-/** The same nine, as the `ai` package wants them. */
+/** The same ten, as the `ai` package wants them. */
 export function buildTools(context: ToolContext): Record<string, Tool> {
   const tools: Record<string, Tool> = {};
   for (const spec of TOOL_SPECS) {

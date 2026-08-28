@@ -20,9 +20,38 @@
    * dropdown would refuse a value the file already contains. `legalValuesFor`
    * returns `null` rather than `[]` for exactly that case, and a property with
    * no known values gets a plain field instead of an empty menu.
+   *
+   * ## The list is a union, and that is the whole fix
+   *
+   * It used to be `Object.entries(inspection.properties)` -- what the entry
+   * happens to carry -- which is right for a block that arrived from a file and
+   * useless for one that arrived bare. A campfire placed over MCP had no
+   * properties at all, so the panel that exists to let you set its direction
+   * said "This block has no block states" and offered nothing. The block did
+   * have them; nobody had written them down.
+   *
+   * So the rows are the entry's own keys **and** what the registry says the
+   * block may hold. `propertyRows` in `inspector_rows.ts` is that rule, and it
+   * is a plain module rather than a `$derived.by` here for `selection_drag.ts`'s
+   * reason: a rule written inside a component can only be grepped for, and this
+   * one has edge cases worth stating -- an unknown block, and a property the
+   * file carries that the block does not legally have.
+   *
+   * ## Empty means remove, in one place
+   *
+   * There is no separate delete verb. Clearing the field removes the property,
+   * and the button beside a set row is a shortcut for clearing it. One rule,
+   * decided in `App.svelte`, because two ways of saying "gone" is how they come
+   * to disagree. Before this, clearing the box wrote `name: ""` -- a property
+   * with an empty value, which is a state no block has.
+   *
+   * Removing is a real thing to want, not just the inverse of adding: a partial
+   * state is legal in the file (the game fills the rest in with its own
+   * defaults), and it is how the MCEdit writer's exact-state match is kept
+   * clean -- the same reasoning that keeps `waterlogged` out of the defaults.
    */
   import type { BlockInspection } from "../../../shared/ipc.js";
-  import { legalValuesFor } from "../../../shared/block_states.js";
+  import { propertyRows } from "./inspector_rows.js";
   import { t } from "./i18n.svelte.js";
 
   interface Props {
@@ -39,25 +68,22 @@
   let showRaw = $state(false);
 
   /**
-   * The legal values of each property this block actually carries, keyed by
-   * property name. `null` for anything the generated table does not describe.
+   * Every property this block could carry, and what it carries now.
    *
-   * Derived rather than looked up in the markup because the lookup takes the
-   * block id, and reading it per row would recompute it once per property on
-   * every render.
+   * `value: null` is a property the block legally has and this one does not --
+   * drawn greyed, with the name still there to type into. Sorted by name and
+   * not by whether it is set, so a row does not jump somewhere else the moment
+   * you fill it in.
+   *
+   * Derived rather than looked up in the markup because the lookups take the
+   * block id, and reading them per row would recompute them once per property
+   * on every render.
    */
-  const valueLists = $derived.by(() => {
+  const rows = $derived.by(() => {
     const block = inspection?.block;
-    if (block === undefined) return {} as Record<string, readonly string[]>;
-    const out: Record<string, readonly string[]> = {};
-    for (const name of Object.keys(inspection?.properties ?? {})) {
-      const values = legalValuesFor(block, name);
-      if (values !== null) out[name] = values;
-    }
-    return out;
+    if (block === undefined) return [];
+    return propertyRows(block, inspection?.properties ?? {});
   });
-
-  const properties = $derived(Object.entries(inspection?.properties ?? {}).sort());
 
   /**
    * NBT as `prismarine-nbt` shapes it is a tree of `{type, value}` wrappers,
@@ -112,23 +138,40 @@
     <p class="id">{inspection.block}</p>
     <p class="hint">{t("inspector.at", { x: at.x, y: at.y, z: at.z })}</p>
 
-    {#if properties.length > 0}
+    {#if rows.length > 0}
       <div class="field">
         <label for="props">{t("inspector.blockStates")}</label>
         <ul id="props" class="props">
-          {#each properties as [name, value] (name)}
+          {#each rows as row (row.name)}
             <li>
-              <span class="key">{name}</span>
+              <span class="key" class:unset={row.value === null}>{row.name}</span>
               <input
-                value={value}
-                list={valueLists[name] ? `values-${name}` : undefined}
+                value={row.value ?? ""}
+                placeholder={row.value === null ? t("inspector.unset") : undefined}
+                list={row.values ? `values-${row.name}` : undefined}
                 disabled={busy}
                 spellcheck="false"
-                onchange={(event) => onchangeproperty(name, event.currentTarget.value)}
+                onchange={(event) => onchangeproperty(row.name, event.currentTarget.value)}
               />
-              {#if valueLists[name]}
-                <datalist id={`values-${name}`}>
-                  {#each valueLists[name] as option (option)}
+              <!--
+                Only on a row that has something to remove. The column is a
+                fixed width either way, so the fields stay lined up rather than
+                each row sizing itself from whether it happens to be set.
+              -->
+              {#if row.value !== null}
+                <button
+                  class="remove"
+                  disabled={busy}
+                  title={t("inspector.removeProperty", { name: row.name })}
+                  aria-label={t("inspector.removeProperty", { name: row.name })}
+                  onclick={() => onchangeproperty(row.name, "")}
+                >
+                  ×
+                </button>
+              {/if}
+              {#if row.values}
+                <datalist id={`values-${row.name}`}>
+                  {#each row.values as option (option)}
                     <option value={option}></option>
                   {/each}
                 </datalist>
@@ -206,10 +249,39 @@
 
   .props li {
     display: grid;
-    grid-template-columns: minmax(80px, 40%) 1fr;
+    /* Three columns, the last a fixed width: the remove button is only drawn on
+       a row that carries something, and a column that sized itself to its
+       contents would make every set row's field narrower than the rest. */
+    grid-template-columns: minmax(70px, 34%) 1fr 18px;
     align-items: center;
     gap: 8px;
     padding: 2px 0;
+  }
+
+  /* A property the block can hold and does not. Present, nameable, and visibly
+     not part of the block yet. */
+  .key.unset {
+    opacity: 0.55;
+  }
+
+  .props li button.remove {
+    background: none;
+    border: none;
+    padding: 0;
+    width: 18px;
+    line-height: 1;
+    font-size: 15px;
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+
+  .props li button.remove:hover:not(:disabled) {
+    color: var(--text);
+  }
+
+  .props li button.remove:disabled {
+    cursor: default;
+    opacity: 0.4;
   }
 
   .key {
@@ -229,6 +301,7 @@
   .nbt li {
     grid-template-columns: minmax(90px, 55%) 1fr;
   }
+
 
   .key em {
     font-style: normal;

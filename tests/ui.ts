@@ -91,6 +91,7 @@ import {
   MAX_LOOK_STEP,
 } from "../src/renderer/src/lib/look_filter.js";
 import { en } from "../src/renderer/src/lib/locales/en.js";
+import { propertyRows } from "../src/renderer/src/lib/inspector_rows.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const RENDERER = path.join(here, "..", "src", "renderer", "src");
@@ -1691,6 +1692,101 @@ console.log("\n--- in flight Ctrl belongs to the camera ---");
   check(
     "...and no longer refuses Ctrl outright",
     !/isTyping\(event\.target\) \|\| event\.ctrlKey/.test(hotbar),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The inspector lists what a block *may* hold, not only what it happens to
+// ---------------------------------------------------------------------------
+//
+// The panel listed the entry's own keys, which is right for a block that came
+// out of a file and useless for one that arrived bare. A campfire placed over
+// MCP had an empty property bag, so the panel that exists to let you point it
+// somewhere said "This block has no block states" -- about a block with four.
+console.log("\n--- the inspector's block-state rows ---");
+{
+  const campfire = propertyRows("minecraft:campfire", {});
+  equal(
+    "a bare block still lists everything it may hold",
+    campfire.map((row) => row.name),
+    ["facing", "lit", "signal_fire", "waterlogged"],
+  );
+  check(
+    "...with none of them set",
+    campfire.every((row) => row.value === null),
+  );
+  check(
+    "...and the legal values offered anyway",
+    (campfire.find((row) => row.name === "facing")?.values ?? []).includes("east"),
+  );
+
+  const lit = propertyRows("minecraft:campfire", { lit: "false" });
+  equal("what the block carries is shown as carried", lit.find((row) => row.name === "lit")?.value, "false");
+  equal(
+    "...and the rest is still offered",
+    lit.find((row) => row.name === "signal_fire")?.value,
+    null,
+  );
+
+  /*
+   * The other half of the union, and the one that is easy to leave out.
+   *
+   * A schematic may hold a property the block does not legally have -- another
+   * tool wrote it, or the block was renamed under it. Listing only what is
+   * legal would hide it here while leaving it in the file, and this panel is
+   * the only place it could ever be taken off.
+   */
+  const odd = propertyRows("minecraft:stone", { nonsense: "yes" });
+  equal("a property the block should not have is still shown", odd.map((row) => row.name), ["nonsense"]);
+  equal("...carrying its value", odd[0].value, "yes");
+  equal("...with no values to offer for it", odd[0].values, null);
+
+  // A block the registry does not know contributes nothing, which is exactly
+  // what the panel did before any of this.
+  equal("an unknown block is listed from the entry alone", propertyRows("minecraft:nonsense", {}), []);
+  equal(
+    "...and keeps whatever it carries",
+    propertyRows("minecraft:nonsense", { a: "1" }).map((row) => row.name),
+    ["a"],
+  );
+
+  // A block with genuinely no states is genuinely empty -- 346 of them are, and
+  // the panel saying so is correct rather than a gap.
+  equal("a block with no states has no rows", propertyRows("minecraft:stone", {}), []);
+
+  // Sorted by name and not by whether it is set: a blank row that jumped
+  // somewhere else the moment it was filled in would send the next keystroke
+  // into whichever row slid into its place.
+  const order = propertyRows("minecraft:campfire", { waterlogged: "true" }).map((row) => row.name);
+  equal("the rows are in name order however they are set", order, [...order].sort());
+}
+
+// ---------------------------------------------------------------------------
+// ...and an empty value means remove, decided in one place
+// ---------------------------------------------------------------------------
+//
+// The panel has no separate delete verb: clearing the field takes the property
+// off and the button beside a set row is a shortcut for clearing it. Two ways
+// of saying "gone" is how they come to disagree, so the rule is in the handler
+// and the markup only calls it. Before this, clearing the box wrote `name: ""`
+// -- a property with an empty value, which is a state no block has and which
+// the writers would have put into the file verbatim.
+{
+  const app = readFileSync(path.join(RENDERER, "App.svelte"), "utf8");
+  const from = app.indexOf("async function changeBlockProperty");
+  check("the block-state handler is still there", from !== -1);
+  const body = app.slice(from, app.indexOf("\n  }", from));
+  check("an empty value deletes the property", /delete properties\[name\]/.test(body), body.slice(0, 200));
+  check(
+    "...rather than writing an empty one",
+    !/properties\[name\] = ""/.test(body) && !/\[name\]: value\.trim\(\)/.test(body),
+  );
+
+  const panel = readFileSync(path.join(RENDERER, "lib", "InspectorPanel.svelte"), "utf8");
+  check("the panel decides its rows in the module that can be checked", panel.includes("propertyRows("));
+  check(
+    "...and the remove button goes through the same handler as typing",
+    /onchangeproperty\(row\.name, ""\)/.test(panel),
   );
 }
 

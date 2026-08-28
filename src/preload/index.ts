@@ -79,6 +79,8 @@ const api: BgptApi = {
   revealPath: (target: string) => ipcRenderer.invoke(IPC.revealPath, target) as Promise<void>,
   reportViewportRect: (rect: { x: number; y: number; width: number; height: number }) =>
     ipcRenderer.invoke(IPC.viewportRect, rect) as Promise<void>,
+  reportPointerLock: (locked: boolean) =>
+    ipcRenderer.invoke(IPC.pointerLock, locked) as Promise<void>,
   copyToClipboard: (text: string) =>
     ipcRenderer.invoke(IPC.clipboardWrite, text) as Promise<void>,
   getDefaultOutputDir: () => ipcRenderer.invoke(IPC.defaultOutputDir) as Promise<string>,

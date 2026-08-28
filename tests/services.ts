@@ -1079,8 +1079,8 @@ console.log("\n--- application menu ---");
   const editMenu = (state: Parameters<typeof menuModel>[0]): MenuItemModel[] =>
     at(menuModel(state), "Edit")?.submenu ?? [];
 
-  const empty = { hasDocument: false, recents: [] as RecentDocument[] };
-  const open = { hasDocument: true, recents: [] as RecentDocument[] };
+  const empty = { hasDocument: false, recents: [] as RecentDocument[], keysToCamera: false };
+  const open = { hasDocument: true, recents: [] as RecentDocument[], keysToCamera: false };
 
   // New and Open never depend on a document -- they are how you get one.
   equal("New works with nothing open", at(fileMenu(empty), "New…")?.enabled, true);
@@ -1125,7 +1125,11 @@ console.log("\n--- application menu ---");
   equal("...and empty", withNone?.submenu?.length, 0);
 
   const some = at(
-    fileMenu({ hasDocument: false, recents: recent(["C:/a/one.schem", "C:/b/two.schem"]) }),
+    fileMenu({
+      hasDocument: false,
+      recents: recent(["C:/a/one.schem", "C:/b/two.schem"]),
+      keysToCamera: false,
+    }),
     "Open Recent",
   );
   equal("history switches it on", some?.enabled, true);
@@ -1148,10 +1152,97 @@ console.log("\n--- application menu ---");
   equal("an ampersand in a file name is escaped", escapeMenuLabel("A&B.schem"), "A&&B.schem");
   equal(
     "...on the way into the menu, not only in principle",
-    at(fileMenu({ hasDocument: false, recents: recent(["C:/a/A&B.schem"]) }), "Open Recent")
-      ?.submenu?.[0].label,
+    at(
+      fileMenu({ hasDocument: false, recents: recent(["C:/a/A&B.schem"]), keysToCamera: false }),
+      "Open Recent",
+    )?.submenu?.[0].label,
     "A&&B.schem",
   );
+
+  /*
+   * In flight the menu prints its keys and claims none of them.
+   *
+   * With the pointer locked Ctrl is the sprint modifier and WASD is the
+   * direction, so Ctrl+W -- Close Schematic -- is also "run forwards", and an
+   * accelerator is taken before the window sees the keystroke. The renderer
+   * cannot decline it on the camera's behalf, so the menu has to let go.
+   *
+   * Walked over the whole tree rather than checked on Close alone, because the
+   * rule is about every accelerator the menu declares including the one added
+   * next -- which is exactly what `releaseAccelerators` is a single pass for.
+   */
+  const flying = { hasDocument: true, recents: recent(["C:/a/one.schem"]), keysToCamera: true };
+  const walk = (items: MenuItemModel[]): MenuItemModel[] =>
+    items.flatMap((item) => [item, ...walk(item.submenu ?? [])]);
+
+  const claimed = walk(menuModel(flying)).filter(
+    (item) => item.accelerator !== undefined && item.registerAccelerator !== false,
+  );
+  equal("in flight the menu claims no accelerator", claimed.length, 0);
+  // Printed, not deleted: the row still says which key it is, and still works
+  // when clicked. Releasing is about the keyboard and nothing else.
+  equal(
+    "...but Close still shows its key",
+    at(fileMenu(flying), "Close Schematic")?.accelerator,
+    "CmdOrCtrl+W",
+  );
+  equal("...and is still clickable", at(fileMenu(flying), "Close Schematic")?.enabled, true);
+  equal(
+    "...and the recents are still there",
+    at(fileMenu(flying), "Open Recent")?.submenu?.length,
+    1,
+  );
+  // Escape releases the lock and the keys come straight back. Nothing else in
+  // the menu moves with it -- same rows, same enablement.
+  equal(
+    "out of flight it claims them again",
+    at(fileMenu(open), "Save")?.registerAccelerator,
+    undefined,
+  );
+  equal(
+    "...which is the only difference the flag makes",
+    JSON.stringify(menuModel({ ...flying, keysToCamera: false })).replace(
+      /,"registerAccelerator":false/g,
+      "",
+    ),
+    JSON.stringify(menuModel(flying)).replace(/,"registerAccelerator":false/g, ""),
+  );
+
+  /*
+   * Every field of the model reaches Electron.
+   *
+   * `menu_model.ts` decides and `menu.ts` copies, which is a division of labour
+   * with one failure mode: a field added to the model and not to `toElectron`
+   * is dropped in silence, and the decision looks taken while nothing happens.
+   * That is `coerceSettings`'s bug in a different module, and this is the same
+   * answer -- a fully populated value, `satisfies` so the compiler breaks when
+   * a required field appears, and the copy checked field by field.
+   *
+   * `registerAccelerator` is the one that prompted it: dropped, the menu would
+   * go on claiming Ctrl+W in flight with every check above still green.
+   */
+  const everyField = {
+    command: "save",
+    filePath: "C:/a/one.schem",
+    label: "Save",
+    accelerator: "CmdOrCtrl+S",
+    registerAccelerator: false,
+    enabled: true,
+    separator: false,
+    role: "quit",
+    submenu: [],
+  } satisfies Required<MenuItemModel>;
+
+  const electronHalf = readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "main", "menu.ts"),
+    "utf8",
+  );
+  const dropped = Object.keys(everyField).filter(
+    // `item.<field>` is how `toElectron` reads each one. A name that appears
+    // only in a comment or a type would not be written that way.
+    (field) => !electronHalf.includes(`item.${field}`),
+  );
+  equal("every field of a menu item reaches Electron", dropped.join(", "), "");
 
   // The title bar. Name first, app second: both the taskbar and Alt-Tab
   // truncate from the right, and which schematic this is survives.

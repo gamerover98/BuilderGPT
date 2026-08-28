@@ -39,6 +39,11 @@ export interface MenuItemModel {
   filePath?: string;
   label?: string;
   accelerator?: string;
+  /**
+   * Whether the accelerator is claimed from the OS, or only printed beside the
+   * label. Absent means claimed, which is Electron's own default.
+   */
+  registerAccelerator?: boolean;
   enabled?: boolean;
   separator?: boolean;
   /** Handed to Electron as-is; the only one used here is `quit`. */
@@ -49,6 +54,13 @@ export interface MenuItemModel {
 export interface MenuState {
   hasDocument: boolean;
   recents: readonly RecentDocument[];
+  /**
+   * The pointer is locked and the keyboard is flying the camera.
+   *
+   * Reported by the renderer over `IPC.pointerLock`; the one fact in this
+   * model main cannot work out for itself.
+   */
+  keysToCamera: boolean;
 }
 
 export interface TitleState {
@@ -112,6 +124,26 @@ export function recentLabels(recents: readonly RecentDocument[]): string[] {
     const folder = folderNameOf(entry.filePath);
     return folder === null ? entry.filePath : `${name} — ${folder}`;
   });
+}
+
+/**
+ * Prints every accelerator without claiming any of them.
+ *
+ * One pass over the finished tree rather than a flag threaded through each row,
+ * because the rule is about *every* accelerator this menu declares -- including
+ * the one somebody adds next, who will not have read this. A row keeps its
+ * label, its enablement and its click: it is only the key that is handed back.
+ *
+ * `registerAccelerator` is Windows and Linux only, and those are the only
+ * platforms where the problem exists: `CmdOrCtrl` resolves to Cmd on macOS, and
+ * the sprint key there is still Ctrl, so the two never meet.
+ */
+function releaseAccelerators(items: MenuItemModel[]): MenuItemModel[] {
+  return items.map((item) => ({
+    ...item,
+    ...(item.accelerator !== undefined ? { registerAccelerator: false } : {}),
+    ...(item.submenu !== undefined ? { submenu: releaseAccelerators(item.submenu) } : {}),
+  }));
 }
 
 /**
@@ -206,7 +238,25 @@ export function menuModel(state: MenuState): MenuItemModel[] {
     });
   }
 
-  return menus;
+  /*
+   * In flight the menu keeps its keys to itself.
+   *
+   * With the pointer locked, Ctrl is the sprint modifier and W, A, S and D are
+   * the direction -- so Ctrl+W, which this menu claims as Close Schematic, is
+   * also "run forwards". Sprinting across a build closed the schematic, and an
+   * accelerator is claimed before the window sees the keystroke, so the
+   * renderer had no way to refuse on the camera's behalf.
+   *
+   * Released rather than disabled: a disabled row loses its accelerator too,
+   * and it also loses its click, which would take the mouse's way in along with
+   * the keyboard's for no reason. The keystroke now reaches the page, where the
+   * viewer is already listening for `KeyW` and `App.svelte` declines anything
+   * Ctrl-modified for the whole time the lock is held.
+   *
+   * Escape is the way back: it releases the lock, the renderer says so, and the
+   * menu claims its keys again.
+   */
+  return state.keysToCamera ? releaseAccelerators(menus) : menus;
 }
 
 /**

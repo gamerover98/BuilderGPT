@@ -1000,6 +1000,26 @@ import VersionsModal from "./lib/VersionsModal.svelte";
     }
 
     /*
+     * Telling main when the keyboard stops belonging to it.
+     *
+     * `document.pointerLockElement` is the truth and this window can read it
+     * whenever it likes -- `onWindowKey` does exactly that. Main cannot, and
+     * the File menu's accelerators are taken before this window sees the
+     * keystroke, so Ctrl+W is the menu's whatever the camera is doing with it.
+     * Hence a report rather than a shared state: it is the only way the menu
+     * can be told to let go.
+     *
+     * Sent once on mount as well as on every change, because main's flag
+     * outlives this component: a reload in dev leaves it holding whatever the
+     * previous instance last said.
+     */
+    const onPointerLock = () => {
+      void api().reportPointerLock(document.pointerLockElement !== null);
+    };
+    document.addEventListener("pointerlockchange", onPointerLock);
+    onPointerLock();
+
+    /*
      * Startup, in named steps.
      *
      * The order is not decoration: the block models come last of the slow
@@ -1148,6 +1168,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
 
     return () => {
       window.removeEventListener("keydown", onWindowKey);
+      document.removeEventListener("pointerlockchange", onPointerLock);
       dark.removeEventListener("change", onSystemTheme);
       unsubscribe();
       unsubscribeStartup();
@@ -1159,6 +1180,28 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   });
 
   function onWindowKey(event: KeyboardEvent): void {
+    /*
+     * With the pointer locked, Ctrl belongs to the camera and to nothing else.
+     *
+     * In flight Ctrl is the sprint modifier and WASD is the direction, so every
+     * Ctrl+letter this window binds is also a way of moving: Ctrl+A selected
+     * the whole schematic while strafing left, and Ctrl+W -- the File menu's
+     * Close Schematic -- closed it while running forwards. The menu half of
+     * that is fixed where it has to be, in main (`IPC.pointerLock`); this is
+     * the window's half.
+     *
+     * Blanket, and first in the function, which are the same decision twice.
+     * An allowlist would have to be re-judged against the movement keys every
+     * time a shortcut was added, by whoever added it; and a gate further down
+     * would be a rule anything written above it silently escapes. Escape is the
+     * way back: it releases the lock, and every shortcut here works again.
+     *
+     * Unmodified keys are untouched. `E` opens the inventory in flight because
+     * that is where you want it, exactly as the game binds it.
+     */
+    if ((event.ctrlKey || event.metaKey) && document.pointerLockElement !== null) {
+      return;
+    }
     /*
      * `E` opens the inventory, unmodified, the way the game binds it.
      *
@@ -1487,9 +1530,16 @@ import VersionsModal from "./lib/VersionsModal.svelte";
 
   function togglePalette(): void {
     const next = !paletteOpen;
-    // Creative mode holds the pointer, and a locked pointer means the keys the
-    // user is about to type are also steering the camera. Releasing it is what
-    // makes the palette usable from flight rather than a way to fly into a wall.
+    /*
+     * A locked pointer means the keys the user is about to type are also
+     * steering the camera, so the lock goes before the palette opens.
+     *
+     * Ctrl+K cannot reach here while the lock is held any more -- `onWindowKey`
+     * declines everything Ctrl-modified for as long as it is, so from flight
+     * the palette is Escape and then Ctrl+K. This stays because it costs
+     * nothing and it is what any other way in would need: the modals all do the
+     * same, and the palette is the one that would be typed into.
+     */
     if (next && document.pointerLockElement) {
       document.exitPointerLock();
     }

@@ -68,6 +68,7 @@ function toElectron(item: MenuItemModel): MenuItemConstructorOptions {
   const built: MenuItemConstructorOptions = {};
   if (item.label !== undefined) built.label = item.label;
   if (item.accelerator !== undefined) built.accelerator = item.accelerator;
+  if (item.registerAccelerator !== undefined) built.registerAccelerator = item.registerAccelerator;
   if (item.enabled !== undefined) built.enabled = item.enabled;
   if (item.role !== undefined) built.role = item.role;
   if (item.submenu !== undefined) built.submenu = item.submenu.map(toElectron);
@@ -88,13 +89,48 @@ function toElectron(item: MenuItemModel): MenuItemConstructorOptions {
  * visible on Windows: the bar flickers. The title is cheap and always set; the
  * menu is rebuilt only when one of the two things it actually reads has moved.
  */
-function menuSignature(hasDocument: boolean, recents: readonly { filePath: string }[]): string {
+function menuSignature(
+  hasDocument: boolean,
+  recents: readonly { filePath: string }[],
+  keysToCamera: boolean,
+): string {
   // JSON rather than a joined string: any separator a path can legitimately
   // contain would make two different lists compare equal.
-  return JSON.stringify([hasDocument, recents.map((entry) => entry.filePath)]);
+  return JSON.stringify([hasDocument, recents.map((entry) => entry.filePath), keysToCamera]);
 }
 
 let lastSignature: string | null = null;
+
+/**
+ * Whether the keyboard is flying the camera, as the renderer last said.
+ *
+ * `false` until it says otherwise, which is the right answer before the window
+ * exists and after it has gone: a menu that had quietly stopped claiming its
+ * keys would be a far worse failure than one that claims them a moment early.
+ *
+ * It lives here because the menu is its only consumer -- and the menu is the
+ * only part of the app that can act on it at all, the accelerators being
+ * claimed before the window sees the keystroke. Putting it in `handlers.ts`
+ * beside `viewportRect`, which is the state it most resembles, would have that
+ * module and this one importing each other.
+ */
+let keysToCamera = false;
+
+/**
+ * The renderer reporting that the pointer was locked, or released.
+ *
+ * Rebuilds through `refreshShell` rather than mutating the live menu items:
+ * `MenuItem.registerAccelerator` can be changed in place, and doing so would
+ * put a second answer to "what does the menu contain" beside `menu_model.ts`,
+ * which is the module that is supposed to hold all of them. A lock is taken and
+ * released a few times a minute, not a few times a second, so the rebuild this
+ * costs is nothing like the one `menuSignature` exists to avoid.
+ */
+export function setKeysToCamera(next: boolean): void {
+  if (next === keysToCamera) return;
+  keysToCamera = next;
+  void refreshShell();
+}
 
 /**
  * Brings the window chrome back in step with main's own state.
@@ -110,11 +146,11 @@ export async function refreshShell(): Promise<void> {
   const hasDocument = session !== null;
   const recents = await getRecentDocuments();
 
-  const signature = menuSignature(hasDocument, recents);
+  const signature = menuSignature(hasDocument, recents, keysToCamera);
   if (signature !== lastSignature) {
     lastSignature = signature;
     Menu.setApplicationMenu(
-      Menu.buildFromTemplate(menuModel({ hasDocument, recents }).map(toElectron)),
+      Menu.buildFromTemplate(menuModel({ hasDocument, recents, keysToCamera }).map(toElectron)),
     );
   }
 

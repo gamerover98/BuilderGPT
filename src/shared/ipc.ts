@@ -138,6 +138,20 @@ export const IPC = {
    * anything, only to be told. So the renderer reports it when it changes.
    */
   viewportRect: "bgpt:viewport:rect",
+  /**
+   * renderer → main: the pointer is locked, so the keyboard is flying the camera.
+   *
+   * Reported for one reason, and it is a reason only main can act on. While the
+   * pointer is locked Ctrl is the *sprint* modifier — so Ctrl+W means "run
+   * forwards", and the File menu claims that combination as Close Schematic. An
+   * accelerator is taken before the window ever sees the keystroke, so the
+   * renderer cannot decline it on the camera's behalf: the menu has to stop
+   * registering it, and only main can be told when.
+   *
+   * Same shape as `viewportRect`, for the same reason: main cannot work it out
+   * and has no way to ask, so the renderer says so when it changes.
+   */
+  pointerLock: "bgpt:viewport:pointerLock",
   /** The sun and moon images out of the resource pack. */
   skyTextures: "bgpt:sky:textures",
   /** The wooden axe, drawn on the cell WorldEdit would paste from. */
@@ -1382,6 +1396,8 @@ export interface BgptApi {
   revealPath(path: string): Promise<void>;
   /** Where the 3D canvas is, in window coordinates. See `IPC.viewportRect`. */
   reportViewportRect(rect: { x: number; y: number; width: number; height: number }): Promise<void>;
+  /** Whether the keyboard is flying the camera. See `IPC.pointerLock`. */
+  reportPointerLock(locked: boolean): Promise<void>;
   /** Put text on the system clipboard. Main's, because the preload is sandboxed. */
   copyToClipboard(text: string): Promise<void>;
   getDefaultOutputDir(): Promise<string>;

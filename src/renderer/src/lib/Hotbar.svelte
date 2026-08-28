@@ -83,9 +83,19 @@
     if (!visible) return;
 
     const onKey = (event: KeyboardEvent) => {
-      // Not while the user is typing: this listens on `window`, so a "3" in the
-      // chat would otherwise change what is in your hand mid-sentence.
-      if (isTyping(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
+      /*
+       * Not while the user is typing: this listens on `window`, so a "3" in the
+       * chat would otherwise change what is in your hand mid-sentence.
+       *
+       * Ctrl is let through while the pointer is locked, which is the same rule
+       * `onWindowKey` applies from the other side: in flight Ctrl is the sprint
+       * modifier, so refusing it here meant a sprinting player could not change
+       * what they were holding. Nothing is being typed with the pointer locked,
+       * and no app shortcut answers Ctrl+3 either.
+       */
+      const flying = document.pointerLockElement !== null;
+      if (isTyping(event.target) || event.metaKey || event.altKey) return;
+      if (event.ctrlKey && !flying) return;
       const digit = Number(event.key);
       if (Number.isInteger(digit) && digit >= 1 && digit <= HOTBAR_SLOTS) {
         event.preventDefault();

@@ -1637,5 +1637,62 @@ console.log("\n--- which side of a surface the block is on ---");
   equal("a perpendicular one is left alone", facingNormal(up, [1, 0, 0]), up);
 }
 
+/*
+ * In flight, Ctrl belongs to the camera.
+ *
+ * One sentence, enforced in three places and runnable in none of them here:
+ * `menu_model.ts` stops the File menu claiming its accelerators (checked in
+ * `tests/services.ts`), `App.svelte` declines every Ctrl-modified keystroke,
+ * and `Hotbar.svelte` stops refusing them. Both renderer halves are a
+ * `document.pointerLockElement` read inside a `window` listener, which is a
+ * browser fact this harness has no browser for.
+ *
+ * So the source is checked, exactly as the coplanar epsilons are: not that the
+ * gate works, but that it is still there and still in the one position that
+ * makes it a rule rather than a habit.
+ */
+console.log("\n--- in flight Ctrl belongs to the camera ---");
+{
+  const app = readFileSync(path.join(RENDERER, "App.svelte"), "utf8");
+  const from = app.indexOf("function onWindowKey");
+  // Two spaces, which is the function's own indentation: every block inside it
+  // closes further in.
+  const body = app.slice(from, app.indexOf("\n  }", from));
+  check("there is a keyboard handler to gate", from > 0 && body.length > 0);
+
+  const lines = body.split(/\r?\n/);
+  const gate = lines.findIndex((line) => line.includes("document.pointerLockElement"));
+  const modifier = lines.findIndex((line) => /event\.(?:ctrlKey|metaKey)/.test(line));
+  check("it declines Ctrl while the pointer is locked", gate >= 0);
+  /*
+   * And the gate is the *first* thing in it that looks at a modifier.
+   *
+   * This is the half worth checking. A gate further down is a rule anything
+   * written above it silently escapes, and a shortcut added above it would work
+   * in flight while every other one did not -- which reads as that shortcut
+   * being special rather than as the gate being in the wrong place.
+   */
+  check(
+    "...before anything else asks about one",
+    modifier === gate,
+    `gate at ${gate}, first modifier at ${modifier}`,
+  );
+  // Blanket, not an allowlist: the point is that no Ctrl shortcut added later
+  // has to be re-judged against WASD by whoever adds it.
+  check("...and Ctrl and Cmd both count", /event\.ctrlKey \|\| event\.metaKey/.test(lines[gate] ?? ""));
+
+  /*
+   * The other side of the same sentence: with the lock held, Ctrl must stop
+   * *suppressing* the keys the game does bind. Ctrl+3 picks the third slot
+   * while sprinting, and refusing it was the mirror image of the bug above.
+   */
+  const hotbar = readFileSync(path.join(RENDERER, "lib", "Hotbar.svelte"), "utf8");
+  check("the hotbar knows about the lock too", hotbar.includes("document.pointerLockElement"));
+  check(
+    "...and no longer refuses Ctrl outright",
+    !/isTyping\(event\.target\) \|\| event\.ctrlKey/.test(hotbar),
+  );
+}
+
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

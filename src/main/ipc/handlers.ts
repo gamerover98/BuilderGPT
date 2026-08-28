@@ -185,7 +185,7 @@ import {
   takeSnapshot,
   useSnapshotDirectory,
 } from "../services/snapshots.js";
-import { refreshShell, rememberInOsRecents } from "../menu.js";
+import { refreshShell, rememberInOsRecents, setKeysToCamera } from "../menu.js";
 import { shellState, useWindow } from "../services/broadcast.js";
 import {
   mcpActivity,
@@ -505,6 +505,18 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       viewportRect = rect;
     },
   );
+
+  /*
+   * The pointer was locked, or released.
+   *
+   * Nothing is stored here: the only thing in main that can act on it is the
+   * menu, which has to stop *registering* its accelerators rather than merely
+   * ignoring them. `setKeysToCamera` is a no-op when the answer has not moved,
+   * so the renderer is free to report whatever it currently sees.
+   */
+  ipcMain.handle(IPC.pointerLock, async (_event, locked: boolean): Promise<void> => {
+    setKeysToCamera(locked === true);
+  });
 
   ipcMain.handle(IPC.clipboardWrite, async (_event, text: string): Promise<void> => {
     clipboard.writeText(String(text ?? ""));

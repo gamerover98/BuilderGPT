@@ -939,12 +939,71 @@ from a field where nothing on screen suggests it. They stay on the keyboard
 handler, behind `isTyping`, alongside the buttons in the document bar.
 `tests/services.ts` asserts the absence, because it looks like an omission.
 
+**In flight, Ctrl belongs to the camera, and only main can honour that.** With
+the pointer locked the keyboard is flying: Ctrl is the sprint modifier and WASD
+is the direction. So every Ctrl+letter the app binds is also a way of moving —
+Ctrl+A selected the whole schematic while strafing left, and **Ctrl+W closed the
+schematic while running forwards**, which is the one that costs something.
+
+The rule is one sentence and it is enforced in three places because it has to
+be:
+
+- `App.svelte`'s `onWindowKey` returns on anything Ctrl- or Cmd-modified while
+  `document.pointerLockElement` is set. **Blanket, and first in the function**,
+  which is the same decision twice: an allowlist would have to be re-judged
+  against the movement keys by whoever adds the next shortcut, and a gate
+  further down is a rule that anything written above it silently escapes.
+- The **menu cannot be fixed from the window at all.** An accelerator is claimed
+  before the keystroke arrives, so `menu_model.ts` stops *registering* its
+  accelerators instead — one `releaseAccelerators` pass over the finished tree,
+  so it covers the accelerator somebody adds next. `registerAccelerator: false`
+  prints the key and does not claim it, which is why it is that rather than
+  `enabled: false`: disabling would take the mouse's way in along with the
+  keyboard's, for nothing.
+- `Hotbar.svelte` stops *refusing* Ctrl, which is the same sentence from the
+  other side. Ctrl+3 picks the third slot while sprinting; declining it was the
+  mirror image of the bug the gate fixes.
+
+`before-input-event` is the obvious mechanism and is the wrong one: its
+`preventDefault` suppresses "the page keydown/keyup events **and** the menu
+shortcuts", so the viewer would never see `KeyW` go down and Ctrl would stop
+being a sprint key at all — the collision removed by deleting the thing it
+collided with.
+
+**Gated on the pointer lock, not on the camera mode.** In fly mode with the lock
+released `updateFlight` returns early, so nothing is steering and there is no
+collision to avoid; the lock is exactly the set of moments the keys are the
+camera's. It also makes Escape the way back, which is the key a player already
+presses to get a cursor — and it is why Ctrl+K can no longer summon the command
+palette from flight. That was deliberate once (`togglePalette` releases the lock
+on the way in) and it is Escape-then-Ctrl+K now; the release stays because any
+other way in would need it.
+
+`IPC.pointerLock` is the report, and it is `viewportRect`'s shape for
+`viewportRect`'s reason: main cannot work it out and has no way to ask. The flag
+lives in `menu.ts` rather than beside `viewportRect` in `handlers.ts` only
+because that module imports this one. It starts `false`, and the renderer
+reports on mount as well as on change — main's flag outlives the component, so a
+dev reload would otherwise leave the menu holding whatever the last instance
+said.
+
+`tests/services.ts` walks the whole menu tree and requires no accelerator to be
+claimed in flight, that the rows keep their labels, keys, enablement and
+recents, and that releasing is *all* the flag does. It also requires every field
+of `MenuItemModel` to be copied in `menu.ts` — `registerAccelerator` dropped
+there would leave the menu claiming Ctrl+W with every other check still green,
+which is `coerceSettings`' failure in another module. The two renderer halves
+are a browser fact this harness has no browser for, so `tests/ui.ts` checks the
+source the way the coplanar epsilons are checked: that the gate is there, and
+that it is still the first thing in the function to look at a modifier.
+
+
 **Enablement is decided from main's own state**, not reported back by the
 renderer: `currentSession() !== null` plus the recents list main already owns.
 `busy` is deliberately not modelled — it is a renderer convention, and every
 action behind these items refuses on its own. `refreshShell` rebuilds the menu
-only when its *shape* moved (a signature over `hasDocument` and the recent
-paths) and always retitles, because it is called from every handler that answers
+only when its *shape* moved (a signature over `hasDocument`, the recent paths
+and whether the keyboard is flying the camera) and always retitles, because it is called from every handler that answers
 with a `DocumentState` — which is many times a second during a drag, and
 rebuilding a native menu at that rate flickers the bar.
 

@@ -112,7 +112,7 @@ const baker = await ModelBaker.create(null, pack);
 function texelOn(
   face: BakedFace,
   point: readonly [number, number, number],
-): { alpha: number; luminance: number } {
+): { inside: boolean; alpha: number; luminance: number; rgba: string } {
   const at = (i: number, axis: number) => face.positions[i * 3 + axis];
   const edge = (i: number) => [0, 1, 2].map((axis) => at(i, axis) - at(0, axis));
   const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -127,9 +127,12 @@ function texelOn(
   const x = Math.min(image.width - 1, Math.max(0, Math.floor(u * image.width)));
   const y = Math.min(image.height - 1, Math.max(0, Math.floor(v * image.height)));
   const i = (y * image.width + x) * 4;
+  const within = (n: number) => n >= -1e-6 && n <= 1 + 1e-6;
   return {
+    inside: within(s) && within(t),
     alpha: image.data[i + 3],
     luminance: image.data[i] * 0.3 + image.data[i + 1] * 0.59 + image.data[i + 2] * 0.11,
+    rgba: `${image.data[i]},${image.data[i + 1]},${image.data[i + 2]},${image.data[i + 3]}`,
   };
 }
 
@@ -263,6 +266,109 @@ if (pack === null) {
     equal("it is the numbered texture", south.textureKey, "minecraft:item/light_07");
     check("the 7's bar is on the west", texelOn(south, [0.1, 0.98, 1]).alpha > 128);
     check("...and nothing is drawn opposite it", texelOn(south, [0.9, 0.98, 1]).alpha < 128);
+  }
+}
+
+// --- turning a block turns its picture with it ------------------------------
+//
+// The four sides get this for free and that is what hid it: a side texture is
+// painted "U to the viewer's right", the viewer walks round with the block, and
+// `rotateFaceMap` delivers the right name to the right face. The **top and the
+// bottom** get nothing — `up` rotates to `up`, so the map is an identity there
+// — and their pictures are painted with the model's north at the top, which
+// after a quarter-turn is not the world's north.
+//
+// It was reported as a bed that only looked right facing north: its pillow came
+// out at the joint facing south, and at east and west the white/black split ran
+// across the mattress instead of along it. `turnFlatFaces` turns the picture and
+// `pinFlatWindows` keeps it reading the patch of tile it read before the box
+// moved; without the second, an off-centre box like a bed's leg lands a couple
+// of texels out.
+//
+// Stated as the property rather than as four pillow positions, because the
+// property is what the two functions are for: the texel under a world point on
+// a turned block is the texel under the un-turned point on the un-turned one.
+console.log("\n--- turning a block turns its picture with it ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const compass = ["north", "east", "south", "west"];
+  // One clockwise quarter-turn about the block's vertical axis, which is
+  // `rotateBoxY`'s `(x, z) -> (16 - z, x)` in 0..1 space.
+  const turn = (p: [number, number, number]): [number, number, number] => [1 - p[2], p[1], p[0]];
+  const unturn = (p: [number, number, number], steps: number) => {
+    let out = p;
+    for (let i = 0; i < ((4 - (steps % 4)) % 4); i += 1) out = turn(out);
+    return out;
+  };
+  const flatFaces = (baked: BakedBlock) =>
+    [...Object.values(baked.faces), ...baked.extraFaces].filter((f) => f.normal[1] !== 0);
+
+  for (const [name, extra] of [
+    ["black_bed", { part: "head" }],
+    ["black_bed", { part: "foot" }],
+    ["anvil", {}],
+    ["grindstone", {}],
+    ["oak_shelf", {}],
+    ["oak_stairs", {}],
+  ] as Array<[string, Record<string, string>]>) {
+    const base = await baker.bakeBlockstate(block(name, { ...extra, facing: "north" }));
+    let compared = 0;
+    let differed = 0;
+    for (let steps = 1; steps < 4; steps += 1) {
+      const turned = await baker.bakeBlockstate(block(name, { ...extra, facing: compass[steps] }));
+      for (const face of flatFaces(turned)) {
+        const height = face.positions[1];
+        for (let x = 1; x < 8; x += 1) {
+          for (let z = 1; z < 8; z += 1) {
+            const point: [number, number, number] = [x / 8, height, z / 8];
+            const got = texelOn(face, point);
+            if (!got.inside) continue;
+            const before = unturn(point, steps);
+            const want = flatFaces(base)
+              .filter(
+                (f) => f.normal[1] === face.normal[1] && Math.abs(f.positions[1] - height) < 1e-6,
+              )
+              .map((f) => texelOn(f, before))
+              .find((sample) => sample.inside);
+            if (want === undefined) continue;
+            compared += 1;
+            if (want.rgba !== got.rgba) differed += 1;
+          }
+        }
+      }
+    }
+    check(
+      `${name}${extra.part ? ` ${extra.part}` : ""} draws the same picture at every facing (${compared})`,
+      compared > 40 && differed === 0,
+      `${differed} of ${compared} texels moved`,
+    );
+  }
+
+  /*
+   * ...and the bed said in its own terms, because that is the sentence the
+   * report was filed in. Black rather than red: a red bed's mattress and its
+   * pillow are both light, and the difference has to be legible in one number.
+   */
+  const outer: Record<string, [number, number]> = {
+    north: [0.5, 0.2],
+    south: [0.5, 0.8],
+    east: [0.8, 0.5],
+    west: [0.2, 0.5],
+  };
+  for (const [facing, [x, z]] of Object.entries(outer)) {
+    const head = await baker.bakeBlockstate(block("black_bed", { part: "head", facing }));
+    const top = head.extraFaces.find((f) => f.normal[1] === 1);
+    if (top === undefined) {
+      check(`a ${facing}-facing bed head has a top`, false);
+      continue;
+    }
+    const joint: [number, number] = [1 - x === 0.5 ? 0.5 : 1 - x, 1 - z === 0.5 ? 0.5 : 1 - z];
+    check(
+      `a ${facing}-facing head keeps its pillow at the outer end`,
+      texelOn(top, [x, top.positions[1], z]).luminance > 200 &&
+        texelOn(top, [joint[0], top.positions[1], joint[1]]).luminance < 60,
+    );
   }
 }
 /*

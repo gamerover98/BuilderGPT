@@ -1655,6 +1655,47 @@ knowing:
   deliberately nothing there about the chest — `entity/chest/normal.png` is
   left-right symmetric on every face it draws, so a check written on it fails
   when the mapping changes without either arrangement being wrong.
+- **Turning a block turns its picture with it, and the top and the bottom get
+  nothing for free.** The four sides do: a side texture is painted "U to the
+  viewer's right", the viewer walks round with the block, and `rotateFaceMap`
+  delivers the right name to the right face. `up` rotates to `up`, so on the two
+  flat faces that map is an identity — and their pictures are painted with the
+  *model's* north at the top, which after a quarter-turn is not the world's
+  north. `turnFlatFaces` in `block_shapes.ts` is the quarter-turn, anticlockwise
+  on the top and clockwise on the bottom, because a block that turns one way
+  from above turns the other way seen from underneath.
+
+  This is what a vanilla blockstate's `y` does — it rotates the baked model,
+  UVs and all — so it belongs to `rotateShapeBox` and not to any one shape.
+
+  `pinFlatWindows` is the other half and is easy to leave out. Coordinate-derived
+  UVs are a *function of the box*, so rotating the box moves them: the picture
+  would be turned and then read out of a different patch of the tile. Writing the
+  un-rotated footprint down as an explicit window is how "vanilla carries the UVs
+  rather than re-deriving them" is said here. It only shows on a box that is
+  off-centre in plan — a bed's leg, sitting in one corner — and there it is a
+  couple of texels of the same wood, which is exactly why it would have been
+  left as an exception nobody remembers.
+
+  Reported as "only the bed facing north is right": at south the pillow came out
+  at the joint, and at east and west the white/black split ran across the
+  mattress instead of along it. The sign is the part to get wrong — a 180° error
+  leaves *south* correct and fails only east and west, which is what the checks
+  key on.
+
+  **Two families still do not turn, and both are bigger jobs than this one.** A
+  full cube with a horizontal `facing` never reaches `rotateShapeBox` at all —
+  `shapeFor` gives it `CUBE` and `cubeFaceTextures` picks a texture per face, so
+  its top is drawn unturned (the furnace family, dispenser, dropper, observer,
+  the pistons, the shulker boxes, carved pumpkin, the command blocks, loom,
+  barrel, beehive, and the sixteen glazed terracottas, which additionally need
+  the per-face `rotation`s `template_glazed_terracotta` states and this app has
+  no entry for). And a shape whose *geometry* is rotation-invariant tends to have
+  been written without passing the steps to `transform` at all — closed
+  trapdoors, wall hanging signs, campfires, the stonecutter, the lectern, the
+  decorated pot, the hopper, the bell. Each of those needs its own check against
+  its vanilla blockstate for the authored direction, which `trapdoor`'s own
+  comment shows is easy to get a quarter-turn wrong.
 - **A texture that lands outside its tile is clamped, not refused.** The atlas
   smears the edge pixels across the face, which reads as a badly drawn texture
   rather than as a window that missed — so `tests/blocks.ts` walks every offered

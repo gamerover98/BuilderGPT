@@ -190,6 +190,75 @@ function rotateBoxRotation(rotation: BoxRotation | undefined, steps: number): Bo
   return current;
 }
 
+/**
+ * A y-rotation turns the picture on the **top and the bottom**, and nothing
+ * else here can do it.
+ *
+ * `rotateFaceMap` moves a value from one face to another, which is the whole of
+ * what a quarter-turn means for the four sides: a side face's texture is
+ * authored "U to the viewer's right", the viewer moves round with the block,
+ * and the right name arrives on the right face. Neither is true of the two flat
+ * faces. `up` rotates to `up`, so the map is an identity there — and their
+ * pictures are authored with the model's **north at the top**, which after a
+ * turn is not the world's north any more.
+ *
+ * That was the whole of "a bed only looks right facing north". Its mattress is
+ * 16x16 and its top is `<colour>_bed_head_up`, white over the model's north
+ * half and black over the other: at `facing=south` the pillow came out at the
+ * joint, and at east and west the split ran across the bed instead of along it.
+ * The four sides were right the whole time, which is what made it read as a
+ * texture problem rather than a rotation one.
+ *
+ * The bottom turns the other way because it is seen from underneath: a block
+ * that turns clockwise from above turns anticlockwise from below.
+ *
+ * This is exactly what a vanilla blockstate's `y` does — it rotates the baked
+ * model, UVs and all — so it belongs here rather than in any one shape. Adding
+ * it to a box that has no top or bottom costs nothing: the value is read only
+ * when the face is drawn.
+ */
+function turnFlatFaces(
+  uvRotation: Readonly<Record<string, number>> | undefined,
+  steps: number,
+): Readonly<Record<string, number>> | undefined {
+  const turns = ((steps % 4) + 4) % 4;
+  if (turns === 0) return uvRotation;
+  return {
+    ...uvRotation,
+    up: ((uvRotation?.up ?? 0) - turns * 90 + 360) % 360,
+    down: ((uvRotation?.down ?? 0) + turns * 90) % 360,
+  };
+}
+
+/**
+ * ...and a top or bottom face with no stated window needs one, pinned to the
+ * box **before** it turned.
+ *
+ * Coordinate-derived UVs are a function of the box, so rotating the box moves
+ * them: the picture would be turned by `turnFlatFaces` and then read out of a
+ * different patch of the tile. Vanilla carries a face's UVs through its
+ * blockstate `y` rather than re-deriving them, and writing the un-rotated
+ * footprint down as a window is how that is said here.
+ *
+ * It only shows on a box that is off-centre in plan — a bed's leg, sitting in
+ * one corner — and there it is a couple of texels of the same wood. It is
+ * written anyway because the alternative is a rule with an exception in it, and
+ * the exception is the part nobody remembers.
+ */
+function pinFlatWindows(
+  uv: Readonly<Record<string, UvWindow>> | undefined,
+  box: Box,
+  steps: number,
+): Readonly<Record<string, UvWindow>> | undefined {
+  if (((steps % 4) + 4) % 4 === 0) return uv;
+  const [x0, , z0, x1, , z1] = box;
+  return {
+    up: [x0, z0, x1, z1],
+    down: [x0, 16 - z1, x1, 16 - z0],
+    ...uv,
+  };
+}
+
 function rotateShapeBox(entry: ShapeBox, steps: number): ShapeBox {
   const turns = ((steps % 4) + 4) % 4;
   let omit = entry.omit;
@@ -199,9 +268,9 @@ function rotateShapeBox(entry: ShapeBox, steps: number): ShapeBox {
   return {
     ...entry,
     box: rotateBoxY(entry.box, steps),
-    uv: rotateFaceMap(entry.uv, steps),
+    uv: rotateFaceMap(pinFlatWindows(entry.uv, entry.box, steps), steps),
     textures: rotateFaceMap(entry.textures, steps),
-    uvRotation: rotateFaceMap(entry.uvRotation, steps),
+    uvRotation: turnFlatFaces(rotateFaceMap(entry.uvRotation, steps), steps),
     rotation: rotateBoxRotation(entry.rotation, steps),
     omit,
   };

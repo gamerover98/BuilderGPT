@@ -49,6 +49,7 @@ import {
   import { isSpuriousLook } from "./look_filter.js";
   import { api } from "./bridge.svelte.js";
   import { COPLANAR_OFFSET, GRID_DIVISIONS, GRID_SIZE } from "./depth.js";
+  import { documentFraming, gridCentre } from "./framing.js";
   import { skyAt, skyDistance } from "./sky.js";
   import { fitShadow } from "./shadow_fit.js";
   import type { Face, PlacementLook } from "../../../shared/block_orientation.js";
@@ -404,7 +405,31 @@ import { isTyping } from "./typing.js";
     // tracked would make the theme effect below depend on `showGrid` too, and
     // rebuild the grid every time the checkbox is toggled.
     grid.visible = untrack(() => showGrid);
+    // Untracked for the reason the line above is: this runs from the theme
+    // effect, which must not start depending on the document's size.
+    untrack(placeGrid);
     scene.add(grid);
+  }
+
+  /**
+   * Puts the middle of the grid under the middle of the schematic.
+   *
+   * The grid was centred on the world origin, which is a *corner* of the
+   * work and not its middle: there are no negative block coordinates, so
+   * three of its four quadrants covered space no block can ever occupy.
+   *
+   * `gridCentre` snaps to the helper's own cell, which is the part that is
+   * easy to leave out -- see `framing.ts`.
+   */
+  function placeGrid(): void {
+    if (!grid) return;
+    const centre = gridCentre(
+      documentSize === null
+        ? null
+        : { width: documentSize[0], height: documentSize[1], length: documentSize[2] },
+    );
+    grid.position.x = centre.x;
+    grid.position.z = centre.z;
   }
 
   let canvas: HTMLCanvasElement;
@@ -1520,16 +1545,29 @@ import { isTyping } from "./typing.js";
     });
   }
 
-  function fitCameraToObject(object: THREE.Object3D): void {
-    if (!camera || !controls) return;
-    const box = new THREE.Box3().setFromObject(object);
-    if (box.isEmpty()) return;
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    const distance = Math.max(size.x, size.y, size.z) * 1.6;
-    camera.position.set(center.x + distance, center.y + distance * 0.7, center.z + distance);
-    camera.lookAt(center);
-    controls.target.copy(center);
+  /**
+   * The establishing shot, framed on the document's *box*.
+   *
+   * It used to be framed on the loaded geometry, and the failure that hides
+   * in that is an empty document: `Box3.setFromObject` of nothing is an empty
+   * box, so the function gave up and left the camera at its mount position,
+   * pointed at no part of the work surface. That is the one moment there is
+   * nothing else on screen to navigate by.
+   *
+   * The box also puts `controls.target` in the middle of the schematic, which
+   * is what makes orbiting turn around the build rather than around its
+   * corner. The arithmetic is `framing.ts`'s so a check can state it.
+   */
+  function frameDocument(size: readonly [number, number, number] | null): void {
+    if (!camera || !controls || size === null) return;
+    const { target, position } = documentFraming({
+      width: size[0],
+      height: size[1],
+      length: size[2],
+    });
+    camera.position.set(position.x, position.y, position.z);
+    camera.lookAt(target.x, target.y, target.z);
+    controls.target.set(target.x, target.y, target.z);
     controls.update();
   }
 
@@ -1741,8 +1779,10 @@ import { isTyping } from "./typing.js";
         if (isTyping(event.target)) {
           return;
         }
-        if ((event.key === "r" || event.key === "R") && loaded) {
-          fitCameraToObject(loaded);
+        if (event.key === "r" || event.key === "R") {
+          // No `loaded` guard any more: an empty document has a box to frame
+          // on even when it has no geometry, and that is when R is most use.
+          frameDocument(documentSize);
         }
       };
       window.addEventListener("keydown", onKey);
@@ -2224,6 +2264,13 @@ import { isTyping } from "./typing.js";
     if (grid) grid.visible = showGrid;
   });
 
+  // A resize moves the middle of the schematic, so it moves the grid. Cheap:
+  // this assigns two numbers, where a theme change rebuilds the helper.
+  $effect(() => {
+    void documentSize;
+    placeGrid();
+  });
+
   $effect(() => {
     // Reads `selection`, `scene` and `theme` so it reruns when any changes.
     // The box's material is built fresh each time, so a theme change is
@@ -2698,6 +2745,33 @@ import { isTyping } from "./typing.js";
     scene.add(group);
   });
 
+  /**
+   * Frames the camera when the viewport starts showing a *different*
+   * schematic, and only then.
+   *
+   * This used to live at the end of the mesh effect, reading `framingKey`
+   * untracked -- because that effect rebuilds geometry, and running it on a
+   * key change would have rebuilt the *outgoing* structure before the new
+   * document's mesh had arrived. An effect that only moves the camera has no
+   * geometry to get wrong, so here the dependency is not merely safe, it is
+   * the point: framing now happens when a document is *opened* rather than
+   * when its first mesh lands, and an empty schematic has no first mesh.
+   *
+   * `documentSize` is read untracked for the mirror reason: it changes on
+   * every resize, and a resize is not a different schematic.
+   *
+   * The key is recorded only when a frame actually happened, so the mount
+   * run -- nothing open, nothing to frame -- does not consume it.
+   */
+  $effect(() => {
+    const key = framingKey;
+    if (key === framedFor) return;
+    const size = untrack(() => documentSize);
+    if (size === null) return;
+    frameDocument(size);
+    framedFor = key;
+  });
+
   $effect(() => {
     const payload = mesh;
     if (!scene) return;
@@ -2729,13 +2803,6 @@ import { isTyping } from "./typing.js";
       return;
     }
     const target = scene;
-    /*
-     * Read without subscribing. If this effect depended on `framingKey` it
-     * would run again the moment a new document is opened — before that
-     * document's mesh has arrived — rebuilding the *previous* geometry and
-     * framing the camera on the structure being replaced.
-     */
-    const key = untrack(() => framingKey);
 
     /*
      * No token guard and no flash of an empty viewport, both of which the GLB
@@ -2774,13 +2841,6 @@ import { isTyping } from "./typing.js";
       loaded = built;
       target.add(built);
       applyWireframe(built, wireframe);
-      // Only for a structure the camera has not been framed on before.
-      // Re-framing on every mesh meant every placed block, and every undo,
-      // snapped the view back to the establishing shot.
-      if (key !== framedFor) {
-        fitCameraToObject(built);
-        framedFor = key;
-      }
       error = null;
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);

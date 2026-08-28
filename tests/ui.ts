@@ -75,6 +75,11 @@ import { openedAge } from "../src/renderer/src/lib/recent_age.js";
 import { DEFAULT_PREVIEW_SETTINGS, PREVIEW_SETTING_RANGES } from "../src/shared/settings.js";
 import { COPLANAR_OFFSET, depthEpsilon, GRID_SIZE } from "../src/renderer/src/lib/depth.js";
 import {
+  documentFraming,
+  GRID_CELL,
+  gridCentre,
+} from "../src/renderer/src/lib/framing.js";
+import {
   dotColor,
   dotFor,
   maskToken,
@@ -1299,6 +1304,128 @@ console.log("\n--- build grid ---");
   equal("...and below the origin also grows", placementNeeds(regionBetween({ x: -1, y: 0, z: 1 }, { x: 2, y: 0, z: 2 }), size), "grows");
   equal("...as does a cell below the floor", placementNeeds(cellRegion({ x: 1, y: -1, z: 1 }), size), "grows");
   equal("a single cell inside is still just a fit", placementNeeds(cellRegion({ x: 1, y: 0, z: 1 }), size), "fits");
+}
+
+// --- where the grid sits and where the camera starts ------------------------
+//
+// Both used to answer "the world origin", and a schematic's origin is a corner
+// of the work rather than its middle: there are no negative block coordinates,
+// so three quadrants of the grid covered space no block can occupy, and
+// orbiting turned around the corner instead of around the build.
+console.log("\n--- framing ---");
+{
+  const box = (width: number, height: number, length: number) => ({ width, height, length });
+
+  equal("nothing open leaves the grid on the origin", gridCentre(null), { x: 0, z: 0 });
+
+  equal(
+    "a box whose middle is already on a cell gets exactly its middle",
+    gridCentre(box(64, 16, 64)),
+    { x: 32, z: 32 },
+  );
+
+  /*
+   * The snap is the whole subtlety, and it is invisible in a screenshot.
+   *
+   * A `GridHelper` draws its lines one cell apart *from its own centre*, so a
+   * centre at 10 puts lines at 10, 18, 26 -- off every block boundary, while
+   * the build-grid patch under the cursor is still drawn on integer cells. The
+   * two would disagree everywhere, by a constant, which reads as a rendering
+   * bug rather than as a centring one.
+   */
+  for (const [w, l] of [
+    [20, 20],
+    [1, 1],
+    [13, 47],
+    [255, 3],
+    [7, 9],
+  ]) {
+    const centre = gridCentre(box(w, 8, l));
+    check(
+      `a ${w}x${l} box still lands on the cell grid`,
+      centre.x % GRID_CELL === 0 && centre.z % GRID_CELL === 0,
+      JSON.stringify(centre),
+    );
+    check(
+      `...within half a cell of the real middle of ${w}x${l}`,
+      Math.abs(centre.x - w / 2) <= GRID_CELL / 2 && Math.abs(centre.z - l / 2) <= GRID_CELL / 2,
+      JSON.stringify(centre),
+    );
+  }
+
+  const framed = documentFraming(box(32, 16, 48));
+  equal("the camera is aimed at the middle of the box", framed.target, { x: 16, y: 8, z: 24 });
+
+  /*
+   * The establishing shot itself is unchanged -- above the box, off one corner
+   * -- because an ordinary document should open looking the way it always did.
+   * Only what it is measured against moved.
+   */
+  check("...from above it", framed.position.y > framed.target.y);
+  check(
+    "...and off the +x/+z corner, as it always was",
+    framed.position.x > framed.target.x && framed.position.z > framed.target.z,
+  );
+  check(
+    "...far enough out to see the whole box",
+    Math.hypot(
+      framed.position.x - framed.target.x,
+      framed.position.y - framed.target.y,
+      framed.position.z - framed.target.z,
+    ) > 48,
+  );
+
+  /*
+   * The reason this is measured from the box rather than from the geometry.
+   * `Box3.setFromObject` of an empty document is an empty box, so the old
+   * framing returned without moving anything and left the camera at wherever it
+   * was mounted -- pointed at no part of a work surface that has nothing else
+   * on it to navigate by.
+   */
+  const empty = documentFraming(box(1, 1, 1));
+  check(
+    "a document with nothing in it still gets a shot",
+    Number.isFinite(empty.position.x) && empty.position.y > empty.target.y,
+    JSON.stringify(empty),
+  );
+
+  const small = documentFraming(box(8, 8, 8));
+  const large = documentFraming(box(128, 8, 8));
+  check(
+    "a bigger box is framed from further away",
+    large.position.x - large.target.x > small.position.x - small.target.x,
+  );
+
+  /*
+   * And the viewer asks this module rather than working it out again.
+   *
+   * The arithmetic above is only worth having if it is the arithmetic that
+   * runs, and the call site is inside a `requestAnimationFrame`-driven
+   * component this harness cannot mount -- so the trigger is checked the way
+   * the Ctrl gate and the coplanar epsilons are, by reading the source.
+   */
+  const viewer = readFileSync(path.join(RENDERER, "lib", "Viewer.svelte"), "utf8");
+  check("the viewer asks this module where its grid goes", viewer.includes("gridCentre("));
+  /*
+   * And then *moves* it. Checking only for the call proves the call is there
+   * and nothing about what is done with the answer -- which is the whole of
+   * what a grep can say, so the grep has to name the effect as well.
+   */
+  check(
+    "...and moves it there on both axes",
+    /grid\.position\.x\s*=/.test(viewer) && /grid\.position\.z\s*=/.test(viewer),
+  );
+  check("...and frames its camera from it too", viewer.includes("documentFraming("));
+  /*
+   * The old version measured `Box3.setFromObject(loaded)`, which is an empty
+   * box on an empty document -- so it returned without moving anything and
+   * the camera stayed where it was mounted. Nothing else in that file frames
+   * anything, so its absence is the whole rule.
+   */
+  check(
+    "...and no longer measures the geometry to do it",
+    !/setFromObject\([a-z]/.test(viewer),
+  );
 }
 
 // --- undo that reaches the selection ---------------------------------------

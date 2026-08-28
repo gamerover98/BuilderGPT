@@ -1560,6 +1560,49 @@ near the horizon refused rather than answered, and below the origin *blocked*
 rather than grown, because growing that way moves the content instead. Dragging
 on it must take the left button for the same reason a selection-face drag does.
 
+**The grid is centred on the schematic, and the camera starts in its middle.**
+Both used to answer "the world origin", and a schematic's origin is a *corner*
+of the work rather than its middle: there are no negative block coordinates, so
+three of the grid's four quadrants covered space no block can ever occupy, and
+orbiting turned around the corner of a build instead of around the build.
+
+`renderer/lib/framing.ts` holds both answers, a plain module for
+`build_grid.ts`'s reason. `gridCentre` **snaps to the helper's own cell**, and
+that is the part that would be left out: a `GridHelper` draws its lines one cell
+apart *from its own centre*, so a centre at 10 puts them at 10, 18, 26 — off
+every block boundary, while the build-grid patch under the cursor is still drawn
+on integer cells. The two would then disagree everywhere by a constant, which
+reads as a rendering fault rather than as a centring one. Half a cell of
+centring is the whole price.
+
+`documentFraming` measures the document's **box** rather than the geometry in
+it, which is the other half of the same fix. `Box3.setFromObject` of an empty
+document is an empty box, so the old framing returned without moving anything
+and left the camera wherever it was mounted — pointed at no part of a work
+surface that has nothing else on it to navigate by. It is also why R no longer
+needs a `loaded` before it will frame.
+
+**And the framing moved out of the mesh effect into one of its own**, which is
+what makes an empty document reachable at all. Inside, it had to read
+`framingKey` untracked: that effect rebuilds geometry, and a key change would
+have rebuilt the *outgoing* structure before the new document's mesh arrived. An
+effect that only moves a camera has no geometry to get wrong, so depending on
+the key there is not merely safe — it is the point, because framing then
+happens when a document is *opened* rather than when its first mesh lands, and
+an empty schematic has no first mesh. `documentSize` is read untracked for the
+mirror reason: it moves on every resize, and a resize is not a different
+schematic. The key is recorded only when a frame actually happened, so the mount
+run consumes nothing.
+
+The grid still extends past the box in every direction, and is deliberately
+**not** clipped to the positive quadrant: `MAX_GRID_REACH` lets it hang over on
+purpose, and hanging over is how a build grows outwards.
+
+`tests/ui.ts` states the arithmetic and then greps `Viewer.svelte`, because the
+call sites run from the rendering steps. The grep has to name the *effect* and
+not only the call — checking for `gridCentre(` alone passes with the answer
+computed and thrown away, which was verified by doing exactly that.
+
 **Block icons are meshed by the same pipeline as the viewport.**
 `services/block_icons.ts` runs a 1×1×1 document through `buildDocumentPreview`,
 so an icon cannot disagree with what appears when the block is placed. It has to

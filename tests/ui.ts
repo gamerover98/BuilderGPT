@@ -105,6 +105,18 @@ import {
 } from "../src/renderer/src/lib/look_filter.js";
 import { en } from "../src/renderer/src/lib/locales/en.js";
 import { propertyRows } from "../src/renderer/src/lib/inspector_rows.js";
+import {
+  arcBetween,
+  axisAt,
+  COMPASS_AXES,
+  easeInOutCubic,
+  flightAt,
+  HANDLE_REACH,
+  orbitFor,
+  projectAxis,
+  type Quat,
+} from "../src/renderer/src/lib/compass.js";
+import { FACE_VECTOR, type Face } from "../src/shared/block_orientation.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const RENDERER = path.join(here, "..", "src", "renderer", "src");
@@ -1522,6 +1534,245 @@ console.log("\n--- orthographic projection ---");
     orthoDepthEpsilon(NEAR, FAR) === orthoDepthEpsilon(NEAR, FAR),
   );
   check("the floor still wins by depth-buffer steps, not by world units", COPLANAR_OFFSET.units >= 1);
+}
+
+// --- the compass in the corner ----------------------------------------------
+//
+// A viewport that orbits freely has no other answer to which way you are
+// facing, and this app's whole subject is a world with named directions:
+// `facing=north` is written into the file and is not derivable from the screen.
+// Everything below is consulted from `requestAnimationFrame`, which this
+// harness does not run, so the decision is here and only the trigger stays
+// unobservable.
+console.log("\n--- compass ---");
+{
+  const IDENTITY: Quat = { x: 0, y: 0, z: 0, w: 1 };
+  const SIZE = 100;
+  const faces: Face[] = ["up", "down", "north", "south", "east", "west"];
+
+  /*
+   * With the camera unrotated it looks down its own -Z, which in world
+   * terms is *north* -- so north is the direction going away into the
+   * screen and **south** is the handle pointing back out at the viewer.
+   * That is the way round it is easy to state backwards, and stating it
+   * backwards costs nothing visible: a compass whose near and far ends
+   * are swapped still looks exactly like a compass.
+   */
+  const reach = HANDLE_REACH * (SIZE / 2);
+  equal("east goes right", projectAxis("east", IDENTITY, SIZE).x, SIZE / 2 + reach);
+  equal("west goes left", projectAxis("west", IDENTITY, SIZE).x, SIZE / 2 - reach);
+  /*
+   * The y flip is the one worth stating. View space has y upwards, a mouse
+   * event has it downwards, and a compass mirrored top to bottom still looks
+   * exactly like a compass.
+   */
+  equal("up goes towards the top", projectAxis("up", IDENTITY, SIZE).y, SIZE / 2 - reach);
+  equal("down goes to the bottom", projectAxis("down", IDENTITY, SIZE).y, SIZE / 2 + reach);
+  check(
+    "looking north, it is south that faces the viewer",
+    projectAxis("south", IDENTITY, SIZE).depth > projectAxis("north", IDENTITY, SIZE).depth,
+  );
+
+  /*
+   * A quarter turn about Y takes the camera to look west, so the handle that
+   * was on the right is now the one facing the viewer. This is the check that
+   * fails if the projection uses the camera's rotation rather than its inverse
+   * -- everything above passes either way, because the identity is its own.
+   */
+  const s = Math.SQRT1_2;
+  const turned: Quat = { x: 0, y: s, z: 0, w: s };
+  check(
+    "turning the camera turns the compass with it",
+    projectAxis("east", turned, SIZE).depth > 0.99,
+    String(projectAxis("east", turned, SIZE).depth),
+  );
+
+  /*
+   * Each handle picks itself -- from an angle where all six are separated.
+   * Axis-aligned is the degenerate case rather than the ordinary one: two
+   * of the handles land on top of each other in the middle, which is the
+   * tie the rule below exists for and cannot be asserted through.
+   */
+  const oblique: Quat = { x: -0.2, y: 0.36, z: 0.08, w: 0.906 };
+  for (const face of faces) {
+    const spot = projectAxis(face, oblique, SIZE);
+    equal(
+      `a click on ${face} picks it`,
+      axisAt({ x: spot.x, y: spot.y }, oblique, SIZE),
+      face,
+    );
+  }
+  equal("the gap between handles is nothing", axisAt({ x: 50, y: 50 }, oblique, SIZE), null);
+  equal("nor is a corner", axisAt({ x: 2, y: 2 }, oblique, SIZE), null);
+
+  /*
+   * Nearest the viewer wins, not nearest the pointer.
+   *
+   * Looking straight north, the north and south handles project to the very
+   * same point -- the centre -- and the one drawn on top is south, the one
+   * pointing back out of the screen. Picking by distance would be a coin
+   * toss between two exact ties, and half the time a click on the handle
+   * under the cursor would fly the camera to the opposite side of the
+   * build.
+   */
+  const at = projectAxis("north", IDENTITY, SIZE);
+  equal(
+    "two ends of one axis resolve to the near one",
+    axisAt({ x: at.x, y: at.y }, IDENTITY, SIZE),
+    "south",
+  );
+  check(
+    "...which is the one the click was actually over",
+    Math.abs(projectAxis("south", IDENTITY, SIZE).x - at.x) < 1e-9,
+  );
+
+  /*
+   * Clicking a handle means show me this side, so the camera lands *on* that
+   * axis: north puts it north of the build looking south, and up puts it
+   * overhead looking down.
+   */
+  const target = { x: 10, y: 4, z: 6 };
+  for (const face of faces) {
+    const seat = orbitFor(face, target, 50);
+    const step = FACE_VECTOR[face];
+    const along =
+      (seat.x - target.x) * step.x +
+      (seat.y - target.y) * step.y +
+      (seat.z - target.z) * step.z;
+    check(`looking from ${face} seats the camera on that side`, along > 49, String(along));
+    check(
+      `...at the distance it was already orbiting from`,
+      Math.abs(Math.hypot(seat.x - target.x, seat.y - target.y, seat.z - target.z) - 50) < 0.1,
+    );
+  }
+
+  /*
+   * The poles lean, and it is not cosmetic. OrbitControls takes its azimuth
+   * from `atan2` of the horizontal offset, which straight overhead is
+   * `atan2(0, 0)` -- zero by definition rather than by intent, so the view
+   * would swing to whatever azimuth zero happens to be.
+   */
+  for (const pole of ["up", "down"] as const) {
+    const seat = orbitFor(pole, target, 50);
+    const lean = Math.hypot(seat.x - target.x, seat.z - target.z);
+    check(`${pole} is not exactly over the target`, lean > 0, String(lean));
+    check(`...but only just`, lean < 0.5, String(lean));
+  }
+  check(
+    "a camera already at the target still gets a seat",
+    Number.isFinite(orbitFor("north", target, 0).z),
+  );
+
+  /*
+   * The flight goes *around* the build, not through it. A straight line between
+   * two points on a sphere is a chord: a quarter turn lerped would pass a third
+   * of the way into the structure and out the other side.
+   */
+  const centre = { x: 0, y: 0, z: 0 };
+  const east = { x: 50, y: 0, z: 0 };
+  const north = { x: 0, y: 0, z: -50 };
+  const half = arcBetween(centre, east, north, 0.5);
+  check(
+    "half way round a quarter turn is still at the orbit radius",
+    Math.abs(Math.hypot(half.x, half.y, half.z) - 50) < 1e-6,
+    String(Math.hypot(half.x, half.y, half.z)),
+  );
+  check(
+    "...which a straight line would not be",
+    Math.hypot((east.x + north.x) / 2, 0, (east.z + north.z) / 2) < 49,
+  );
+  equal("the start is the start", arcBetween(centre, east, north, 0), east);
+  check("the end is the end", Math.abs(arcBetween(centre, east, north, 1).z + 50) < 1e-6);
+
+  /*
+   * Antipodal is not exotic here: it is clicking north and then south. Two
+   * opposite directions span no plane, so there is no arc between them and the
+   * arithmetic has to choose one rather than divide by a sine of zero.
+   */
+  const south = { x: 0, y: 0, z: 50 };
+  const across = arcBetween(centre, north, south, 0.5);
+  check(
+    "reversing an axis still goes round rather than through the middle",
+    Math.abs(Math.hypot(across.x, across.y, across.z) - 50) < 1e-3,
+    JSON.stringify(across),
+  );
+  check("...over the top, not through a wall", across.y > 49, JSON.stringify(across));
+  check(
+    "a radius of nothing does not divide by zero",
+    Number.isFinite(arcBetween(centre, centre, north, 0.5).z),
+  );
+
+  equal("the ease starts still", easeInOutCubic(0), 0);
+  equal("...and finishes still", easeInOutCubic(1), 1);
+  equal("...and is half way at half way", easeInOutCubic(0.5), 0.5);
+  check("a tick before the start is clamped", easeInOutCubic(-1) === 0);
+  check("and one after the end", easeInOutCubic(2) === 1);
+
+  /*
+   * `done` is reported rather than inferred from the position: the last frame
+   * of a flight is *at* the destination, so a caller comparing coordinates
+   * would either hand control back a frame early or never hand it back.
+   */
+  const flight = { from: east, to: north, around: centre, startedAt: 1000 };
+  check("a flight that has not started is at its start", flightAt(flight, 1000).position.x > 49.9);
+  check("...and is not done", !flightAt(flight, 1000).done);
+  check("one past its span is done", flightAt(flight, 1000 + 421).done);
+  check("...and has arrived", Math.abs(flightAt(flight, 1000 + 421).position.z + 50) < 1e-6);
+  check(
+    "a zero-length flight cannot divide by zero",
+    flightAt(flight, 1000, 0).done && Number.isFinite(flightAt(flight, 1000, 0).position.x),
+  );
+
+  /*
+   * Six handles, three axes, and the two ends of each told apart. They share a
+   * colour, so drawn the same a view from due east and one from due west would
+   * be the same picture.
+   */
+  equal("there are six handles", COMPASS_AXES.length, 6);
+  equal("...three colours between them", new Set(COMPASS_AXES.map((a) => a.token)).size, 3);
+  equal("...one positive end each", COMPASS_AXES.filter((a) => a.positive).length, 3);
+  equal("...and a distinct letter each", new Set(COMPASS_AXES.map((a) => a.label)).size, 6);
+
+  /*
+   * And it points where the writers point. A compass a quarter turn out of step
+   * with the file is invisible until somebody pastes a build into a world and
+   * finds it facing the wrong way.
+   */
+  check(
+    "north on the gizmo is north in the schematic",
+    FACE_VECTOR.north.z === -1 && FACE_VECTOR.east.x === 1,
+  );
+
+  /*
+   * And the viewer asks this module rather than working any of it out again.
+   *
+   * The click handler is sliced out and checked as a *chain* rather than the
+   * file being grepped for three names: every one of those names still
+   * appears in a file where the handler computes a face and drops it, which
+   * was verified by writing exactly that. A grep has to name the wiring.
+   */
+  const viewerSource = readFileSync(path.join(RENDERER, "lib", "Viewer.svelte"), "utf8");
+  const handlerFrom = viewerSource.indexOf("function onCompassClick");
+  // Two spaces is the function's own indentation; every block inside it
+  // closes further in.
+  const handler = viewerSource.slice(handlerFrom, viewerSource.indexOf("\n  }", handlerFrom));
+  check("there is a handler for a click on the gizmo", handlerFrom > 0 && handler.length > 0);
+  check("...it asks this module which handle was hit", handler.includes("axisAt("));
+  check("...and does something with the answer", /flyToAxis\(\s*face\s*\)/.test(handler));
+  check("the camera is seated by this module", viewerSource.includes("orbitFor("));
+  check("...and flown by it", viewerSource.includes("flightAt("));
+  /*
+   * Drawn in the same renderer, not a second one. A browser gives a page on
+   * the order of sixteen live WebGL contexts before it starts silently
+   * dropping the oldest, which is why the block icons already share one --
+   * spending a context on an ornament would be the worst use of it there is.
+   */
+  equal(
+    "the gizmo costs no second WebGL context",
+    viewerSource.split("new THREE.WebGLRenderer").length - 1,
+    1,
+  );
+  check("...it is a scissored pass over the one there is", viewerSource.includes("setScissorTest(true)"));
 }
 
 // --- undo that reaches the selection ---------------------------------------

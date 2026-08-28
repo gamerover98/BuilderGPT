@@ -17,6 +17,8 @@ import AdmZip from "adm-zip";
 import { parseBlockList } from "../src/main/core.js";
 import { searchBlocks } from "../src/renderer/src/lib/block_search.js";
 import {
+  FACE_VECTOR,
+  horizontalFacing,
   ORIENTED_BLOCK_NAMES,
   orientPlacement,
   placementState,
@@ -3825,6 +3827,71 @@ console.log("\n--- block state descriptions ---");
     null,
   );
   equal("...nor is a property nobody has heard of", describeProperty("nonsense", ["a"]), null);
+}
+
+/** The literal the neighbour table used to hold, kept apart from the check
+    that forbids it so the check cannot match itself. */
+const NORTH_LITERAL = '["north", 0, 0, -1]';
+
+// --- one table for which way is north ---------------------------------------
+//
+// `block_orientation.ts` placed blocks by these six vectors and
+// `main/domain/connect.ts` walked to its neighbours by its own copy of them.
+// Two places deciding where north is, and a viewport compass a quarter turn out
+// of step with the writers would stay invisible until somebody pasted a build
+// into a world and found it facing the wrong way.
+console.log("\n--- face vectors ---");
+{
+  /*
+   * `horizontalFacing` is the inverse for the four horizontal ones, so the pair
+   * has to round-trip. This is what catches a transposed sign, which is the
+   * only way a table of six unit vectors ever goes wrong.
+   */
+  for (const face of ["north", "south", "east", "west"] as const) {
+    equal(`${face} reads back as ${face}`, horizontalFacing(FACE_VECTOR[face]), face);
+  }
+
+  equal("north is -Z, as the file says", FACE_VECTOR.north, { x: 0, y: 0, z: -1 });
+  equal("east is +X", FACE_VECTOR.east, { x: 1, y: 0, z: 0 });
+  equal("up is +Y", FACE_VECTOR.up, { x: 0, y: 1, z: 0 });
+
+  for (const [a, b] of [
+    ["north", "south"],
+    ["east", "west"],
+    ["up", "down"],
+  ] as const) {
+    check(
+      `${a} and ${b} are opposite`,
+      FACE_VECTOR[a].x === -FACE_VECTOR[b].x &&
+        FACE_VECTOR[a].y === -FACE_VECTOR[b].y &&
+        FACE_VECTOR[a].z === -FACE_VECTOR[b].z,
+    );
+  }
+
+  /*
+   * And the neighbour walk reads this table rather than restating it. Checked
+   * by reading the source, because those offsets are a module-private constant
+   * -- exporting one for a test's benefit is a worse trade than a grep.
+   */
+  const connect = readFileSync(
+    path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "src",
+      "main",
+      "domain",
+      "connect.ts",
+    ),
+    "utf8",
+  );
+  check(
+    "the neighbour offsets come from the shared table",
+    connect.includes("FACE_VECTOR[face]"),
+  );
+  check(
+    "...rather than from six numbers of their own",
+    !connect.includes(NORTH_LITERAL),
+  );
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

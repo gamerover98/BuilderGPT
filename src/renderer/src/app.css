@@ -48,6 +48,17 @@
   --grid-minor: #202937;
   --selection: #6ea8fe;
 
+  /* The compass gizmo. X red, Y green, Z blue is the convention every CAD
+     and 3D package shares, so it is read without being told; the *labels*
+     on it are Minecraft's, which is the half that has to be learned. Taken
+     from tokens rather than baked into `compass.ts` for the reason the
+     hover outline learned the hard way -- it was the one hardcoded colour
+     in the viewer, and so the only one that stayed put in the light
+     theme. */
+  --axis-x: #e05252;
+  --axis-y: #5fbf5f;
+  --axis-z: #5588e0;
+
   color-scheme: dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px;
@@ -82,6 +93,10 @@
   --grid-minor: #c4cedc;
   --selection: #1f5fd0;
 
+  --axis-x: #c23b3b;
+  --axis-y: #2f8f3f;
+  --axis-z: #2f62c2;
+
   color-scheme: light;
 }
 
@@ -109,6 +124,10 @@
     --grid-major: #97a5ba;
     --grid-minor: #c4cedc;
     --selection: #1f5fd0;
+
+    --axis-x: #c23b3b;
+    --axis-y: #2f8f3f;
+    --axis-z: #2f62c2;
 
     color-scheme: light;
   }

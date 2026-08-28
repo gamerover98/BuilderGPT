@@ -58,8 +58,22 @@ import {
   } from "./framing.js";
   import { skyAt, skyDistance } from "./sky.js";
   import { fitShadow } from "./shadow_fit.js";
-  import type { Face, PlacementLook } from "../../../shared/block_orientation.js";
+  import {
+    FACE_VECTOR,
+    type Face,
+    type PlacementLook,
+  } from "../../../shared/block_orientation.js";
   import type { Projection } from "../../../shared/settings.js";
+  import {
+    axisAt,
+    COMPASS_AXES,
+    FLIGHT_MS,
+    flightAt,
+    HANDLE_RADIUS,
+    HANDLE_REACH,
+    orbitFor,
+    type CameraFlight,
+  } from "./compass.js";
 import { isTyping } from "./typing.js";
   import * as THREE from "three";
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -448,6 +462,155 @@ import { isTyping } from "./typing.js";
     grid.position.z = centre.z;
   }
 
+  /** How big the gizmo is, and how far it sits from the corner, in CSS px. */
+  const COMPASS_PX = 104;
+  const COMPASS_MARGIN = 16;
+
+  /**
+   * One handle: a disc with a letter in it, drawn on a canvas.
+   *
+   * A canvas rather than a texture from the pack, because these are letters
+   * and the pack has no alphabet the app is allowed to lay out (only the
+   * ASCII page, and that is the sign renderer's). A `CanvasTexture` decodes
+   * nothing and fetches nothing, so unlike an embedded PNG it cannot fail
+   * quietly against the CSP -- the same reasoning that made the atlas raw
+   * pixels.
+   *
+   * Positive ends are filled and negative ends hollow. Both ends of an axis
+   * share a colour, so drawn alike a view from due east and one from due
+   * west would be the same picture.
+   */
+  function handleTexture(label: string, colour: THREE.Color, filled: boolean): THREE.CanvasTexture {
+    const size = 64;
+    const face = document.createElement("canvas");
+    face.width = size;
+    face.height = size;
+    const pen = face.getContext("2d");
+    if (pen !== null) {
+      const css = `#${colour.getHexString()}`;
+      pen.beginPath();
+      pen.arc(size / 2, size / 2, size / 2 - 4, 0, Math.PI * 2);
+      if (filled) {
+        pen.fillStyle = css;
+        pen.fill();
+      } else {
+        // Filled with the viewport's own background rather than left clear,
+        // so a hollow handle in front of the axis line hides the line behind
+        // it instead of having it run through the letter.
+        pen.fillStyle = `#${themeColor("--viewport-bg", 0x0b0f14).getHexString()}`;
+        pen.fill();
+        pen.lineWidth = 5;
+        pen.strokeStyle = css;
+        pen.stroke();
+      }
+      pen.fillStyle = filled
+        ? `#${themeColor("--viewport-bg", 0x0b0f14).getHexString()}`
+        : css;
+      pen.font = `bold ${size * 0.5}px system-ui, sans-serif`;
+      pen.textAlign = "center";
+      pen.textBaseline = "middle";
+      pen.fillText(label, size / 2, size / 2 + 1);
+    }
+    const texture = new THREE.CanvasTexture(face);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
+
+  /**
+   * (Re)builds the gizmo in the current theme's colours.
+   *
+   * Rebuilt rather than recoloured, like `buildGrid`: the letters are baked
+   * into their textures, so a theme change is a redraw of six small canvases.
+   */
+  function buildCompass(): void {
+    if (!compassScene) return;
+    if (compassGroup) {
+      compassScene.remove(compassGroup);
+      // Not `disposeObject`: it walks for meshes, and there are none here --
+      // six sprites and three lines, which own their own geometry, material
+      // and canvas texture and would otherwise leak one set per theme change.
+      compassGroup.traverse((child) => {
+        const sprite = child as THREE.Sprite;
+        if (sprite.isSprite) {
+          sprite.material.map?.dispose();
+          sprite.material.dispose();
+        }
+        const line = child as THREE.Line;
+        if (line.isLine) {
+          line.geometry.dispose();
+          (line.material as THREE.Material).dispose();
+        }
+      });
+    }
+    const group = new THREE.Group();
+    const drawn = new Set<string>();
+    for (const axis of COMPASS_AXES) {
+      const colour = themeColor(axis.token, 0x808080);
+      const step = FACE_VECTOR[axis.face];
+      // One line per *axis*, not per end: it runs through the middle and out
+      // both sides, so the second end would draw it again on top of itself.
+      if (!drawn.has(axis.token)) {
+        drawn.add(axis.token);
+        const line = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(-step.x, -step.y, -step.z).multiplyScalar(HANDLE_REACH),
+            new THREE.Vector3(step.x, step.y, step.z).multiplyScalar(HANDLE_REACH),
+          ]),
+          new THREE.LineBasicMaterial({ color: colour, transparent: true, opacity: 0.85 }),
+        );
+        group.add(line);
+      }
+      const sprite = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: handleTexture(axis.label, colour, axis.positive),
+          // Sprites are in the transparent pass and this scene has nothing
+          // else in it, so depth writing would only make the six fight each
+          // other; `depthTest` keeps the near one on top, which is the same
+          // answer `axisAt` gives a click.
+          depthWrite: false,
+        }),
+      );
+      sprite.position.set(step.x, step.y, step.z).multiplyScalar(HANDLE_REACH);
+      sprite.scale.setScalar(HANDLE_RADIUS * 2);
+      group.add(sprite);
+    }
+    compassGroup = group;
+    compassScene.add(group);
+  }
+
+  /**
+   * Sends the camera round to look from one of the six sides.
+   *
+   * The target and the distance are both kept: a click on the gizmo changes
+   * where you are looking *from*, never what you are looking at or how close
+   * you are to it.
+   */
+  function flyToAxis(face: Face): void {
+    if (!camera || !controls) return;
+    const target = controls.target;
+    const distance = camera.position.distanceTo(target);
+    flight = {
+      from: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+      to: orbitFor(face, { x: target.x, y: target.y, z: target.z }, distance),
+      around: { x: target.x, y: target.y, z: target.z },
+      startedAt: performance.now(),
+    };
+    // The camera is being driven from here for the duration; letting the
+    // user drag mid-flight would fight it and land somewhere neither meant.
+    controls.enabled = false;
+  }
+
+  /** A click in the gizmo's square, which is its own element, not the canvas. */
+  function onCompassClick(event: MouseEvent): void {
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const face = axisAt(
+      { x: event.clientX - box.left, y: event.clientY - box.top },
+      camera?.quaternion ?? { x: 0, y: 0, z: 0, w: 1 },
+      box.width,
+    );
+    if (face !== null) flyToAxis(face);
+  }
+
   let canvas: HTMLCanvasElement;
   let container: HTMLDivElement;
   let error = $state<string | null>(null);
@@ -474,6 +637,21 @@ import { isTyping } from "./typing.js";
    * `Raycaster.setFromCamera` are common to the two. Only `resize` and the
    * construction have to know which is which.
    */
+  /**
+   * The corner gizmo, in a scene of its own.
+   *
+   * Its own scene and camera, drawn in a third pass into a small scissored
+   * viewport -- not a second `WebGLRenderer`. A browser gives a page on the
+   * order of sixteen live contexts before it starts silently dropping the
+   * oldest, which is the limit `block_icons.svelte.ts` already shares one
+   * renderer for; spending one on an ornament would be the worst possible
+   * use of it.
+   */
+  let compassScene: THREE.Scene | undefined;
+  let compassCamera: THREE.OrthographicCamera | undefined;
+  let compassGroup: THREE.Group | undefined;
+  /** A click on a handle, in progress. `null` the rest of the time. */
+  let flight: CameraFlight | null = null;
   let perspective: THREE.PerspectiveCamera | undefined;
   let ortho: THREE.OrthographicCamera | undefined;
   let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined;
@@ -1633,6 +1811,38 @@ import { isTyping } from "./typing.js";
     return next;
   }
 
+  /**
+   * The gizmo, into a scissored square in the bottom-left corner.
+   *
+   * A third pass over the same renderer. The depth buffer is cleared first
+   * so the build cannot occlude an overlay that is not in the world, and the
+   * scissor is what stops the pass clearing -- or drawing into -- the rest
+   * of the frame.
+   *
+   * The group takes the *inverse* of the camera's rotation, which is what
+   * makes the handles hold still in world terms while the camera swings
+   * around them. `compass.ts` does the same inversion, from the same
+   * quaternion, which is what keeps the hit test on the handle that is drawn.
+   *
+   * The viewport is set in CSS pixels: three multiplies by its own pixel
+   * ratio, so a high-DPI display needs nothing here.
+   */
+  function drawCompass(): void {
+    if (!renderer || !compassScene || !compassCamera || !compassGroup || !camera) return;
+    compassGroup.quaternion.copy(camera.quaternion).invert();
+    const wasAutoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.setScissorTest(true);
+    renderer.setViewport(COMPASS_MARGIN, COMPASS_MARGIN, COMPASS_PX, COMPASS_PX);
+    renderer.setScissor(COMPASS_MARGIN, COMPASS_MARGIN, COMPASS_PX, COMPASS_PX);
+    renderer.render(compassScene, compassCamera);
+    renderer.setScissorTest(false);
+    const size = renderer.getSize(new THREE.Vector2());
+    renderer.setViewport(0, 0, size.x, size.y);
+    renderer.autoClear = wasAutoClear;
+  }
+
   function resize(): void {
     if (!renderer || !camera || !container) return;
     const width = container.clientWidth || 1;
@@ -1747,6 +1957,18 @@ import { isTyping } from "./typing.js";
 
       buildGrid();
 
+      /*
+       * The gizmo's own scene and camera: a unit sphere seen orthographically
+       * from `+Z`, which is exactly the projection `compass.ts` assumes -- so
+       * a handle's view-space `x`/`y` *are* where it lands in the square and
+       * its `z` is the depth. No projection matrix enters the hit test.
+       */
+      compassScene = new THREE.Scene();
+      compassCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 10);
+      compassCamera.position.set(0, 0, 2);
+      compassCamera.lookAt(0, 0, 0);
+      buildCompass();
+
       resize();
 
       // Bound to the perspective camera for good, which is safe because the
@@ -1797,7 +2019,28 @@ import { isTyping } from "./typing.js";
       const animate = () => {
         frame = requestAnimationFrame(animate);
         const delta = clock.getDelta();
-        if (cameraMode === "fly") {
+        /*
+         * A gizmo flight outranks both controllers while it lasts.
+         *
+         * `controls.update()` is still called after it: OrbitControls derives
+         * its spherical state from wherever the camera actually is on every
+         * call, so writing the position underneath it is safe -- and skipping
+         * the update would leave the damping to snap on the frame the flight
+         * ends.
+         */
+        if (flight !== null && camera && controls) {
+          const at = flightAt(flight, performance.now(), FLIGHT_MS);
+          camera.position.set(at.position.x, at.position.y, at.position.z);
+          camera.lookAt(controls.target);
+          controls.update();
+          if (at.done) {
+            flight = null;
+            controls.enabled = cameraMode !== "fly";
+            // Orthographic sizes itself from the orbit distance, which the
+            // flight has been changing all the way round.
+            resize();
+          }
+        } else if (cameraMode === "fly") {
           updateFlight(delta);
         } else {
           controls?.update();
@@ -1850,6 +2093,7 @@ import { isTyping } from "./typing.js";
           } else {
             renderer.render(scene, camera);
           }
+          drawCompass();
         }
       };
       animate();
@@ -2441,6 +2685,7 @@ import { isTyping } from "./typing.js";
     // built on first use, not at mount.
     highlightMaterial?.color.copy(themeColor("--selection", 0x6ea8fe));
     buildGrid();
+    buildCompass();
   });
 
   /**
@@ -3025,6 +3270,31 @@ import { isTyping } from "./typing.js";
       <div class="crosshair" aria-hidden="true"></div>
     {/if}
   {/if}
+
+  <!--
+    The gizmo is *drawn* by the renderer into a scissored square; this is the
+    square's worth of DOM that takes the click.
+
+    An overlay rather than a branch in the canvas's own pointer handling,
+    because the left button in that canvas is `THREE.MOUSE.PAN` and every
+    gesture there has to be written as something that takes it away from
+    OrbitControls first. An element on top never enters that argument.
+
+    Shown whenever there is a document, in both camera modes: in flight it is
+    a read-only heading indicator, which is when knowing which way is north
+    is hardest. It is not clickable there -- the pointer is locked -- and
+    `pointer-events` says so rather than the handler declining silently.
+  -->
+  {#if mesh || documentSize}
+    <button
+      class="compass"
+      class:locked={flying}
+      style={`width:${COMPASS_PX}px;height:${COMPASS_PX}px;left:${COMPASS_MARGIN}px;bottom:${COMPASS_MARGIN}px`}
+      onclick={onCompassClick}
+      title={t("viewport.compassHint")}
+      aria-label={t("viewport.compass")}
+    ></button>
+  {/if}
 </div>
 
 <style>
@@ -3053,6 +3323,26 @@ import { isTyping } from "./typing.js";
     backdrop-filter: blur(6px);
     font-size: 13px;
     line-height: 1.4;
+    pointer-events: none;
+  }
+
+  /*
+   * Transparent: what is inside it is drawn by WebGL, in the same pixels.
+   * This element exists to be clicked and to carry the tooltip, and giving
+   * it any background of its own would put that background over the gizmo.
+   */
+  .compass {
+    position: absolute;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  /* With the pointer locked there is no cursor to click it with, and the
+     gizmo is a heading indicator rather than a control. */
+  .compass.locked {
     pointer-events: none;
   }
 

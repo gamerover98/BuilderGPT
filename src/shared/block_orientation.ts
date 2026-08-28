@@ -63,6 +63,29 @@ export interface PlacementLook {
   readonly cursorY: number;
 }
 
+/**
+ * Which way a face points, as a unit vector in the schematic's own axes.
+ *
+ * The convention is stated in prose a few lines above and was, until this
+ * table, stated only in prose: north is -Z, south +Z, east +X, west -X.
+ * `main/domain/connect.ts` kept the same six numbers as its own neighbour
+ * offsets, which is two places deciding where north is -- and a viewport
+ * compass that disagreed with the writers by a quarter turn would be
+ * invisible until somebody pasted a build into a world and found it facing
+ * the wrong way.
+ *
+ * `horizontalFacing` below is the inverse for the four horizontal ones, so
+ * `tests/blocks.ts` can require the pair to round-trip.
+ */
+export const FACE_VECTOR: Record<Face, { x: number; y: number; z: number }> = {
+  up: { x: 0, y: 1, z: 0 },
+  down: { x: 0, y: -1, z: 0 },
+  north: { x: 0, y: 0, z: -1 },
+  south: { x: 0, y: 0, z: 1 },
+  east: { x: 1, y: 0, z: 0 },
+  west: { x: -1, y: 0, z: 0 },
+};
+
 /** The axis a face lies along, which is the axis a pillar placed on it runs. */
 const FACE_AXIS: Record<Face, "x" | "y" | "z"> = {
   up: "y",

@@ -1655,6 +1655,80 @@ safe there and wrong again one checkbox later. `orthoDepthEpsilon` exists in
 than to be called; `COPLANAR_OFFSET` is denominated in depth-buffer steps and
 so covers both projections unchanged.
 
+**There is one table for which way north is, and there used to be two.**
+`shared/block_orientation.ts` states the convention in prose — north is -Z,
+south +Z, east +X, west -X — and now states it as `FACE_VECTOR` as well;
+`main/domain/connect.ts` had kept the same six numbers as its neighbour offsets
+and now reads them from there. It is one fact about Minecraft, and two copies of
+it is how one of them comes to be a quarter turn out. `horizontalFacing` is the
+inverse for the four horizontal ones, so `tests/blocks.ts` requires the pair to
+round-trip, which is what catches the only mistake a table of six unit vectors
+ever makes: a transposed sign.
+
+**The compass is drawn in a third pass over the same renderer, and clicked
+through an element on top of it.** Both halves are the design.
+
+A pass rather than a second `WebGLRenderer`, because a browser gives a page on
+the order of sixteen live contexts before it silently drops the oldest —
+already the reason `block_icons.svelte.ts` shares one, and spending a context on
+an ornament would be the worst possible use of it. The depth buffer is cleared
+first so the build cannot occlude an overlay that is not in the world, and the
+scissor is what stops the pass clearing or drawing into the rest of the frame.
+
+An element rather than a branch in the canvas's pointer handling, because the
+left button in that canvas is `THREE.MOUSE.PAN`: *every* gesture there has to be
+written as something that takes the button away from OrbitControls first, and an
+element on top never enters that argument. It is transparent, because what is
+inside it is drawn by WebGL in the same pixels.
+
+`compass.ts` holds the arithmetic, a plain module for `build_grid.ts`'s reason.
+Three things in it are load-bearing and none of them are visible in a
+screenshot:
+
+- **The gizmo group takes the *inverse* of the camera's rotation**, and so does
+  `projectAxis`. Same quaternion, same inversion, which is what keeps the hit
+  test on the handle that is drawn. With the identity rotation the two agree
+  either way, so this is checked with the camera turned.
+- **Nearest the viewer wins a tie, not nearest the pointer.** The two ends of an
+  axis project to the very same point when that axis faces the camera —
+  looking north, both the north and the south handle land dead centre — and
+  the one drawn on top is the one pointing back out of the screen, which there
+  is *south*. Picking by distance is a coin toss between two exact ties, so half
+  the time a click flies the camera to the opposite side of the build from the
+  handle it was over. That "looking north, south faces you" is also the sentence
+  that is easiest to write down backwards, and a compass with its near and far
+  ends swapped still looks exactly like a compass.
+- **The poles lean off vertical by a thousandth of the orbit distance.**
+  OrbitControls takes its azimuth from `atan2` of the horizontal offset, which
+  straight overhead is `atan2(0, 0)`: zero by definition rather than by intent,
+  so the view would swing to whatever azimuth zero happens to be. Leaning
+  towards +Z makes it deterministic *and* the one a map has, with north at the
+  top.
+
+**A flight goes around the build rather than through it.** A straight line
+between two points on a sphere is a chord, so a lerped quarter turn passes a
+third of the way inside the structure and out again; `arcBetween` interpolates
+the direction and the radius apart. Its antipodal case is not exotic — it is
+clicking north and then south — and two opposite directions span no plane, so
+there is no arc and the arithmetic has to choose one rather than divide by a
+sine of zero.
+
+While a flight is running it outranks both controllers, and `controls.update()`
+is still called under it: OrbitControls derives its spherical state from wherever
+the camera actually is on every call, so writing the position underneath it is
+safe, and skipping the update would let the damping snap on the frame the flight
+ends.
+
+The gizmo is drawn in **both** camera modes and clickable only in orbit. In
+flight it is a heading indicator, which is when knowing which way is north is
+hardest; it is not a control there because the pointer is locked, and
+`pointer-events` says so rather than the handler declining in silence.
+
+Its colours are `--axis-x/y/z`, defined in all three palettes. X red, Y green, Z
+blue is the convention every 3D package shares and so is read without being
+told; the *labels* are Minecraft's, which is the half that has to be learned —
+a builder thinks in north and east, and `facing=north` is what the file says.
+
 **Block icons are meshed by the same pipeline as the viewport.**
 `services/block_icons.ts` runs a 1×1×1 document through `buildDocumentPreview`,
 so an icon cannot disagree with what appears when the block is placed. It has to

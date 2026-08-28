@@ -63,23 +63,29 @@ import {
   type NeighbourBlock,
   type Neighbours,
 } from "../../shared/block_connections.js";
+import { FACE_VECTOR } from "../../shared/block_orientation.js";
 import { occludesNeighbours } from "../pipeline/block_shapes.js";
 import { paletteEntryIsAir, type PaletteEntry } from "../pipeline/types.js";
 import { getBlock, getBlockEntity, type SchematicDocument } from "./document.js";
 import type { TransactionScope } from "./history.js";
 
-/** The six neighbours, as offsets. Order matches nothing and need not. */
+/**
+ * The six neighbours, as offsets. Order matches nothing and need not.
+ *
+ * Derived from `FACE_VECTOR` rather than written out again: these numbers
+ * and the ones `block_orientation.ts` places blocks by are the same fact
+ * about Minecraft, and two copies of it is how one of them comes to be a
+ * quarter turn out.
+ */
 /** Stands in for a palette slot that does not exist; every rule reads it as air. */
 const AIR_ENTRY: PaletteEntry = { namespacedName: "minecraft:air", properties: {} };
 
-const OFFSETS: ReadonlyArray<readonly [Face, number, number, number]> = [
-  ["north", 0, 0, -1],
-  ["south", 0, 0, 1],
-  ["east", 1, 0, 0],
-  ["west", -1, 0, 0],
-  ["up", 0, 1, 0],
-  ["down", 0, -1, 0],
-];
+const OFFSETS: ReadonlyArray<readonly [Face, number, number, number]> = (
+  ["north", "south", "east", "west", "up", "down"] as const
+).map((face) => {
+  const step = FACE_VECTOR[face];
+  return [face, step.x, step.y, step.z] as const;
+});
 
 function bareName(entry: PaletteEntry): string {
   return entry.namespacedName.replace(/^minecraft:/, "");

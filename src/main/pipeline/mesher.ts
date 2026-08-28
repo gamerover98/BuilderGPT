@@ -171,6 +171,21 @@ export async function culledFaces(
    * before there was any such thing.
    */
   signs?: ReadonlyMap<number, SignText>,
+  /**
+   * Which palette entries are the *void block* -- the thing standing in for
+   * empty space.
+   *
+   * Keyed on the palette rather than on "was this cell air", so the two
+   * populations follow one rule: the cells drawn over air, and the cells a
+   * break actually wrote the block into. A caller that told them apart would
+   * have two answers to what water is.
+   *
+   * It changes nothing about *how* a face is meshed -- the void block is
+   * culled, lit and shaded exactly like any other block, which is what keeps
+   * a wall's face and the water in front of it from being coplanar. It only
+   * marks which layer the face comes out in.
+   */
+  voidIndices?: ReadonlySet<number>,
 ): Promise<BakedFace[]> {
   const voxels = struct.voxels;
   const [sizeX, sizeY, sizeZ] = [
@@ -210,15 +225,31 @@ export async function culledFaces(
    * loop was going to do anyway.
    */
   const opaqueTexture: boolean[] = [];
+  /**
+   * Whether an entry draws anything that culling cannot remove.
+   *
+   * `extraFaces` are the surfaces inside a block -- a staircase's step, a
+   * fence's rails -- and they are emitted unconditionally, because a
+   * neighbour cannot cover them. That is what makes the fast path below need
+   * this: a cell full of fence draws its rails however many fences surround
+   * it, so skipping it would be wrong, while a cell full of water draws
+   * nothing at all and skipping it is the whole point.
+   */
+  const hasInnerFaces: boolean[] = [];
   for (const entry of struct.palette) {
     if (paletteEntryIsAir(entry)) {
       opaqueTexture.push(true);
+      hasInnerFaces.push(false);
       continue;
     }
     const baked = await baker.bakeBlockstate(entry);
     const drawn = [...Object.values(baked.faces), ...baked.extraFaces];
     opaqueTexture.push(drawn.every((face) => baker.isTextureOpaque(face.textureKey)));
+    hasInnerFaces.push(baked.extraFaces.length > 0);
   }
+
+  const isVoidEntry = struct.palette.map((_entry, index) => voidIndices?.has(index) === true);
+  const anyVoid = isVoidEntry.some(Boolean);
 
   /*
    * Deliberately **not** narrowed by `opaqueTexture`.
@@ -439,6 +470,55 @@ export async function culledFaces(
         if (paletteEntryIsAir(entry)) {
           continue;
         }
+        /*
+         * A void cell buried in void cells draws nothing, and finding that out
+         * the long way is the entire cost of this feature.
+         *
+         * Without the void block the loop visits only the blocks somebody
+         * placed; with it, every empty cell in the document is a block too, and
+         * on an ordinary schematic that is most of the volume. Every one of
+         * them would be baked and asked about six neighbours only to have all
+         * six faces culled against its identical neighbours -- which is the
+         * same shape of quadratic-looking waste `warmBaker` was written for,
+         * and it is again the *right picture, slowly*.
+         *
+         * Six array reads instead. On the boundary of the grid it does not
+         * apply, because out of bounds is open air and the outer shell of the
+         * void genuinely is drawn.
+         *
+         * There is no sign check here and there must not be one: a sign is a
+         * block entity on a sign block, and no cell this skips holds one.
+         */
+        if (anyVoid && isVoidEntry[paletteIndex] && !hasInnerFaces[paletteIndex]) {
+          if (
+            inside(x - 1, y, z) &&
+            inside(x + 1, y, z) &&
+            inside(x, y - 1, z) &&
+            inside(x, y + 1, z) &&
+            inside(x, y, z - 1) &&
+            inside(x, y, z + 1) &&
+            isVoidEntry[voxels[flatIndex(x - 1, y, z)]] &&
+            isVoidEntry[voxels[flatIndex(x + 1, y, z)]] &&
+            isVoidEntry[voxels[flatIndex(x, y - 1, z)]] &&
+            isVoidEntry[voxels[flatIndex(x, y + 1, z)]] &&
+            isVoidEntry[voxels[flatIndex(x, y, z - 1)]] &&
+            isVoidEntry[voxels[flatIndex(x, y, z + 1)]]
+          ) {
+            continue;
+          }
+        }
+        const voidCell = isVoidEntry[paletteIndex];
+        /**
+         * Every face this cell produces, marked with the layer it belongs to.
+         *
+         * One place rather than a flag threaded through `bakedFaceOffset`,
+         * whose four call sites below would each have to remember -- and the
+         * one that forgot would put a patch of the void into the pickable
+         * layer, where it would silently start swallowing clicks.
+         */
+        const emit = (face: BakedFace): void => {
+          faces.push(voidCell ? { ...face, voidFill: true } : face);
+        };
         const bakedBlock: BakedBlock = await baker.bakeBlockstate(entry);
 
         // Geometry that never participates in culling: every box of a
@@ -446,7 +526,7 @@ export async function culledFaces(
         // quads of a cross. Their surfaces sit inside the block, where a
         // neighbour cannot cover them.
         for (const face of bakedBlock.extraFaces) {
-          faces.push(bakedFaceOffset(face, x, y, z, shadeFace(face, x, y, z)));
+          emit(bakedFaceOffset(face, x, y, z, shadeFace(face, x, y, z)));
         }
 
         /*
@@ -461,7 +541,7 @@ export async function culledFaces(
         const written = signs?.get(flatIndex(x, y, z));
         if (written !== undefined) {
           for (const face of await signTextFaces(entry, written, baker)) {
-            faces.push(bakedFaceOffset(face, x, y, z, face.shade ?? shadeFace(face, x, y, z)));
+            emit(bakedFaceOffset(face, x, y, z, face.shade ?? shadeFace(face, x, y, z)));
           }
         }
 
@@ -496,7 +576,7 @@ export async function culledFaces(
             // The water in a waterlogged cell is a source, so it stands at the
             // same 8/9 as any other -- unless there is more water above it.
             const flooded = loweredFace(waterFace, holdsWater(x, y + 1, z) ? 1 : 8 / 9);
-            faces.push(bakedFaceOffset(flooded, x, y, z, shadeFace(flooded, x, y, z)));
+            emit(bakedFaceOffset(flooded, x, y, z, shadeFace(flooded, x, y, z)));
           }
         }
 
@@ -596,7 +676,7 @@ export async function culledFaces(
           const height =
             fluid === null ? 1 : fluidHeight(entry, fluidAt(x, y + 1, z) === fluid);
           const shaped = loweredFace(bakedFace, height);
-          faces.push(bakedFaceOffset(shaped, x, y, z, shadeFace(shaped, x, y, z)));
+          emit(bakedFaceOffset(shaped, x, y, z, shadeFace(shaped, x, y, z)));
         }
       }
     }

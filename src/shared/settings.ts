@@ -498,11 +498,42 @@ export interface EditingSettings {
    * would throw away the room they made to build in.
    */
   autoGrow: boolean;
+  /**
+   * What empty space is made of. `""` means air, which is the default and
+   * is what a schematic has always been full of.
+   *
+   * Set it to water and an underwater build stops being a build in a
+   * vacuum: breaking a block leaves water behind, which is what the game
+   * would do and what the file has to say for the paste to come out right.
+   * Lava, barrier and structure void are the other obvious ones.
+   *
+   * It does three things at once and they are separate mechanisms: it is
+   * **written** when a block is broken, it is **drawn** over every empty
+   * cell, and it is **ignored by the pointer** so a click reaches whatever
+   * is behind it.
+   */
+  voidBlock: string;
+  /**
+   * How solid the void block looks, 0 to 1.
+   *
+   * A viewport property with nowhere else to live: it belongs with the
+   * block it applies to, and splitting the pair across `preview` and
+   * `editing` would put one panel's two controls in two settings files.
+   *
+   * Never zero. A void block that draws nothing is a void block that is
+   * not there, and the checkbox for that is choosing air.
+   */
+  voidOpacity: number;
 }
 
 export const DEFAULT_EDITING_SETTINGS: EditingSettings = {
   autoGrow: true,
+  voidBlock: "",
+  voidOpacity: 0.4,
 };
+
+/** What the void block's opacity may be. Never 0; see `voidOpacity`. */
+export const VOID_OPACITY = { min: 0.05, max: 1 } as const;
 
 /**
  * What a schematic may be resized to by hand, per axis.

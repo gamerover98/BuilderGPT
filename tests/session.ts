@@ -2344,5 +2344,78 @@ console.log("\n--- dimensions ---");
   }
 }
 
+
+// --- empty space made of something else -------------------------------------
+//
+// With a void block chosen, breaking writes *it* rather than air -- which is
+// what an underwater build needs the file to say. The rule that has to survive
+// that is `Breaking never grows`: it read `namespacedName === "minecraft:air"`,
+// which was the whole of what a break was until empty space could be water.
+console.log("\n--- breaking into the void ---");
+{
+  const at = (session: ReturnType<typeof newDocument>, x: number, y: number, z: number) =>
+    getBlock(session.doc, x, y, z).namespacedName;
+
+  {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    setBlock(session.doc, 1, 1, 1, { namespacedName: "minecraft:stone", properties: {} });
+    const changed = applyEdit(
+      session,
+      { kind: "setBlock", x: 1, y: 1, z: 1, block: { namespacedName: "minecraft:water" } },
+      { voidBlock: "minecraft:water" },
+    );
+    equal("breaking writes the void block", changed, 1);
+    equal("...into the cell the block was in", at(session, 1, 1, 1), "minecraft:water");
+  }
+
+  {
+    /*
+     * And it still does not grow.
+     *
+     * Nothing sends a break from outside the box today -- a break comes from a
+     * pick, so the block exists -- which is exactly why this is written down:
+     * left keyed on the word `air`, the rule would go on being true of the word
+     * while quietly ceasing to be true of *breaking*, and nothing would fail.
+     */
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    const changed = applyEdit(
+      session,
+      { kind: "setBlock", x: 9, y: 0, z: 0, block: { namespacedName: "minecraft:water" } },
+      { voidBlock: "minecraft:water" },
+    );
+    equal("breaking outside the box changes nothing", changed, 0);
+    equal("...and does not grow the document", session.doc.width, 4);
+  }
+
+  {
+    /*
+     * The other half of the same sentence: with no void block chosen, water is
+     * an ordinary block and placing it outside the box grows the document like
+     * anything else. The guard is about emptiness, not about water.
+     */
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    applyEdit(session, {
+      kind: "setBlock",
+      x: 9,
+      y: 0,
+      z: 0,
+      block: { namespacedName: "minecraft:water" },
+    });
+    equal("placing water with no void block set grows", session.doc.width, 10);
+  }
+
+  {
+    // And air is still air, whatever else is chosen.
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    const changed = applyEdit(
+      session,
+      { kind: "setBlock", x: 9, y: 0, z: 0, block: { namespacedName: "minecraft:air" } },
+      { voidBlock: "minecraft:water" },
+    );
+    equal("a plain break is unaffected", changed, 0);
+    equal("...and grows nothing either", session.doc.width, 4);
+  }
+}
+
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

@@ -43,6 +43,26 @@ import type { UVRect } from "./types.js";
 
 export const CHUNK_SIZE = 16;
 
+/**
+ * One chunk's geometry, split by what it is.
+ *
+ * `solid` is the schematic: pickable, drawn as it always was. `filler` is
+ * the void block standing in for empty space, and it is a separate set of
+ * buffers rather than a third index range beside `opaqueIndices` for two
+ * reasons that arrive together. Its opacity is a **material** property, so a
+ * material of its own was required anyway; and a material of its own means an
+ * *object* of its own in the viewer, which is what keeps it out of the
+ * raycaster -- `Mesh.raycast` tests a whole geometry and knows nothing about
+ * draw groups, so an index range could never have bought that.
+ *
+ * `filler` is empty for every document until somebody chooses a void block,
+ * which is the default.
+ */
+export interface ChunkLayers {
+  readonly solid: MeshBuffers;
+  readonly filler: MeshBuffers;
+}
+
 export interface ChunkMeshCache {
   width: number;
   height: number;
@@ -72,8 +92,8 @@ export interface ChunkMeshCache {
    * with one per cell.
    */
   signs: Map<number, string>;
-  /** Chunk key -> that chunk's geometry. */
-  chunks: Map<number, MeshBuffers>;
+  /** Chunk key -> that chunk's geometry, in both layers. */
+  chunks: Map<number, ChunkLayers>;
 }
 
 export interface ChunkedMeshResult {
@@ -94,6 +114,18 @@ export interface ChunkedMeshResult {
    * what an edit used to cost.
    */
   pieceKeys: number[];
+  /**
+   * The void layer, in the same shape and deliberately not folded into
+   * `pieces`.
+   *
+   * `buffers` above and `boundsOf(pieces)` downstream both stay about the
+   * *schematic*: the void fills the whole document, so folding it in would
+   * make an empty document's bounds the whole box and stop
+   * `EmptyPreviewError` ever firing -- which is the check that keeps the
+   * viewport from showing the ghost of a build that has been deleted.
+   */
+  voidPieces: MeshBuffers[];
+  voidPieceKeys: number[];
   cache: ChunkMeshCache;
   /** How many chunks had to be re-meshed, and how many there are. */
   rebuilt: number;
@@ -262,6 +294,8 @@ export async function buildChunkedMesh(
   cache: ChunkMeshCache,
   shading: Shading | null = null,
   signs: ReadonlyMap<number, SignText> | null = null,
+  /** Palette entries that are the void block; see `culledFaces`. */
+  voidIndices: ReadonlySet<number> | null = null,
 ): Promise<ChunkedMeshResult> {
   const width = struct.bounds.maxX - struct.bounds.minX + 1;
   const height = struct.bounds.maxY - struct.bounds.minY + 1;
@@ -323,7 +357,7 @@ export async function buildChunkedMesh(
     }
   }
 
-  const chunks = reusable ? new Map(cache.chunks) : new Map<number, MeshBuffers>();
+  const chunks = reusable ? new Map(cache.chunks) : new Map<number, ChunkLayers>();
 
   for (const key of dirty) {
     const cx = key % nx;
@@ -342,14 +376,28 @@ export async function buildChunkedMesh(
       },
       shading,
       signs ?? undefined,
+      voidIndices ?? undefined,
     );
-    const buffers = buildMesh(faces, atlasUv, (key) => baker.isTextureTranslucent(key));
-    if (buffers.indices.length === 0) {
+    /*
+     * Partitioned here rather than meshed twice.
+     *
+     * Culling has to be *one* pass over the real structure: the void block's
+     * face at a wall and the wall's own face are the same plane, and only a
+     * pass that can see both removes one of them. Two passes would draw both
+     * and z-fight along every surface of the build.
+     */
+    const solidFaces = faces.filter((face) => face.voidFill !== true);
+    const voidFaces = voidIndices === null ? [] : faces.filter((face) => face.voidFill === true);
+    const layers: ChunkLayers = {
+      solid: buildMesh(solidFaces, atlasUv, (name) => baker.isTextureTranslucent(name)),
+      filler: buildMesh(voidFaces, atlasUv, (name) => baker.isTextureTranslucent(name)),
+    };
+    if (layers.solid.indices.length === 0 && layers.filler.indices.length === 0) {
       // An all-air chunk holds nothing; dropping it keeps the concatenation
       // short rather than walking thousands of empty entries.
       chunks.delete(key);
     } else {
-      chunks.set(key, buffers);
+      chunks.set(key, layers);
     }
   }
 
@@ -358,14 +406,21 @@ export async function buildChunkedMesh(
   // incremental build comparable to a rebuilt-from-scratch one.
   const ordered: MeshBuffers[] = [];
   const orderedKeys: number[] = [];
+  const orderedVoid: MeshBuffers[] = [];
+  const orderedVoidKeys: number[] = [];
   for (let cz = 0; cz < nz; cz += 1) {
     for (let cy = 0; cy < ny; cy += 1) {
       for (let cx = 0; cx < nx; cx += 1) {
         const key = chunkKey(cx, cy, cz, nx, ny);
         const piece = chunks.get(key);
-        if (piece) {
-          ordered.push(piece);
+        if (piece === undefined) continue;
+        if (piece.solid.indices.length > 0) {
+          ordered.push(piece.solid);
           orderedKeys.push(key);
+        }
+        if (piece.filler.indices.length > 0) {
+          orderedVoid.push(piece.filler);
+          orderedVoidKeys.push(key);
         }
       }
     }
@@ -375,6 +430,8 @@ export async function buildChunkedMesh(
     buffers: concatChunks(ordered),
     pieces: ordered,
     pieceKeys: orderedKeys,
+    voidPieces: orderedVoid,
+    voidPieceKeys: orderedVoidKeys,
     cache: {
       width,
       height,

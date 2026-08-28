@@ -1805,6 +1805,96 @@ inspector picking the wrong block rather than as the cage being in the way.
 it by default. It is `BackSide` so the near faces are not in the way from
 inside, which is where anyone building will be.
 
+**Empty space can be made of something other than air, and that is three
+mechanisms wearing one name.** `editing.voidBlock` is **written** when a block
+is broken, **drawn** over every empty cell, and **ignored by the pointer**. An
+underwater build needs all three: the file has to say water or the paste comes
+back full of bubbles, the space has to be visible as space, and a click has to
+reach the build inside it.
+
+**The palette is swapped, not the grid.** `fillVoid` in `preview.ts` is
+`hideMarkers` inverted: it rewrites the *air* entry into the chosen block, so
+every empty cell becomes water without a voxel being touched. Index 0 is always
+air, which is what makes it a one-entry edit; the voxels are shared with the
+document and only the palette array is rebuilt.
+
+**The bucket is chosen by palette entry, not by "was this cell air".** Two
+populations end up holding the block — the cells drawn over air and the cells
+a break actually wrote it into — and one rule covers both. The consequence is
+worth knowing before it is reported: **with water as the void block,
+hand-placed water is unpickable too.** That is the request rather than a side
+effect; if water is what empty space is made of, a click passes through it the
+way it passes through air.
+
+**One culling pass, two layers.** `BakedFace.voidFill` marks the layer and
+`chunked_mesh.ts` partitions before calling `buildMesh` twice. Meshing the two
+*separately* is the obvious arrangement and is wrong: the water's face at a wall
+and the wall's own face are the same plane, and only a pass that sees both
+removes one of them. Two passes draw both and z-fight along every surface of the
+build. `tests/chunks.ts` states it as a number — a stone block dropped into
+the void must leave the void geometry byte for byte unchanged — with glass
+beside it as the control, because a layer that culled against *everything* would
+satisfy the first check and put a hole in the water behind every pane.
+
+**Separate buffers rather than a third index range beside `opaqueIndices`, and
+the reason arrives twice.** The opacity is a **material** property, so a
+material of its own was required anyway; and a material of its own means an
+*object* of its own in the viewer, which is what keeps it out of the raycaster.
+`Mesh.raycast` tests a whole geometry and knows nothing about draw groups, so an
+index range could never have bought that. Every raycast in `Viewer.svelte` names
+`loaded`; `voidLoaded` is its sibling and is never handed to one.
+
+`ChunkGeometry` carries a `layer` and `dropped` is a `ChunkRef[]`, because the
+two layers of one chunk are different geometry under one number and they move in
+opposite directions: breaking the last block in a chunk empties its solid layer
+and fills its void one. Keyed on the number alone — in main's `sent` map or
+in the renderer's `chunkMeshes` — one would stand in for the other, and the
+build would develop holes on the *second* edit rather than the first.
+
+**Light is flooded through the document without the void in it.** `lighting.ts`
+floods from `occludesNeighbours`, so a void block that happens to be solid would
+seal every empty cell and take the light out of the whole schematic — the
+build goes black and the cause is a dropdown two panels away. The void is a way
+of seeing the space; it does not decide how lit the space is. It casts no shadow
+either, in both the full build and the delta, which `tests/ui.ts` **counts**
+rather than finds: a check that merely finds the rule passes while one of the
+two has lost it, and that fault would appear only in the chunk an edit touched.
+
+**Breaking still never grows, and keeping that true took a parameter.** The
+guard read `namespacedName === "minecraft:air"`, which was the whole of what a
+break was until empty space could be water. Left alone it would have gone on
+being true of the *word* while quietly ceasing to be true of *breaking*, and
+nothing would have failed — a break comes from a pick, so the block exists
+and the case never arises. Which is exactly why it is written down.
+`EditOptions.voidBlock` is what `emptiness()` asks.
+
+**The interior fast path is the whole cost of the feature, and it is measured.**
+Without a void block the loop visits only the blocks somebody placed; with one,
+every empty cell is a block too, and on an ordinary schematic that is most of the
+volume. A void cell buried in void cells draws nothing, so six array reads
+replace a bake and six neighbour queries. On a 128x32x128:
+
+| | |
+|---|---|
+| cold mesh, no void block | 274 ms |
+| cold mesh, water as the void | 676 ms |
+| **one block placed, void on** | **22 ms** |
+| the same three without the fast path | 279 / **3135** / 50 ms |
+
+It is skipped for a void block with `extraFaces` — a fence draws its rails
+however many fences surround it — and it does not apply on the grid boundary,
+where out of bounds is open air and the outer shell genuinely is drawn. There is
+no sign check in it and there must not be: a sign is a block entity on a sign
+block, and no cell it skips holds one.
+
+**Air is stored as the empty string, and an id that spells air is healed into
+it.** Two spellings of one state is how they come to disagree: the other one
+would have `fillVoid` intern air over air and hand the mesher a palette where
+every index is void and none of them draws anything — the expensive way of
+doing exactly what the default already does for free. `voidOpacity` never
+reaches zero for the mirror reason: a void block drawn at nothing is a second,
+silent way of turning the feature off with the block still going into the file.
+
 **Block icons are meshed by the same pipeline as the viewport.**
 `services/block_icons.ts` runs a 1×1×1 document through `buildDocumentPreview`,
 so an icon cannot disagree with what appears when the block is placed. It has to

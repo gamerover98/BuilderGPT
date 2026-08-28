@@ -28,6 +28,7 @@ import {
   type ChunkMeshCache,
 } from "../src/main/pipeline/chunked_mesh.js";
 import { buildMesh, culledFaces } from "../src/main/pipeline/mesher.js";
+import { fillVoid } from "../src/main/services/preview.js";
 import { readSignText, type SignText } from "../src/main/pipeline/sign_text.js";
 import { ModelBaker } from "../src/main/pipeline/model_baker.js";
 import type { MeshBuffers, PaletteEntry } from "../src/main/pipeline/types.js";
@@ -279,6 +280,230 @@ console.log("\n--- full invalidation ---");
   );
   equal("so does a resize", afterResize.rebuilt, afterResize.total);
 }
+
+/** The pieces of one layer, fused, so two layers can be compared as bytes. */
+function concat(pieces: readonly MeshBuffers[]): MeshBuffers {
+  let vertices = 0;
+  let indices = 0;
+  for (const piece of pieces) {
+    vertices += piece.positions.length / 3;
+    indices += piece.indices.length;
+  }
+  const out = {
+    positions: new Float32Array(vertices * 3),
+    normals: new Float32Array(vertices * 3),
+    uvs: new Float32Array(vertices * 2),
+    indices: new Uint32Array(indices),
+    light: new Float32Array(vertices * 3),
+    opaqueIndices: 0,
+  };
+  let v = 0;
+  let i = 0;
+  for (const piece of pieces) {
+    out.positions.set(piece.positions, v * 3);
+    out.normals.set(piece.normals, v * 3);
+    out.uvs.set(piece.uvs, v * 2);
+    out.light.set(piece.light, v * 3);
+    for (let k = 0; k < piece.indices.length; k += 1) out.indices[i + k] = piece.indices[k] + v;
+    v += piece.positions.length / 3;
+    i += piece.indices.length;
+  }
+  return out;
+}
+
+
+// --- empty space made of something else -------------------------------------
+//
+// A schematic has always been full of air, and for an underwater build that is
+// wrong in a way that only shows up after the paste. Choosing a block here
+// swaps the *air palette entry* for it, so every empty cell becomes a cell of
+// water without a voxel being touched -- and the faces come out in a layer of
+// their own, which is what lets the viewer give them their own material and
+// keep them out of the raycaster.
+console.log("\n--- the void block ---");
+{
+  const doc = createDocument({ width: 4, height: 4, length: 4 });
+  setBlock(doc, 1, 1, 1, STONE);
+  const real = toStructureData(doc);
+
+  /*
+   * Air is the default and has to stay free. Nothing is rebuilt, nothing is
+   * marked, and the structure comes back as the very same object -- which is
+   * what makes "no void block" cost nothing at all rather than cost a copy.
+   */
+  const untouched = fillVoid(real, "");
+  check("no void block leaves the structure alone", untouched.structure === real);
+  equal("...and marks nothing", untouched.voidIndices.size, 0);
+  /*
+   * And so does one that *spells* air. Two spellings of one state would have
+   * the mesher visit every cell to draw nothing.
+   */
+  equal("air by name is the same as no void block", fillVoid(real, "minecraft:air").voidIndices.size, 0);
+
+  const filled = fillVoid(real, "minecraft:water");
+  /*
+   * Index 0 is always air (`domain/document.ts` guarantees it), which is what
+   * makes this a one-entry edit rather than a pass over the whole grid.
+   */
+  equal("the air entry becomes the void block", filled.structure.palette[0].namespacedName, "minecraft:water");
+  check("...and is marked as void", filled.voidIndices.has(0));
+  check("...while the stone beside it is not", !filled.voidIndices.has(1));
+  check("the voxels are shared, not copied", filled.structure.voxels === real.voxels);
+  check("...and the original palette is untouched", real.palette[0].namespacedName === "minecraft:air");
+
+  /*
+   * Both populations, one rule.
+   *
+   * A break writes the void block for real, so a document can hold cells of it
+   * that were never air. Keyed on the palette rather than on "was this cell
+   * air", they are the same thing -- which is the sentence that makes\
+   * hand-placed water unpickable too, and that is the request rather than a
+   * side effect.
+   */
+  const withWater = createDocument({ width: 4, height: 4, length: 4 });
+  setBlock(withWater, 1, 1, 1, block("minecraft:water"));
+  const both = fillVoid(toStructureData(withWater), "minecraft:water");
+  equal("a placed void block is void as well", both.voidIndices.size, 2);
+}
+
+console.log("\n--- the two layers ---");
+{
+  /*
+   * One pass, two layers. Culling has to see both at once: the water's face at
+   * a wall and the wall's own face are the same plane, and only a pass that
+   * knows about both removes one of them. Meshed separately they would both be
+   * drawn and z-fight along every surface of the build.
+   */
+  const doc = createDocument({ width: 6, height: 6, length: 6 });
+  setBlock(doc, 2, 2, 2, STONE);
+  const real = toStructureData(doc);
+  const filled = fillVoid(real, "minecraft:water");
+
+  await culledFaces(filled.structure, baker, undefined, null, undefined, filled.voidIndices);
+  const atlas = buildAtlas(baker.textures);
+
+  const plain = await buildChunkedMesh(
+    real,
+    baker,
+    atlas.uvRects,
+    1,
+    createChunkMeshCache(),
+  );
+  equal("without a void block there is no void layer", plain.voidPieces.length, 0);
+  check("...and the structure is still meshed", plain.pieces.length > 0);
+
+  const voided = await buildChunkedMesh(
+    filled.structure,
+    baker,
+    atlas.uvRects,
+    1,
+    createChunkMeshCache(),
+    null,
+    null,
+    filled.voidIndices,
+  );
+  check("with one, the void gets a layer of its own", voided.voidPieces.length > 0);
+
+  /*
+   * The solid layer is *unchanged* by the void, which is the property the
+   * whole split exists for: the schematic is what it always was, and the void
+   * is drawn beside it.
+   */
+  equal(
+    "the structure's own geometry is untouched by it",
+    fingerprint(concat(voided.pieces)),
+    fingerprint(concat(plain.pieces)),
+  );
+
+  /*
+   * And `buffers` -- the fused geometry, which `EmptyPreviewError` measures --
+   * stays about the schematic. Folded together, an empty document would come
+   * back full of water and the check that catches a deleted build showing its
+   * own ghost would never fire again.
+   */
+  equal(
+    "the fused mesh is the structure, not the void",
+    fingerprint(voided.buffers),
+    fingerprint(plain.buffers),
+  );
+
+  const empty = createDocument({ width: 4, height: 4, length: 4 });
+  const emptyFilled = fillVoid(toStructureData(empty), "minecraft:water");
+  const emptyVoided = await buildChunkedMesh(
+    emptyFilled.structure,
+    baker,
+    atlas.uvRects,
+    1,
+    createChunkMeshCache(),
+    null,
+    null,
+    emptyFilled.voidIndices,
+  );
+  equal("a document with nothing in it still meshes as empty", emptyVoided.buffers.indices.length, 0);
+  check("...while its void has a shell", emptyVoided.voidPieces.length > 0);
+
+  /*
+   * And the interface is culled, which is the z-fighting guard stated as a
+   * number.
+   *
+   * A stone block dropped into the middle of the void takes one cell away
+   * from it -- and that cell's six faces were interior ones, culled against
+   * its identical neighbours. The six water faces now *pointing at* the stone
+   * are culled too, because stone covers them and its texture is opaque. So
+   * the void geometry has to come out **byte for byte the same** as it does
+   * with nothing in the box at all.
+   *
+   * If it does not, the extra faces are water drawn in the same plane as the
+   * stone's own -- which is exactly what meshing the two layers in separate
+   * passes would produce, and it is invisible until the two start flickering
+   * against each other at a distance.
+   */
+  const boxed = createDocument({ width: 4, height: 4, length: 4 });
+  setBlock(boxed, 1, 1, 1, STONE);
+  const boxedFilled = fillVoid(toStructureData(boxed), "minecraft:water");
+  const boxedVoided = await buildChunkedMesh(
+    boxedFilled.structure,
+    baker,
+    atlas.uvRects,
+    1,
+    createChunkMeshCache(),
+    null,
+    null,
+    boxedFilled.voidIndices,
+  );
+  equal(
+    "the void draws no face where a block covers it",
+    fingerprint(concat(boxedVoided.voidPieces)),
+    fingerprint(concat(emptyVoided.voidPieces)),
+  );
+
+  /*
+   * Glass, on the other hand, does *not* cover it: its texture is not opaque,
+   * so the water behind it is drawn and has to be. The pair is what stops the
+   * check above from passing for the wrong reason -- a void layer that culled
+   * against everything would satisfy it just as well, and would put a hole in
+   * the water behind every pane in the build.
+   */
+  const glazed = createDocument({ width: 4, height: 4, length: 4 });
+  setBlock(glazed, 1, 1, 1, GLASS);
+  const glazedFilled = fillVoid(toStructureData(glazed), "minecraft:water");
+  const glazedVoided = await buildChunkedMesh(
+    glazedFilled.structure,
+    baker,
+    atlas.uvRects,
+    1,
+    createChunkMeshCache(),
+    null,
+    null,
+    glazedFilled.voidIndices,
+  );
+  check(
+    "...but does draw one behind something see-through",
+    concat(glazedVoided.voidPieces).indices.length >
+      concat(emptyVoided.voidPieces).indices.length,
+  );
+}
+
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exitCode = failures === 0 ? 0 : 1;

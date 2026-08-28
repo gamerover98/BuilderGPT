@@ -1815,6 +1815,59 @@ console.log("\n--- bounds cage ---");
   );
 }
 
+// --- a click passes through the void ----------------------------------------
+//
+// Empty space made of water is only usable if the pointer ignores it. The rule
+// is one object: every raycast in the viewer names `loaded`, so the void living
+// in a group beside it is the whole of what makes a click reach the build
+// inside. Checked by reading the source, because `Mesh.raycast` runs from the
+// rendering steps and this harness composites no frames.
+console.log("\n--- the void block ---");
+{
+  const viewer = readFileSync(path.join(RENDERER, "lib", "Viewer.svelte"), "utf8");
+
+  check("the void has a group of its own", viewer.includes("voidLoaded"));
+  const casts = viewer.match(/raycaster\.intersectObjects?\([^)]*\)/g) ?? [];
+  check("there are raycasts to check", casts.length > 0);
+  check(
+    "none of them reaches it",
+    casts.every((cast) => !cast.includes("voidLoaded")),
+    casts.join(" | "),
+  );
+
+  /*
+   * Two layers of one chunk are two meshes under one number, so the map has to
+   * be keyed on the pair. Keyed on the number alone a void chunk would evict
+   * the solid chunk beside it, and the build would develop holes wherever
+   * there was empty space next to it -- a delta only, so it would appear on
+   * the second edit and not the first.
+   */
+  check("chunk meshes are keyed by layer as well as key", /chunkMeshes = new Map<string,/.test(viewer));
+  check("...through one place that decides the id", viewer.includes("function meshId("));
+
+  /*
+   * A material of its own is not a nicety: the opacity is a material property,
+   * and it is what forces the separate object that buys the picking rule.
+   */
+  check("the void draws with a material of its own", viewer.includes("function ensureVoidMaterial"));
+  check("...whose opacity is the setting", /voidMaterial\.opacity = voidOpacity/.test(viewer));
+
+  /*
+   * And it casts no shadow. A document-sized volume of it would put the whole
+   * build in its own shade -- and it is not there in the sense a shadow means.
+   */
+  /*
+   * Both places that build a chunk mesh, counted rather than found.
+   *
+   * There are two -- the full build and the delta -- and a check that merely
+   * *finds* the rule passes while one of them has lost it. That is the shape
+   * of the fault this would be: the shadow appears only after an edit, and
+   * only in the chunk the edit touched.
+   */
+  const shadowed = viewer.match(/mesh\.(?:cast|receive)Shadow = !isVoid/g) ?? [];
+  equal("neither place lets the void cast a shadow", shadowed.length, 4);
+}
+
 // --- undo that reaches the selection ---------------------------------------
 //
 // Ctrl+Z used to reach only the main process, because only the main process had

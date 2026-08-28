@@ -893,6 +893,10 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       try {
         const { settings } = request;
         const session = requireSession();
+        // The void block lives in `editing` rather than `preview`, because it
+        // is written into the file as well as drawn -- so it comes from the
+        // store rather than from the payload the renderer sent.
+        const stored = await getSettings();
         const mesh = await documentMesh(
           session,
           {
@@ -900,6 +904,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
             fallbackResourcePackPath: await defaultResourcePackPath(),
             biomeColor: settings.biomeColor,
             showMarkers: settings.showMarkers,
+            voidBlock: stored.editing.voidBlock,
             waterColor: settings.waterColor,
             blockLight: settings.blockLight,
             occlusion: settings.ambientOcclusion,
@@ -931,6 +936,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       const settings = await getSettings();
       const changed = applyEdit(session, request, {
         autoGrow: settings.editing.autoGrow,
+        voidBlock: settings.editing.voidBlock,
       });
       return { ok: true, changed, state: shellState(session) };
     } catch (err) {

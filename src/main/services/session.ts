@@ -16,6 +16,8 @@ import path from "path";
 
 import type {
   ChunkGeometry,
+  ChunkLayer,
+  ChunkRef,
   DocumentState,
   EditRequest,
   MeshPayload,
@@ -110,7 +112,7 @@ export interface DocumentSession {
    * know at all -- and the token means a wrong guess costs a full payload
    * rather than a wrong picture.
    */
-  sent?: { token: string; chunks: Map<number, Float32Array> } | null;
+  sent?: { token: string; chunks: Map<string, Float32Array> } | null;
 }
 
 let current: DocumentSession | null = null;
@@ -496,6 +498,18 @@ function twoPartPlacement(
 export interface EditOptions {
   /** Default true, which is what the editor did before there was a setting. */
   autoGrow?: boolean;
+  /**
+   * What a break writes instead of air, when somebody has chosen one.
+   *
+   * Needed here for one rule and one only: **breaking never grows.** That
+   * guard reads `namespacedName === "minecraft:air"`, which was the whole
+   * of what a break was until empty space could be made of water. Left
+   * alone, the rule would go on being true of the word `air` while
+   * quietly ceasing to be true of *breaking*, and nothing would fail --
+   * because a break comes from a pick, so the block exists and the case
+   * never arises. Which is exactly why it is written down.
+   */
+  voidBlock?: string;
 }
 
 export function applyEdit(
@@ -505,6 +519,8 @@ export function applyEdit(
 ): number {
   const { doc, history } = session;
   const mayGrow = options.autoGrow !== false;
+  const emptiness = (block: string): boolean =>
+    block === "minecraft:air" || (options.voidBlock !== undefined && options.voidBlock !== "" && block === options.voidBlock);
 
   /*
    * Placing one block grows the document, exactly as filling does.
@@ -580,8 +596,7 @@ export function applyEdit(
      * the day something does, the failure would be a document that quietly got
      * larger.
      */
-    const wanted =
-      entry.namespacedName === "minecraft:air" ? null : growthToInclude(doc, cell);
+    const wanted = emptiness(entry.namespacedName) ? null : growthToInclude(doc, cell);
     // Refused rather than clipped: see `OutsideDocumentError`. A break is
     // exempt because it never wanted to grow in the first place, so with
     // auto-grow off it goes on doing exactly what it did before.
@@ -1019,6 +1034,9 @@ export async function documentMesh(
     options.blockLight === false ? "flat" : "lit",
     options.occlusion === false ? "open" : "ao",
     options.smoothLighting === false ? "flat-light" : "smooth",
+    // And once more: the void block is drawn into the geometry and moves
+    // no revision, so the same stale mesh would come back after changing it.
+    options.voidBlock ?? "",
   ].join("|");
 
   const cached = session.mesh !== null && session.mesh.key === key;
@@ -1056,6 +1074,25 @@ export async function documentMesh(
  * payload, which is the right failure: everything is a correct answer to
  * everything, and only the size varies.
  */
+/**
+ * The two numbers that identify a chunk's geometry, as one string.
+ *
+ * A composite key rather than a nested map because the only thing done
+ * with it is equality, and `refOfChunkId` next door is what keeps it from
+ * being a one-way encoding nobody can read back.
+ */
+function chunkId(chunk: { key: number; layer: ChunkLayer }): string {
+  return `${chunk.layer}:${chunk.key}`;
+}
+
+function refOfChunkId(id: string): ChunkRef {
+  const cut = id.indexOf(":");
+  return {
+    layer: id.slice(0, cut) as ChunkLayer,
+    key: Number(id.slice(cut + 1)),
+  };
+}
+
 function shipMesh(
   session: DocumentSession,
   token: string,
@@ -1074,19 +1111,30 @@ function shipMesh(
   const incremental =
     sent !== null && sent.chunks.size > 0 && held.mesh !== null && held.mesh === sent.token;
 
+  /*
+   * Identity is per (layer, key), not per key.
+   *
+   * The two layers of one chunk are different geometry under one number,
+   * and they move in opposite directions: breaking the last block in a
+   * chunk empties its solid layer and fills its void one. Keyed on the
+   * number alone, one of the two would stand in for the other and the
+   * renderer would be told nothing changed.
+   */
   const chunks = incremental
-    ? payload.chunks.filter((chunk) => sent!.chunks.get(chunk.key) !== chunk.positions)
+    ? payload.chunks.filter((chunk) => sent!.chunks.get(chunkId(chunk)) !== chunk.positions)
     : payload.chunks;
 
-  let dropped: number[] = [];
+  let dropped: ChunkRef[] = [];
   if (incremental) {
-    const present = new Set(payload.chunks.map((chunk) => chunk.key));
-    dropped = [...sent!.chunks.keys()].filter((chunkKey) => !present.has(chunkKey));
+    const present = new Set(payload.chunks.map(chunkId));
+    dropped = [...sent!.chunks.keys()]
+      .filter((id) => !present.has(id))
+      .map(refOfChunkId);
   }
 
   session.sent = {
     token,
-    chunks: new Map(payload.chunks.map((chunk) => [chunk.key, chunk.positions])),
+    chunks: new Map(payload.chunks.map((chunk) => [chunkId(chunk), chunk.positions])),
   };
 
   return {

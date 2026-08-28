@@ -25,6 +25,8 @@ import {
   PROVIDERS,
   SIDEBAR_WIDTH,
   THEMES,
+  DEFAULT_EDITING_SETTINGS,
+  VOID_OPACITY,
   type EditingSettings,
   type Language,
   type McpSettings,
@@ -159,7 +161,29 @@ export function coerceEditing(raw: unknown): EditingSettings {
     // setting -- so `!== false` rather than `=== true`: an absent value has
     // to mean the old behaviour, not the safe-looking one.
     autoGrow: source.autoGrow !== false,
+    /*
+     * Air is stored as the empty string, and an id that *says* air is
+     * healed into it rather than kept.
+     *
+     * Two spellings of the same state is how they come to disagree: one of
+     * them would make `fillVoid` intern air over air and hand the mesher a
+     * palette full of void indices that draw nothing, which is the
+     * expensive way of doing exactly what the default already does.
+     */
+    voidBlock: voidBlock(source.voidBlock),
+    voidOpacity: opacity(source.voidOpacity),
   };
+}
+
+function voidBlock(raw: unknown): string {
+  const value = typeof raw === "string" ? raw.trim() : "";
+  return value === "" || isAir(value) ? "" : value;
+}
+
+function opacity(raw: unknown): number {
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return DEFAULT_EDITING_SETTINGS.voidOpacity;
+  return Math.min(VOID_OPACITY.max, Math.max(VOID_OPACITY.min, value));
 }
 
 export function coerceMcp(raw: unknown): McpSettings {

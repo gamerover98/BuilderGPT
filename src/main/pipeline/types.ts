@@ -191,6 +191,21 @@ export interface BakedFace {
    * viewport did before any of this existed.
    */
   readonly shade?: Float32Array;
+  /**
+   * True when this face belongs to a cell holding the *void block* -- the
+   * thing standing in for empty space.
+   *
+   * Carried on the face because that is the only place the answer is known:
+   * `culledFaces` has the cell and the palette index, and by the time the
+   * geometry reaches `buildMesh` there is nothing left but triangles. The
+   * two layers are then built separately, which is what gives the void its
+   * own material -- opacity is a material property -- and what keeps it out
+   * of the raycaster, since three tests a whole object and ignores groups.
+   *
+   * Absent means the ordinary structure, which is every face until somebody
+   * chooses a void block.
+   */
+  readonly voidFill?: boolean;
 }
 
 /** Ported from `BakedFace.offset` (`types.py:83-89`). */

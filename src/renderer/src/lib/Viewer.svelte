@@ -64,6 +64,7 @@ import {
     type PlacementLook,
   } from "../../../shared/block_orientation.js";
   import type { Projection } from "../../../shared/settings.js";
+  import type { ChunkLayer } from "../../../shared/ipc.js";
   import {
     axisAt,
     COMPASS_AXES,
@@ -183,6 +184,14 @@ import { isTyping } from "./typing.js";
      * there is no way to see how much room is left except by running out.
      */
     showBounds?: boolean;
+    /**
+     * How solid the void block looks, 0 to 1.
+     *
+     * Which block it *is* never reaches here: main draws it into the
+     * geometry and marks the chunks, so this side only has to know how to
+     * paint them.
+     */
+    voidOpacity?: number;
     showGrid: boolean;
     wireframe: boolean;
     /**
@@ -324,6 +333,7 @@ import { isTyping } from "./typing.js";
     maxDrawDistance,
     projection = "perspective",
     showBounds = false,
+    voidOpacity = 0.4,
     showGrid,
     wireframe,
     sky,
@@ -373,6 +383,7 @@ import { isTyping } from "./typing.js";
   let textureVersion = -1;
   let material: THREE.MeshStandardMaterial | undefined;
   let blended: THREE.MeshStandardMaterial | undefined;
+  let voidMaterial: THREE.MeshStandardMaterial | undefined;
 
   /** The block outline under the pointer or the crosshair; see `updateBlockHighlight`. */
   let highlight: THREE.LineSegments | undefined;
@@ -764,6 +775,15 @@ import { isTyping } from "./typing.js";
    */
   const daylight = { value: 1 };
   let loaded: THREE.Object3D | null = null;
+  /**
+   * The void layer, beside `loaded` and never inside it.
+   *
+   * Every raycast in this file names `loaded`, so keeping the void out of it
+   * is the whole of what makes a click pass through the block standing in for
+   * empty space. A group rather than a flag on the meshes, because
+   * `Mesh.raycast` knows nothing about flags either.
+   */
+  let voidLoaded: THREE.Object3D | null = null;
   /** When the pointer lock was taken, for the look filter below. */
   let lockedAt = 0;
   let selectionBox: THREE.LineSegments | undefined;
@@ -2542,6 +2562,7 @@ import { isTyping } from "./typing.js";
         disposeSky();
         ghostMaterial?.dispose();
         if (loaded) disposeObject(loaded);
+      if (voidLoaded) disposeObject(voidLoaded);
         // Shared, so nothing above frees them.
         material?.dispose();
         texture?.dispose();
@@ -2693,6 +2714,12 @@ import { isTyping } from "./typing.js";
 
   $effect(() => {
     if (bounds) bounds.visible = showBounds;
+  });
+
+  // Applied live rather than re-meshed: it is a material property, and the
+  // geometry does not care how see-through it is drawn.
+  $effect(() => {
+    if (voidMaterial) voidMaterial.opacity = voidOpacity;
   });
 
   $effect(() => {
@@ -2929,6 +2956,45 @@ import { isTyping } from "./typing.js";
   }
 
   /**
+   * The third material: the block standing in for empty space.
+   *
+   * A material of its own is not a nicety -- opacity is a material property,
+   * and the void has to be see-through while the same block placed as part of
+   * the build does not. That it then needs an *object* of its own is what
+   * buys the rule underneath the whole feature: `Mesh.raycast` tests a whole
+   * geometry and knows nothing about draw groups, so only a separate object
+   * can be left out of the pick.
+   *
+   * `depthWrite` is **off**, which is the opposite of the blended material's
+   * choice and for the opposite reason. Water in a pond is a surface and
+   * should hide the sand beyond it; the void is the medium you are working
+   * *inside*, and a shell of it that wrote depth would hide the build it is
+   * wrapped around.
+   *
+   * Same `shadeWithBakedLight` as the other two, or the void would be the
+   * one surface in the viewport that ignored the sun.
+   */
+  function ensureVoidMaterial(texture: THREE.Texture): THREE.MeshStandardMaterial {
+    if (!voidMaterial) {
+      voidMaterial = new THREE.MeshStandardMaterial({
+        map: texture,
+        metalness: 0,
+        roughness: 1,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        vertexColors: true,
+      });
+      shadeWithBakedLight(voidMaterial);
+    } else if (voidMaterial.map !== texture) {
+      voidMaterial.map = texture;
+      voidMaterial.needsUpdate = true;
+    }
+    voidMaterial.opacity = voidOpacity;
+    return voidMaterial;
+  }
+
+  /**
    * Teaches a material to read the light main baked into the vertices.
    *
    * The vertex colour is not a colour: r is block light, g is sky light and b
@@ -3091,8 +3157,14 @@ import { isTyping } from "./typing.js";
     }
   }
 
-  /** Which chunk each mesh under `loaded` is, so a delta can find it. */
-  const chunkMeshes = new Map<number, THREE.Mesh>();
+  /**
+   * Which chunk each mesh is, so a delta can find it.
+   *
+   * Keyed on layer *and* key: the two layers of one chunk are different
+   * geometry under one number, so a map keyed on the number alone would have
+   * a void chunk evict the solid chunk beside it.
+   */
+  const chunkMeshes = new Map<string, THREE.Mesh>();
 
   function chunkMesh(chunk: ChunkGeometry, materials: THREE.Material[]): THREE.Mesh {
     const geometry = new THREE.BufferGeometry();
@@ -3124,19 +3196,49 @@ import { isTyping } from "./typing.js";
     return new THREE.Mesh(geometry, materials);
   }
 
-  /** One mesh per chunk, under a group the rest of the viewer treats as before. */
-  function buildModel(payload: MeshPayload, texture: THREE.Texture): THREE.Group {
-    const group = new THREE.Group();
+  /**
+   * Two chunks of one number are two meshes, so the map is keyed on the pair.
+   *
+   * Keyed on the number alone, a void chunk arriving would evict the solid
+   * chunk of the same key and the build would develop holes wherever there
+   * was empty space beside it.
+   */
+  function meshId(chunk: { key: number; layer: ChunkLayer }): string {
+    return `${chunk.layer}:${chunk.key}`;
+  }
+
+  /**
+   * One mesh per chunk, split into the group that is picked and the one that
+   * is not.
+   *
+   * `solid` is what every raycast in this file tests, unchanged. `filler` is
+   * the void block: drawn, lit, shadowed by nothing, and invisible to the
+   * pointer -- which is what makes a click pass through it exactly as it
+   * passes through air.
+   */
+  function buildModel(
+    payload: MeshPayload,
+    texture: THREE.Texture,
+  ): { solid: THREE.Group; filler: THREE.Group } {
+    const solid = new THREE.Group();
+    const filler = new THREE.Group();
     const shared = [ensureMaterial(texture), ensureBlendedMaterial(texture)];
+    const voidShared = [ensureVoidMaterial(texture), ensureVoidMaterial(texture)];
     chunkMeshes.clear();
     for (const chunk of payload.chunks) {
-      const mesh = chunkMesh(chunk, shared);
-      chunkMeshes.set(chunk.key, mesh);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      group.add(mesh);
+      const isVoid = chunk.layer === "void";
+      const mesh = chunkMesh(chunk, isVoid ? voidShared : shared);
+      chunkMeshes.set(meshId(chunk), mesh);
+      /*
+       * The void casts no shadow and receives none. A document-sized volume
+       * of it would put the whole build in its own shade, and it is not
+       * there in the sense a shadow means.
+       */
+      mesh.castShadow = !isVoid;
+      mesh.receiveShadow = !isVoid;
+      (isVoid ? filler : solid).add(mesh);
     }
-    return group;
+    return { solid, filler };
   }
 
   /**
@@ -3148,26 +3250,36 @@ import { isTyping } from "./typing.js";
    * whole group from a partial payload would draw three chunks and nothing
    * else, so `partial` is a fact the renderer has to honour, not a hint.
    */
-  function applyDelta(group: THREE.Object3D, payload: MeshPayload, texture: THREE.Texture): void {
+  function applyDelta(
+    solid: THREE.Object3D,
+    filler: THREE.Object3D,
+    payload: MeshPayload,
+    texture: THREE.Texture,
+  ): void {
     const shared = [ensureMaterial(texture), ensureBlendedMaterial(texture)];
-    for (const key of payload.dropped) {
-      const gone = chunkMeshes.get(key);
+    const voidShared = [ensureVoidMaterial(texture), ensureVoidMaterial(texture)];
+    const groupFor = (layer: ChunkLayer): THREE.Object3D => (layer === "void" ? filler : solid);
+    for (const ref of payload.dropped) {
+      const id = meshId(ref);
+      const gone = chunkMeshes.get(id);
       if (!gone) continue;
-      group.remove(gone);
+      groupFor(ref.layer).remove(gone);
       gone.geometry.dispose();
-      chunkMeshes.delete(key);
+      chunkMeshes.delete(id);
     }
     for (const chunk of payload.chunks) {
-      const existing = chunkMeshes.get(chunk.key);
+      const id = meshId(chunk);
+      const isVoid = chunk.layer === "void";
+      const existing = chunkMeshes.get(id);
       if (existing) {
-        group.remove(existing);
+        groupFor(chunk.layer).remove(existing);
         existing.geometry.dispose();
       }
-      const mesh = chunkMesh(chunk, shared);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      chunkMeshes.set(chunk.key, mesh);
-      group.add(mesh);
+      const mesh = chunkMesh(chunk, isVoid ? voidShared : shared);
+      mesh.castShadow = !isVoid;
+      mesh.receiveShadow = !isVoid;
+      chunkMeshes.set(id, mesh);
+      groupFor(chunk.layer).add(mesh);
     }
   }
 
@@ -3274,8 +3386,13 @@ import { isTyping } from "./typing.js";
         scene.remove(loaded);
         disposeObject(loaded, { keepMaterials: true });
         loaded = null;
-        chunkMeshes.clear();
       }
+      if (voidLoaded) {
+        scene.remove(voidLoaded);
+        disposeObject(voidLoaded, { keepMaterials: true });
+        voidLoaded = null;
+      }
+      chunkMeshes.clear();
       error = null;
       return;
     }
@@ -3288,6 +3405,7 @@ import { isTyping } from "./typing.js";
      * the swap happens inside a single frame.
      */
     const previous = loaded;
+    const previousVoid = voidLoaded;
     try {
       if (payload.atlas === null && texture === undefined) {
         // Main only omits the atlas when the renderer is known to hold it.
@@ -3304,20 +3422,23 @@ import { isTyping } from "./typing.js";
        * incrementally to a token it issued -- but the check costs nothing and
        * the failure it prevents is a structure with holes in it.
        */
-      if (payload.partial && previous !== null) {
-        applyDelta(previous, payload, map);
+      if (payload.partial && previous !== null && previousVoid !== null) {
+        applyDelta(previous, previousVoid, payload, map);
         applyWireframe(previous, wireframe);
         error = null;
         return;
       }
       const built = buildModel(payload, map);
-      if (previous) {
-        target.remove(previous);
-        disposeObject(previous, { keepMaterials: true });
+      for (const gone of [previous, previousVoid]) {
+        if (!gone) continue;
+        target.remove(gone);
+        disposeObject(gone, { keepMaterials: true });
       }
-      loaded = built;
-      target.add(built);
-      applyWireframe(built, wireframe);
+      loaded = built.solid;
+      voidLoaded = built.filler;
+      target.add(built.solid);
+      target.add(built.filler);
+      applyWireframe(built.solid, wireframe);
       error = null;
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);

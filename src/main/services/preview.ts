@@ -28,7 +28,12 @@ import {
   type PreviewSettings,
 } from "../../shared/settings.js";
 import { buildAtlas } from "../pipeline/atlas.js";
-import type { AtlasAnimation, MeshPayload } from "../../shared/ipc.js";
+import type {
+  AtlasAnimation,
+  ChunkGeometry,
+  ChunkLayer,
+  MeshPayload,
+} from "../../shared/ipc.js";
 import { loadStructure } from "../pipeline/loader.js";
 import type { SchematicFormat } from "../pipeline/loader_formats.js";
 import { buildMesh, culledFaces } from "../pipeline/mesher.js";
@@ -42,6 +47,7 @@ import {
   type PaletteEntry,
   type StructureData,
 } from "../pipeline/types.js";
+import { parsePaletteEntry } from "../pipeline/loader_formats.js";
 import { getBlock, toStructureData, type SchematicDocument } from "../domain/document.js";
 import { breathe } from "./breathing.js";
 import {
@@ -165,17 +171,29 @@ function toMeshPayload(
   atlas: ReturnType<typeof buildAtlas>,
   version: number,
   animations: Readonly<Record<string, TextureAnimation>>,
+  voidPieces: readonly MeshBuffers[] = [],
+  voidKeys: readonly number[] = [],
 ): MeshPayload {
-  return {
-    chunks: pieces.map((piece, index) => ({
-      key: keys[index] ?? 0,
+  const geometry = (
+    buffers: readonly MeshBuffers[],
+    from: readonly number[],
+    layer: ChunkLayer,
+  ): ChunkGeometry[] =>
+    buffers.map((piece, index) => ({
+      key: from[index] ?? 0,
+      layer,
       positions: piece.positions,
       normals: piece.normals,
       uvs: piece.uvs,
       indices: piece.indices,
       light: piece.light,
       opaqueIndices: piece.opaqueIndices,
-    })),
+    }));
+  return {
+    chunks: [
+      ...geometry(pieces, keys, "solid"),
+      ...geometry(voidPieces, voidKeys, "void"),
+    ],
     // A whole payload says what exists by listing it; there is nothing left
     // over to take down, and no token because nothing here is incremental.
     dropped: [],
@@ -228,6 +246,7 @@ function cacheKey(
   biomeColor: string,
   waterColor: string,
   showMarkers: boolean,
+  voidBlock: string,
 ): string {
   const hash = createHash("sha256");
   hash.update(schemBytes);
@@ -241,6 +260,7 @@ function cacheKey(
   // this key would notice, so a preview cached with markers shown would be
   // handed back to a caller that asked for them hidden.
   hash.update(showMarkers ? "markers" : "no-markers");
+  hash.update(voidBlock);
   hash.update(SEPARATOR);
   // The pack paths, not their bytes: the bundled pack is 17 MB and hashing it
   // on every preview would cost more than the mesh build this cache exists to
@@ -469,6 +489,9 @@ export async function buildPreview(options: BuildPreviewOptions): Promise<BuildP
     biomeColor,
     waterColor,
     showMarkers,
+    // This path draws a *file* and never a document, so there is no editing
+    // session for a void block to belong to.
+    "",
   );
   const hit = cache.get(key);
   if (hit) {
@@ -562,6 +585,13 @@ export interface DocumentPreviewOptions {
    * vanilla looks like with the setting off.
    */
   smoothLighting?: boolean;
+  /**
+   * What to draw empty space as. Empty means air, and nothing changes.
+   *
+   * The mesher's, like the two tints and `showMarkers`: it changes the
+   * geometry without moving `doc.revision`, so it is part of the cache key.
+   */
+  voidBlock?: string;
 
   /*
    * Both are part of the mesh cache key, for the same reason the two tints
@@ -596,6 +626,52 @@ function hideMarkers(structure: StructureData): StructureData {
   return touched ? { ...structure, palette } : structure;
 }
 
+/**
+ * Empty space made of something other than air.
+ *
+ * Done here rather than in the baker for `hideMarkers`' reason, and by that
+ * function's mechanism inverted: it rewrites the *air* palette entry into
+ * the chosen block, so every empty cell in the document becomes a cell of
+ * water without a single voxel being touched. Index 0 is always air
+ * (`domain/document.ts` guarantees it), which is what makes the swap a
+ * one-entry edit rather than a pass over millions of cells.
+ *
+ * It returns **which palette indices are the void**, and that set is the
+ * whole reason this is more than a palette swap. Two populations end up
+ * holding the block: the cells drawn over air, and the cells a break
+ * actually wrote it into. One rule covers both -- *any cell holding the
+ * void block is void* -- which is why the answer is keyed on the palette
+ * rather than on whether a cell used to be air.
+ *
+ * The consequence is worth stating before it is reported as a bug: with
+ * water as the void block, water placed by hand is unpickable too. That is
+ * the request rather than a side effect -- if water is what empty space is
+ * made of, a click has to pass through it the way it passes through air.
+ */
+export function fillVoid(
+  structure: StructureData,
+  block: string,
+): { structure: StructureData; voidIndices: ReadonlySet<number> } {
+  const wanted = block.trim();
+  if (wanted === "") return { structure, voidIndices: new Set() };
+  const entry = parsePaletteEntry(wanted);
+  if (paletteEntryIsAir(entry)) return { structure, voidIndices: new Set() };
+
+  const key = paletteEntryCacheKey(entry);
+  const voidIndices = new Set<number>();
+  const palette = structure.palette.map((existing, index) => {
+    if (paletteEntryIsAir(existing)) {
+      voidIndices.add(index);
+      return entry;
+    }
+    if (paletteEntryCacheKey(existing) === key) voidIndices.add(index);
+    return existing;
+  });
+  // The voxels are shared with the document on purpose; only the palette
+  // is rebuilt, and only when there is something to rewrite.
+  return { structure: { ...structure, palette }, voidIndices };
+}
+
 export interface DocumentPreviewResult extends PreviewResult {
   /** Hand this back on the next call to re-mesh only what changed. */
   meshCache: ChunkMeshCache;
@@ -628,8 +704,10 @@ export async function buildDocumentPreview(
     options.biomeColor ?? DEFAULT_BIOME_COLOR,
     options.waterColor ?? DEFAULT_WATER_COLOR,
   );
-  const structure =
+  const visible =
     options.showMarkers === false ? hideMarkers(toStructureData(doc)) : toStructureData(doc);
+  const filled = fillVoid(visible, options.voidBlock ?? "");
+  const structure = filled.structure;
 
   /*
    * The atlas has to exist before the chunks are meshed, because their UVs
@@ -654,8 +732,18 @@ export async function buildDocumentPreview(
    * diffs the result and re-meshes whatever the light actually reached, which
    * is how placing a torch relights the room and nothing else.
    */
+  /*
+   * Light is flooded through the document *without* the void block in it.
+   *
+   * `lighting.ts` floods from `occludesNeighbours`, so a void block that
+   * happens to be solid -- barrier, stone, anything somebody tries -- would
+   * seal every empty cell and take the light out of the whole schematic.
+   * The build would go black and the cause would be a dropdown two panels
+   * away. The void is a way of seeing the space; it does not get to decide
+   * how lit the space is.
+   */
   const shading = {
-    light: options.blockLight === false ? null : computeLight(structure),
+    light: options.blockLight === false ? null : computeLight(visible),
     occlusion: options.occlusion !== false,
     smooth: options.smoothLighting !== false,
   };
@@ -668,6 +756,7 @@ export async function buildDocumentPreview(
     meshCache ?? createChunkMeshCache(),
     shading,
     signs,
+    filled.voidIndices,
   );
   await warnAboutBlocksWithNoGeometry(structure, cached.baker, new Set(Object.keys(atlas.uvRects)));
   if (chunked.buffers.indices.length === 0) {
@@ -675,7 +764,15 @@ export async function buildDocumentPreview(
   }
   const bounds = boundsOf(chunked.pieces);
   return {
-    mesh: toMeshPayload(chunked.pieces, chunked.pieceKeys, atlas, version, cached.baker.animations),
+    mesh: toMeshPayload(
+      chunked.pieces,
+      chunked.pieceKeys,
+      atlas,
+      version,
+      cached.baker.animations,
+      chunked.voidPieces,
+      chunked.voidPieceKeys,
+    ),
     center: bounds.center,
     size: bounds.size,
     meshCache: chunked.cache,

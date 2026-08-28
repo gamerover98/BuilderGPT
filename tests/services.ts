@@ -113,11 +113,13 @@ import {
   shiftRegion,
 } from "../src/main/domain/grow.js";
 import {
+  DEFAULT_EDITING_SETTINGS,
   DEFAULT_HOTBAR,
   DEFAULT_MCP_SETTINGS,
   DEFAULT_SETTINGS,
   DEFAULT_UI_SETTINGS,
   SIDEBAR_WIDTH,
+  VOID_OPACITY,
   type EditingSettings,
   type McpSettings,
   type Settings,
@@ -1396,6 +1398,8 @@ console.log("\n--- settings coercion ---");
   // round-trip written with the default in it.
   const editing = {
     autoGrow: false,
+    voidBlock: "minecraft:lava",
+    voidOpacity: 0.75,
   } satisfies EditingSettings;
 
   equal("every editing field survives a round-trip", coerceEditing(editing), editing);
@@ -1414,6 +1418,59 @@ console.log("\n--- settings coercion ---");
     "...while an explicit false is honoured",
     coerceEditing({ autoGrow: false }).autoGrow,
     false,
+  );
+
+  /*
+   * Air is the empty string, and an id that *says* air is healed into it.
+   *
+   * Two spellings of one state is how they come to disagree: `fillVoid`
+   * would intern air over air and hand the mesher a palette where every
+   * index is void and none of them draws anything -- the expensive way of
+   * doing precisely what the default already does for free.
+   */
+  for (const spelling of [
+    "minecraft:air",
+    "air",
+    "  minecraft:air  ",
+  ]) {
+    equal(
+      `${JSON.stringify(spelling)} is stored as no void block at all`,
+      coerceEditing({ voidBlock: spelling }).voidBlock,
+      "",
+    );
+  }
+  equal(
+    "a real block survives, trimmed",
+    coerceEditing({ voidBlock: "  minecraft:water  " }).voidBlock,
+    "minecraft:water",
+  );
+  equal(
+    "...and so does one carrying a state",
+    coerceEditing({ voidBlock: "minecraft:water[level=0]" }).voidBlock,
+    "minecraft:water[level=0]",
+  );
+
+  /*
+   * Never zero. A void block drawn at nothing is a void block that is not
+   * there, and the control for that is choosing air -- so a slider that
+   * could reach zero would be a second, silent way of turning the feature
+   * off, with the block still being written into the file.
+   */
+  check("opacity never reaches zero", coerceEditing({ voidOpacity: 0 }).voidOpacity > 0);
+  equal(
+    "...nor past full",
+    coerceEditing({ voidOpacity: 4 }).voidOpacity,
+    VOID_OPACITY.max,
+  );
+  equal(
+    "junk falls back to the default",
+    coerceEditing({ voidOpacity: "quite" }).voidOpacity,
+    DEFAULT_EDITING_SETTINGS.voidOpacity,
+  );
+  equal(
+    "a missing editing block is air",
+    coerceEditing(undefined).voidBlock,
+    "",
   );
 
   const settings = {

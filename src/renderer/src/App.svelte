@@ -22,6 +22,7 @@
   import InspectorPanel from "./lib/InspectorPanel.svelte";
   import AnchorModal from "./lib/AnchorModal.svelte";
   import DimensionsModal from "./lib/DimensionsModal.svelte";
+import VoidBlockModal from "./lib/VoidBlockModal.svelte";
 import NbtModal from "./lib/NbtModal.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
   import SelectionTools from "./lib/SelectionTools.svelte";
@@ -504,6 +505,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   let framingEpoch = $state(0);
 
   let dimensionsOpen = $state(false);
+  let voidOpen = $state(false);
   let dimensionsError = $state("");
   /**
    * Whether main has already refused this resize for losing blocks.
@@ -536,9 +538,19 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   ): Promise<void> {
     if (busy) return;
     const held = parseBlock(placingBlock);
+    /*
+     * Breaking writes the *void block*, which is air unless somebody chose
+     * otherwise.
+     *
+     * The point of choosing otherwise: an underwater build wants water in
+     * the cell a block came out of, because that is what the game would
+     * leave there and what the file has to say for the paste to come out
+     * right. Parsed like any other id, so `minecraft:water[level=0]` is a
+     * thing somebody can type.
+     */
     const block =
       action === "break"
-        ? { namespacedName: "minecraft:air" }
+        ? parseBlock(settings.editing.voidBlock || "minecraft:air")
         : {
             ...held,
             properties: {
@@ -3157,6 +3169,19 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   onpickmcproot={() => pick("mcp-root")}
 />
 
+<VoidBlockModal
+  open={voidOpen}
+  block={settings.editing.voidBlock}
+  opacity={settings.editing.voidOpacity}
+  {busy}
+  blocks={blockRegistry}
+  onblock={(voidBlock) =>
+    void patchSettings({ editing: { ...settings.editing, voidBlock } })}
+  onopacity={(voidOpacity) =>
+    void patchSettings({ editing: { ...settings.editing, voidOpacity } })}
+  onclose={() => (voidOpen = false)}
+/>
+
 <DimensionsModal
   open={docState !== null && dimensionsOpen}
   size={docState?.size ?? [1, 1, 1]}
@@ -3304,6 +3329,15 @@ import VersionsModal from "./lib/VersionsModal.svelte";
       title={t("dimensions.openHint")}
     >
       {t("dimensions.open")}
+    </button>
+
+    <button
+      class="nbt-open"
+      disabled={docState === null}
+      onclick={() => (voidOpen = true)}
+      title={t("void.openHint")}
+    >
+      {t("void.open")}
     </button>
 
     <button
@@ -3664,6 +3698,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
       projection={settings.preview.projection}
       showGrid={settings.preview.showGrid}
       showBounds={settings.preview.showBounds}
+      voidOpacity={settings.editing.voidOpacity}
       wireframe={settings.preview.wireframe}
       sky={settings.preview.sky}
       {skyTextures}

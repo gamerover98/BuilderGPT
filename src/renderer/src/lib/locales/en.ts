@@ -127,6 +127,17 @@ export const en = {
   "viewport.orthographic": "2.5D",
   "viewport.compass": "Compass",
   "dimensions.open": "Dimensions",
+  "void.open": "Empty space",
+  "void.openHint": "What fills the cells nothing has been built in",
+  "void.title": "Empty space",
+  "void.hint":
+    "By default a schematic is full of air. Choose something else and breaking a block leaves it behind \u2014 which is what an underwater build needs the file to say. It is drawn over every empty cell, and the pointer passes straight through it.",
+  "void.presets": "Common choices",
+  "void.air": "Air",
+  "void.block": "Block",
+  "void.opacity": "Opacity \u2014 {percent}%",
+  "void.pickNote":
+    "Clicks pass through this block wherever it appears, including where you placed it by hand. That is what lets you reach the build inside it.",
   "dimensions.openHint": "How big the schematic is, and whether editing may change it",
   "dimensions.title": "Dimensions",
   "dimensions.size": "Size in blocks",

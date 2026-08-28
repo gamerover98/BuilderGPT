@@ -531,6 +531,23 @@ export interface PreviewRequest {
  * TypedArray — the rule in CLAUDE.md is about `Buffer`, a Node subclass that
  * arrives as a plain object, not about typed arrays in general.
  */
+/**
+ * Which of the two things a chunk's geometry is.
+ *
+ * `"solid"` is the schematic. `"void"` is the block standing in for empty
+ * space, which the viewer draws with a material of its own -- the opacity is
+ * a setting -- and, because that makes it a separate object, never hands to
+ * the raycaster. That is the whole of what the split buys: a click passes
+ * through the void exactly as it passes through air.
+ */
+export type ChunkLayer = "solid" | "void";
+
+/** One chunk of one layer, which is what the renderer keeps a mesh for. */
+export interface ChunkRef {
+  key: number;
+  layer: ChunkLayer;
+}
+
 export interface ChunkGeometry {
   /**
    * Which chunk of the document this is.
@@ -566,6 +583,13 @@ export interface ChunkGeometry {
    * putting them in the blended one would cost the sorting for nothing.
    */
   opaqueIndices: number;
+  /**
+   * Which layer this is. Absent is not possible on the wire, but the two
+   * share a `key` -- so the renderer keeps its meshes under the pair, and a
+   * payload that named only the key would have the void layer of a chunk
+   * silently replace its solid one.
+   */
+  layer: ChunkLayer;
 }
 
 /**
@@ -629,8 +653,12 @@ export interface MeshPayload {
   /**
    * Chunks that became empty and should be taken down. Only meaningful
    * alongside `partial` -- a full payload says what exists by listing it.
+   *
+   * Named by layer as well as by key, because the two layers of one chunk
+   * empty independently: breaking the last block in a chunk takes its solid
+   * geometry away and *adds* to its void geometry.
    */
-  dropped: number[];
+  dropped: ChunkRef[];
   /**
    * Whether `chunks` updates what the renderer holds or replaces it.
    *

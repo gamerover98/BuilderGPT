@@ -26,6 +26,7 @@ import {
   type DocumentState,
   type DocumentStateResponse,
   type EditRequest,
+  type ResizeRequest,
   type EditResponse,
   type GenerateRequest,
   type GenerateResponse,
@@ -111,6 +112,8 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docMesh, request) as Promise<DocumentMeshResponse>,
   applyEdit: (request: EditRequest) =>
     ipcRenderer.invoke(IPC.docApply, request) as Promise<EditResponse>,
+  resizeDocument: (request: ResizeRequest) =>
+    ipcRenderer.invoke(IPC.docResize, request) as Promise<EditResponse>,
   undo: () => ipcRenderer.invoke(IPC.docUndo) as Promise<EditResponse>,
   redo: () => ipcRenderer.invoke(IPC.docRedo) as Promise<EditResponse>,
   inspectBlock: (x: number, y: number, z: number) =>

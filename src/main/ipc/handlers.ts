@@ -20,6 +20,7 @@ import {
   type DocumentState,
   type DocumentStateResponse,
   type EditRequest,
+  type ResizeRequest,
   type EditResponse,
   type ChatState,
   type ConversationList,
@@ -76,6 +77,9 @@ import {
   type DocumentSession,
   adoptDocument,
   applyEdit,
+  OutsideDocumentError,
+  ResizeWouldLoseBlocksError,
+  resizeSession,
   closeDocument,
   copySelection,
   currentSession,
@@ -770,6 +774,14 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     if (err instanceof NoSaveTargetError || err instanceof EditTooLargeError) {
       return { ok: false, kind: "invalid-input", message: err.message };
     }
+    if (err instanceof ResizeWouldLoseBlocksError) {
+      // Its own kind, so the panel can offer to go ahead without reading the
+      // sentence. The message already names the count.
+      return { ok: false, kind: "needs-confirmation", message: err.message };
+    }
+    if (err instanceof OutsideDocumentError) {
+      return { ok: false, kind: "invalid-input", message: err.message };
+    }
     if (err instanceof UnrepresentableBlocksError) {
       // Its message already names the blocks and suggests .schem; wrapping it
       // would only bury the one thing the user needs to read.
@@ -913,12 +925,33 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   ipcMain.handle(IPC.docApply, async (_event, request: EditRequest): Promise<EditResponse> => {
     try {
       const session = requireSession();
-      const changed = applyEdit(session, request);
+      // Whether an edit outside the box may move the box is a setting, and
+      // main is where it has to be honoured -- `session.ts` may not read the
+      // store, which imports Electron and is out of the suites' reach.
+      const settings = await getSettings();
+      const changed = applyEdit(session, request, {
+        autoGrow: settings.editing.autoGrow,
+      });
       return { ok: true, changed, state: shellState(session) };
     } catch (err) {
       return failure(err);
     }
   });
+
+  ipcMain.handle(
+    IPC.docResize,
+    async (_event, request: ResizeRequest): Promise<EditResponse> => {
+      try {
+        const session = requireSession();
+        const changed = resizeSession(session, request, {
+          confirmLoss: request.confirmLoss === true,
+        });
+        return { ok: true, changed, state: shellState(session) };
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
 
   ipcMain.handle(IPC.docSetNbt, async (_event, request: SetNbtRequest): Promise<EditResponse> => {
     try {

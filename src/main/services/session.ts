@@ -69,6 +69,7 @@ export { NotSquareError, type RegionTransform };
 import { loadStructure } from "../pipeline/loader.js";
 import type { PaletteEntry } from "../pipeline/types.js";
 import { hasProperty } from "../../shared/block_states.js";
+import { DOCUMENT_SIZE } from "../../shared/settings.js";
 import { buildDocumentPreview, type DocumentPreviewOptions } from "./preview.js";
 import type { ChunkMeshCache } from "../pipeline/chunked_mesh.js";
 import { saveDocument, type WriteResult } from "./writers.js";
@@ -268,6 +269,46 @@ export class EditTooLargeError extends Error {
  */
 export const MAX_DOCUMENT_VOLUME = 32_000_000;
 
+/**
+ * The edit reached outside the box and the box is not allowed to move.
+ *
+ * Refused by name rather than clipped. Clipping is the failure this codebase
+ * already wrote down once: a fill asking for the universe quietly became a
+ * full fill of whatever was open, reported a healthy `changed`, and read as
+ * success. With auto-grow off the same silence would put the same edit
+ * against the wall of the box and say nothing about the part that fell off.
+ */
+export class OutsideDocumentError extends Error {
+  constructor() {
+    super(
+      "That reaches outside the schematic, and automatic resizing is off. Turn it back on in Dimensions, or set the size you want there first.",
+    );
+    this.name = "OutsideDocumentError";
+  }
+}
+
+/**
+ * A shrink that would destroy blocks, asked for without saying so.
+ *
+ * The refusal *is* the answer, which is `discard_prompt.ts`'s rule arrived at
+ * from a different direction: a warning shown after the blocks are gone is
+ * not a warning, and main cannot raise a dialog of its own for something that
+ * may not have come from a person at the keyboard. So it comes back counted,
+ * and the caller asks again with `confirmLoss`.
+ *
+ * The step is undoable either way -- `tx.resize` records what it dropped --
+ * so this is about not being surprised, not about being unable to recover.
+ */
+export class ResizeWouldLoseBlocksError extends Error {
+  constructor(public readonly blocks: number) {
+    super(
+      `That size leaves ${blocks.toLocaleString()} block${blocks === 1 ? "" : "s"} outside ` +
+        `the schematic, and they would be removed. Confirm to go ahead.`,
+    );
+    this.name = "ResizeWouldLoseBlocksError";
+  }
+}
+
 export class DocumentTooLargeError extends Error {
   constructor(volume: number) {
     super(
@@ -445,8 +486,25 @@ function twoPartPlacement(
  * The label is what the undo menu will say, so it is built from the request
  * rather than passed in: the renderer should not be able to mislabel history.
  */
-export function applyEdit(session: DocumentSession, request: EditRequest): number {
+/**
+ * What an edit is allowed to do beyond writing blocks.
+ *
+ * Passed in rather than read from the settings store, because this module is
+ * reachable from the suites and `settings-store.ts` imports Electron -- the
+ * same reason `settings_coerce.ts` was split out of it.
+ */
+export interface EditOptions {
+  /** Default true, which is what the editor did before there was a setting. */
+  autoGrow?: boolean;
+}
+
+export function applyEdit(
+  session: DocumentSession,
+  request: EditRequest,
+  options: EditOptions = {},
+): number {
   const { doc, history } = session;
+  const mayGrow = options.autoGrow !== false;
 
   /*
    * Placing one block grows the document, exactly as filling does.
@@ -522,8 +580,13 @@ export function applyEdit(session: DocumentSession, request: EditRequest): numbe
      * the day something does, the failure would be a document that quietly got
      * larger.
      */
-    const growth =
+    const wanted =
       entry.namespacedName === "minecraft:air" ? null : growthToInclude(doc, cell);
+    // Refused rather than clipped: see `OutsideDocumentError`. A break is
+    // exempt because it never wanted to grow in the first place, so with
+    // auto-grow off it goes on doing exactly what it did before.
+    if (wanted !== null && !mayGrow) throw new OutsideDocumentError();
+    const growth = wanted;
     if (growth !== null && extentVolume(growth.size) > MAX_DOCUMENT_VOLUME) {
       throw new DocumentTooLargeError(extentVolume(growth.size));
     }
@@ -577,7 +640,9 @@ export function applyEdit(session: DocumentSession, request: EditRequest): numbe
    * ask for and would have to undo.
    */
   const asked = orderRegion(request.region);
-  const growth = request.kind === "fill" ? growthToInclude(doc, asked) : null;
+  const wantedGrowth = request.kind === "fill" ? growthToInclude(doc, asked) : null;
+  if (wantedGrowth !== null && !mayGrow) throw new OutsideDocumentError();
+  const growth = wantedGrowth;
 
   // In the document's coordinates *after* the resize: existing content moves by
   // `shift`, and so does the region naming the cells to write.
@@ -611,6 +676,93 @@ export function applyEdit(session: DocumentSession, request: EditRequest): numbe
     history,
     `Replace ${from.namespacedName} with ${to.namespacedName}`,
     (tx) => tx.replace(region, from, to),
+  );
+}
+
+/**
+ * Sets the schematic's size by hand, as one undoable step.
+ *
+ * **At the far side, never with a shift**, which is `resize_document`'s pair of
+ * restrictions and is here for the same reason: every coordinate anybody has
+ * already been given -- a selection, a block they are looking at, a number in
+ * the inspector -- is still valid afterwards. Making room *below* the origin
+ * would move all the content up instead, because the grid has no negative
+ * index, and then nothing anyone had written down would mean what it meant.
+ *
+ * Shrinking is allowed, unlike the agent's tool, because this is somebody
+ * typing a size on purpose: the box is theirs to set. `tx.resize` records the
+ * blocks and block entities it drops, so the step comes back in full on Ctrl+Z.
+ *
+ * What it will not do is take them by surprise. A shrink that would destroy
+ * blocks is refused, counted, and only goes through when the caller says so --
+ * the refusal is the answer, because a warning shown after the fact is not a
+ * warning and main must not raise a dialog for a request that may not have come
+ * from a person at the keyboard.
+ */
+export function resizeSession(
+  session: DocumentSession,
+  size: { width: number; height: number; length: number },
+  options: { confirmLoss?: boolean } = {},
+): number {
+  const { doc, history } = session;
+  const width = Math.trunc(size.width);
+  const height = Math.trunc(size.height);
+  const length = Math.trunc(size.length);
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    !Number.isFinite(length) ||
+    width < DOCUMENT_SIZE.min ||
+    height < DOCUMENT_SIZE.min ||
+    length < DOCUMENT_SIZE.min ||
+    width > DOCUMENT_SIZE.max ||
+    height > DOCUMENT_SIZE.max ||
+    length > DOCUMENT_SIZE.max
+  ) {
+    throw new Error(
+      `A schematic is between ${DOCUMENT_SIZE.min} and ${DOCUMENT_SIZE.max} blocks on each ` +
+        `side; got ${size.width}x${size.height}x${size.length}.`,
+    );
+  }
+
+  const volume = width * height * length;
+  if (volume > MAX_DOCUMENT_VOLUME) throw new DocumentTooLargeError(volume);
+
+  if (width === doc.width && height === doc.height && length === doc.length) {
+    // Nothing to record. `runTransaction` would push no undo step for an empty
+    // recorder anyway; returning here also keeps the count honest.
+    return 0;
+  }
+
+  /*
+   * Counted before anything moves, over exactly the cells the new box does not
+   * reach. Air is not counted -- losing air is losing nothing, and a shrink into
+   * empty space is the ordinary case this must not interrupt.
+   */
+  if (!options.confirmLoss) {
+    let lost = 0;
+    for (let x = 0; x < doc.width; x += 1) {
+      for (let y = 0; y < doc.height; y += 1) {
+        for (let z = 0; z < doc.length; z += 1) {
+          if (x < width && y < height && z < length) continue;
+          if (doc.voxels[x * doc.height * doc.length + y * doc.length + z] !== 0) lost += 1;
+        }
+      }
+    }
+    if (lost > 0) throw new ResizeWouldLoseBlocksError(lost);
+  }
+
+  return runTransaction(
+    doc,
+    history,
+    `Resize to ${width}x${height}x${length}`,
+    (tx) => {
+      tx.resize({ width, height, length });
+      // A resize moves no voxel that stays, so it contributes nothing to the
+      // recorder's own tally; the answer worth giving back is how much the box
+      // changed by, which the caller reads off the state it gets anyway.
+      return 0;
+    },
   );
 }
 

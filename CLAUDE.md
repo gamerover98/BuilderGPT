@@ -1729,6 +1729,82 @@ blue is the convention every 3D package shares and so is read without being
 told; the *labels* are Minecraft's, which is the half that has to be learned —
 a builder thinks in north and east, and `facing=north` is what the file says.
 
+**The document has a size, and three different things decide it.** They live in
+one panel because they are one question and they are emphatically not one
+mechanism:
+
+- **the cage** (`preview.showBounds`) is the viewer's alone — not a block,
+  never in the atlas, never raycast;
+- **automatic resizing** (`editing.autoGrow`) changes what an *edit* is allowed
+  to do, and is honoured in main;
+- **the size itself** is an edit, on the undo stack like any other.
+
+**`Settings.editing` is a third bag, and it is not `preview` or `ui`.** Those
+two are about drawing and about window chrome; this decides what ends up in the
+file. `coerceSettings` spreads `preview` over the defaults without checking
+anything, which is the right trade for numbers a slider wrote and the wrong one
+for a rule about whether a fill may resize somebody's schematic — so
+`coerceEditing` names its fields the way `coerceUi` does, and
+`tests/services.ts`'s `satisfies Settings` round-trip breaks the *compile* until
+a new field is named.
+
+`autoGrow` reads **`!== false`**, not `=== true`. Growing on a fill outside the
+box is what the editor did before there was a setting, so every settings file
+written until now has no `editing` block at all; reading absence as `false`
+would silently turn the behaviour off for everyone who never asked.
+
+**With it off an edit outside the box is refused by name, never clipped.** Silent
+clipping is the failure this file already records once: a fill asking for the
+universe quietly became a full fill of whatever was open, reported a healthy
+`changed`, and read as success. `OutsideDocumentError` is that sentence said out
+loud. A **break** is exempt, because it never wanted to grow in the first place
+— making room for air is a resize and nothing else — so with the setting
+off a break outside the box goes on doing exactly what it always did.
+
+**`resizeSession` grows at the far side and never with a shift**, which is
+`resize_document`'s pair of restrictions for its reason: every coordinate
+anybody has already been told stays valid. Room *below* the origin would move
+all the content up instead, because the grid has no negative index.
+
+Unlike the agent's tool it may **shrink**, because this is somebody typing a
+size on purpose and the box is theirs to set. `tx.resize` records the blocks and
+block entities it drops, so it comes back whole on Ctrl+Z. What it will not do
+is take them by surprise: a shrink that would destroy blocks is **refused,
+counted, and only goes through with `confirmLoss`**. That is
+`discardUnsavedChanges`' shape and it is the only order that helps — a
+warning shown after the blocks are gone is not a warning, and main must not
+raise a dialog for a request that may not have come from a person at the
+keyboard. Air is not counted: losing air is losing nothing, and a shrink into
+empty space is the ordinary case this must not interrupt.
+
+**The refusal is a `FailureKind`, not a sentence to match on.**
+`"needs-confirmation"` sits beside `"cancelled"` for the same reason — the
+request was understood and nothing went wrong — and it is what lets the panel
+offer to go ahead. A renderer matching on the wording is how a reworded refusal
+silently becomes a dead end with nothing failing. Only that kind is offered a
+second attempt: a size out of range or a volume past the cap is not a decision
+the user can make differently, so offering to force it would be a lie.
+
+The per-axis `DOCUMENT_SIZE` guard is partly redundant —
+`domain/document.ts` already refuses anything under 1x1x1 — and what it buys
+is the **wording**, which names the ceiling the layer underneath knows nothing
+about. So `tests/session.ts` checks the message rather than only the refusal,
+and the maximum gets cases nothing downstream would catch: 8192x1x1 is well
+inside `MAX_DOCUMENT_VOLUME` and would simply succeed.
+
+**And there is deliberately no shrink-on-delete.** It has no analogue: breaking
+never grows, `saveSession` already crops to content, and shrinking under the
+user would throw away the room they made to build in. The one control is growth.
+
+**The cage is a separate object so the picker never sees it.** A transparent box
+around the whole build, handed to the raycaster, swallows every click meant for
+a block inside it — and the click still does *something*, so it reads as the
+inspector picking the wrong block rather than as the cage being in the way.
+`tests/ui.ts` requires every `intersectObject` call in the viewer to name
+`loaded` and nothing else, which is what keeps the next decorative object out of
+it by default. It is `BackSide` so the near faces are not in the way from
+inside, which is where anyone building will be.
+
 **Block icons are meshed by the same pipeline as the viewport.**
 `services/block_icons.ts` runs a 1×1×1 document through `buildDocumentPreview`,
 so an icon cannot disagree with what appears when the block is placed. It has to

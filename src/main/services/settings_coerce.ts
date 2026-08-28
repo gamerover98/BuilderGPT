@@ -25,6 +25,7 @@ import {
   PROVIDERS,
   SIDEBAR_WIDTH,
   THEMES,
+  type EditingSettings,
   type Language,
   type McpSettings,
   type Provider,
@@ -141,6 +142,26 @@ function coordinate(raw: unknown, fallback: number): number {
  * into one that does. `enabled` and `allowDelete` are compared against `true`
  * rather than coerced, so anything that is not exactly `true` is off.
  */
+/**
+ * Named field by field, like `coerceUi` and unlike the `preview` spread.
+ *
+ * These decide what an edit is allowed to do to a file, so a value arriving
+ * from disk in a shape nobody checked is not a cosmetic risk. The cost is
+ * the usual one and it is the point: a field added to `EditingSettings` and
+ * not named here is silently dropped on the next save, and
+ * `tests/services.ts` round-trips a fully-populated `Settings` so that
+ * breaks the compile before it can break a user's settings file.
+ */
+export function coerceEditing(raw: unknown): EditingSettings {
+  const source = (raw ?? {}) as Partial<EditingSettings>;
+  return {
+    // Defaults to on, which is what the editor did before there was a
+    // setting -- so `!== false` rather than `=== true`: an absent value has
+    // to mean the old behaviour, not the safe-looking one.
+    autoGrow: source.autoGrow !== false,
+  };
+}
+
 export function coerceMcp(raw: unknown): McpSettings {
   const source = (raw ?? {}) as Partial<McpSettings>;
   const port = Number(source.port);
@@ -172,6 +193,7 @@ export function coerceSettings(raw: unknown): Settings {
   const preview = { ...DEFAULT_SETTINGS.preview, ...(source.preview ?? {}) };
   const ui = coerceUi(source.ui);
   const mcp = coerceMcp(source.mcp);
+  const editing = coerceEditing(source.editing);
   return {
     provider: isProvider(source.provider) ? source.provider : DEFAULT_SETTINGS.provider,
     model: typeof source.model === "string" ? source.model : DEFAULT_SETTINGS.model,
@@ -182,5 +204,6 @@ export function coerceSettings(raw: unknown): Settings {
     preview,
     ui,
     mcp,
+    editing,
   };
 }

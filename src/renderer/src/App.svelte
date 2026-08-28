@@ -21,7 +21,8 @@
   import type { McpActivity, McpStatus } from "../../shared/ipc.js";
   import InspectorPanel from "./lib/InspectorPanel.svelte";
   import AnchorModal from "./lib/AnchorModal.svelte";
-  import NbtModal from "./lib/NbtModal.svelte";
+  import DimensionsModal from "./lib/DimensionsModal.svelte";
+import NbtModal from "./lib/NbtModal.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
   import SelectionTools from "./lib/SelectionTools.svelte";
     import ToolWindow from "./lib/ToolWindow.svelte";
@@ -501,6 +502,18 @@ import VersionsModal from "./lib/VersionsModal.svelte";
    * screen.
    */
   let framingEpoch = $state(0);
+
+  let dimensionsOpen = $state(false);
+  let dimensionsError = $state("");
+  /**
+   * Whether main has already refused this resize for losing blocks.
+   *
+   * Held here rather than in the modal because it is a fact about the last
+   * answer from main, and it is cleared whenever the request changes -- so
+   * a confirmation cannot be carried over onto a different size than the
+   * one it was given for.
+   */
+  let dimensionsConfirmable = $state(false);
 
   /**
    * Building from the crosshair. One block, one transaction — the same edit the
@@ -2465,6 +2478,53 @@ import VersionsModal from "./lib/VersionsModal.svelte";
    * channel the main process does not answer, would look exactly like a button
    * that does nothing.
    */
+  /**
+   * Sets the schematic's size, and relays main's refusal into the panel.
+   *
+   * Two answers rather than one, and the second is the point. A shrink that
+   * would destroy blocks comes back as a failure carrying the count -- main is
+   * the only side that knows, because it holds the voxels -- and the button
+   * then offers to go ahead. Asking *before* the request would mean guessing
+   * that number here, which would be wrong in exactly the case that matters.
+   *
+   * The confirmation is cleared on every attempt, so it can never be carried
+   * from the size it was given for onto a different one.
+   */
+  async function resizeDocument(
+    size: [number, number, number],
+    confirmLoss: boolean,
+  ): Promise<void> {
+    dimensionsError = "";
+    dimensionsConfirmable = false;
+    busy = true;
+    try {
+      const response = await api().resizeDocument({
+        width: size[0],
+        height: size[1],
+        length: size[2],
+        confirmLoss,
+      });
+      if (!response.ok) {
+        dimensionsError = response.message;
+        // Only a loss is worth offering to override. Anything else -- a size
+        // out of range, a volume past the cap -- is not a decision the user
+        // can make differently, so offering to force it would be a lie.
+        //
+        // On the kind, never on the wording: matching the sentence is how a
+        // reworded refusal silently becomes a dead end, and nothing would
+        // fail when it did.
+        dimensionsConfirmable = !confirmLoss && response.kind === "needs-confirmation";
+        return;
+      }
+      docState = response.state;
+      await refreshDocument();
+    } catch (err) {
+      dimensionsError = err instanceof Error ? err.message : String(err);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function changeWorldEditAnchor(
     next: [number, number, number] | null,
   ): Promise<void> {
@@ -3097,6 +3157,24 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   onpickmcproot={() => pick("mcp-root")}
 />
 
+<DimensionsModal
+  open={docState !== null && dimensionsOpen}
+  size={docState?.size ?? [1, 1, 1]}
+  autoGrow={settings.editing.autoGrow}
+  showBounds={settings.preview.showBounds}
+  {busy}
+  error={dimensionsError}
+  confirmable={dimensionsConfirmable}
+  onresize={(size, confirmLoss) => void resizeDocument(size, confirmLoss)}
+  onautogrow={(autoGrow) => void patchSettings({ editing: { ...settings.editing, autoGrow } })}
+  onbounds={(showBounds) => void patchPreview({ showBounds })}
+  onclose={() => {
+    dimensionsOpen = false;
+    dimensionsError = "";
+    dimensionsConfirmable = false;
+  }}
+/>
+
 <NbtModal
   open={nbtOpen}
   text={nbtText}
@@ -3219,6 +3297,15 @@ import VersionsModal from "./lib/VersionsModal.svelte";
       already mixes both. They sit before the gear, which carries the auto
       margin, so they land at the trailing edge beside it.
     -->
+    <button
+      class="nbt-open"
+      disabled={docState === null}
+      onclick={() => (dimensionsOpen = true)}
+      title={t("dimensions.openHint")}
+    >
+      {t("dimensions.open")}
+    </button>
+
     <button
       class="nbt-open"
       disabled={docState === null}
@@ -3576,6 +3663,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
       maxDrawDistance={settings.preview.maxDrawDistance}
       projection={settings.preview.projection}
       showGrid={settings.preview.showGrid}
+      showBounds={settings.preview.showBounds}
       wireframe={settings.preview.wireframe}
       sky={settings.preview.sky}
       {skyTextures}

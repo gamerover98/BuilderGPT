@@ -189,6 +189,19 @@ export interface PreviewSettings {
    */
   showMarkers: boolean;
   /**
+   * Draw the schematic's own box as a transparent cage.
+   *
+   * The document has a size and, until this, no way to see it: the build
+   * inside it is not its edge, and empty space at the top of a box looks
+   * exactly like empty space outside one. Off by default, because on a
+   * build that fills its box it is a wire cage around everything.
+   *
+   * The viewer's, not the mesher's -- it is not a block, never reaches the
+   * atlas, and is not raycast -- so it is a visibility toggle rather than a
+   * rebuild.
+   */
+  showBounds: boolean;
+  /**
    * Draw WorldEdit's paste anchor as a marker in the viewport.
    *
    * Applied by the viewer, not the mesher: the anchor is not a block and never
@@ -225,6 +238,7 @@ export const DEFAULT_PREVIEW_SETTINGS: PreviewSettings = {
   waterColor: DEFAULT_WATER_COLOR,
   flySpeed: 12,
   showMarkers: true,
+  showBounds: false,
   showWorldEditOffset: true,
 };
 
@@ -459,6 +473,47 @@ export const DEFAULT_MCP_SETTINGS: McpSettings = {
 /** What the port may be. `0` is legal and means "any free one". */
 export const MCP_PORT = { min: 0, max: 65535 } as const;
 
+/**
+ * What an edit *does*, as opposed to how the result is drawn.
+ *
+ * A third bag rather than more fields in `preview` or `ui`, because these
+ * are neither: they change what ends up in the file, and main has to honour
+ * them. `preview` is spread over the defaults without validation, which is
+ * the right trade for numbers a slider wrote and the wrong one for a rule
+ * that decides whether a fill is allowed to resize somebody's schematic.
+ */
+export interface EditingSettings {
+  /**
+   * Whether a fill or a placement outside the box grows the document.
+   *
+   * On is what the editor has always done: the region leads and the
+   * document follows, in one transaction so growing and filling are one
+   * undo step. Off makes the box a fixed frame -- which is what somebody
+   * building to a size wants -- and then an edit that reaches outside it is
+   * **refused by name** rather than clipped. Silent clipping is the failure
+   * this codebase has already written down once.
+   *
+   * Growth only. There is no shrink-on-delete to turn off: breaking never
+   * grows, saving already crops to content, and shrinking under the user
+   * would throw away the room they made to build in.
+   */
+  autoGrow: boolean;
+}
+
+export const DEFAULT_EDITING_SETTINGS: EditingSettings = {
+  autoGrow: true,
+};
+
+/**
+ * What a schematic may be resized to by hand, per axis.
+ *
+ * The ceiling is per *axis* and is not the volume guard: 4096 cubed is far
+ * past what `MAX_DOCUMENT_VOLUME` allows, and the volume is checked
+ * separately by main. This is only what a number field will accept, so a
+ * fat-fingered extra digit is refused where it is typed.
+ */
+export const DOCUMENT_SIZE = { min: 1, max: 4096 } as const;
+
 export interface Settings {
   provider: Provider;
   model: string;
@@ -471,6 +526,7 @@ export interface Settings {
   preview: PreviewSettings;
   ui: UiSettings;
   mcp: McpSettings;
+  editing: EditingSettings;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -487,6 +543,7 @@ export const DEFAULT_SETTINGS: Settings = {
   preview: { ...DEFAULT_PREVIEW_SETTINGS },
   ui: { ...DEFAULT_UI_SETTINGS },
   mcp: { ...DEFAULT_MCP_SETTINGS },
+  editing: { ...DEFAULT_EDITING_SETTINGS },
 };
 
 /**

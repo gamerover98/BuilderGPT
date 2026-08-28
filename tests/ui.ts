@@ -1775,6 +1775,46 @@ console.log("\n--- compass ---");
   check("...it is a scissored pass over the one there is", viewerSource.includes("setScissorTest(true)"));
 }
 
+// --- the schematic's own box -------------------------------------------------
+//
+// The build inside a document is not its edge: empty room at the top of a box
+// looks exactly like empty space outside one, so without the cage there is no
+// way to see how much is left except by running out of it.
+console.log("\n--- bounds cage ---");
+{
+  const viewer = readFileSync(path.join(RENDERER, "lib", "Viewer.svelte"), "utf8");
+
+  check("the viewer builds a cage for the document's box", viewer.includes("function buildBounds"));
+  /*
+   * It has to follow a resize, because the cage *is* the size -- and unlike the
+   * grid, which only moves, it is rebuilt: a scaled cube would need its own
+   * inverse to keep the edge lines an even width.
+   */
+  check("...and rebuilds it when the size changes", /void documentSize;[^}]*buildBounds\(\)/s.test(viewer));
+
+  /*
+   * And it is never raycast. This is the half that would go wrong silently: a
+   * transparent cage around the whole build, handed to the picker, swallows
+   * every click meant for a block inside it -- and the click still *does*
+   * something, so it reads as the inspector picking the wrong block rather
+   * than as the cage being in the way.
+   *
+   * Checked by requiring the block raycast to name `loaded` and nothing else,
+   * which is what keeps a new decorative object out of it by default.
+   */
+  const casts = viewer.match(/raycaster\.intersectObjects?\([^)]*\)/g) ?? [];
+  check("there are raycasts to check", casts.length > 0);
+  check(
+    "no raycast reaches the cage",
+    casts.every((cast) => !cast.includes("bounds")),
+    casts.join(" | "),
+  );
+  check(
+    "...the block pick tests the structure alone",
+    casts.some((cast) => cast.includes("intersectObject(loaded")),
+  );
+}
+
 // --- undo that reaches the selection ---------------------------------------
 //
 // Ctrl+Z used to reach only the main process, because only the main process had

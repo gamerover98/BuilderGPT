@@ -108,6 +108,15 @@ export const IPC = {
   docChanged: "bgpt:doc:changed",
   docMesh: "bgpt:doc:mesh",
   docApply: "bgpt:doc:apply",
+  /**
+   * Set the schematic's size by hand.
+   *
+   * Its own verb rather than a shape of `EditRequest`, because it is not
+   * one: nothing about it names a block, it can refuse for a reason no
+   * block edit has, and `applyEdit`'s answer counts blocks changed while
+   * this one changes none of them.
+   */
+  docResize: "bgpt:doc:resize",
   docUndo: "bgpt:doc:undo",
   docRedo: "bgpt:doc:redo",
   docInspect: "bgpt:doc:inspect",
@@ -301,7 +310,20 @@ export type FailureKind =
    * `llm-error`: nothing went wrong, so the UI must not dress it up in red and
    * invite a bug report.
    */
-  | "cancelled";
+  | "cancelled"
+  /**
+   * The request was understood and refused pending a yes.
+   *
+   * `cancelled`'s neighbour rather than a flavour of `invalid-input`: the
+   * request was not invalid, and the difference is one the UI has to act on
+   * rather than merely phrase. A caller may offer to repeat it with the
+   * confirmation set; for every other kind, offering to force it would be a
+   * lie, because nothing the user can say changes the answer.
+   *
+   * A kind rather than the renderer matching on the wording, which is how a
+   * reworded sentence silently turns a confirmable refusal into a dead end.
+   */
+  | "needs-confirmation";
 
 export interface Failure {
   ok: false;
@@ -839,6 +861,27 @@ export type EditRequest =
   | { kind: "setState"; x: number; y: number; z: number; block: BlockSpec }
   | { kind: "fill"; region: RegionSpec; block: BlockSpec }
   | { kind: "replace"; region: RegionSpec; from: BlockSpec; to: BlockSpec };
+
+/**
+ * A size typed into the dimensions panel.
+ *
+ * Absolute rather than a delta, because that is what the fields hold and
+ * because a delta would be ambiguous about which side it grew from. Growth
+ * lands at the far side, so every coordinate already on screen stays valid.
+ */
+export interface ResizeRequest {
+  width: number;
+  height: number;
+  length: number;
+  /**
+   * Go ahead even though blocks fall outside the new box.
+   *
+   * Absent, a lossy shrink comes back as a failure that says how many --
+   * which is the only order that helps, since a warning after the blocks are
+   * gone is not a warning. The step is undoable either way.
+   */
+  confirmLoss?: boolean;
+}
 
 export interface DocumentMesh {
   mesh: MeshPayload;
@@ -1437,6 +1480,8 @@ export interface BgptApi {
   regionMesh(region: RegionSpec): Promise<RegionMeshResponse>;
   getSkyTextures(): Promise<SkyTextures>;
   applyEdit(request: EditRequest): Promise<EditResponse>;
+  /** Set the schematic's size. Refuses a lossy shrink without `confirmLoss`. */
+  resizeDocument(request: ResizeRequest): Promise<EditResponse>;
   undo(): Promise<EditResponse>;
   redo(): Promise<EditResponse>;
   inspectBlock(x: number, y: number, z: number): Promise<InspectResponse>;

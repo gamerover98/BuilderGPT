@@ -78,7 +78,12 @@ import {
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { loadSkyTextures } from "../src/main/services/sky_textures.js";
 import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/services/versions.js";
-import { coerceMcp, coerceSettings, coerceUi } from "../src/main/services/settings_coerce.js";
+import {
+  coerceEditing,
+  coerceMcp,
+  coerceSettings,
+  coerceUi,
+} from "../src/main/services/settings_coerce.js";
 import { discardPrompt } from "../src/main/services/discard_prompt.js";
 import {
   buildBlockIcons,
@@ -113,6 +118,7 @@ import {
   DEFAULT_SETTINGS,
   DEFAULT_UI_SETTINGS,
   SIDEBAR_WIDTH,
+  type EditingSettings,
   type McpSettings,
   type Settings,
   type UiSettings,
@@ -1385,6 +1391,31 @@ console.log("\n--- settings coercion ---");
 
   equal("every mcp field survives a round-trip", coerceMcp(mcp), mcp);
 
+  // The opposite of its default, for the reason above: a `coerceEditing`
+  // that dropped the field and substituted the default would still pass a
+  // round-trip written with the default in it.
+  const editing = {
+    autoGrow: false,
+  } satisfies EditingSettings;
+
+  equal("every editing field survives a round-trip", coerceEditing(editing), editing);
+
+  /*
+   * Absent has to read as *on*, not as off.
+   *
+   * Growing on a fill outside the box is what the editor did before there
+   * was a setting, so every settings file written until now has no
+   * `editing` block at all -- and reading that as `false` would silently
+   * turn the behaviour off for everyone who had never asked.
+   */
+  equal("a missing editing block still grows", coerceEditing(undefined).autoGrow, true);
+  equal("...and so does an empty one", coerceEditing({}).autoGrow, true);
+  equal(
+    "...while an explicit false is honoured",
+    coerceEditing({ autoGrow: false }).autoGrow,
+    false,
+  );
+
   const settings = {
     provider: "OpenAI",
     model: "gpt-4o-mini",
@@ -1395,6 +1426,7 @@ console.log("\n--- settings coercion ---");
     preview: { ...DEFAULT_SETTINGS.preview, wireframe: true, maxDrawDistance: 1024 },
     ui,
     mcp,
+    editing,
   } satisfies Settings;
 
   equal("every settings field survives a round-trip", coerceSettings(settings), settings);

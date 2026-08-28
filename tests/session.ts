@@ -14,8 +14,12 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import { documentSize, getBlock, setBlock, setBlockEntity } from "../src/main/domain/document.js";
+import { DOCUMENT_SIZE } from "../src/shared/settings.js";
 import {
   applyEdit,
+  OutsideDocumentError,
+  ResizeWouldLoseBlocksError,
+  resizeSession,
   closeDocument,
   copySelection,
   currentClipboard,
@@ -2115,6 +2119,229 @@ console.log("\n--- placing into water floods the block ---");
   put(session, 4, "oak_slab");
   put(session, 4, "oak_stairs");
   equal("replacing a flooded block keeps the water", loggedAt(session, 4), "true");
+}
+
+
+// --- the box as a fixed frame, and setting it by hand ----------------------
+//
+// The editor imposes no footprint: a region may be dragged outside the box and
+// filling it grows the document to suit. That is right for building freely and
+// wrong for building *to a size*, so it is a setting -- and with it off the
+// edit is refused by name rather than clipped, which is the failure this
+// codebase already wrote down once.
+console.log("\n--- dimensions ---");
+{
+  const at = (session: ReturnType<typeof newDocument>, x: number, y: number, z: number) =>
+    getBlock(session.doc, x, y, z).namespacedName;
+
+  const outside = (session: ReturnType<typeof newDocument>, autoGrow: boolean) =>
+    applyEdit(
+      session,
+      {
+        kind: "fill",
+        region: { minX: 0, minY: 0, minZ: 0, maxX: 9, maxY: 0, maxZ: 0 },
+        block: { namespacedName: "minecraft:stone" },
+      },
+      { autoGrow },
+    );
+
+  {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    equal("with growing on, a fill past the edge still grows", outside(session, true), 10);
+    equal("...and the document followed the region", session.doc.width, 10);
+  }
+
+  {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    let raised: unknown = null;
+    try {
+      outside(session, false);
+    } catch (err) {
+      raised = err;
+    }
+    check("with it off the same fill is refused", raised instanceof OutsideDocumentError);
+    /*
+     * Refused, not clipped. Clipping is what makes this worth a check: it would
+     * have written four blocks, reported `changed: 4`, and read as success --
+     * so the difference between the two behaviours is invisible from the
+     * answer alone.
+     */
+    equal("...and nothing was written", session.doc.width, 4);
+    equal("...not even the part that fitted", countBlocks(session.doc), 0);
+  }
+
+  {
+    // An edit that fits is untouched by the setting; the guard is on growth and
+    // nothing else.
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    const changed = applyEdit(
+      session,
+      {
+        kind: "fill",
+        region: { minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 0, maxZ: 0 },
+        block: { namespacedName: "minecraft:stone" },
+      },
+      { autoGrow: false },
+    );
+    equal("a fill that fits is unaffected", changed, 4);
+  }
+
+  {
+    /*
+     * A break is exempt, because it never wanted to grow. Making room for air
+     * is a resize and nothing else, so with the setting off a break outside the
+     * box goes on doing exactly what it did before: nothing, quietly.
+     */
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    const changed = applyEdit(
+      session,
+      { kind: "setBlock", x: 9, y: 0, z: 0, block: { namespacedName: "minecraft:air" } },
+      { autoGrow: false },
+    );
+    equal("a break outside the box is not a refusal", changed, 0);
+    equal("...and still does not grow", session.doc.width, 4);
+  }
+
+  // --- resizing by hand ---
+  {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    resizeSession(session, { width: 8, height: 6, length: 5 });
+    equal("a size typed in is taken", documentSize(session.doc), [8, 6, 5]);
+
+    /*
+     * At the far side, never with a shift. Making room below the origin would
+     * move all the content up instead -- the grid has no negative index -- and
+     * then every coordinate anybody had written down would mean something else.
+     */
+    setBlock(session.doc, 0, 0, 0, { namespacedName: "minecraft:stone", properties: {} });
+    resizeSession(session, { width: 12, height: 6, length: 5 });
+    equal("growing leaves the content where it was", at(session, 0, 0, 0), "minecraft:stone");
+  }
+
+  {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    resizeSession(session, { width: 6, height: 6, length: 6 });
+    undoEdit(session);
+    equal("a resize is one undo step", documentSize(session.doc), [4, 4, 4]);
+  }
+
+  {
+    // Shrinking into empty space is the ordinary case and must not be
+    // interrupted: losing air is losing nothing.
+    const session = newDocument({ width: 8, height: 8, length: 8 });
+    setBlock(session.doc, 1, 1, 1, { namespacedName: "minecraft:stone", properties: {} });
+    resizeSession(session, { width: 4, height: 4, length: 4 });
+    equal("a shrink over empty space goes through", documentSize(session.doc), [4, 4, 4]);
+  }
+
+  {
+    const session = newDocument({ width: 8, height: 8, length: 8 });
+    setBlock(session.doc, 7, 0, 0, { namespacedName: "minecraft:stone", properties: {} });
+    setBlock(session.doc, 6, 0, 0, { namespacedName: "minecraft:stone", properties: {} });
+    let raised: unknown = null;
+    try {
+      resizeSession(session, { width: 4, height: 8, length: 8 });
+    } catch (err) {
+      raised = err;
+    }
+    check(
+      "a shrink that would destroy blocks is refused",
+      raised instanceof ResizeWouldLoseBlocksError,
+    );
+    /*
+     * Counted, because the refusal *is* the warning -- a message shown after
+     * the blocks are gone is not one, and main must not raise a dialog for a
+     * request that may not have come from a person at the keyboard.
+     */
+    equal(
+      "...and says how many",
+      raised instanceof ResizeWouldLoseBlocksError ? raised.blocks : -1,
+      2,
+    );
+    equal("...having changed nothing", documentSize(session.doc), [8, 8, 8]);
+
+    resizeSession(session, { width: 4, height: 8, length: 8 }, { confirmLoss: true });
+    equal("confirmed, it goes through", documentSize(session.doc), [4, 8, 8]);
+    /*
+     * And it is still one Ctrl+Z away. `tx.resize` records the blocks it drops,
+     * which is what makes confirming a decision rather than a commitment.
+     */
+    undoEdit(session);
+    equal("...and comes back whole", at(session, 7, 0, 0), "minecraft:stone");
+  }
+
+  {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    equal("resizing to the size it already is changes nothing", resizeSession(session, { width: 4, height: 4, length: 4 }), 0);
+    //  pushes no step for a recorder with no commands, so a
+    // resize to the size it already is must not leave one to take back.
+    equal("...and leaves nothing to undo", undoEdit(session), null);
+  }
+
+  {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    /*
+     * Per axis, and each case chosen so that nothing *downstream* would catch
+     * it on this function's behalf.
+     *
+     * `document.resizeDocument` already refuses anything below 1x1x1, so a zero
+     * proves only that something refused it somewhere. The ceiling has no such
+     * backstop: 8192 x 1 x 1 is 8,192 cells, comfortably inside
+     * `MAX_DOCUMENT_VOLUME`, so with the per-axis maximum gone it would simply
+     * succeed and leave a schematic eight thousand blocks long on one side.
+     */
+    for (const bad of [
+      { width: 0, height: 4, length: 4 },
+      { width: 4, height: -1, length: 4 },
+      { width: 4, height: 4, length: 0 },
+      { width: DOCUMENT_SIZE.max + 1, height: 1, length: 1 },
+      { width: 1, height: DOCUMENT_SIZE.max + 1, length: 1 },
+      { width: 1, height: 1, length: DOCUMENT_SIZE.max + 1 },
+    ]) {
+      let raised: unknown = null;
+      try {
+        resizeSession(session, bad);
+      } catch (err) {
+        raised = err;
+      }
+      check(`${JSON.stringify(bad)} is refused`, raised instanceof Error);
+    }
+    equal("...and the document is untouched", documentSize(session.doc), [4, 4, 4]);
+
+    /*
+     * And it is refused *here*, with a message naming the range.
+     *
+     *  already declines anything under 1x1x1, so the
+     * minimum could be left to it -- and then the message would say "at least
+     * 1x1x1" and stop, which tells somebody who typed 9000 nothing about why.
+     * Naming the ceiling is the whole of what this guard buys over the one
+     * underneath it, so that is what is checked.
+     */
+    let small: unknown = null;
+    try {
+      resizeSession(session, { width: 0, height: 4, length: 4 });
+    } catch (err) {
+      small = err;
+    }
+    check(
+      "...and the refusal names the range it wanted",
+      small instanceof Error && small.message.includes(String(DOCUMENT_SIZE.max)),
+      small instanceof Error ? small.message : String(small),
+    );
+
+    /*
+     * The volume cap is a separate guard from the per-axis one and catches what
+     * the axes cannot: every side inside its own limit, and the product past
+     * what an `Int32Array` should hold.
+     */
+    let huge: unknown = null;
+    try {
+      resizeSession(session, { width: 4000, height: 4000, length: 4000 });
+    } catch (err) {
+      huge = err;
+    }
+    check("a volume past the cap is refused", huge instanceof DocumentTooLargeError);
+  }
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

@@ -175,6 +175,14 @@ import { isTyping } from "./typing.js";
      * projection does not have one -- flying inside it means nothing.
      */
     projection?: Projection;
+    /**
+     * Draw the schematic's own box as a transparent cage.
+     *
+     * The build inside a document is not its edge: empty space at the top of
+     * a box looks exactly like empty space outside one, so without this
+     * there is no way to see how much room is left except by running out.
+     */
+    showBounds?: boolean;
     showGrid: boolean;
     wireframe: boolean;
     /**
@@ -315,6 +323,7 @@ import { isTyping } from "./typing.js";
     renderScale,
     maxDrawDistance,
     projection = "perspective",
+    showBounds = false,
     showGrid,
     wireframe,
     sky,
@@ -460,6 +469,60 @@ import { isTyping } from "./typing.js";
     );
     grid.position.x = centre.x;
     grid.position.z = centre.z;
+  }
+
+  /**
+   * (Re)builds the bounds cage for the document's current size.
+   *
+   * Two objects rather than one: `EdgesGeometry` over the box gives the
+   * twelve edges, which is what actually reads as a frame, and a very faint
+   * `BackSide` skin behind them is what makes it a *volume* rather than a
+   * wireframe drawn in mid-air. `BackSide` so the near faces are not in the
+   * way when you are inside it, which is where anyone building will be.
+   *
+   * Rebuilt rather than scaled, like the grid, because it moves rarely -- a
+   * resize or a theme change -- and a scaled cube would have to carry its
+   * own inverse to keep the edges an even width.
+   */
+  function buildBounds(): void {
+    if (!scene) return;
+    if (bounds) {
+      scene.remove(bounds);
+      bounds.traverse((child) => {
+        const drawn = child as THREE.Mesh | THREE.LineSegments;
+        drawn.geometry?.dispose();
+        const material = drawn.material as THREE.Material | undefined;
+        material?.dispose();
+      });
+      bounds = undefined;
+    }
+    if (documentSize === null) return;
+    const [width, height, length] = documentSize;
+    const box = new THREE.BoxGeometry(width, height, length);
+    const colour = themeColor("--selection", 0x6ea8fe);
+    const group = new THREE.Group();
+    const skin = new THREE.Mesh(
+      box,
+      new THREE.MeshBasicMaterial({
+        color: colour,
+        transparent: true,
+        opacity: 0.04,
+        side: THREE.BackSide,
+        depthWrite: false,
+      }),
+    );
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(box),
+      new THREE.LineBasicMaterial({ color: colour, transparent: true, opacity: 0.55 }),
+    );
+    group.add(skin);
+    group.add(edges);
+    // `BoxGeometry` is centred on its origin and the document's box runs from
+    // (0,0,0) to (w,h,l), so the middle of it is half the size out.
+    group.position.set(width / 2, height / 2, length / 2);
+    group.visible = untrack(() => showBounds);
+    bounds = group;
+    scene.add(group);
   }
 
   /** How big the gizmo is, and how far it sits from the corner, in CSS px. */
@@ -647,6 +710,14 @@ import { isTyping } from "./typing.js";
    * renderer for; spending one on an ornament would be the worst possible
    * use of it.
    */
+  /**
+   * The document's box, as edges plus a barely-there skin.
+   *
+   * Its own object, never handed to the raycaster: `pickBlockAt` and
+   * `faceAt` test `loaded` alone, so a cage around the whole build cannot
+   * swallow a click meant for a block inside it.
+   */
+  let bounds: THREE.Group | undefined;
   let compassScene: THREE.Scene | undefined;
   let compassCamera: THREE.OrthographicCamera | undefined;
   let compassGroup: THREE.Group | undefined;
@@ -1956,6 +2027,7 @@ import { isTyping } from "./typing.js";
       scene.add(sun);
 
       buildGrid();
+      buildBounds();
 
       /*
        * The gizmo's own scene and camera: a unit sphere seen orthographically
@@ -2614,6 +2686,13 @@ import { isTyping } from "./typing.js";
   $effect(() => {
     void documentSize;
     placeGrid();
+    // The cage *is* the size, so unlike the grid it is rebuilt rather than
+    // moved.
+    buildBounds();
+  });
+
+  $effect(() => {
+    if (bounds) bounds.visible = showBounds;
   });
 
   $effect(() => {
@@ -2686,6 +2765,7 @@ import { isTyping } from "./typing.js";
     highlightMaterial?.color.copy(themeColor("--selection", 0x6ea8fe));
     buildGrid();
     buildCompass();
+    buildBounds();
   });
 
   /**

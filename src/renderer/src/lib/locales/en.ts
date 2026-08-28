@@ -124,6 +124,9 @@ export const en = {
   "viewport.orbit": "Orbit",
   "viewport.creative": "Creative",
   "viewport.orbitHint": "Orbit around the structure, and click to select",
+  "viewport.orthographic": "2.5D",
+  "viewport.orthographicHint":
+    "Draw without perspective, so parallel lines stay parallel and distance does not shrink a block. Orbit only \u2014 flying needs a point of view.",
   "viewport.creativeHint": "Fly through it — WASD, Space and Shift",
   "viewport.hudOrbit":
     "Left: pan · Right: rotate · Wheel: zoom · Click: select · Drag a face: resize · R: reset",

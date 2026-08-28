@@ -3189,6 +3189,31 @@ import VersionsModal from "./lib/VersionsModal.svelte";
     </div>
 
     <!--
+      A real checkbox rather than a third button in the group above: it is
+      not a fourth camera mode, it is a property of one of them.
+
+      Disabled in flight, and that is the same rule the Stop button is
+      under -- an orthographic projection has no point of view for
+      `PointerLockControls` to move, so flight ignores it, and a live
+      control that does nothing is worse than a greyed one that says why.
+      The viewer forces perspective regardless, because the *setting* is
+      on disk and outlives the mode: launching straight into flight with
+      `orthographic` stored has to come out right too.
+    -->
+    <label class="projection" title={t("viewport.orthographicHint")}>
+      <input
+        type="checkbox"
+        checked={settings.preview.projection === "orthographic"}
+        disabled={cameraMode === "fly"}
+        onchange={(event) =>
+          void patchPreview({
+            projection: event.currentTarget.checked ? "orthographic" : "perspective",
+          })}
+      />
+      {t("viewport.orthographic")}
+    </label>
+
+    <!--
       Text buttons rather than icons: there is no glyph for "the file's NBT" or
       "WorldEdit's paste anchor" that anyone would read correctly, and the bar
       already mixes both. They sit before the gear, which carries the auto
@@ -3549,6 +3574,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
       maxDpr={settings.preview.maxDpr}
       renderScale={settings.preview.renderScale}
       maxDrawDistance={settings.preview.maxDrawDistance}
+      projection={settings.preview.projection}
       showGrid={settings.preview.showGrid}
       wireframe={settings.preview.wireframe}
       sky={settings.preview.sky}
@@ -3815,6 +3841,21 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   .camera-modes button.active {
     background: var(--accent);
     color: var(--accent-contrast);
+  }
+
+  .projection {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  /* Greyed rather than hidden: a control that comes and goes with the
+     camera mode reads as a bug in the bar. */
+  .projection:has(input:disabled) {
+    opacity: 0.5;
   }
 
   .preview :global(.viewer) {

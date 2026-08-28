@@ -67,3 +67,26 @@ export function depthEpsilon(near: number, far: number, distance: number, bits =
   const steps = 2 ** bits - 1;
   return (distance * distance * (1 / safeNear - 1 / safeFar)) / steps;
 }
+
+/**
+ * The same question for an orthographic projection, where the answer does not
+ * depend on distance at all.
+ *
+ * There is no `1/z` in an orthographic depth buffer: the mapping is linear, so
+ * one step is worth `(far - near) / (2^bits - 1)` world units everywhere in the
+ * frustum. That makes the coplanar problem *strictly easier* under
+ * orthographic than under perspective -- the worst case is the perspective far
+ * corner, and this is finer than it by orders of magnitude.
+ *
+ * Which is the point of exporting it. `COPLANAR_OFFSET` is denominated in
+ * depth-buffer steps rather than world units, so it covers both projections
+ * unchanged, and the temptation on adding an orthographic mode is to conclude
+ * that a hand-picked epsilon would now be safe. It would be safe *here* and
+ * still wrong the moment the camera goes back to perspective, which is one
+ * checkbox away.
+ */
+export function orthoDepthEpsilon(near: number, far: number, bits = 24): number {
+  const safeFar = far > 0 ? far : 2048;
+  const safeNear = near > 0 && near < safeFar ? near : safeFar / 1000;
+  return (safeFar - safeNear) / (2 ** bits - 1);
+}

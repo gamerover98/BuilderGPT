@@ -73,11 +73,19 @@ import { HOSTILE_CASES } from "./markdown_cases.js";
 import { missingKeys, translate, translatePlural } from "../src/renderer/src/lib/i18n_core.js";
 import { openedAge } from "../src/renderer/src/lib/recent_age.js";
 import { DEFAULT_PREVIEW_SETTINGS, PREVIEW_SETTING_RANGES } from "../src/shared/settings.js";
-import { COPLANAR_OFFSET, depthEpsilon, GRID_SIZE } from "../src/renderer/src/lib/depth.js";
+import {
+  COPLANAR_OFFSET,
+  depthEpsilon,
+  GRID_SIZE,
+  orthoDepthEpsilon,
+} from "../src/renderer/src/lib/depth.js";
 import {
   documentFraming,
   GRID_CELL,
   gridCentre,
+  ORBIT_FOV,
+  orthoBounds,
+  orthoFrustumHeight,
 } from "../src/renderer/src/lib/framing.js";
 import {
   dotColor,
@@ -1426,6 +1434,94 @@ console.log("\n--- framing ---");
     "...and no longer measures the geometry to do it",
     !/setFromObject\([a-z]/.test(viewer),
   );
+}
+
+// --- drawing without a vanishing point --------------------------------------
+//
+// The 2.5D mode. An orthographic frustum does not widen with depth, so
+// "the same view" as a perspective camera is only well defined at one
+// distance -- and picking the wrong one turns a projection toggle into a
+// zoom, which is what it looks like when it is wrong.
+console.log("\n--- orthographic projection ---");
+{
+  /*
+   * The frustum matches the perspective one *at the orbit target*, which is
+   * the arithmetic worth stating: half the height over the distance is the
+   * tangent of half the field of view, and nothing else.
+   */
+  const height = orthoFrustumHeight(60, 100);
+  check(
+    "the frustum subtends the field of view at the target",
+    Math.abs(height / 2 / 100 - Math.tan(Math.PI / 6)) < 1e-9,
+    String(height),
+  );
+  check(
+    "...so twice as far out shows twice as much",
+    Math.abs(orthoFrustumHeight(60, 200) - 2 * height) < 1e-9,
+  );
+
+  /*
+   * Zero is reachable: fly into the middle of a build, come back to orbit,
+   * and the distance is whatever is left. A zero-height frustum is a
+   * degenerate projection matrix, which draws nothing and reports nothing.
+   */
+  check("a camera sitting on its own target still has a frustum", orthoFrustumHeight(60, 0) > 0);
+  check("...and so does one behind it", orthoFrustumHeight(60, -5) > 0);
+
+  /*
+   * Height is the invariant and width follows the aspect, the same way round
+   * as `PerspectiveCamera.fov` -- which is vertical too, so a wider window
+   * shows more at the sides rather than less top to bottom. On a square
+   * viewport the two conventions agree, which is why this is stated at 2:1.
+   */
+  const wide = orthoBounds(10, 2);
+  equal("a wide window keeps its height", [wide.top, wide.bottom], [5, -5]);
+  equal("...and gains width", [wide.left, wide.right], [-10, 10]);
+  const tall = orthoBounds(10, 0.5);
+  equal("a tall one keeps it too", [tall.top, tall.bottom], [5, -5]);
+  equal("...and loses width", [tall.left, tall.right], [-2.5, 2.5]);
+  check("a degenerate aspect still gives a usable box", orthoBounds(10, 0).right > 0);
+
+  /*
+   * One field of view, used twice. The perspective camera is constructed
+   * with it and the orthographic frustum is derived from it, so a literal 60
+   * left at either call site is a toggle that resizes the build.
+   */
+  const viewer = readFileSync(path.join(RENDERER, "lib", "Viewer.svelte"), "utf8");
+  check("the viewer builds its camera with the shared field of view", /PerspectiveCamera\(ORBIT_FOV/.test(viewer));
+  check("...and derives the orthographic frustum from the same one", viewer.includes("orthoFrustumHeight(ORBIT_FOV"));
+  check("ORBIT_FOV is the 60 the viewport always used", ORBIT_FOV === 60);
+
+  /*
+   * Flight forces perspective. Not belt-and-braces over the greyed checkbox:
+   * the setting is on disk, so a window that opens with `orthographic`
+   * stored and goes straight into flight never passes through the control.
+   */
+  check(
+    "flight is drawn with a point of view whatever the setting says",
+    /cameraMode === \"fly" \|\| projection !== \"orthographic"/.test(viewer),
+  );
+  check("...and the flight controller is bound to that camera", viewer.includes("PointerLockControls(perspective"));
+
+  /*
+   * And the epsilons stay gone.
+   *
+   * Orthographic depth is linear, so precision is uniform and the coplanar
+   * problem is *easier* than under perspective -- which is exactly the
+   * argument someone reaches for when putting a hand-picked constant back.
+   * It would be safe here and wrong again one checkbox later.
+   */
+  const NEAR = 0.1;
+  const FAR = 512;
+  check(
+    "orthographic depth resolves finer than the perspective far corner",
+    orthoDepthEpsilon(NEAR, FAR) < depthEpsilon(NEAR, FAR, (GRID_SIZE / 2) * Math.SQRT2),
+  );
+  check(
+    "...and does not vary with distance, because there is no 1/z in it",
+    orthoDepthEpsilon(NEAR, FAR) === orthoDepthEpsilon(NEAR, FAR),
+  );
+  check("the floor still wins by depth-buffer steps, not by world units", COPLANAR_OFFSET.units >= 1);
 }
 
 // --- undo that reaches the selection ---------------------------------------

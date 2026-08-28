@@ -49,10 +49,17 @@ import {
   import { isSpuriousLook } from "./look_filter.js";
   import { api } from "./bridge.svelte.js";
   import { COPLANAR_OFFSET, GRID_DIVISIONS, GRID_SIZE } from "./depth.js";
-  import { documentFraming, gridCentre } from "./framing.js";
+  import {
+    documentFraming,
+    gridCentre,
+    ORBIT_FOV,
+    orthoBounds,
+    orthoFrustumHeight,
+  } from "./framing.js";
   import { skyAt, skyDistance } from "./sky.js";
   import { fitShadow } from "./shadow_fit.js";
   import type { Face, PlacementLook } from "../../../shared/block_orientation.js";
+  import type { Projection } from "../../../shared/settings.js";
 import { isTyping } from "./typing.js";
   import * as THREE from "three";
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -146,6 +153,14 @@ import { isTyping } from "./typing.js";
     maxDpr: number;
     renderScale: number;
     maxDrawDistance: number;
+    /**
+     * With a vanishing point, or without one.
+     *
+     * Orbit only. Flight forces perspective back on, because
+     * `PointerLockControls` moves a point of view and an orthographic
+     * projection does not have one -- flying inside it means nothing.
+     */
+    projection?: Projection;
     showGrid: boolean;
     wireframe: boolean;
     /**
@@ -285,6 +300,7 @@ import { isTyping } from "./typing.js";
     maxDpr,
     renderScale,
     maxDrawDistance,
+    projection = "perspective",
     showGrid,
     wireframe,
     sky,
@@ -445,7 +461,22 @@ import { isTyping } from "./typing.js";
    */
   let renderer: THREE.WebGLRenderer | undefined;
   let scene = $state<THREE.Scene | undefined>(undefined);
-  let camera: THREE.PerspectiveCamera | undefined;
+  /**
+   * Two cameras, one of which is `camera` at any moment.
+   *
+   * Both are kept rather than one being rebuilt on the toggle, because the
+   * perspective one is also the *flight* camera: `PointerLockControls` binds
+   * to whatever it was constructed with, and rebuilding under it would leave
+   * it steering a camera nothing draws with.
+   *
+   * Everything below goes on using `camera`, which is the point -- the
+   * position, the quaternion, the clipping planes, `getWorldDirection` and
+   * `Raycaster.setFromCamera` are common to the two. Only `resize` and the
+   * construction have to know which is which.
+   */
+  let perspective: THREE.PerspectiveCamera | undefined;
+  let ortho: THREE.OrthographicCamera | undefined;
+  let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined;
   let controls: OrbitControls | undefined;
   let sun: THREE.DirectionalLight | undefined;
   let ambient: THREE.HemisphereLight | undefined;
@@ -1571,14 +1602,78 @@ import { isTyping } from "./typing.js";
     controls.update();
   }
 
+  /**
+   * OrbitControls on the camera that is current, with this app's mapping.
+   *
+   * Rebuilt rather than re-pointed when the projection changes. Swapping
+   * `controls.object` does work, and it leaves `object0` -- the clone the
+   * constructor takes for `reset()` -- describing a camera that is no longer
+   * in use. Nothing here calls `reset()` today, which is exactly the kind of
+   * dependency that is fine until it is not. Rebuilding costs two DOM
+   * listeners on a gesture a user makes by hand.
+   *
+   * `enabled` is decided here rather than left to the effect that owns it,
+   * because the two run in the same flush and this one may run second: a
+   * flag written onto the controls that were about to be replaced is a flag
+   * that was never written.
+   */
+  function makeControls(target: THREE.Vector3): OrbitControls {
+    const next = new OrbitControls(camera!, renderer!.domElement);
+    next.enableDamping = true;
+    next.dampingFactor = 0.08;
+    next.screenSpacePanning = true;
+    next.mouseButtons = {
+      LEFT: THREE.MOUSE.PAN,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.ROTATE,
+    };
+    next.target.copy(target);
+    next.enabled = cameraMode !== "fly";
+    next.update();
+    return next;
+  }
+
   function resize(): void {
     if (!renderer || !camera || !container) return;
     const width = container.clientWidth || 1;
     const height = container.clientHeight || 1;
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
+    applyProjection(width / height);
     renderer.setSize(width, height, false);
     reportRect();
+  }
+
+  /**
+   * Gives the active camera the frustum this viewport's shape asks for.
+   *
+   * The orthographic half is derived from the distance to what is being
+   * orbited, through `orthoFrustumHeight`: an orthographic frustum does not
+   * widen with depth, so "the same view" is only well defined at one
+   * distance, and the one worth matching is the thing being looked at.
+   * Without it the toggle reads as a zoom rather than as a projection.
+   *
+   * Stable across a window resize, because in orthographic OrbitControls
+   * dollies by writing `camera.zoom` and never moves the camera -- so the
+   * distance this reads does not change while zooming, and recomputing from
+   * it cannot undo the zoom.
+   */
+  function applyProjection(aspect: number): void {
+    if (camera === undefined) return;
+    if (camera === ortho && ortho !== undefined) {
+      const distance = controls
+        ? ortho.position.distanceTo(controls.target)
+        : ortho.position.length();
+      const bounds = orthoBounds(orthoFrustumHeight(ORBIT_FOV, distance), aspect);
+      ortho.left = bounds.left;
+      ortho.right = bounds.right;
+      ortho.top = bounds.top;
+      ortho.bottom = bounds.bottom;
+      ortho.updateProjectionMatrix();
+      return;
+    }
+    if (perspective !== undefined) {
+      perspective.aspect = aspect;
+      perspective.updateProjectionMatrix();
+    }
   }
 
   /**
@@ -1634,18 +1729,16 @@ import { isTyping } from "./typing.js";
       scene = new THREE.Scene();
       scene.background = themeColor("--viewport-bg", 0x0b0f14);
 
-      camera = new THREE.PerspectiveCamera(60, 1, 0.1, maxDrawDistance || 2048);
-      camera.position.set(32, 32, 32);
+      const far = maxDrawDistance || 2048;
+      perspective = new THREE.PerspectiveCamera(ORBIT_FOV, 1, 0.1, far);
+      perspective.position.set(32, 32, 32);
+      // The sides are placeholders: `resize` runs before the first frame and
+      // derives them from the aspect and the orbit distance.
+      ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, far);
+      ortho.position.copy(perspective.position);
+      camera = perspective;
 
-      controls = new OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
-      controls.dampingFactor = 0.08;
-      controls.screenSpacePanning = true;
-      controls.mouseButtons = {
-        LEFT: THREE.MOUSE.PAN,
-        MIDDLE: THREE.MOUSE.DOLLY,
-        RIGHT: THREE.MOUSE.ROTATE,
-      };
+      controls = makeControls(new THREE.Vector3());
 
       ambient = new THREE.HemisphereLight(0xffffff, 0x1a2230, 0.9);
       scene.add(ambient);
@@ -1656,7 +1749,9 @@ import { isTyping } from "./typing.js";
 
       resize();
 
-      fly = new PointerLockControls(camera, renderer.domElement);
+      // Bound to the perspective camera for good, which is safe because the
+      // effect below forces perspective on whenever flight is.
+      fly = new PointerLockControls(perspective, renderer.domElement);
       fly.addEventListener("lock", () => {
         flying = true;
         lockedAt = performance.now();
@@ -2166,10 +2261,16 @@ import { isTyping } from "./typing.js";
     resize();
   });
 
+  // Both cameras, not the active one: the inactive one is a checkbox away
+  // from being drawn with, and a far plane it never received is a build that
+  // half disappears the moment the projection is switched.
   $effect(() => {
-    if (!camera) return;
-    camera.far = maxDrawDistance || 2048;
-    camera.updateProjectionMatrix();
+    const far = maxDrawDistance || 2048;
+    for (const which of [perspective, ortho]) {
+      if (which === undefined) continue;
+      which.far = far;
+      which.updateProjectionMatrix();
+    }
   });
 
   /*
@@ -2343,6 +2444,54 @@ import { isTyping } from "./typing.js";
   });
 
   /**
+   * Which of the two cameras is the one being drawn with.
+   *
+   * **Flight always wins.** An orthographic projection has no point of view
+   * -- every ray through it is parallel -- so there is nothing for
+   * `PointerLockControls` to move and nothing a step forward would make
+   * larger.
+   *
+   * The checkbox is greyed while flying, so it is never a live control doing
+   * nothing, and this rule is still not redundant with that: the *setting*
+   * lives on disk and outlives the mode, so a window that opens with
+   * `orthographic` stored and goes straight into flight has to come out
+   * right without anybody touching the checkbox at all.
+   *
+   * The pose is carried across by hand. Both cameras exist from mount and
+   * only one of them has been moved since, so the incoming one is wherever
+   * it was left -- which for the whole of a session is `(32, 32, 32)`,
+   * pointing at nothing.
+   *
+   * Declared before the effect that owns `controls.enabled`, so that when
+   * both fire on one `cameraMode` change this one replaces the controls
+   * first and the other writes onto the pair that survives.
+   */
+  $effect(() => {
+    /*
+     * Read so this re-runs once the cameras exist.
+     *
+     * Effects can run before `onMount`, and this one's only other
+     * dependencies are two props that a fresh window never changes: a
+     * settings file saying `orthographic` would have been read, found no
+     * cameras to switch between, returned, and never been asked again. Same
+     * reason `scene` is `$state` at all -- see its declaration.
+     */
+    void scene;
+    const wanted =
+      cameraMode === "fly" || projection !== "orthographic" ? perspective : ortho;
+    if (wanted === undefined || camera === undefined || wanted === camera) return;
+    wanted.position.copy(camera.position);
+    wanted.quaternion.copy(camera.quaternion);
+    const target = controls ? controls.target.clone() : new THREE.Vector3();
+    camera = wanted;
+    controls?.dispose();
+    controls = makeControls(target);
+    // The orthographic frustum is a function of the orbit distance, which
+    // the line above has just settled.
+    resize();
+  });
+
+  /**
    * Exactly one controller drives the camera at a time.
    *
    * OrbitControls is disabled rather than disposed in fly mode: it keeps its
@@ -2368,6 +2517,9 @@ import { isTyping } from "./typing.js";
           .add(camera.position);
         controls.target.copy(ahead);
         controls.update();
+        // Orthographic sizes itself from the distance to the target, and
+        // the line above just moved it.
+        resize();
       }
     }
   });

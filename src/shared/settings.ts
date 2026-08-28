@@ -65,7 +65,26 @@ export const DEFAULT_BIOME_COLOR = "#91bd59";
  */
 export const DEFAULT_WATER_COLOR = "#3f76e4";
 
+/**
+ * How the orbit camera projects: with a vanishing point, or without one.
+ *
+ * `"orthographic"` is the isometric look -- parallel lines stay parallel and a
+ * block the far side of the build is drawn exactly as large as one at the near
+ * side, which is what makes a schematic readable as a plan rather than as a
+ * photograph.
+ *
+ * A union, and the one field in `PreviewSettings` that is not a number or a
+ * boolean, so it is worth saying why it needs no validation while `ui.theme`
+ * does: `coerceSettings` spreads `preview` over the defaults without checking
+ * anything, and the read of this is *total* -- anything that is not exactly
+ * `"orthographic"` is drawn with perspective, which is the default. A junk
+ * value is therefore indistinguishable from an absent one, which is the only
+ * property that makes the spread safe.
+ */
+export type Projection = "perspective" | "orthographic";
+
 export interface PreviewSettings {
+  projection: Projection;
   sunAzimuthDeg: number;
   sunElevationDeg: number;
   maxDpr: number;
@@ -181,6 +200,7 @@ export interface PreviewSettings {
 
 /** component.py:319-328 slider/checkbox defaults, verbatim. */
 export const DEFAULT_PREVIEW_SETTINGS: PreviewSettings = {
+  projection: "perspective",
   sunAzimuthDeg: 60,
   sunElevationDeg: 35,
   maxDpr: 1.6,

@@ -1603,6 +1603,58 @@ call sites run from the rendering steps. The grep has to name the *effect* and
 not only the call — checking for `gridCentre(` alone passes with the answer
 computed and thrown away, which was verified by doing exactly that.
 
+**The viewport has two cameras and draws with one of them.** `preview.projection`
+picks between them: perspective, and the 2.5D orthographic view where parallel
+lines stay parallel and a block at the far side of a build is drawn exactly as
+large as one at the near side. Both are built at mount and kept, because the
+perspective one is also the *flight* camera {EM} `PointerLockControls` binds to
+whatever it was constructed with, and rebuilding under it would leave it
+steering a camera nothing draws with.
+
+Everything else in `Viewer.svelte` goes on saying `camera`, which is most of why
+this is cheap: the position, the quaternion, the clipping planes,
+`getWorldDirection` and `Raycaster.setFromCamera` are common to the two. Only
+`applyProjection` and the construction have to know which is which.
+
+**Flight always wins, and that rule is not the greyed checkbox restated.** An
+orthographic projection has no point of view {EM} every ray through it is
+parallel {EM} so there is nothing for the flight controller to move and nothing
+a step forward would make larger. The checkbox is disabled in flight so it is
+never a live control doing nothing, which is the Stop button's rule; the
+*setting* is on disk and outlives the mode, so a window that opens with
+`orthographic` stored and goes straight into flight has to come out right with
+nobody having touched the checkbox at all.
+
+**One field of view, used twice.** `ORBIT_FOV` in `framing.ts` builds the
+perspective camera and `orthoFrustumHeight` derives the orthographic frustum
+from it, matched **at the distance to `controls.target`**. An orthographic
+frustum does not widen with depth, so "the same view" is only well defined at
+one distance, and the one worth matching is the thing being looked at {EM} get
+it wrong and the toggle reads as a zoom rather than as a projection. A literal
+`60` left at either call site is that bug, so `tests/ui.ts` greps for both.
+
+It stays right across a window resize because OrbitControls dollies an
+orthographic camera by writing `camera.zoom` and never moves it: the distance
+`applyProjection` reads does not change while zooming, so recomputing from it
+cannot undo the zoom. What it does *not* survive is the target moving, which is
+why leaving flight calls `resize()` after it puts the target back.
+
+`projection` is the one field in `PreviewSettings` that is not a number or a
+boolean, and it still needs no validation {EM} which is worth stating, because
+`ui.theme` does. `coerceSettings` spreads `preview` over the defaults without
+checking anything, and this read is **total**: anything that is not exactly
+`"orthographic"` is drawn with perspective. A junk value is therefore
+indistinguishable from an absent one, and that property is the whole of what
+makes the spread safe for it.
+
+**And the epsilons stay gone.** Orthographic depth is linear, so precision is
+uniform and the coplanar problem is *easier* than under perspective {EM} which
+is exactly the argument for putting a hand-picked constant back. It would be
+safe there and wrong again one checkbox later. `orthoDepthEpsilon` exists in
+`depth.ts` to be checked against `depthEpsilon` at the grid's far corner rather
+than to be called; `COPLANAR_OFFSET` is denominated in depth-buffer steps and
+so covers both projections unchanged.
+
 **Block icons are meshed by the same pipeline as the viewport.**
 `services/block_icons.ts` runs a 1×1×1 document through `buildDocumentPreview`,
 so an icon cannot disagree with what appears when the block is placed. It has to

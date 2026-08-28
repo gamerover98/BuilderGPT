@@ -81,3 +81,50 @@ export function documentFraming(size: BoxSize): { target: Vec3; position: Vec3 }
     },
   };
 }
+
+/**
+ * The viewport's vertical field of view, in degrees.
+ *
+ * Named here rather than left as a literal at the `PerspectiveCamera` call
+ * because the orthographic camera has to match it: switching projection must
+ * not resize the build on screen, and the only way to be sure of that is for
+ * both to be derived from one number.
+ */
+export const ORBIT_FOV = 60;
+
+/**
+ * How tall a slice of the world an orthographic camera must show to frame the
+ * same thing a perspective one frames at `distance`.
+ *
+ * A perspective camera's frustum widens with depth; an orthographic one's does
+ * not, so "the same view" is only well defined at one distance. The distance to
+ * `controls.target` is the right one: it is what the user is looking *at*, and
+ * matching there is what makes the toggle read as a change of projection rather
+ * than as a jump.
+ *
+ * Clamped away from zero. The target can be reached exactly -- fly into the
+ * middle of a build, switch back to orbit, and the distance is whatever is
+ * left -- and a zero-height frustum is a camera with a degenerate projection
+ * matrix, which renders nothing at all and reports no error.
+ */
+export function orthoFrustumHeight(fovDeg: number, distance: number): number {
+  const height = 2 * Math.max(0, distance) * Math.tan(((fovDeg * Math.PI) / 180) / 2);
+  return Math.max(height, 1e-3);
+}
+
+/**
+ * That height as the four sides an `OrthographicCamera` wants.
+ *
+ * Height is the invariant and width follows the aspect, which is the same way
+ * round as a perspective camera: `fov` is vertical there too, so a window made
+ * wider shows more of the world at the sides rather than less of it top to
+ * bottom. Getting this the other way round is invisible on a square viewport.
+ */
+export function orthoBounds(
+  height: number,
+  aspect: number,
+): { left: number; right: number; top: number; bottom: number } {
+  const half = height / 2;
+  const wide = half * (aspect > 0 ? aspect : 1);
+  return { left: -wide, right: wide, top: half, bottom: -half };
+}

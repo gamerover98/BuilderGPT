@@ -1037,6 +1037,10 @@ export class ModelBaker {
   // RULEBOOK §1 Record-over-Map row: both caches below.
   private readonly cache: Record<string, BakedBlock> = {};
   private readonly textureCache: Record<string, RgbaImage> = {};
+  /** Cut glyphs, and the ones known to have nothing to draw. */
+  private readonly glyphCache = new Map<string, { key: string | null; advance: number } | null>();
+  /** `undefined` until asked for, `null` once the pack is known to lack it. */
+  private fontSheet: RgbaImage | null | undefined;
   /** Memo for `alphaOf`; a texture's alpha does not change once decoded. */
   private readonly opaqueTextures = new Map<string, "opaque" | "cutout" | "translucent">();
   /** Tinted copies of the animated textures, and the keys already done. */
@@ -1129,6 +1133,91 @@ export class ModelBaker {
    */
   isTextureTranslucent(key: string): boolean {
     return this.alphaOf(key) === "translucent";
+  }
+
+  /**
+   * One character of sign text, as an atlas tile and the width it takes up.
+   *
+   * `textures/font/ascii.png` is a 16x16 grid indexed by code point, which the
+   * bundled pack ships like any other texture -- so a sign's text needs nothing
+   * vendored and nothing fetched, the same standing rule the block models are
+   * under. Cut into per-character tiles rather than registered whole for two
+   * reasons: `MAX_TILE` is 256 and the sheet is 512 in this pack, so the atlas
+   * would subsample it four to one and take a pixel in sixteen of a font; and
+   * the tint has to be per character anyway, because it is baked in.
+   *
+   * **Only the ASCII page.** The accented and non-latin pages are laid out by
+   * `font/default.json`, which lives in the client jar and is not in a texture
+   * pack, so their code points cannot be looked up here. A character outside
+   * the page draws nothing rather than drawing the wrong glyph.
+   *
+   * `advance` is in the font's own 8-pixel units and is *measured*, exactly as
+   * the game measures it: the last column with a pixel in it, plus one for the
+   * gap. Minecraft's font is proportional -- an `i` is two wide and an `m` is
+   * six -- and laying it out fixed-width is instantly recognisable as wrong.
+   * A space has no pixels and no column to find, so it takes vanilla's four.
+   */
+  async glyph(
+    code: number,
+    colour: readonly [number, number, number],
+  ): Promise<{ key: string | null; advance: number } | null> {
+    if (!Number.isInteger(code) || code < 0 || code > 0xff) return null;
+    const hex = colour.map((c) => c.toString(16).padStart(2, "0")).join("");
+    const key = `minecraft:font/glyph_${code}_${hex}`;
+    const known = this.glyphCache.get(key);
+    if (known !== undefined) return known;
+
+    const sheet = await this.fontPage();
+    if (sheet === null) {
+      this.glyphCache.set(key, null);
+      return null;
+    }
+    const cell = Math.floor(sheet.width / 16);
+    const left = (code % 16) * cell;
+    const top = Math.floor(code / 16) * cell;
+    const tile = new Uint8Array(cell * cell * 4);
+    let lastInk = -1;
+    for (let y = 0; y < cell; y += 1) {
+      for (let x = 0; x < cell; x += 1) {
+        const from = ((top + y) * sheet.width + left + x) * 4;
+        const to = (y * cell + x) * 4;
+        const alpha = sheet.data[from + 3];
+        tile[to] = (sheet.data[from] * colour[0]) / 255;
+        tile[to + 1] = (sheet.data[from + 1] * colour[1]) / 255;
+        tile[to + 2] = (sheet.data[from + 2] * colour[2]) / 255;
+        tile[to + 3] = alpha;
+        if (alpha >= 8 && x > lastInk) lastInk = x;
+      }
+    }
+    // The sheet is drawn at some multiple of the font's 8-pixel cell; the pack
+    // decides which, and the advance is stated in the font's units.
+    const scale = cell / 8;
+    /*
+     * Three answers, not two. `null` is "there is nothing here" -- a code point
+     * off the page -- and a **null key with an advance** is a space: it takes
+     * room and draws nothing. Folded together, a space got a tile that was
+     * never registered, and every one of them emitted a quad addressing a
+     * texture the atlas had never heard of.
+     */
+    const answer: { key: string | null; advance: number } | null =
+      lastInk < 0
+        ? code === 0x20
+          ? { key: null, advance: 4 }
+          : null
+        : { key, advance: Math.ceil((lastInk + 1) / scale) + 1 };
+    if (answer !== null && answer.key !== null) {
+      this.textureCache[key] = { width: cell, height: cell, data: tile };
+    }
+    this.glyphCache.set(key, answer);
+    return answer;
+  }
+
+  /** The ASCII font page, loaded once. `null` once it is known to be absent. */
+  private async fontPage(): Promise<RgbaImage | null> {
+    if (this.fontSheet === undefined) {
+      this.fontSheet = await this.textureSource.loadTexture("minecraft:font/ascii");
+    }
+    return this.fontSheet;
   }
 
   /** Cached verdict on a decoded texture's alpha channel. */

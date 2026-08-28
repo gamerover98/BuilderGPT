@@ -28,6 +28,7 @@ import {
   type ChunkMeshCache,
 } from "../src/main/pipeline/chunked_mesh.js";
 import { buildMesh, culledFaces } from "../src/main/pipeline/mesher.js";
+import { readSignText, type SignText } from "../src/main/pipeline/sign_text.js";
 import { ModelBaker } from "../src/main/pipeline/model_baker.js";
 import type { MeshBuffers, PaletteEntry } from "../src/main/pipeline/types.js";
 
@@ -50,10 +51,23 @@ function equal(label: string, actual: unknown, expected: unknown): void {
   check(label, ok);
 }
 
-const block = (name: string): PaletteEntry => ({ namespacedName: name, properties: {} });
+const block = (name: string, properties: Record<string, string> = {}): PaletteEntry => ({
+  namespacedName: name,
+  properties,
+});
 const STONE = block("minecraft:stone");
 const PLANKS = block("minecraft:oak_planks");
 const GLASS = block("minecraft:glass");
+const SIGN = block("minecraft:oak_sign", { rotation: "0" });
+
+/** A sign saying one thing, as the mesher is handed it. */
+function sign(line: string): SignText {
+  const read = readSignText({
+    Text1: { type: "string", value: JSON.stringify({ text: line }) },
+  } as never);
+  if (read === null) throw new Error("the fixture says nothing");
+  return read;
+}
 const AIR = block("minecraft:air");
 
 /** A stable fingerprint of the geometry, order included. */
@@ -103,10 +117,14 @@ async function fromScratch(doc: SchematicDocument) {
   return buildChunkedMesh(structure, baker, atlas.uvRects, 1, createChunkMeshCache());
 }
 
-async function incremental(doc: SchematicDocument, cache: ChunkMeshCache) {
+async function incremental(
+  doc: SchematicDocument,
+  cache: ChunkMeshCache,
+  signs: ReadonlyMap<number, SignText> | null = null,
+) {
   const structure = toStructureData(doc);
   const atlas = buildAtlas(baker.textures);
-  return buildChunkedMesh(structure, baker, atlas.uvRects, 1, cache);
+  return buildChunkedMesh(structure, baker, atlas.uvRects, 1, cache, null, signs);
 }
 
 // --- chunked output matches the unchunked mesher ----------------------------
@@ -200,6 +218,34 @@ console.log("\n--- and it skips the untouched chunks ---");
   setBlock(doc, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, PLANKS);
   const corner = await incremental(doc, boundary.cache);
   equal("one on a three-axis corner rebuilds four", corner.rebuilt, 4);
+
+  /*
+   * ...and a sign that has been retyped, which is the third thing this cache
+   * has had to learn to see.
+   *
+   * The rule is the same one and this is why it is a rule: a voxel grid and a
+   * light grid are what the cache compares, and text is neither. Editing a
+   * sign's words moved nothing either array holds, so the chunk stayed exactly
+   * as it was -- the old sign on screen and the new one in the file, until some
+   * unrelated edit nearby happened to dirty it.
+   *
+   * One chunk and not seven. `markDirty` spreads to the face-neighbours because
+   * light does; text does not leave the block it is written on.
+   */
+  setBlock(doc, 5, 5, 5, SIGN);
+  const at = 5 * doc.height * doc.length + 5 * doc.length + 5;
+  const said = (line: string) => new Map([[at, sign(line)]]);
+  const written = await incremental(doc, corner.cache, said("prima"));
+  check("placing the sign rebuilt its chunk", written.rebuilt >= 1);
+
+  const same = await incremental(doc, written.cache, said("prima"));
+  equal("the same words rebuild nothing", same.rebuilt, 0);
+
+  const retyped = await incremental(doc, same.cache, said("dopo"));
+  equal("retyping it rebuilds exactly its chunk", retyped.rebuilt, 1);
+
+  const rubbedOut = await incremental(doc, retyped.cache, new Map());
+  equal("...and rubbing it out does too", rubbedOut.rebuilt, 1);
 }
 
 // --- what has to invalidate everything --------------------------------------

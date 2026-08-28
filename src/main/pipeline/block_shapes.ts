@@ -1539,36 +1539,71 @@ const HANGING_CHAIN: Readonly<Record<string, UvWindow>> = {
   west: sheetWindow(21, 7, 5, 6),
 };
 
-function standingSign(entry: PaletteEntry): BlockShape {
+/**
+ * A sign's board and the quarter-turns it takes, which is the one thing the
+ * three shapes below and `signTextPlanes` have to agree about.
+ *
+ * They did not, twice over. A wall sign was turned by `facingSteps + 2` and its
+ * model is authored on the **south** wall looking north, so every one of them
+ * came out a quarter-turn round the block — a sign that says `facing=north`
+ * hanging on the west wall. And a wall hanging sign was handed to the hanging
+ * shape whole, which reads `rotation`: a wall hanging sign has none, so
+ * `Number(undefined)` was `NaN`, the guard turned that into zero steps, and all
+ * twelve of them faced south whatever the file said.
+ *
+ * Both are invisible from inside a shape function — the geometry is a plausible
+ * sign either way — and both stop being invisible the moment there is *text* on
+ * it, which is why they are fixed here rather than filed.
+ */
+function signBoard(entry: PaletteEntry): { box: Box; steps: number } {
+  const name = entry.namespacedName.slice(entry.namespacedName.indexOf(":") + 1);
   // `rotation` is 0..15 around the compass; the boards are square in plan, so
   // the sixteenth-turns land on the nearest quarter.
-  const sixteenths = Number(entry.properties.rotation ?? "0");
-  const steps = Number.isFinite(sixteenths) ? Math.round(sixteenths / 4) : 0;
+  const sixteenths = Number(entry.properties.rotation);
+  const spun = Number.isFinite(sixteenths) ? Math.round(sixteenths / 4) : null;
+  if (name.endsWith("_wall_sign")) {
+    return { box: [0, 4, 14, 16, 12, 16], steps: northFacingSteps(entry) };
+  }
+  if (name.endsWith("_wall_hanging_sign")) {
+    // The one bolted to a wall carries `facing` and no `rotation` at all, and
+    // the model is authored looking south. Reading `rotation` off it gave
+    // `NaN`, which the guard turned into zero: twelve blocks all facing south.
+    return { box: [1, 0, 7, 15, 10, 9], steps: southFacingSteps(entry) };
+  }
+  if (name.endsWith("_hanging_sign")) {
+    // ...and the one that hangs from a ceiling carries `rotation` and no
+    // `facing`. Falling through to a facing-derived answer here would default
+    // it to east and turn every one of them a quarter.
+    return { box: [1, 0, 7, 15, 10, 9], steps: spun ?? 0 };
+  }
+  return { box: [0, 9, 7, 16, 16, 9], steps: spun ?? 0 };
+}
+
+function standingSign(entry: PaletteEntry): BlockShape {
+  const board = signBoard(entry);
   return transform(
     [
-      { box: [0, 9, 7, 16, 16, 9], uv: SIGN_BOARD },
+      { box: board.box, uv: SIGN_BOARD },
       { box: [7, 0, 7, 9, 9, 9], uv: SIGN_POST, omit: ["up"] },
     ],
-    steps,
+    board.steps,
     false,
   );
 }
 
 /** A board flat on the wall, at the height a sign sits rather than floor to ceiling. */
 function wallSign(entry: PaletteEntry): BlockShape {
-  return transform(
-    [{ box: [0, 4, 14, 16, 12, 16], uv: SIGN_BOARD }],
-    facingSteps(entry) + 2,
-    false,
-  );
+  const board = signBoard(entry);
+  return transform([{ box: board.box, uv: SIGN_BOARD }], board.steps, false);
 }
 
 /** A board on a bar, hanging clear of whatever is above it. */
 function hangingSign(entry: PaletteEntry): BlockShape {
   const attached = entry.properties.attached === "true";
+  const board = signBoard(entry);
   const parts: ShapeBox[] = [
     // The board.
-    { box: [1, 0, 7, 15, 10, 9], uv: HANGING_BOARD },
+    { box: board.box, uv: HANGING_BOARD },
     // The bar it hangs from, and the two chains, or the one plate that
     // replaces them when it is bolted straight to the block above.
     { box: [1, 14, 6, 15, 16, 10], uv: HANGING_BAR },
@@ -1579,10 +1614,92 @@ function hangingSign(entry: PaletteEntry): BlockShape {
       { box: [11, 10, 7.5, 13, 14, 8.5], uv: HANGING_CHAIN },
     );
   }
-  const sixteenths = Number(entry.properties.rotation ?? "0");
-  const steps = Number.isFinite(sixteenths) ? Math.round(sixteenths / 4) : 0;
-  return transform(parts, steps, false);
+  return transform(parts, board.steps, false);
 }
+
+/**
+ * The two faces a sign's text is written on, in the block's own 0..16 units and
+ * already turned to face the way the sign does.
+ *
+ * It lives here because the board's box and the quarter-turns are here, and
+ * because a plane derived anywhere else would be a second copy of both: the
+ * text sitting a quarter-turn off the sign is exactly the failure the two fixes
+ * above were.
+ *
+ * `right` is the reader's right rather than an axis, which is what makes the
+ * layout in `sign_faces.ts` free of compass arithmetic — it walks the pen along
+ * `right` and drops a line down `up`, and the same code writes all eight
+ * orientations.
+ *
+ * The plane stands `LIFT` off the board rather than on it. Coplanar is
+ * unresolvable at *any* distance — `depth.ts` has the arithmetic and the
+ * reason — so text written on the board's own plane stipples against it from
+ * halfway across a build. Half a unit is a thirty-second of a block: under half
+ * a texel of the sign's own texture, and still resolvable well past a hundred
+ * blocks, which is further than a sign is legible from.
+ *
+ * In the model's 0..16 units, like every other number in this file. It was
+ * written `1 / 16`, which is a *block*-unit value, and `quad` in
+ * `sign_faces.ts` divides by 16 again on its way out — so the lift came to a
+ * 256th of a block and the text sank into the board it was standing on.
+ */
+export interface SignTextPlane {
+  readonly side: "front" | "back";
+  /** The reader's bottom-left corner of the writable area. */
+  readonly origin: readonly [number, number, number];
+  readonly right: readonly [number, number, number];
+  readonly up: readonly [number, number, number];
+  readonly normal: readonly [number, number, number];
+  readonly width: number;
+  readonly height: number;
+}
+
+const LIFT = 0.5;
+
+export function signTextPlanes(entry: PaletteEntry, front: string): readonly SignTextPlane[] {
+  const board = signBoard(entry);
+  const [x0, y0, z0, x1, y1, z1] = rotateBoxY(board.box, board.steps);
+  const height = y1 - y0;
+  const planes: SignTextPlane[] = [];
+  for (const [side, facing] of [
+    ["front", front],
+    ["back", OPPOSITE_COMPASS[front]],
+  ] as const) {
+    switch (facing) {
+      case "south":
+        planes.push({
+          side, origin: [x0, y0, z1 + LIFT], right: [1, 0, 0], up: [0, 1, 0],
+          normal: [0, 0, 1], width: x1 - x0, height,
+        });
+        break;
+      case "north":
+        planes.push({
+          side, origin: [x1, y0, z0 - LIFT], right: [-1, 0, 0], up: [0, 1, 0],
+          normal: [0, 0, -1], width: x1 - x0, height,
+        });
+        break;
+      case "east":
+        planes.push({
+          side, origin: [x1 + LIFT, y0, z1], right: [0, 0, -1], up: [0, 1, 0],
+          normal: [1, 0, 0], width: z1 - z0, height,
+        });
+        break;
+      default:
+        planes.push({
+          side, origin: [x0 - LIFT, y0, z0], right: [0, 0, 1], up: [0, 1, 0],
+          normal: [-1, 0, 0], width: z1 - z0, height,
+        });
+    }
+  }
+  return planes;
+}
+
+const OPPOSITE_COMPASS: Readonly<Record<string, string>> = {
+  north: "south",
+  south: "north",
+  east: "west",
+  west: "east",
+};
 
 /**
  * A piston head: the plate you see, and the rod holding it out.

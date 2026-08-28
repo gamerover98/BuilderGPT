@@ -26,6 +26,8 @@ import {
 import type { BakedFace, MeshBuffers, PaletteEntry, StructureData, UVRect } from "./types.js";
 import { bakedFaceOffset, paletteEntryIsAir } from "./types.js";
 import type { BakedBlock, ModelBaker } from "./model_baker.js";
+import { signTextFaces } from "./sign_faces.js";
+import type { SignText } from "./sign_text.js";
 import {
   cornerOcclusion,
   MAX_LIGHT,
@@ -158,6 +160,17 @@ export async function culledFaces(
    * chunk boundaries, so it cannot be a per-chunk job.
    */
   shading?: Shading | null,
+  /**
+   * What each sign says, by flat voxel index.
+   *
+   * A per-*position* overlay, exactly like `shading` above and for the same
+   * reason: it is not a property of the palette entry, so nothing the baker
+   * memoises can hold it, and two signs of the same block state say different
+   * things. `preview.ts` reads it off the document once and hands the same map
+   * to every chunk. Omitted means blank signs, which is what the app drew
+   * before there was any such thing.
+   */
+  signs?: ReadonlyMap<number, SignText>,
 ): Promise<BakedFace[]> {
   const voxels = struct.voxels;
   const [sizeX, sizeY, sizeZ] = [
@@ -434,6 +447,22 @@ export async function culledFaces(
         // neighbour cannot cover them.
         for (const face of bakedBlock.extraFaces) {
           faces.push(bakedFaceOffset(face, x, y, z, shadeFace(face, x, y, z)));
+        }
+
+        /*
+         * ...and what it says, if it is a sign and somebody wrote on it.
+         *
+         * `face.shade ?? shadeFace(...)` rather than the shading alone: a face
+         * that already knows how lit it is keeps it, which is how glowing text
+         * stays readable in an unlit room. Nothing else in the pipeline arrives
+         * carrying one -- a baked face is a picture, and how lit it is depends
+         * on where the block ended up.
+         */
+        const written = signs?.get(flatIndex(x, y, z));
+        if (written !== undefined) {
+          for (const face of await signTextFaces(entry, written, baker)) {
+            faces.push(bakedFaceOffset(face, x, y, z, face.shade ?? shadeFace(face, x, y, z)));
+          }
         }
 
         /*

@@ -1793,6 +1793,87 @@ knowing:
   included, because the generic candidate list offers `_front` only after
   `_side`. `_front_on` comes first when the block is lit.
 
+**A sign says what is written on it, and that is the one thing in the pipeline
+that is a function of a *position*.** Two signs of the same block state say
+different things, so it cannot be baked — `bakeBlockstate` is memoised on the
+state and would hand the second sign the first one's words. It is built per
+cell, in `culledFaces`, from a **per-position overlay** exactly like `shading`:
+`preview.ts` reads the document's block entities once and hands the same map to
+every chunk.
+
+Four modules, and the split is the usual one. `sign_text.ts` is the reading and
+nothing else — pure, so both spellings can be tested without a resource pack.
+`block_shapes.ts` owns `signTextPlanes`, because the board's box and its
+quarter-turns are already there and a plane derived anywhere else would be a
+second copy of both. `sign_faces.ts` is layout. `model_baker.ts` cuts the
+glyphs.
+
+- **Two spellings, both still in circulation.** 1.20 replaced `Text1`..`Text4`
+  with `front_text`/`back_text`, nothing migrates a schematic cut before that,
+  and files from both eras get opened side by side. Each message is a **JSON
+  text component** rather than a string — `{"text":"Hello"}` far more often
+  than `"Hello"` — and skipping that step is what reads as "the sign is blank".
+  Anything that parses as neither is used verbatim: a sign nobody can read is
+  worse than a sign with the raw text on it.
+- **The glyphs come out of the pack, as `textures/font/ascii.png`.** A 16x16
+  grid indexed by code point, so it needs nothing vendored and nothing fetched
+  — the same rule the block models are under. Cut into per-character tiles
+  rather than registered whole for two reasons: `MAX_TILE` is 256 and the sheet
+  is 512 in this pack, so the atlas would take a pixel in sixteen of a font;
+  and the tint is per character anyway, because colour is baked into the tile
+  like every other colour here.
+
+  **Only the ASCII page.** `accented.png` and `nonlatin_european.png` are laid
+  out by `font/default.json`, which lives in the client jar and is in no texture
+  pack, so their code points cannot be looked up. A character off the page draws
+  nothing rather than drawing the wrong glyph.
+- **The advance is measured, not tabulated** — the last column with a pixel in
+  it, plus one, which is what the game does. Minecraft's font is proportional,
+  an `i` is two wide and an `m` is six, and laid out fixed-width the text is
+  instantly recognisable as wrong. A space has no column to find and takes
+  vanilla's four, which makes it the one glyph that is **a width with no key**:
+  folded in with "nothing to draw" it got a tile that was never registered, and
+  every space emitted a quad addressing a texture the atlas had never heard of.
+- **The letters are primed before the atlas is packed**, in `primeBaker`, for
+  the reason `buildBlockIcons` primes: the atlas is packed once and the chunks'
+  UVs address it, so a glyph first cut *during* meshing lands in a layout the
+  mesh cannot see and `buildMesh` drops the face. The symptom is a sign that is
+  blank until some unrelated edit re-meshes its chunk — "sometimes the text does
+  not load".
+- **The chunk cache diffs the text**, as `signDigest`. Third time the same rule
+  has earned its keep: dirtiness is *observed*, and text is neither a voxel nor
+  a photon, so retyping a sign moved nothing either grid compares and the chunk
+  kept the old words. Only its own chunk, not the face-neighbours — `markDirty`
+  spreads because light does, and text does not leave the block it is on.
+- **The text stands `LIFT` off the board**, half a model unit. Coplanar is
+  unresolvable at any distance (`depth.ts` has the arithmetic), and the number
+  is in the model's 0..16 units like everything else in that file: written as a
+  block-unit `1 / 16` it was divided by 16 a second time on the way out and the
+  text sank into the board.
+- **Colour is the dye's, and the table is hard-coded in the game.** From
+  minecraft.wiki's Sign article. One source rather than the two `mc-versions`
+  insists on, and the difference is the failure mode: a wrong DataVersion is
+  undetectable here and misbehaves in game a long way away, while a wrong colour
+  is a wrong colour on the screen. Fourteen of the sixteen are X11 colour names
+  exactly, which is corroboration no single transcription slip would produce.
+- **Glowing text carries its own light** and no outline. `BakedFace.shade` is
+  normally filled in by the mesher from where the block ended up; a face that
+  arrives already knowing keeps it, which is the whole of what lets a glowing
+  sign be read in an unlit room. Vanilla also draws an outline in a second
+  colour; that is not reproduced.
+
+Two orientation bugs came out with it, both invisible until there were words to
+put on the board. A **wall sign** was turned by `facingSteps + 2` and its model
+is authored on the south wall looking north, so every one of them hung a quarter
+round the block — `facing=north` bolted to the west wall. And a **wall hanging
+sign** was handed to the hanging shape whole, which reads `rotation`: it has
+none, `Number(undefined)` is `NaN`, the guard turned that into zero, and all
+twelve faced south whatever the file said. `signBoard` is now the one place that
+decides, and `tests/blocks.ts` checks the **board** rather than the text for
+both — the text plane is derived from the same rotated box, so the two agree
+wherever the box ends up and every text check passes with the sign on the wrong
+wall.
+
 **Water is blended, and a cutout is not — they are different jobs.** The block
 material alpha-tests at 0.5 and does not blend, which is right for leaves and
 wrong for water: `water_still` is `alpha 180` across its whole tile, so it

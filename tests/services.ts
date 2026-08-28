@@ -69,7 +69,12 @@ import {
   clearPreviewCache,
   sunAnglesRadians,
 } from "../src/main/services/preview.js";
-import { createDocument, documentFromLoaded, setBlock } from "../src/main/domain/document.js";
+import {
+  createDocument,
+  documentFromLoaded,
+  setBlock,
+  setBlockEntity,
+} from "../src/main/domain/document.js";
 import { SpongeSchematicWriter } from "../src/main/services/schematic.js";
 import { loadSkyTextures } from "../src/main/services/sky_textures.js";
 import { dataVersionFor, VERSION_NAMES, VERSION_TABLE } from "../src/main/services/versions.js";
@@ -448,6 +453,62 @@ try {
       atlasBuildCount() - packedBefore,
       1,
     );
+
+    /*
+     * A sign says what it says, on the *first* preview.
+     *
+     * A glyph is an atlas tile like any other, and the atlas is packed once,
+     * before the chunks are meshed — so a letter first cut during meshing lands
+     * in a layout the mesh has no UVs into, and `buildMesh` drops every face
+     * whose key the atlas has never heard of. The visible result is a sign that
+     * is blank until something else happens to re-mesh its chunk, which reads
+     * as "sometimes the text does not load". `primeBaker` cuts them first, and
+     * this is the check that says so: the same document, with and without words
+     * on the sign, has to render differently the first time it is asked.
+     */
+    console.log("\n--- a sign says what it says ---");
+    {
+      const written = (line: string) => {
+        const doc = createDocument({ width: 1, height: 1, length: 1, format: "sponge3" });
+        setBlock(doc, 0, 0, 0, {
+          namespacedName: "minecraft:oak_sign",
+          properties: { rotation: "0" },
+        });
+        setBlockEntity(doc, 0, 0, 0, {
+          id: "minecraft:sign",
+          pos: [0, 0, 0],
+          nbt: {
+            front_text: {
+              type: "compound",
+              value: {
+                messages: {
+                  type: "list",
+                  value: { type: "string", value: [JSON.stringify({ text: line }), "", "", ""] },
+                },
+                color: { type: "string", value: "black" },
+              },
+            },
+          },
+        });
+        return doc;
+      };
+      const options = { resourcePackPath: null, fallbackResourcePackPath: bundledPack };
+
+      clearBakerCache();
+      const blank = await buildDocumentPreview(written(""), options);
+      clearBakerCache();
+      const says = await buildDocumentPreview(written("Ciao"), options);
+      check(
+        "text on a sign is drawn the first time it is previewed",
+        says.mesh.chunks[0].positions.length > blank.mesh.chunks[0].positions.length,
+        `${says.mesh.chunks[0].positions.length} vs ${blank.mesh.chunks[0].positions.length}`,
+      );
+
+      // ...and it is the same picture on the second pass, which is what says
+      // the first one was not built against a layout that had since moved.
+      const again = await buildDocumentPreview(written("Ciao"), options);
+      check("...and identically the second time", meshDigest(says.mesh) === meshDigest(again.mesh));
+    }
 
     /*
      * Barriers, and the setting that decides whether they are drawn.

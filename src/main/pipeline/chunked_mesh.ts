@@ -37,6 +37,7 @@ import type { MeshBuffers, StructureData } from "./types.js";
 import type { LightGrid } from "./lighting.js";
 import type { Shading } from "./mesher.js";
 import { buildMesh, culledFaces } from "./mesher.js";
+import { signDigest, type SignText } from "./sign_text.js";
 import type { ModelBaker } from "./model_baker.js";
 import type { UVRect } from "./types.js";
 
@@ -60,6 +61,17 @@ export interface ChunkMeshCache {
    * dark would be a bug nobody could reproduce.
    */
   light: Uint8Array;
+  /**
+   * What each sign said, by flat voxel index, as `signDigest` renders it.
+   *
+   * The same rule again, and the third thing it has caught: a sign's text is
+   * neither a voxel nor a photon, so retyping one moved nothing either array
+   * compares and the chunk stayed as it was -- the old words on screen and the
+   * new ones in the file. Digests rather than the text because this is only
+   * ever compared, and a map with one entry per sign is nothing beside a grid
+   * with one per cell.
+   */
+  signs: Map<number, string>;
   /** Chunk key -> that chunk's geometry. */
   chunks: Map<number, MeshBuffers>;
 }
@@ -214,6 +226,7 @@ export function createChunkMeshCache(): ChunkMeshCache {
     atlasVersion: -1,
     voxels: new Int32Array(0),
     light: new Uint8Array(0),
+    signs: new Map(),
     chunks: new Map(),
   };
 }
@@ -248,6 +261,7 @@ export async function buildChunkedMesh(
   atlasVersion: number,
   cache: ChunkMeshCache,
   shading: Shading | null = null,
+  signs: ReadonlyMap<number, SignText> | null = null,
 ): Promise<ChunkedMeshResult> {
   const width = struct.bounds.maxX - struct.bounds.minX + 1;
   const height = struct.bounds.maxY - struct.bounds.minY + 1;
@@ -286,6 +300,29 @@ export async function buildChunkedMesh(
     }
   }
 
+  /*
+   * The signs, diffed the same way and marking only their own chunk.
+   *
+   * `markDirty` spreads to the face-neighbours because light does; text does
+   * not leave the block it is written on, so spreading here would re-mesh six
+   * chunks to redraw one word.
+   */
+  const written = new Map<number, string>();
+  if (signs !== null) {
+    for (const [at, text] of signs) written.set(at, signDigest(text));
+  }
+  if (reusable) {
+    for (const at of new Set([...written.keys(), ...cache.signs.keys()])) {
+      if (written.get(at) === cache.signs.get(at)) continue;
+      const x = Math.floor(at / (height * length));
+      const rest = at - x * height * length;
+      const cx = Math.floor(x / CHUNK_SIZE);
+      const cy = Math.floor(Math.floor(rest / length) / CHUNK_SIZE);
+      const cz = Math.floor((rest % length) / CHUNK_SIZE);
+      if (cx < nx && cy < ny && cz < nz) dirty.add(chunkKey(cx, cy, cz, nx, ny));
+    }
+  }
+
   const chunks = reusable ? new Map(cache.chunks) : new Map<number, MeshBuffers>();
 
   for (const key of dirty) {
@@ -304,6 +341,7 @@ export async function buildChunkedMesh(
         maxZ: cz * CHUNK_SIZE + CHUNK_SIZE - 1,
       },
       shading,
+      signs ?? undefined,
     );
     const buffers = buildMesh(faces, atlasUv, (key) => baker.isTextureTranslucent(key));
     if (buffers.indices.length === 0) {
@@ -346,6 +384,7 @@ export async function buildChunkedMesh(
       // and a shared reference would compare equal to itself and see no change.
       voxels: Int32Array.from(struct.voxels),
       light,
+      signs: written,
       chunks,
     },
     rebuilt: dirty.size,

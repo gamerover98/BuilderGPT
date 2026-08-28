@@ -34,6 +34,13 @@ import {
   type BakedBlock,
 } from "../src/main/pipeline/model_baker.js";
 import { buildMesh, culledFaces } from "../src/main/pipeline/mesher.js";
+import {
+  isSignBlock,
+  plainText,
+  readSignText,
+  signFacing,
+  type SignText,
+} from "../src/main/pipeline/sign_text.js";
 import { buildAtlas } from "../src/main/pipeline/atlas.js";
 import { atlasAnimations } from "../src/main/services/preview.js";
 import type { BakedFace, PaletteEntry, StructureData } from "../src/main/pipeline/types.js";
@@ -1706,6 +1713,331 @@ if (pack === null) {
     (f) => texelOn(f, [f.positions[0], 0.09, 0.09]).alpha < 128,
   );
   equal("...and every one of them is drawn", blank.length, 0);
+}
+
+// --- what a sign says -------------------------------------------------------
+//
+// Two spellings, both still in circulation: 1.20 replaced `Text1`..`Text4` with
+// `front_text`/`back_text`, and nothing migrates a schematic cut before that.
+// Each message is a JSON text component rather than a string, which is the part
+// that reads as "the sign is blank" when it is skipped.
+console.log("\n--- what a sign says ---");
+{
+  const str = (value: string) => ({ type: "string", value });
+  const modern = (lines: string[], color = "black", glowing = false) =>
+    ({
+      front_text: {
+        type: "compound",
+        value: {
+          messages: {
+            type: "list",
+            value: { type: "string", value: lines.map((l) => JSON.stringify({ text: l })) },
+          },
+          color: str(color),
+          has_glowing_text: { type: "byte", value: glowing ? 1 : 0 },
+        },
+      },
+    }) as never;
+
+  const read = readSignText(modern(["Ciao", "mondo"], "red", true));
+  equal("a modern sign reads its front", read?.front.lines, ["Ciao", "mondo", "", ""]);
+  equal("...with its colour", read?.front.color, "red");
+  equal("...and whether it glows", read?.front.glowing, true);
+  equal("...padded to four lines however many it holds", read?.front.lines.length, 4);
+
+  const legacy = readSignText({
+    Text1: str('{"text":"Vecchio"}'),
+    Text2: str('{"text":"cartello"}'),
+    Color: str("blue"),
+  } as never);
+  equal("a pre-1.20 sign reads Text1..Text4", legacy?.front.lines, [
+    "Vecchio",
+    "cartello",
+    "",
+    "",
+  ]);
+  equal("...and its Color", legacy?.front.color, "blue");
+
+  /*
+   * A component, not a string. `{"text":"x"}` is what the game writes and
+   * `"x"` is what a hand-edited file often holds, and anything that parses as
+   * neither is used verbatim -- a sign nobody can read is worse than a sign
+   * with the raw text on it.
+   */
+  equal("a text component is the words in it", plainText('{"text":"Ciao"}'), "Ciao");
+  equal("...a bare JSON string too", plainText('"Ciao"'), "Ciao");
+  equal("...`extra` is joined on", plainText('{"text":"a","extra":[{"text":"b"},"c"]}'), "abc");
+  equal("...an array is joined too", plainText('[{"text":"a"},{"text":"b"}]'), "ab");
+  equal("...and what will not parse is left alone", plainText("Ciao mondo"), "Ciao mondo");
+
+  // Nothing to draw is `null`, which is not the same as an empty sign: a blank
+  // one still has a `front_text`, and a value for it would put four empty lines
+  // through the layout for every sign in the build.
+  equal("a blank sign says nothing", readSignText(modern(["", "", "", ""])), null);
+  equal("...and neither does a chest", readSignText({ Items: { type: "list", value: { type: "compound", value: [] } } } as never), null);
+
+  check("every sign block is one", isSignBlock("minecraft:oak_sign"));
+  check("...wall signs included", isSignBlock("minecraft:oak_wall_sign"));
+  check("...and hanging ones", isSignBlock("minecraft:oak_wall_hanging_sign"));
+  check("...and a chest is not", !isSignBlock("minecraft:chest"));
+
+  // `rotation` is sixteen steps clockwise from **south**, which is the one that
+  // has no `facing` to read and the one that is easy to start from north.
+  equal("rotation 0 looks south", signFacing(block("oak_sign", { rotation: "0" })), "south");
+  equal("rotation 4 looks west", signFacing(block("oak_sign", { rotation: "4" })), "west");
+  equal("rotation 8 looks north", signFacing(block("oak_sign", { rotation: "8" })), "north");
+  equal("rotation 12 looks east", signFacing(block("oak_sign", { rotation: "12" })), "east");
+  equal(
+    "a wall sign says so outright",
+    signFacing(block("oak_wall_sign", { facing: "east" })),
+    "east",
+  );
+}
+
+// --- and where it says it ---------------------------------------------------
+//
+// The text is the only geometry in the pipeline that is a function of a
+// *position* rather than of a palette entry — two signs of one block state say
+// different things — so it is built per cell by `culledFaces` and cannot be
+// checked by baking a blockstate. These drive the real mesher.
+console.log("\n--- and where it says it ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const str = (value: string) => ({ type: "string", value });
+  const sideNbt = (key: string, lines: string[], color: string, glowing: boolean) => ({
+    [key]: {
+      type: "compound",
+      value: {
+        messages: {
+          type: "list",
+          value: { type: "string", value: lines.map((l) => JSON.stringify({ text: l })) },
+        },
+        color: str(color),
+        has_glowing_text: { type: "byte", value: glowing ? 1 : 0 },
+      },
+    },
+  });
+  const textOf = (
+    front: string[],
+    options: { back?: string[]; color?: string; glowing?: boolean } = {},
+  ): SignText => {
+    const nbt = {
+      ...sideNbt("front_text", front, options.color ?? "black", options.glowing ?? false),
+      ...(options.back ? sideNbt("back_text", options.back, "black", false) : {}),
+    };
+    const read = readSignText(nbt as never);
+    if (read === null) throw new Error("the fixture says nothing");
+    return read;
+  };
+
+  /** One sign alone, meshed the way a document is. */
+  const meshSign = async (id: string, properties: Record<string, string>, text: SignText) => {
+    const sign = block(id, properties);
+    const struct: StructureData = {
+      bounds: { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 },
+      palette: [block("air"), sign],
+      voxels: Int32Array.from([1]),
+    };
+    for (const side of [text.front, text.back]) {
+      for (const line of side.lines) {
+        for (const character of line) {
+          await baker.glyph(character.codePointAt(0) ?? 0, [0, 0, 0]);
+        }
+      }
+    }
+    const faces = await culledFaces(struct, baker, undefined, null, new Map([[0, text]]));
+    return {
+      all: faces,
+      glyphs: faces.filter((f) => f.textureKey.includes("font/glyph_")),
+      board: faces.filter((f) => !f.textureKey.includes("font/glyph_")),
+    };
+  };
+
+  const plain = await meshSign("oak_sign", { rotation: "0" }, textOf(["Ciao"]));
+  check("a sign with nothing on it still draws its board", plain.board.length > 0);
+  equal("...and one quad per letter", plain.glyphs.length, 4);
+
+  // A space takes room and draws nothing, exactly as the font has it: an empty
+  // glyph with an advance. Counting quads is what tells the two apart.
+  const spaced = await meshSign("oak_sign", { rotation: "0" }, textOf(["Ci ao"]));
+  equal("a space is width, not a quad", spaced.glyphs.length, 4);
+
+  /*
+   * The front is the side the sign looks at, at every orientation. This is the
+   * check the whole feature rests on: the board is turned by `signBoard` and
+   * the text by `signTextPlanes`, and if the two ever disagree the words end up
+   * on the back of the sign or floating a quarter-turn off it.
+   */
+  const NORMALS: Record<string, readonly [number, number, number]> = {
+    north: [0, 0, -1],
+    south: [0, 0, 1],
+    east: [1, 0, 0],
+    west: [-1, 0, 0],
+  };
+  for (const [id, properties] of [
+    ["oak_sign", { rotation: "0" }],
+    ["oak_sign", { rotation: "4" }],
+    ["oak_sign", { rotation: "8" }],
+    ["oak_sign", { rotation: "12" }],
+    ["oak_wall_sign", { facing: "north" }],
+    ["oak_wall_sign", { facing: "east" }],
+    ["oak_wall_sign", { facing: "south" }],
+    ["oak_wall_sign", { facing: "west" }],
+    ["oak_wall_hanging_sign", { facing: "north" }],
+    ["oak_wall_hanging_sign", { facing: "east" }],
+    ["oak_hanging_sign", { rotation: "4", attached: "false" }],
+  ] as Array<[string, Record<string, string>]>) {
+    const facing = signFacing(block(id, properties));
+    const want = NORMALS[facing];
+    const meshed = await meshSign(id, properties, textOf(["Ciao"]));
+    const label = `${id.replace("oak_", "")} ${Object.values(properties)[0]}`;
+    check(
+      `${label}: the front text faces ${facing}`,
+      meshed.glyphs.length > 0 && meshed.glyphs.every((f) => f.normal.join() === want.join()),
+      meshed.glyphs.map((f) => f.normal.join()).join(" "),
+    );
+    /*
+     * ...and stands off the board rather than in it. Coplanar is unresolvable
+     * at any distance — the arithmetic is in `depth.ts` — so text written on the
+     * board's own plane would stipple against it from halfway across a build.
+     */
+    const axis = want[0] !== 0 ? 0 : 2;
+    const outward = want[axis];
+    // The board, meaning the part of the sign the text is written on: a hanging
+    // sign's bar reaches further out than its board and a standing sign's post
+    // reaches further down, and neither is anything the text has to clear.
+    const lows = meshed.glyphs.flatMap((f) => [0, 1, 2, 3].map((i) => f.positions[i * 3 + 1]));
+    const lowest = Math.min(...lows);
+    const highest = Math.max(...lows);
+    const behind = meshed.board.filter((f) => {
+      const ys = [0, 1, 2, 3].map((i) => f.positions[i * 3 + 1]);
+      return Math.min(...ys) < highest && Math.max(...ys) > lowest;
+    });
+    const boardEdge = Math.max(
+      ...behind.map((f) =>
+        outward > 0
+          ? Math.max(...[0, 1, 2, 3].map((i) => f.positions[i * 3 + axis]))
+          : -Math.min(...[0, 1, 2, 3].map((i) => f.positions[i * 3 + axis])),
+      ),
+    );
+    const textEdge = Math.min(
+      ...meshed.glyphs.map((f) =>
+        outward > 0
+          ? Math.min(...[0, 1, 2, 3].map((i) => f.positions[i * 3 + axis]))
+          : -Math.max(...[0, 1, 2, 3].map((i) => f.positions[i * 3 + axis])),
+      ),
+    );
+    check(`${label}: ...and stands off it`, textEdge > boardEdge, `${textEdge} vs ${boardEdge}`);
+  }
+
+  /*
+   * ...and the board is where the sign says it is.
+   *
+   * This is a fact about the *shape*, and the checks above cannot see it: the
+   * text plane is derived from the same rotated box, so the two agree wherever
+   * the box ends up. Sabotage either turn and every check above still passes
+   * while the sign hangs on the wrong wall — which is exactly the state both of
+   * these were shipped in, because a sign is a plausible sign at any quarter.
+   */
+  const boardOf = (id: string, properties: Record<string, string>) => {
+    const shape = shapeFor(block(id, properties));
+    if (shape.kind !== "boxes") return null;
+    const volume = (b: readonly number[]) => (b[3] - b[0]) * (b[4] - b[1]) * (b[5] - b[2]);
+    return [...shape.boxes].sort((a, b) => volume(b.box) - volume(a.box))[0].box;
+  };
+  // A wall sign hangs on the block behind it, so its board is against the far
+  // side of its own cell. Turned by `facingSteps + 2` it went against a wall to
+  // one side: a sign that reads `facing=north` bolted to the west.
+  //
+  // Both halves are needed and the edge alone is not enough: turned a quarter,
+  // a north-facing board lands at x 0..2 spanning the whole of z, so its `z1`
+  // is still 16 and an edge check passes while the sign is on the west wall.
+  // Which way it is *thin* is what says it is against the right one.
+  const mounted = (box: readonly number[] | null, facing: string) => {
+    if (box === null) return null;
+    const thin = box[3] - box[0] < box[5] - box[2] ? "x" : "z";
+    const edge =
+      facing === "north" ? box[5] : facing === "south" ? box[2] : facing === "east" ? box[0] : box[3];
+    return [thin, edge];
+  };
+  const backsOnto: Record<string, [string, number]> = {
+    north: ["z", 16],
+    south: ["z", 0],
+    east: ["x", 0],
+    west: ["x", 16],
+  };
+  for (const [facing, want] of Object.entries(backsOnto)) {
+    equal(
+      `a ${facing}-facing wall sign backs onto the wall behind it`,
+      mounted(boardOf("oak_wall_sign", { facing }), facing),
+      want,
+    );
+  }
+  /*
+   * A wall hanging sign hangs in the middle rather than against anything, so
+   * what says it turned at all is which way its board is thin. It carries
+   * `facing` and no `rotation`, and the hanging shape read `rotation`:
+   * `Number(undefined)` is `NaN`, the guard turned that into no rotation, and
+   * all twelve of them faced south whatever the file said.
+   */
+  const thinAxis = (box: readonly number[] | null) =>
+    box === null ? null : box[3] - box[0] < box[5] - box[2] ? "x" : "z";
+  equal("a north-facing wall hanging sign is thin north-south", thinAxis(boardOf("oak_wall_hanging_sign", { facing: "north" })), "z");
+  equal("...and an east-facing one is thin east-west", thinAxis(boardOf("oak_wall_hanging_sign", { facing: "east" })), "x");
+  // ...while the one that hangs from a ceiling reads `rotation` and must not
+  // fall through to a `facing` it does not have, which defaults to east.
+  equal("a hanging sign with no rotation is unturned", thinAxis(boardOf("oak_hanging_sign", { attached: "false" })), "z");
+  equal("...and rotation 4 turns it", thinAxis(boardOf("oak_hanging_sign", { rotation: "4" })), "x");
+
+  // Both sides, because a sign has two and the back is the half nobody
+  // remembers writing on.
+  const twoSided = await meshSign(
+    "oak_sign",
+    { rotation: "0" },
+    textOf(["Ciao"], { back: ["Addio"] }),
+  );
+  equal("a two-sided sign writes on both", new Set(twoSided.glyphs.map((f) => f.normal[2])).size, 2);
+  equal("...four letters one way and five the other", twoSided.glyphs.length, 9);
+  const oneSided = await meshSign("oak_sign", { rotation: "0" }, textOf(["Ciao"]));
+  equal("...and a blank back draws nothing", new Set(oneSided.glyphs.map((f) => f.normal[2])).size, 1);
+
+  /*
+   * Colour is baked into the glyph's own tile, like every other colour in this
+   * pipeline: the mesh carries no per-vertex tint and the atlas is the single
+   * source. So a red A and a black A are two tiles, and the check is on the
+   * pixels rather than on the key.
+   */
+  const red = await meshSign("oak_sign", { rotation: "0" }, textOf(["A"], { color: "red" }));
+  const ink = baker.textures[red.glyphs[0].textureKey];
+  let reddest = 0;
+  for (let i = 0; i < ink.data.length; i += 4) {
+    if (ink.data[i + 3] > 128) reddest = Math.max(reddest, ink.data[i] - ink.data[i + 1]);
+  }
+  check("red text is red", reddest > 100, `${reddest}`);
+
+  // Glowing text is lit by itself. `shade` is normally filled in by the mesher
+  // from where the block ended up; a face that arrives already knowing keeps it,
+  // which is what lets a glowing sign be read in an unlit room.
+  const glowing = await meshSign("oak_sign", { rotation: "0" }, textOf(["A"], { glowing: true }));
+  check(
+    "glowing text carries its own light",
+    glowing.glyphs.every((f) => f.shade !== undefined && [...f.shade].every((v) => v === 1)),
+  );
+  const dark = await meshSign("oak_sign", { rotation: "0" }, textOf(["A"]));
+  check("...and ordinary text does not", dark.glyphs.every((f) => f.shade === undefined));
+
+  /*
+   * The font is proportional and measured, not tabulated: the game finds the
+   * last column with a pixel in it. Laid out fixed-width the text is instantly
+   * recognisable as wrong, and `i` against `m` is where it shows first.
+   */
+  const advance = async (character: string) =>
+    (await baker.glyph(character.codePointAt(0) ?? 0, [0, 0, 0]))?.advance;
+  equal("an i is two wide", await advance("i"), 2);
+  equal("...an m is six", await advance("m"), 6);
+  equal("...and a space is four, which it has no pixels to say", await advance(" "), 4);
+  equal("a character off the ascii page draws nothing", await baker.glyph(0x2603, [0, 0, 0]), null);
 }
 
 // --- potted plants ----------------------------------------------------------

@@ -595,6 +595,48 @@ console.log("\n--- shapes ---");
 }
 
 {
+  /*
+   * And the two halves composed, which is what the sign of this bug needs.
+   *
+   * Above, `orientPlacement` says a wall torch faces the way it was clicked;
+   * further up, the baker says a torch's foot is planted in the wall opposite
+   * its `facing`. Both were true while every wall torch in the app came out on
+   * the wrong side of its cell, because nothing put them together. Place one by
+   * clicking a block's face and the foot has to end up *inside that block*.
+   */
+  const AS_VECTOR: Record<string, readonly [number, number, number]> = {
+    east: [1, 0, 0],
+    west: [-1, 0, 0],
+    south: [0, 0, 1],
+    north: [0, 0, -1],
+  };
+  const AXIS_OF: Record<string, 0 | 2> = { east: 0, west: 0, south: 2, north: 2 };
+
+  for (const clicked of ["north", "south", "east", "west"] as const) {
+    const face = AS_VECTOR[clicked];
+    // Looking straight at the face that was hit, which is how one is placed:
+    // the wall is in front of you and the torch goes onto it.
+    const state = orientPlacement("minecraft:wall_torch", {
+      direction: { x: -face[0], y: 0, z: -face[2] },
+      against: clicked,
+      cursorY: 0.5,
+    });
+    const baked = await baker.bakeBlockstate(block("wall_torch", state));
+    const base = allVertices(baked).filter((vertex) => vertex[1] < 0.35);
+    // The block that was clicked is on the far side of that face, so the foot
+    // has to reach out of the cell in the direction *opposite* the click.
+    const axis = AXIS_OF[clicked];
+    const coordinates = base.map((vertex) => vertex[axis]);
+    const reach = face[axis] > 0 ? Math.min(...coordinates) : Math.max(...coordinates);
+    check(
+      `a torch placed on a ${clicked} face is footed in the block behind it`,
+      face[axis] > 0 ? reach < 0 : reach > 1,
+      `facing=${state.facing} reaches ${reach}`,
+    );
+  }
+}
+
+{
   const lantern = await baker.bakeBlockstate(block("lantern"));
   const side = lantern.extraFaces.find((f) => f.normal[2] === -1);
   check("a lantern bakes a side face", side !== undefined);
@@ -2313,6 +2355,77 @@ console.log("\n--- placement orientation ---");
     orientPlacement("minecraft:ladder", looking(0, 0, -1, "south")),
     { facing: "south" },
   );
+
+  /*
+   * A wall torch points out of the wall, and the sign of that is the whole bug.
+   *
+   * Every one of these landed on `facing=north` whatever the click, which for a
+   * torch is a torch bolted to nothing on the wrong side of the cell. The
+   * natural fix is "point it where the camera is looking" and it is exactly
+   * backwards: placing one means *looking at* the wall, so it ends up pointing
+   * back at you.
+   */
+  equal(
+    "a wall torch faces out of the wall it was stuck to",
+    orientPlacement("minecraft:wall_torch", looking(1, 0, 0, "west")),
+    { facing: "west" },
+  );
+  check(
+    "...which is the opposite of where the camera was looking",
+    orientPlacement("minecraft:wall_torch", looking(1, 0, 0, "west")).facing !==
+      orientPlacement("minecraft:oak_stairs", looking(1, 0, 0, "west")).facing,
+  );
+  /*
+   * With no wall to go on -- a floor, a ceiling, the build grid -- the wall is
+   * taken to be the one that was being looked at. Not a second rule: it is the
+   * same answer the side click gives, because clicking a block's west face
+   * means looking east.
+   */
+  equal(
+    "with no wall it faces back down the look direction",
+    orientPlacement("minecraft:wall_torch", looking(1, 0, 0, "up")),
+    { facing: "west" },
+  );
+  equal(
+    "...and the two agree wherever both apply",
+    orientPlacement("minecraft:soul_wall_torch", looking(0, 0, -1, "south")).facing,
+    orientPlacement("minecraft:soul_wall_torch", looking(0, 0, -1, "up")).facing,
+  );
+
+  // The rest of the family, which is the same fact and was the same bug: a
+  // wall sign, a banner, a mob head and a coral fan all read out of the wall.
+  for (const id of [
+    "minecraft:redstone_wall_torch",
+    "minecraft:copper_wall_torch",
+    "minecraft:oak_wall_sign",
+    "minecraft:wall_sign",
+    "minecraft:red_wall_banner",
+    "minecraft:creeper_wall_head",
+    "minecraft:skeleton_wall_skull",
+    "minecraft:brain_coral_wall_fan",
+  ]) {
+    equal(`${id} faces out of the wall`, orientPlacement(id, looking(0, 0, 1, "north")).facing, "north");
+  }
+
+  /*
+   * And the one the suffix must not catch.
+   *
+   * A wall hanging sign hangs *between* two blocks, on the axis across its
+   * `facing`, rather than off the face it was clicked onto -- so the clicked
+   * face is not its answer and a confident wrong one is worse than the default.
+   * It does not end in `_wall_sign` either ("..._wall_hanging_sign" does not),
+   * which is a true sentence about string endings that nobody would check and
+   * everybody would rely on.
+   */
+  equal(
+    "a wall hanging sign is left alone",
+    orientPlacement("minecraft:oak_wall_hanging_sign", looking(0, 0, 1, "north")),
+    {},
+  );
+  // Nor a standing torch, which has no `facing` at all: writing one would be a
+  // state the game refuses, on a block whose name is one character away.
+  equal("a standing torch is left alone", orientPlacement("minecraft:torch", north), {});
+  equal("...and a standing sign too", orientPlacement("minecraft:oak_sign", north), {});
   equal(
     "a button on a wall knows it is on a wall",
     orientPlacement("minecraft:stone_button", looking(0, 0, -1, "south")),

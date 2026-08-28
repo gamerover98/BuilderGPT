@@ -125,23 +125,38 @@ back carrying a state no version of it has; only if the request did not spell it
 out, because a caller that did meant it; and only water, where a cell holding a
 *waterlogged* block counts, since that cell is water too.
 
-**A bed is two blocks, and laying one places both.** A lone foot is a state
-the game cannot hold — it drops as an item the moment anything updates it, and
-until then it draws as half a bed — so `applyEdit`'s `setBlock` arm writes the
-head one cell along `facing`, which is where the camera was looking when the
-block was picked up. Both in **one transaction**, or Ctrl+Z would take a bed
-back a half at a time.
+**A bed is two blocks, a door is two blocks, and placing one places both.** A
+lone bed foot is a state the game cannot hold — it drops as an item the moment
+anything updates it, and until then it draws as half a bed — and a lone door
+half is a door you walk through. Both were written as one block, so the
+schematic looked right here and came apart when it was pasted.
 
-**Nothing is placed if the head has nowhere to go.** That is the game's rule and
-it is the safe half of it: refusing over a flower is a smaller wrong than
+`TWO_PART` in `services/session.ts` is the table and there are two rows, which
+is one more than there are shapes of answer: the far cell is one step along
+`facing` for a bed — where the camera was looking when the block was picked up —
+and always the cell above for a door. Both halves go in **one transaction**, or
+Ctrl+Z would take a door back a half at a time. `_trapdoor` does not end in
+`_door` (it ends "pdoor"), which is why the suffix needs no guard and why
+`tests/session.ts` says so out loud: it is a true sentence about string endings
+that nobody would check and everybody would rely on.
+
+**Nothing is placed if the far half has nowhere to go.** That is the game's rule
+and it is the safe half of it: refusing over a flower is a smaller wrong than
 destroying what was there, and the block in the way is on screen, so the silence
 says as much as a message would. A cell *outside* the document is not a
 refusal — the region the growth is measured against spans both cells, so a bed
-laid at the edge makes room exactly as a single block does.
+laid at the edge or a door hung at the ceiling makes room exactly as a single
+block does.
 
-A request that already names `part=head` is somebody placing one half on
-purpose — the inspector, a paste, an agent tool — and is left alone. Only an
-absent `part`, or `foot`, means "lay a bed".
+A request that already names the far half — `part=head`, `half=upper` — is
+somebody placing one on purpose: the inspector, a paste, an agent tool. Those
+are left alone. Only an absent value, or the near one, means "place the whole
+thing".
+
+A door's `hinge` is **not** derived, here or in `connect.ts`. Vanilla decides it
+at the click from the neighbours and from which side of the block was hit, and
+then never revisits it — so it is neither a placement fact this file knows nor a
+neighbour rule, and it stays at its default where the inspector can change it.
 
 **Breaking never grows.** A break is `setBlock` with air, and growing to make
 room for air is a resize and nothing else — the same reason `replace` does not.
@@ -1127,6 +1142,38 @@ stack depth — is it. The rule is one sentence: **a selection is undone only wh
 no block edit has landed on top of it.** `selection_history.ts` holds it. A drag
 is one step rather than one per frame, which is why `Viewer.svelte` reports
 gesture boundaries at all: only it knows where the press was.
+
+**A wall-mounted block points *out* of the wall, and the sign of that is the
+whole bug.** Wall torches, wall signs, wall banners, mob heads and coral wall
+fans all landed on `facing=north` whatever the click — for a torch, a torch
+bolted to nothing on the wrong side of its cell. They join `ladder` in
+`WALL_MOUNTED`, where `facing` is **the face that was clicked** and nothing else.
+
+The natural fix is "point it where the camera is looking" and it is exactly
+backwards: placing one means *looking at* the wall, so it ends up pointing back
+at you. Look east, click a block's west face, and the torch faces west. The two
+disagree about every case, which is why `tests/blocks.ts` states it as the
+difference between a torch and a staircase rather than as an absolute.
+
+With no wall to go on — a floor, a ceiling, the build grid — the wall is taken
+to be the one that was being looked at. That is not a second rule: it is the
+same answer the side click gives, because clicking a block's west face means
+looking east, and it differs only at a glancing angle, where the face actually
+hit wins. There is no wall torch on a floor in the game — you get a standing
+`torch` — but the inventory offers the wall variant by name, so there is no
+standing block to fall back to and `facing=north` forever was the alternative.
+
+**`_wall_hanging_sign` is deliberately not in the family**, and it is the one
+that would be wrong: it hangs *between* two blocks on the axis across its
+`facing`, not off the face it was clicked onto. It does not match `_wall_sign`
+either — `oak_wall_hanging_sign` ends "hanging_sign" — and that is checked by
+name, because a suffix list is exactly where it would be assumed instead.
+
+Two halves of this were separately true while every torch came out wrong:
+`orientPlacement` says which way it faces, and the baker says a torch's foot is
+planted in the wall opposite its `facing`. Nothing put them together, so
+`tests/blocks.ts` now does — place one by clicking a face, and the foot has to
+end up inside the block that was clicked.
 
 **A placed block points where the game would point it.** Every block placed by
 hand used to land in its default state, which for anything with a direction is a

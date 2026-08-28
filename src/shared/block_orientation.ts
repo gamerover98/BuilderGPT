@@ -153,9 +153,45 @@ const AWAY_FROM_PLAYER_ANY_AXIS: ReadonlySet<string> = new Set(["piston", "stick
  * Blocks that stick to whatever they were clicked onto.
  *
  * `facing` here means "the way it looks out of the wall", which is the face
- * that was clicked — not a function of the look direction at all.
+ * that was clicked. A wall torch on the west face of a block stands in the cell
+ * west of it and points west, away from the block holding it up: `facing` and
+ * the clicked face are the same word.
+ *
+ * That is worth saying out loud because it reads backwards. Placing one means
+ * *looking at* the wall, so the block ends up pointing back at the camera --
+ * "where I am looking" is the one answer that is always wrong here, and it is
+ * the natural guess. The two agree on the sign of nothing: look east, click the
+ * block's west face, and the torch faces west.
+ *
+ * Every one of these was landing on `facing=north` whatever the click, which
+ * for a torch is a torch bolted to thin air on the wrong side of the cell.
  */
-const WALL_MOUNTED: ReadonlySet<string> = new Set(["ladder"]);
+const WALL_MOUNTED: ReadonlySet<string> = new Set([
+  "ladder",
+  // The two pre-Flattening spellings the app still offers; every other member
+  // of both families is caught by the suffixes below.
+  "wall_torch",
+  "wall_sign",
+]);
+
+/**
+ * The same rule, by family.
+ *
+ * `_wall_hanging_sign` is deliberately absent and is the one that would be
+ * wrong: it hangs *between* two blocks on the axis across its `facing`, not off
+ * the face it was clicked onto, so the clicked face is not its answer. It does
+ * not match `_wall_sign` either -- the two are checked by name in
+ * `tests/blocks.ts`, because a suffix list is exactly where that would be
+ * assumed rather than known.
+ */
+const WALL_MOUNTED_SUFFIXES = [
+  "_wall_torch",
+  "_wall_sign",
+  "_wall_banner",
+  "_wall_fan",
+  "_wall_head",
+  "_wall_skull",
+] as const;
 
 /**
  * Blocks carrying `face` (floor/wall/ceiling) alongside a horizontal `facing`.
@@ -262,10 +298,26 @@ export function orientPlacement(id: string, look: PlacementLook): Record<string,
     return { facing: horizontalFacing(look.direction) };
   }
 
-  if (WALL_MOUNTED.has(name)) {
-    return look.against === null || look.against === "up" || look.against === "down"
-      ? {}
-      : { facing: look.against };
+  if (WALL_MOUNTED.has(name) || WALL_MOUNTED_SUFFIXES.some((suffix) => name.endsWith(suffix))) {
+    /*
+     * The clicked face is the answer wherever there is one.
+     *
+     * Where there is not -- placed on a floor, on a ceiling, or on the build
+     * grid -- the wall is taken to be the one the camera was looking at, which
+     * puts the block's front back towards the viewer. That is not a second rule:
+     * it is the same answer the side click gives, because clicking a block's
+     * west face means looking east. It differs only at a glancing angle, where
+     * the face that was actually hit wins, as it should.
+     *
+     * There is no such thing as a wall torch on a floor in the game -- you get
+     * a standing `torch` instead -- but the inventory here offers the wall
+     * variant by name, so there is no standing block to fall back to and a
+     * permanent `facing=north` was the alternative.
+     */
+    if (look.against !== null && look.against !== "up" && look.against !== "down") {
+      return { facing: look.against };
+    }
+    return { facing: OPPOSITE[horizontalFacing(look.direction)] };
   }
 
   if (FACE_AND_FACING.has(name) || FACE_AND_FACING_SUFFIXES.some((s) => name.endsWith(s))) {

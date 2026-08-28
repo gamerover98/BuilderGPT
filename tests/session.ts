@@ -1941,6 +1941,123 @@ console.log("\n--- a bed is two blocks ---");
 }
 
 /*
+ * A door is two blocks too, and the second one is above rather than along.
+ *
+ * Same rule as the bed, same transaction, same refusal -- which is the point of
+ * `twoPartPlacement` being one function: the bed's checks above and these are
+ * the same list, and a family added later gets both for free or neither.
+ */
+console.log("\n--- a door is two blocks ---");
+{
+  const doorAt = (
+    session: ReturnType<typeof newDocument>,
+    y: number,
+    facing: string,
+  ): number =>
+    applyEdit(session, {
+      kind: "setBlock",
+      x: 2,
+      y,
+      z: 2,
+      block: { namespacedName: "minecraft:oak_door", properties: { facing, hinge: "right" } },
+    });
+  const halfAt = (session: ReturnType<typeof newDocument>, y: number) => {
+    const at = getBlock(session.doc, 2, y, 2);
+    return at === null ? null : `${at.namespacedName}:${at.properties.half ?? "-"}`;
+  };
+
+  {
+    const session = newDocument({ width: 5, height: 5, length: 5 });
+    equal("hanging a door places both halves", doorAt(session, 1, "north"), 2);
+    equal("the clicked cell is the lower half", halfAt(session, 1), "minecraft:oak_door:lower");
+    equal("...and the upper is the cell above", halfAt(session, 2), "minecraft:oak_door:upper");
+    /*
+     * Both halves carry the same everything else. In the game they have to --
+     * a door whose halves disagree about `facing` or `hinge` draws as two
+     * different doors and swings as neither.
+     */
+    const lower = getBlock(session.doc, 2, 1, 2);
+    const upper = getBlock(session.doc, 2, 2, 2);
+    equal("the upper half faces the same way", upper?.properties.facing, lower?.properties.facing);
+    equal("...and hangs on the same hinge", upper?.properties.hinge, "right");
+    // One transaction, so one Ctrl+Z takes the door back rather than half of it.
+    undo(session.doc, session.history);
+    equal("one undo takes the whole door", halfAt(session, 1), "minecraft:air:-");
+    equal("...both halves of it", halfAt(session, 2), "minecraft:air:-");
+  }
+
+  // The upper half is straight up whichever way the door faces -- the bed's
+  // step is the one that follows `facing`, and sharing a function is exactly
+  // where that could have been got wrong for one of them.
+  for (const facing of ["north", "south", "east", "west"] as const) {
+    const session = newDocument({ width: 5, height: 5, length: 5 });
+    doorAt(session, 1, facing);
+    equal(`facing ${facing} still puts the upper half above`, halfAt(session, 2), "minecraft:oak_door:upper");
+  }
+
+  {
+    // Blocked above: nothing at all is written, not even the lower half.
+    const session = newDocument({ width: 5, height: 5, length: 5 });
+    applyEdit(session, {
+      kind: "setBlock",
+      x: 2,
+      y: 2,
+      z: 2,
+      block: { namespacedName: "minecraft:stone" },
+    });
+    equal("a blocked upper half refuses the whole door", doorAt(session, 1, "north"), 0);
+    equal("...leaving the lower cell empty", halfAt(session, 1), "minecraft:air:-");
+  }
+
+  {
+    // At the ceiling it grows, exactly as the bed does at the edge.
+    const session = newDocument({ width: 5, height: 3, length: 5 });
+    equal("a door hung at the ceiling makes room", doorAt(session, 2, "north"), 2);
+    equal("...by growing the document", session.doc.height, 4);
+    equal("...with the upper half in the new cell", halfAt(session, 3), "minecraft:oak_door:upper");
+  }
+
+  {
+    // One half on purpose is somebody else's business, exactly as `part=head`.
+    const session = newDocument({ width: 5, height: 5, length: 5 });
+    const changed = applyEdit(session, {
+      kind: "setBlock",
+      x: 2,
+      y: 1,
+      z: 2,
+      block: { namespacedName: "minecraft:oak_door", properties: { half: "upper" } },
+    });
+    equal("an explicit upper half is placed alone", changed, 1);
+    equal("...with nothing above it", halfAt(session, 2), "minecraft:air:-");
+  }
+
+  {
+    /*
+     * And a trapdoor is not a door.
+     *
+     * `_trapdoor` does not end in `_door` -- "oak_trapdoor" ends "pdoor" -- so
+     * the suffix needs no guard. That is a true sentence about string endings
+     * which nobody would ever check, and if it stopped being true every
+     * trapdoor in the app would start placing a second one above itself.
+     */
+    const session = newDocument({ width: 5, height: 5, length: 5 });
+    const changed = applyEdit(session, {
+      kind: "setBlock",
+      x: 2,
+      y: 1,
+      z: 2,
+      block: { namespacedName: "minecraft:oak_trapdoor", properties: { half: "bottom" } },
+    });
+    equal("a trapdoor is one block", changed, 1);
+    equal(
+      "...with nothing above it",
+      getBlock(session.doc, 2, 2, 2)?.namespacedName,
+      "minecraft:air",
+    );
+  }
+}
+
+/*
  * A block placed into water comes out waterlogged.
  *
  * That is what the game does — a fence, a slab or a stair put into a pond

@@ -349,61 +349,95 @@ function floodedPlacement(
 }
 
 /**
- * The two cells a bed occupies, or `null` when this is not a bed being laid.
+ * The families that are one block to place and two blocks in the file.
  *
- * A bed is two blocks in the game and was one here: placing it wrote a lone
- * foot, which is a state the game cannot hold — it drops as an item the moment
- * anything updates it, and until then it renders as half a bed. The head goes
- * one cell along `facing`, which `placementState` has already set from where
- * the camera was looking.
+ * A bed is a foot and a head; a door is a lower half and an upper. Both are
+ * states the game cannot hold on their own -- a lone bed foot drops as an item
+ * the moment anything updates it, and a lone door half is a door you can walk
+ * through -- and both were being written as one block, so the schematic looked
+ * right here and came apart when it was pasted.
  *
- * **Nothing is placed if the head has nowhere to go.** That is the game's rule
- * and it is the safe half of it: refusing over a flower is a smaller wrong than
- * destroying whatever was there, and the block in the way is on screen, so the
- * silence says as much as a message would. `null` for a cell outside the
- * document is *not* a refusal — a bed laid at the edge grows it, exactly as a
- * single block does.
+ * `step` is `null` for the family whose second cell is decided by `facing`,
+ * which is the bed: its head goes one cell the way you were looking when you
+ * laid it. A door's is always the cell above, whichever way it faces.
  *
- * A request that already names `part=head` is somebody placing one half on
- * purpose — the inspector, a paste, a tool — and is left alone.
+ * A request that already names the far half -- `part=head`, `half=upper` -- is
+ * somebody placing one half on purpose: the inspector, a paste, an agent tool.
+ * Those are left alone. Only an absent value, or the near one, means "place the
+ * whole thing".
  */
-function bedPlacement(
+const TWO_PART: readonly {
+  readonly suffix: string;
+  readonly property: string;
+  readonly near: string;
+  readonly far: string;
+  readonly step: readonly [number, number, number] | null;
+}[] = [
+  { suffix: "_bed", property: "part", near: "foot", far: "head", step: null },
+  // `_trapdoor` does not end in `_door`, which is why this needs no guard --
+  // `tests/session.ts` says so, because it is the kind of thing that reads as
+  // true and would be relied on without ever being checked.
+  { suffix: "_door", property: "half", near: "lower", far: "upper", step: [0, 1, 0] },
+];
+
+/** One cell along each horizontal facing, as `[dx, dy, dz]`. */
+const FACING_STEP: Readonly<Record<string, readonly [number, number, number]>> = {
+  north: [0, 0, -1],
+  south: [0, 0, 1],
+  west: [-1, 0, 0],
+  east: [1, 0, 0],
+};
+
+interface TwoPartPlacement {
+  readonly other: { x: number; y: number; z: number };
+  readonly here: PaletteEntry;
+  readonly there: PaletteEntry;
+}
+
+/**
+ * The two cells one of those blocks occupies.
+ *
+ * `null` when this is not one of them, or is one half placed deliberately.
+ * `"blocked"` when the far cell has something in it: **nothing is placed at
+ * all.** That is the game's rule and it is the safe half of it -- refusing over
+ * a flower is a smaller wrong than destroying whatever was there, and the block
+ * in the way is on screen, so the silence says as much as a message would.
+ *
+ * A cell *outside* the document is not blocked. The region the growth is
+ * measured against spans both, so a bed laid against the edge or a door hung at
+ * the ceiling makes room for itself exactly as a single block does.
+ */
+function twoPartPlacement(
   doc: SchematicDocument,
   request: { x: number; y: number; z: number },
   entry: PaletteEntry,
-): { head: { x: number; y: number; z: number }; foot: PaletteEntry; headEntry: PaletteEntry } | null {
-  if (!entry.namespacedName.endsWith("_bed")) return null;
-  if (entry.properties.part === "head") return null;
+): TwoPartPlacement | "blocked" | null {
+  const family = TWO_PART.find((candidate) => entry.namespacedName.endsWith(candidate.suffix));
+  if (family === undefined) return null;
+  if (entry.properties[family.property] === family.far) return null;
 
-  const facing = entry.properties.facing ?? "north";
-  const step = BED_STEP[facing];
-  if (step === undefined) return null;
+  const step = family.step ?? FACING_STEP[entry.properties.facing ?? "north"];
+  // A facing outside the four is something no placement produces and no file
+  // should carry. Placing half of the block would be worse than placing none.
+  if (step === undefined) return "blocked";
 
-  const head = { x: request.x + step[0], y: request.y, z: request.z + step[1] };
+  const other = { x: request.x + step[0], y: request.y + step[1], z: request.z + step[2] };
   const inDocument =
-    head.x >= 0 &&
-    head.y >= 0 &&
-    head.z >= 0 &&
-    head.x < doc.width &&
-    head.y < doc.height &&
-    head.z < doc.length;
-  if (inDocument && getBlock(doc, head.x, head.y, head.z).namespacedName !== "minecraft:air") {
-    return null;
+    other.x >= 0 &&
+    other.y >= 0 &&
+    other.z >= 0 &&
+    other.x < doc.width &&
+    other.y < doc.height &&
+    other.z < doc.length;
+  if (inDocument && getBlock(doc, other.x, other.y, other.z).namespacedName !== "minecraft:air") {
+    return "blocked";
   }
   return {
-    head,
-    foot: { ...entry, properties: { ...entry.properties, part: "foot" } },
-    headEntry: { ...entry, properties: { ...entry.properties, part: "head" } },
+    other,
+    here: { ...entry, properties: { ...entry.properties, [family.property]: family.near } },
+    there: { ...entry, properties: { ...entry.properties, [family.property]: family.far } },
   };
 }
-
-/** One cell along each horizontal facing, as `[dx, dz]`. */
-const BED_STEP: Readonly<Record<string, readonly [number, number]>> = {
-  north: [0, -1],
-  south: [0, 1],
-  west: [-1, 0],
-  east: [1, 0],
-};
 
 /**
  * Applies one request as one undoable step.
@@ -457,28 +491,28 @@ export function applyEdit(session: DocumentSession, request: EditRequest): numbe
       );
     }
     /*
-     * A bed is two blocks, and was being placed as one.
+     * A bed is two blocks, a door is two blocks, and both were being placed as
+     * one.
      *
-     * Both halves in one transaction, so Ctrl+Z takes the whole bed back --
-     * two edits would leave you undoing a bed one half at a time, and a lone
+     * Both halves in one transaction, so Ctrl+Z takes the whole thing back --
+     * two edits would leave you undoing a door one half at a time, and a lone
      * half is a state the game cannot hold. The region below spans both cells
-     * so the growth covers the head as well: a bed laid against the edge of the
-     * document makes room for itself exactly as a single block does.
+     * so the growth covers the far one as well: a bed laid against the edge of
+     * the document, or a door hung at the ceiling, makes room for itself
+     * exactly as a single block does.
      */
-    const bed = bedPlacement(doc, request, entry);
-    if (bed === null && entry.namespacedName.endsWith("_bed") &&
-        entry.properties.part !== "head") {
-      // The head has a block in it. The game does not place the bed either.
-      return 0;
-    }
+    const pair = twoPartPlacement(doc, request, entry);
+    // The far cell has something in it. The game does not place it either, and
+    // the block in the way is on screen.
+    if (pair === "blocked") return 0;
 
     const cell = {
-      minX: Math.min(request.x, bed?.head.x ?? request.x),
-      minY: Math.min(request.y, bed?.head.y ?? request.y),
-      minZ: Math.min(request.z, bed?.head.z ?? request.z),
-      maxX: Math.max(request.x, bed?.head.x ?? request.x),
-      maxY: Math.max(request.y, bed?.head.y ?? request.y),
-      maxZ: Math.max(request.z, bed?.head.z ?? request.z),
+      minX: Math.min(request.x, pair?.other.x ?? request.x),
+      minY: Math.min(request.y, pair?.other.y ?? request.y),
+      minZ: Math.min(request.z, pair?.other.z ?? request.z),
+      maxX: Math.max(request.x, pair?.other.x ?? request.x),
+      maxY: Math.max(request.y, pair?.other.y ?? request.y),
+      maxZ: Math.max(request.z, pair?.other.z ?? request.z),
     };
     /*
      * Breaking is `setBlock` with air, and growing to make room for air would
@@ -499,18 +533,18 @@ export function applyEdit(session: DocumentSession, request: EditRequest): numbe
       // Resize first, for the reason the fill below states: a block delta
       // recorded before it would be an index into the old shape.
       if (growth !== null) tx.resize(growth.size, growth.shift);
-      if (bed !== null) {
+      if (pair !== null) {
         const [sx, sy, sz] = growth?.shift ?? [0, 0, 0];
-        const foot = tx.setBlock(request.x + sx, request.y + sy, request.z + sz, bed.foot) ? 1 : 0;
-        const head = tx.setBlock(
-          bed.head.x + sx,
-          bed.head.y + sy,
-          bed.head.z + sz,
-          bed.headEntry,
+        const here = tx.setBlock(request.x + sx, request.y + sy, request.z + sz, pair.here) ? 1 : 0;
+        const there = tx.setBlock(
+          pair.other.x + sx,
+          pair.other.y + sy,
+          pair.other.z + sz,
+          pair.there,
         )
           ? 1
           : 0;
-        return foot + head;
+        return here + there;
       }
       return tx.setBlock(at.minX, at.minY, at.minZ, entry) ? 1 : 0;
     });

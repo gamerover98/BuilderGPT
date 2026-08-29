@@ -14,7 +14,7 @@
    * than a promise made from a filename.
    */
   import { FILE_KINDS, FILE_KIND_LABEL, type FileKind } from "../../../shared/ipc.js";
-  import { formatsFor, MC_VERSION_NAMES, mcVersion, refusalFor } from "../../../shared/mc_versions.js";
+  import { MC_VERSION_NAMES, mcVersion, refusalFor } from "../../../shared/mc_versions.js";
   import type { SchematicFormat } from "../../../shared/schematic.js";
   import { t } from "./i18n.svelte.js";
 
@@ -93,7 +93,6 @@
     if (open) dialog?.focus();
   });
 
-  void formatsFor;
 </script>
 
 {#if open}

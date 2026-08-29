@@ -1,11 +1,11 @@
 {
   "name": "buildergpt",
-  "version": "3.0.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Schematic AI Studio — an AI-assisted 3D editor for Minecraft schematics",
-  "author": "CyniaAI Team",
-  "homepage": "https://github.com/CyniaAI/BuilderGPT",
-  "license": "GPL-3.0",
+  "author": "gamerover98",
+  "homepage": "https://github.com/gamerover98/BuilderGPT",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {

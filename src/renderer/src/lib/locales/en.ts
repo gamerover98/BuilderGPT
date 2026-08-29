@@ -151,9 +151,9 @@ export const en = {
     "Draws the box as a transparent cage, so empty room inside the schematic is visible as room rather than as nothing.",
   "dimensions.autoGrow": "Resize automatically while editing",
   "dimensions.autoGrowHint":
-    "Filling or placing outside the schematic grows it to fit, in the same undo step. Turn this off to build to a fixed size; edits that reach outside are then refused rather than trimmed.",
+    "Filling or placing outside the schematic grows it to fit, and breaking the block an outer face is made of takes it back in \u2014 both in the same undo step as the edit. Turn this off to build to a fixed size; edits that reach outside are then refused rather than trimmed.",
   "dimensions.shrinking":
-    "This is smaller on at least one side. Anything outside the new box is removed \u2014 undoable, but you will be asked first.",
+    "This is smaller on at least one side. You are asked to confirm only if blocks would actually be lost \u2014 shrinking into empty space simply happens. Either way it is one undo step: Ctrl+Z brings the size and the blocks back together.",
   "viewport.compassHint": "Which way you are looking. Click an axis to look from it.",
   "viewport.orthographicHint":
     "Draw without perspective, so parallel lines stay parallel and distance does not shrink a block. Orbit only \u2014 flying needs a point of view.",

@@ -549,5 +549,63 @@ console.log("\n--- transactions have identities ---");
   equal("an empty stack has no id", nextUndoId(createHistory()), null);
 }
 
+
+// --- a command on the far side of the connection pass ------------------------
+//
+// `TransactionOptions.after` exists for one caller and one shape of command: a
+// resize that follows an edit rather than preceding one. `tx.resize` calls
+// `flush()`, and the pass reads the recorder's *live* set -- so written into
+// the body it would not reorder the two, it would delete the derivation. What
+// is checked here is the half that has nothing to do with connections: it is
+// part of the same step, and a throw inside it takes the whole step back.
+console.log("\n--- after the derivation ---");
+{
+  {
+    const doc = createDocument({ width: 4, height: 4, length: 4 });
+    const history = createHistory();
+    const order: string[] = [];
+    runTransaction(doc, history, "resize after", (tx) => {
+      tx.setBlock(1, 1, 1, STONE);
+      order.push("body");
+    }, {
+      after: (tx) => {
+        order.push("after");
+        tx.resize({ width: 3, height: 3, length: 3 });
+      },
+    });
+    equal("it runs, and after the body", order, ["body", "after"]);
+    equal("its command lands in the same step", history.undoStack.length, 1);
+    equal("...alongside the edit", [doc.width, doc.height, doc.length], [3, 3, 3]);
+    undo(doc, history);
+    equal("one undo takes both back", [doc.width, doc.height, doc.length], [4, 4, 4]);
+    equal("...the block included", getBlock(doc, 1, 1, 1).namespacedName, "minecraft:air");
+  }
+
+  {
+    /*
+     * Inside the try, like the derivation above it. Outside, a rule that threw
+     * here would leave the document edited with no entry describing it -- the
+     * exact failure `runTransactionAsync` exists to prevent one layer up.
+     */
+    const doc = createDocument({ width: 4, height: 4, length: 4 });
+    const history = createHistory();
+    let raised = false;
+    try {
+      runTransaction(doc, history, "throws late", (tx) => {
+        tx.setBlock(1, 1, 1, STONE);
+      }, {
+        after: () => {
+          throw new Error("no");
+        },
+      });
+    } catch {
+      raised = true;
+    }
+    check("a throw in it is not swallowed", raised);
+    equal("...and the edit is rolled back", getBlock(doc, 1, 1, 1).namespacedName, "minecraft:air");
+    equal("...leaving nothing on the stack", history.undoStack.length, 0);
+  }
+}
+
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

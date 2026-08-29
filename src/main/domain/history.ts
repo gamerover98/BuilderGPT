@@ -572,6 +572,23 @@ export interface TransactionOptions {
    * is what the game does and what "editable afterwards" has to mean.
    */
   readonly derive?: boolean;
+
+  /**
+   * A command that has to land *after* the connection pass, not before it.
+   *
+   * There is exactly one, and it is a resize that follows an edit rather than
+   * preceding one. A growth resizes first, so it costs nothing; a shrink can
+   * only be measured once the block is gone, and `tx.resize` calls `flush()` --
+   * which empties the live set `deriveConnections` reads. Put in the body it
+   * would therefore not reorder the pass, it would silently *delete* it: the
+   * fence beside the one you broke would keep an arm pointing at nothing, with
+   * every check still green.
+   *
+   * Deriving before the shrink is also the right answer rather than merely a
+   * possible one -- outside the schematic reads as air (`connect.ts`), and the
+   * slabs about to come off are empty, so the two agree cell for cell.
+   */
+  readonly after?: (tx: TransactionScope) => void;
 }
 
 /**
@@ -598,6 +615,9 @@ export function runTransaction<T>(
     if (options.derive !== false) {
       deriveConnections(doc, recorder, [...recorder.touchedIndices()]);
     }
+    // Also inside the try, for the reason above it: whatever this applies is
+    // part of the same step and has to come back with it.
+    options.after?.(recorder);
   } catch (err) {
     recorder.flush();
     for (let i = recorder.commands.length - 1; i >= 0; i -= 1) {
@@ -641,6 +661,9 @@ export async function runTransactionAsync<T>(
     if (options.derive !== false) {
       deriveConnections(doc, recorder, [...recorder.touchedIndices()]);
     }
+    // Both runners honour it, whether or not anything asks today. An option
+    // one of them quietly ignores is worse than one neither has.
+    options.after?.(recorder);
   } catch (err) {
     recorder.flush();
     for (let i = recorder.commands.length - 1; i >= 0; i -= 1) {

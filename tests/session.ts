@@ -2417,5 +2417,197 @@ console.log("\n--- breaking into the void ---");
   }
 }
 
+
+// --- the box follows the content back in ------------------------------------
+//
+// The mirror of "a single placed block grows it too", and it was missing:
+// placing past the edge grew the schematic and breaking that same block left it
+// grown. Reported exactly that way -- "deleting a block does not resize the
+// area, and setting one does".
+console.log("\n--- breaking takes the box back ---");
+{
+  const stone = { namespacedName: "minecraft:stone" };
+  const air = { namespacedName: "minecraft:air" };
+  const place = (
+    session: DocumentSession,
+    x: number,
+    y: number,
+    z: number,
+    block: { namespacedName: string } = stone,
+    options: { autoGrow?: boolean; voidBlock?: string } = {},
+  ) => applyEdit(session, { kind: "setBlock", x, y, z, block }, options);
+  const put = (session: DocumentSession, x: number, y: number, z: number) =>
+    setBlock(session.doc, x, y, z, { namespacedName: "minecraft:stone", properties: {} });
+
+  {
+    // The round trip, which is the whole complaint.
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    place(session, 4, 0, 0);
+    equal("placing outside grows the box", session.doc.width, 5);
+    place(session, 4, 0, 0, air);
+    equal("...and breaking it takes the box back", session.doc.width, 4);
+    equal("...leaving the other axes alone", [session.doc.height, session.doc.length], [4, 4]);
+  }
+
+  {
+    /*
+     * One slab, not "shrink to the content".
+     *
+     * Shrinking to the content is the obvious rule and is the one that eats
+     * work: this document has empty slabs behind the block being broken, and
+     * they are room somebody made on purpose.
+     */
+    const session = newDocument({ width: 8, height: 4, length: 4 });
+    put(session, 7, 0, 0);
+    place(session, 7, 0, 0, air);
+    equal("breaking the outer face peels one slab", session.doc.width, 7);
+  }
+
+  {
+    // A face with something else still on it is not a face that came free.
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    put(session, 3, 0, 0);
+    put(session, 3, 2, 2);
+    place(session, 3, 0, 0, air);
+    equal("a face still holding a block does not come off", session.doc.width, 4);
+  }
+
+  {
+    /*
+     * Room is untouchable rather than usually safe: the broken cell has to *be*
+     * the outer face, and a roomy box has nothing on its outer faces.
+     */
+    const session = newDocument({ width: 16, height: 16, length: 16 });
+    put(session, 5, 5, 5);
+    place(session, 5, 5, 5, air);
+    equal(
+      "breaking inside a roomy schematic moves nothing",
+      [session.doc.width, session.doc.height, session.doc.length],
+      [16, 16, 16],
+    );
+  }
+
+  {
+    // A corner is on three faces at once, and all three come off.
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    put(session, 3, 3, 3);
+    place(session, 3, 3, 3, air);
+    equal(
+      "a corner break peels all three",
+      [session.doc.width, session.doc.height, session.doc.length],
+      [3, 3, 3],
+    );
+  }
+
+  {
+    /*
+     * Never at the near side. Retreating there would move all the content down,
+     * and every coordinate anybody has been given would stop meaning what it
+     * meant -- `resizeSession`'s restriction, from the other direction.
+     */
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    put(session, 0, 0, 0);
+    put(session, 2, 2, 2);
+    place(session, 0, 0, 0, air);
+    equal("breaking at the origin moves nothing", session.doc.width, 4);
+    equal(
+      "...and leaves the rest of the content where it was",
+      getBlock(session.doc, 2, 2, 2).namespacedName,
+      "minecraft:stone",
+    );
+  }
+
+  {
+    // It is the same setting seen from the other side, so it is off with it.
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    put(session, 3, 0, 0);
+    place(session, 3, 0, 0, air, { autoGrow: false });
+    equal("with automatic resizing off nothing moves", session.doc.width, 4);
+  }
+
+  {
+    /*
+     * And underwater. Keyed on the word `air` this would grow and never come
+     * back in, which is exactly the build the void block exists for -- the
+     * break writes water, and water is what empty means there.
+     */
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    put(session, 3, 0, 0);
+    place(session, 3, 0, 0, { namespacedName: "minecraft:water" }, {
+      voidBlock: "minecraft:water",
+    });
+    equal("a break into water peels the face too", session.doc.width, 3);
+  }
+
+  {
+    /*
+     * A break that wrote nothing peels nothing. Nothing sends one today -- a
+     * break comes from a pick, so the block is there -- which is why it is
+     * written down: without the guard, clicking an empty cell at the outer
+     * face would take a slab off on a click that did nothing at all.
+     */
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    put(session, 1, 1, 1);
+    place(session, 3, 3, 3, air);
+    equal(
+      "breaking a cell that is already empty moves nothing",
+      [session.doc.width, session.doc.height, session.doc.length],
+      [4, 4, 4],
+    );
+  }
+
+  {
+    // Never below the smallest schematic there is.
+    const session = newDocument({ width: 1, height: 1, length: 1 });
+    put(session, 0, 0, 0);
+    place(session, 0, 0, 0, air);
+    equal(
+      "a 1x1x1 stays a 1x1x1",
+      [session.doc.width, session.doc.height, session.doc.length],
+      [1, 1, 1],
+    );
+  }
+
+  {
+    // One step, both halves: the size and the block come back together.
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    place(session, 4, 0, 0);
+    place(session, 4, 0, 0, air);
+    equal("the box is back in", session.doc.width, 4);
+    undoEdit(session);
+    equal("undo restores the size", session.doc.width, 5);
+    equal(
+      "...and the block with it",
+      getBlock(session.doc, 4, 0, 0).namespacedName,
+      "minecraft:stone",
+    );
+  }
+
+  {
+    /*
+     * The ordering check, and the one worth having.
+     *
+     * `tx.resize` calls `flush()`, and the connection pass reads the recorder's
+     * *live* set -- so a peel written into the transaction body would not
+     * reorder the two, it would delete the derivation outright. The fence
+     * beside the one you broke would keep an arm pointing at nothing, with
+     * every other check here still green. `TransactionOptions.after` is what
+     * puts it on the far side of the pass.
+     */
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    const fence = { namespacedName: "minecraft:oak_fence" };
+    place(session, 1, 0, 2, fence);
+    place(session, 1, 0, 3, fence);
+    equal("two fences in a row connect", getBlock(session.doc, 1, 0, 2).properties.south, "true");
+    place(session, 1, 0, 3, air);
+    equal("breaking the outer one peels the face", session.doc.length, 3);
+    equal(
+      "...and its neighbour still loses the arm",
+      getBlock(session.doc, 1, 0, 2).properties.south,
+      "false",
+    );
+  }
+}
+
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

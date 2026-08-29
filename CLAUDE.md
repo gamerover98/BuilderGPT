@@ -1792,9 +1792,67 @@ about. So `tests/session.ts` checks the message rather than only the refusal,
 and the maximum gets cases nothing downstream would catch: 8192x1x1 is well
 inside `MAX_DOCUMENT_VOLUME` and would simply succeed.
 
-**And there is deliberately no shrink-on-delete.** It has no analogue: breaking
-never grows, `saveSession` already crops to content, and shrinking under the
-user would throw away the room they made to build in. The one control is growth.
+**Breaking takes the box back in, one slab at a time.** This was written down
+as a deliberate omission — "shrinking under the user would throw away the room
+they made to build in" — and the omission was the bug. Placing a block past
+the edge grew the schematic and breaking that same block left it grown, so one
+gesture had two answers depending on which way round you did it. Reported as
+"deleting a block does not resize the area, and setting one does", which is
+exactly what it was.
+
+**One slab per face, and that number is the whole design.** "Shrink to the
+content" is the obvious rule and is the one the old note was right to fear: a
+schematic 16 wide with a house between x=2 and x=12 is three slabs of room
+somebody made on purpose, and one break at the far face would take all three.
+One slab gives back exactly what the matching growth added — a click on an
+edge block's outer face grows the box by one — so the gesture round-trips and
+nothing else moves. A wall built outwards peels back one break at a time, in the
+order it was built.
+
+Room is untouchable rather than merely usually safe, and that is a second rule
+rather than the same one: a face is named only when the broken cell **is** that
+face, and a deliberately roomy box has nothing on its outer faces to break. At
+the far side only, never the origin, for `resizeSession`'s reason — retreating
+at the near side moves all the content down, and every coordinate anybody has
+been given stops meaning what it meant. Behind `editing.autoGrow`, because it is
+that setting seen from the other side: growing and never coming back in is half
+a checkbox.
+
+Emptiness is `applyEdit`'s own predicate, not the word `air`. With a void block
+chosen a break writes *that*, so keyed on air the schematic would go on growing
+underwater and never come back — which is the build the void block exists for.
+The consequence to know before it is reported: water put down by hand on the
+outer face is empty space by the same rule that makes it unpickable, and comes
+off with the slab, in the same undo step as the break.
+
+**And it lands through `TransactionOptions.after`, which exists for it alone.**
+`tx.resize` calls `flush()`, and `deriveConnections` reads the recorder's *live*
+set — so a peel written into the transaction body would not reorder the two,
+it would **delete the derivation outright**: the fence beside the one you broke
+would keep an arm pointing at nothing, with every other check green. A growth
+has no such problem because it resizes first. Deriving before the shrink is also
+the right answer rather than merely a possible one: outside the schematic reads
+as air, and the slab about to come off is empty, so the two agree cell for cell.
+
+The guard that reads `wrote > 0` is a correctness guard and is checked by name;
+the `emptiness` half beside it is **not**, and saying so is the point. A
+placement could take the same path harmlessly — the cell written is on every
+face the peel would name, so it finds it occupied and declines — and what the
+test buys is that an ordinary placement never scans a face for nothing.
+
+Still deliberately absent: any shrink that is not this one. A fill of air over
+the edge slab does not peel, because a fill reaching outside *grows* to cover
+the selection, and one gesture cannot mean both. The agent's tools do not peel
+either, for the reason they do not grow: `resize_document` is their one way to
+change the size.
+
+**And the shrink warning says which half of itself applies.** It read
+"undoable, but you will be asked first", which is two claims where the second is
+conditional: `resizeSession` counts non-air blocks and refuses only if there are
+any, so shrinking into empty space simply happens and nobody is asked. Reported
+as the message not being exact, alongside the observation that undo restores the
+blocks and the size together — which it does, and which the wording buried
+behind a "but".
 
 **The cage is a separate object so the picker never sees it.** A transparent box
 around the whole build, handed to the raycaster, swallows every click meant for

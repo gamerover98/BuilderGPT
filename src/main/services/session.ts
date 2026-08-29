@@ -51,6 +51,7 @@ import {
   runTransaction,
   undo,
   type History,
+  type TransactionScope,
 } from "../domain/history.js";
 
 import {
@@ -82,6 +83,7 @@ import {
   orderRegion,
   shiftRegion,
 } from "../domain/grow.js";
+import { peelEmptyFaces } from "../domain/shrink.js";
 
 export interface DocumentSession {
   readonly doc: SchematicDocument;
@@ -489,6 +491,52 @@ function twoPartPlacement(
  * rather than passed in: the renderer should not be able to mislabel history.
  */
 /**
+ * The box follows the content back in, when a break empties the face it was on.
+ *
+ * The mirror of `growthToInclude`, and it was missing: placing a block past the
+ * edge grew the schematic and breaking that same block left it grown, so one
+ * gesture had two answers depending on which way round you did it. Reported
+ * exactly that way -- "deleting a block does not resize the area, and setting
+ * one does".
+ *
+ * One slab, off the faces the broken cell *was*. Both halves keep it from
+ * eating work: a face with nothing on it is never named, because the broken
+ * cell has to be that face, and even a named one gives back only what the
+ * matching growth added. `shrink.ts` holds the rest of the reasoning, including
+ * why the near side is left alone.
+ *
+ * Emptiness is `applyEdit`'s own predicate, so with a void block chosen the
+ * water a break wrote counts as empty here too. That has a consequence worth
+ * knowing before it is reported: water put down by hand at the outer face is
+ * empty space by the same rule that makes it unpickable, and comes off with the
+ * slab. It is one undo step, like the rest of the break.
+ */
+function takeBoxBack(
+  doc: SchematicDocument,
+  tx: TransactionScope,
+  cell: { x: number; y: number; z: number },
+  isEmpty: (namespacedName: string) => boolean,
+): void {
+  const faces = {
+    x: cell.x === doc.width - 1,
+    y: cell.y === doc.height - 1,
+    z: cell.z === doc.length - 1,
+  };
+  if (!faces.x && !faces.y && !faces.z) return;
+
+  /*
+   * Read here rather than passed in: the connection pass runs before this and
+   * interns as it goes, so a table built before it would be short by however
+   * many entries a fence's arms had just added -- and an index past the end
+   * would read as "not empty", which is the safe direction but the wrong
+   * answer. `connect.ts` records the same trap one layer down.
+   */
+  const empty = doc.palette.map((entry) => isEmpty(entry.namespacedName));
+  const next = peelEmptyFaces(doc, (index) => empty[index] === true, faces);
+  if (next !== null) tx.resize(next);
+}
+
+/**
  * What an edit is allowed to do beyond writing blocks.
  *
  * Passed in rather than read from the settings store, because this module is
@@ -607,25 +655,62 @@ export function applyEdit(
     }
     const at = growth === null ? cell : shiftRegion(cell, growth.shift);
 
-    return runTransaction(doc, history, `Place ${entry.namespacedName}`, (tx) => {
-      // Resize first, for the reason the fill below states: a block delta
-      // recorded before it would be an index into the old shape.
-      if (growth !== null) tx.resize(growth.size, growth.shift);
-      if (pair !== null) {
-        const [sx, sy, sz] = growth?.shift ?? [0, 0, 0];
-        const here = tx.setBlock(request.x + sx, request.y + sy, request.z + sz, pair.here) ? 1 : 0;
-        const there = tx.setBlock(
-          pair.other.x + sx,
-          pair.other.y + sy,
-          pair.other.z + sz,
-          pair.there,
-        )
-          ? 1
-          : 0;
-        return here + there;
-      }
-      return tx.setBlock(at.minX, at.minY, at.minZ, entry) ? 1 : 0;
-    });
+    /*
+     * Set by the body, read by `after`, because only the body knows whether the
+     * write landed. Breaking a cell that was already empty must move nothing --
+     * the slab would come off on a click that did nothing at all -- and that
+     * half is a correctness guard, checked by name.
+     *
+     * The `emptiness` half is not, and saying so is the point. A *placement*
+     * could take the same path harmlessly: the cell written is on every face
+     * `takeBoxBack` would name, because a face is named by the coordinate that
+     * equals the boundary, so the peel finds it occupied and declines. What the
+     * test buys is that an ordinary placement never scans a face for nothing.
+     */
+    let broke = false;
+
+    return runTransaction(
+      doc,
+      history,
+      `Place ${entry.namespacedName}`,
+      (tx) => {
+        // Resize first, for the reason the fill below states: a block delta
+        // recorded before it would be an index into the old shape.
+        if (growth !== null) tx.resize(growth.size, growth.shift);
+        if (pair !== null) {
+          const [sx, sy, sz] = growth?.shift ?? [0, 0, 0];
+          const here = tx.setBlock(request.x + sx, request.y + sy, request.z + sz, pair.here) ? 1 : 0;
+          const there = tx.setBlock(
+            pair.other.x + sx,
+            pair.other.y + sy,
+            pair.other.z + sz,
+            pair.there,
+          )
+            ? 1
+            : 0;
+          return here + there;
+        }
+        const wrote = tx.setBlock(at.minX, at.minY, at.minZ, entry) ? 1 : 0;
+        broke = wrote > 0 && emptiness(entry.namespacedName);
+        return wrote;
+      },
+      {
+        /*
+         * After the connection pass, never in the body: `tx.resize` flushes,
+         * and the pass reads the live set. In the body this would not reorder
+         * the two, it would delete the derivation outright -- see
+         * `TransactionOptions.after`.
+         *
+         * Behind `mayGrow` because it is the same setting seen from the other
+         * side. "Resize automatically while editing" that grew and never came
+         * back in would be half a checkbox.
+         */
+        after: (tx) => {
+          if (!broke || !mayGrow) return;
+          takeBoxBack(doc, tx, { x: at.minX, y: at.minY, z: at.minZ }, emptiness);
+        },
+      },
+    );
   }
 
   /*

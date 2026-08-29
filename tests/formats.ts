@@ -13,17 +13,24 @@
  * came back as a v2 file with an empty one.
  */
 
-import { mkdtemp, readFile, rm } from "fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { promisify } from "util";
+import { gzip as gzipCb } from "zlib";
 import { tmpdir } from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { parse as parseNbt } from "prismarine-nbt";
+import { parse as parseNbt, writeUncompressed } from "prismarine-nbt";
+
+const gzipAsync = promisify(gzipCb);
 
 import {
+  applyNbt,
   omittedTags,
+  schematicNbtText,
   schematicNbtTree,
 } from "../src/main/services/schematic_nbt.js";
+import { createHistory } from "../src/main/domain/history.js";
 import type { NbtCompound } from "../src/main/pipeline/types.js";
 
 import {
@@ -42,10 +49,12 @@ import { contentBounds, cropToContent } from "../src/main/domain/crop.js";
 import { paletteEntryCacheKey, type PaletteEntry } from "../src/main/pipeline/types.js";
 import {
   extensionFor,
+  int,
   saveDocument,
   UnrepresentableBlocksError,
 } from "../src/main/services/writers.js";
 import { dataVersionFor } from "../src/main/services/versions.js";
+import { bitsPerEntry } from "../src/main/pipeline/litematic_bits.js";
 import {
   LITEMATIC_MIN_DATA_VERSION,
   LITEMATIC_VERSIONS,
@@ -63,6 +72,8 @@ import { dataVersionFor as _unusedDataVersionFor, VERSION_NAMES } from "../src/m
 import {
   anchorLocation,
   originLocation,
+  SCHEMATIC_FORMATS,
+  schematicExtension,
   tagPathLabel,
   type TagLocation,
 } from "../src/shared/schematic.js";
@@ -618,10 +629,20 @@ try {
   // exactly what the panel would have shown. A tag that appears in one and not
   // the other fails here rather than in front of a user.
   console.log("\n--- the panel's tree is the file's tree ---");
-  for (const format of ["sponge2", "sponge3", "mcedit"] as const) {
+  for (const format of ["sponge2", "sponge3", "mcedit", "litematic"] as const) {
     // MCEdit cannot carry an oak sign at all, so that case gets a document the
     // legacy table knows every block of. Everything else about it is the same.
     const doc = format === "mcedit" ? legacySafeDocument() : sampleDocument(format);
+    /*
+     * Litematica has nowhere to put either vector, so the sample's anchor and
+     * origin would be reported as dropped and would not come back. They are
+     * cleared here rather than left, because this check is about the *tags*,
+     * and `dropped` gets a check of its own below.
+     */
+    if (format === "litematic") {
+      doc.offset = null;
+      doc.worldOrigin = null;
+    }
     const filePath = path.join(workDir, `panel-${format}.${extensionFor(format)}`);
     await saveDocument(doc, filePath, { legacyBlocksPath: LEGACY_BLOCKS });
 
@@ -644,12 +665,445 @@ try {
       fromFile.Blocks = { type: "compound", value: blocks };
     }
 
+    let expectedTree = schematicNbtTree(doc, true);
+    if (format === "litematic") {
+      // The two arrays that *are* the schematic live inside the region, one
+      // level deeper than the top-level strip above can reach -- the same
+      // arrangement as v3's `Blocks`, in a different container.
+      const regions = { ...(fromFile.Regions as { value: NbtCompound }).value };
+      const [name] = Object.keys(regions);
+      const region = { ...(regions[name] as { value: NbtCompound }).value };
+      delete region.BlockStatePalette;
+      delete region.BlockStates;
+      regions[name] = { type: "compound", value: region };
+      fromFile.Regions = { type: "compound", value: regions };
+
+      /*
+       * And the two clocks are normalised out of both sides. `TimeModified` is
+       * stamped when the file is written and the panel's tree is built when the
+       * panel opens, so the two are milliseconds apart by construction and
+       * comparing them would make this check fail at random. It is the one pair
+       * of tags this tripwire cannot speak for, which is why it says so.
+       */
+      const clocks = (tree: NbtCompound): NbtCompound => {
+        const metadata = { ...(tree.Metadata as { value: NbtCompound }).value };
+        metadata.TimeCreated = { type: "long", value: [0, 0] };
+        metadata.TimeModified = { type: "long", value: [0, 0] };
+        return { ...tree, Metadata: { type: "compound", value: metadata } };
+      };
+      expectedTree = clocks(expectedTree);
+      Object.assign(fromFile, clocks(fromFile));
+    }
+
     equal(
       `${format}: the panel shows exactly the file's own tags`,
-      schematicNbtTree(doc, true),
+      expectedTree,
       fromFile,
     );
   }
+
+
+// --- Litematica -------------------------------------------------------------
+//
+// The referee is the same round trip as everywhere else in this file: build a
+// document, save it, load it, and require the two to agree block for block and
+// chest for chest. What is worth checking beyond that is the packing, because
+// it is the one thing here that is not shared with any other container -- and
+// the width at which it goes wrong is not the width the obvious test uses.
+console.log("\n--- litematic ---");
+{
+  /*
+   * A document whose palette forces a given bit width, filled so that every
+   * index is used and no two neighbours share one.
+   *
+   * The widths matter more than the count. At 8 bits an entry never crosses a
+   * long boundary, so a packer that refused to straddle would agree exactly --
+   * and 8 bits is what an ordinary schematic has. 5 and 9 are where the two
+   * arrangements diverge, which is why they are here and why the first sample
+   * file anyone reaches for cannot catch it.
+   */
+  const spread = (entries: number): SchematicDocument => {
+    const side = Math.ceil(Math.cbrt(entries + 1));
+    const doc = createDocument({
+      width: side,
+      height: side,
+      length: side,
+      format: "litematic",
+      dataVersion: 3837,
+    });
+    let n = 0;
+    for (let x = 0; x < side; x += 1) {
+      for (let y = 0; y < side; y += 1) {
+        for (let z = 0; z < side; z += 1) {
+          if (n >= entries) break;
+          setBlock(doc, x, y, z, {
+            namespacedName: "minecraft:stone",
+            properties: { n: String(n) },
+          });
+          n += 1;
+        }
+      }
+    }
+    return doc;
+  };
+
+  /*
+   * The sizes are chosen so that each one fails a different way of getting the
+   * width wrong. `1` is the only size the floor of 2 shows up at -- everything
+   * larger needs two bits anyway. `256` is the only one where "bits for the
+   * largest index" and "bits for the count" disagree, because 256 blocks plus
+   * air is 257 entries and 257 needs nine bits where 256 needs eight. And 5 and
+   * 9 are where an entry crosses a long boundary at all; at 8 it never does,
+   * which is exactly the width an ordinary schematic has and exactly why the
+   * first file anyone reaches for cannot catch a packer that refuses to
+   * straddle.
+   */
+  for (const [entries, bits] of [
+    [1, 2],
+    [3, 2],
+    [20, 5],
+    [200, 8],
+    [256, 9],
+    [400, 9],
+  ] as const) {
+    const doc = spread(entries);
+    equal(`a palette of ${entries + 1} packs at ${bits} bits`, bitsPerEntry(entries + 1), bits);
+
+    const filePath = path.join(workDir, `packed-${entries}.litematic`);
+    await saveDocument(doc, filePath, { format: "litematic" });
+    const back = documentFromLoaded(await loadStructure(filePath), filePath);
+    equal(`...and ${entries} distinct blocks survive it`, countBlocks(back), countBlocks(doc));
+    equal(`...cell for cell at ${bits} bits`, grid(back), grid(doc));
+    equal(`...with the same names`, names(back), names(doc));
+  }
+
+  {
+    // The whole document, the way every other container here is checked.
+    const doc = sampleDocument("litematic");
+    doc.offset = null;
+    doc.worldOrigin = null;
+    const filePath = path.join(workDir, "sample.litematic");
+    const result = await saveDocument(doc, filePath, { format: "litematic" });
+    equal("nothing is degraded", [...result.degraded], []);
+    equal("...and nothing is dropped", [...result.dropped], []);
+
+    const back = documentFromLoaded(await loadStructure(filePath), filePath);
+    equal("the grid survives", grid(back), grid(doc));
+    equal("the palette survives", names(back), names(doc));
+    equal("the block entities survive", back.blockEntities.size, doc.blockEntities.size);
+    equal("the entities survive", back.entities.length, doc.entities.length);
+    equal("the DataVersion survives", back.dataVersion, doc.dataVersion);
+    equal("...and it comes back as a litematic", back.format, "litematic");
+  }
+
+  {
+    /*
+     * The two vectors the container has nowhere to keep. Reported by name
+     * rather than lost quietly, which is the whole reason `dropped` is a
+     * separate list from `degraded`: a degraded block is in the file,
+     * approximated, and these are simply not there.
+     */
+    const doc = sampleDocument("litematic");
+    const filePath = path.join(workDir, "anchored.litematic");
+    const result = await saveDocument(doc, filePath, { format: "litematic" });
+    equal("the anchor and the origin are reported as dropped", [...result.dropped], [
+      "the paste anchor",
+      "the world origin",
+    ]);
+    const back = documentFromLoaded(await loadStructure(filePath), filePath);
+    equal("...and they really are gone", [back.offset, back.worldOrigin], [null, null]);
+  }
+
+  {
+    /*
+     * The version stamped on the file is chosen from the document's own
+     * DataVersion. Always 7 writes files Litematica below 1.20.6 refuses
+     * outright; always 6 puts component-shaped item NBT under a label promising
+     * the older shape.
+     */
+    const stamped = async (dataVersion: number): Promise<[number, number | null]> => {
+      const doc = createDocument({ width: 2, height: 2, length: 2, format: "litematic", dataVersion });
+      setBlock(doc, 0, 0, 0, { namespacedName: "minecraft:stone", properties: {} });
+      const filePath = path.join(workDir, `stamp-${dataVersion}.litematic`);
+      await saveDocument(doc, filePath, { format: "litematic" });
+      const { parsed } = await parseNbt(await readFile(filePath));
+      const root = parsed.value as unknown as NbtCompound;
+      const sub = root.SubVersion;
+      return [
+        Number((root.Version as { value: number }).value),
+        sub === undefined ? null : Number((sub as { value: number }).value),
+      ];
+    };
+    equal("1.13.2 is stamped version 5, with no SubVersion", await stamped(1631), [5, null]);
+    equal("1.18 is stamped 6, SubVersion 1", await stamped(2860), [6, 1]);
+    equal("1.20.4 is still 6", await stamped(3700), [6, 1]);
+    equal("1.20.5 moves to 7", await stamped(3837), [7, 1]);
+  }
+
+  {
+    /*
+     * And the refusals. This is the one container that has to carry a
+     * DataVersion -- Sponge omits the tag when there is none and MCEdit has no
+     * such tag at all -- so a document that names no version cannot be written
+     * as one, and stamping 1631 would tell every reader it was cut from 1.13.2.
+     */
+    const noVersion = createDocument({ width: 2, height: 2, length: 2, format: "litematic" });
+    let refused: string | null = null;
+    try {
+      await saveDocument(noVersion, path.join(workDir, "no-version.litematic"), {
+        format: "litematic",
+      });
+    } catch (err) {
+      refused = err instanceof Error ? err.message : String(err);
+    }
+    check("a document with no version is refused", refused !== null);
+    check("...by name, saying what to do", (refused ?? "").includes("1.13.2"), refused ?? "");
+
+    const tooOld = createDocument({
+      width: 2,
+      height: 2,
+      length: 2,
+      format: "litematic",
+      dataVersion: 1519,
+    });
+    let old: string | null = null;
+    try {
+      await saveDocument(tooOld, path.join(workDir, "too-old.litematic"), { format: "litematic" });
+    } catch (err) {
+      old = err instanceof Error ? err.message : String(err);
+    }
+    check("1.13 is refused too", old !== null);
+    check(
+      "...and the sentence is about the conversion, not the Flattening",
+      (old ?? "").includes("converts"),
+      old ?? "",
+    );
+  }
+
+
+  {
+    /*
+     * Several regions become one box, and this is the only place that can be
+     * seen. A litematic may hold any number of them, each with its own
+     * position, size and palette; a document is one box, so the union becomes
+     * the document and each region is written in at its own offset.
+     *
+     * The second region also states its box **backwards** -- a negative `Size`
+     * means the region runs back from `Position`, so the corner its array is
+     * indexed from is `Position + Size + 1`. Litematica normalises on save, so
+     * no file anyone is likely to open carries one, which is exactly why it is
+     * built by hand here.
+     *
+     * And it takes two regions to see either rule. With one, a wrong corner
+     * simply translates the whole document and the union translates it back:
+     * the box comes out the right size holding the right blocks, and the sign
+     * error is invisible until something else has to be placed relative to it.
+     */
+    const stone: PaletteEntry = { namespacedName: "minecraft:stone", properties: {} };
+    const blockPalette: NbtCompound[] = [
+      { Name: { type: "string", value: "minecraft:air" } },
+      { Name: { type: "string", value: "minecraft:stone" } },
+    ];
+    /**
+     * One region, `span` cells along x, holding stone in its first cell.
+     *
+     * `span` is 2 for the backwards one and that is not decoration: at a span
+     * of 1 the two readings coincide, because `Position + Size + 1` is
+     * `Position` exactly when `Size` is -1. A test written with 1x1x1 regions
+     * passes with the sign dropped altogether.
+     */
+    const region = (
+      at: [number, number, number],
+      span: number,
+      backwards: boolean,
+    ): NbtCompound => ({
+      Position: {
+        type: "compound",
+        value: { x: int(at[0]), y: int(at[1]), z: int(at[2]) },
+      },
+      Size: {
+        type: "compound",
+        value: backwards
+          ? { x: int(-span), y: int(-1), z: int(-1) }
+          : { x: int(span), y: int(1), z: int(1) },
+      },
+      BlockStatePalette: { type: "list", value: { type: "compound", value: blockPalette } },
+      // Two entries, so two bits per cell: stone in the first cell, air after
+      // it, and the whole thing sits in the low bits of one long.
+      BlockStates: { type: "longArray", value: [[0, 1]] },
+      TileEntities: { type: "list", value: { type: "compound", value: [] } },
+      Entities: { type: "list", value: { type: "compound", value: [] } },
+    });
+
+    const pairPath = path.join(workDir, "two-regions.litematic");
+    await writeFile(
+      pairPath,
+      await gzipAsync(
+        writeUncompressed(
+          {
+            type: "compound",
+            name: "",
+            value: {
+              MinecraftDataVersion: int(3837),
+              Version: int(7),
+              SubVersion: int(1),
+              Metadata: { type: "compound", value: { Name: { type: "string", value: "Pair" } } },
+              Regions: {
+                type: "compound",
+                value: {
+                  // At the origin, stated forwards.
+                  near: { type: "compound", value: region([0, 0, 0], 1, false) },
+                  /*
+                   * Two wide, stated backwards from its own far corner: it
+                   * occupies x = 4 and 5, and its array is indexed from 4.
+                   */
+                  far: { type: "compound", value: region([5, 0, 0], 2, true) },
+                },
+              },
+            },
+          } as never,
+          "big",
+        ),
+      ),
+    );
+
+    const merged = documentFromLoaded(await loadStructure(pairPath), pairPath);
+    equal(
+      "two regions become one box spanning both",
+      [merged.width, merged.height, merged.length],
+      [6, 1, 1],
+    );
+    equal("...with a block at each end", countBlocks(merged), 2);
+    equal(
+      "...the near one where it was",
+      getBlock(merged, 0, 0, 0).namespacedName,
+      stone.namespacedName,
+    );
+    equal(
+      "...and the backwards one four along, not five",
+      getBlock(merged, 4, 0, 0).namespacedName,
+      stone.namespacedName,
+    );
+  }
+
+  {
+    /*
+     * A schematic version below 5 is refused by name rather than read as best
+     * it can be: its palette is pre-Flattening numeric ids, which is a
+     * different table and a different decoder, and guessing would produce a
+     * document full of the wrong blocks that looked like a successful load.
+     */
+    const doc = sampleDocument("litematic");
+    doc.offset = null;
+    doc.worldOrigin = null;
+    const filePath = path.join(workDir, "old-version.litematic");
+    await saveDocument(doc, filePath, { format: "litematic" });
+    const { parsed } = await parseNbt(await readFile(filePath));
+    const root = { ...(parsed.value as unknown as NbtCompound), Version: int(4) };
+    const agedPath = path.join(workDir, "aged.litematic");
+    await writeFile(agedPath, await gzipAsync(writeUncompressed(
+      { type: "compound", name: "", value: root } as never,
+      "big",
+    )));
+
+    let refused: string | null = null;
+    try {
+      await loadStructure(agedPath);
+    } catch (err) {
+      refused = err instanceof Error ? err.message : String(err);
+    }
+    check("version 4 is refused", refused !== null);
+    check(
+      "...saying which version and what to do about it",
+      (refused ?? "").includes("version 4") && (refused ?? "").includes("1.13.2"),
+      refused ?? "",
+    );
+  }
+
+  {
+    /*
+     * The five derived fields are lifted out of the bag on the way in, for
+     * `readMetadata`'s reason: every one of them is a function of the blocks,
+     * so a copy left behind goes stale on the first edit and is written back
+     * out as fact.
+     */
+    const doc = sampleDocument("litematic");
+    doc.offset = null;
+    doc.worldOrigin = null;
+    const filePath = path.join(workDir, "metadata.litematic");
+    await saveDocument(doc, filePath, { format: "litematic" });
+    const back = documentFromLoaded(await loadStructure(filePath), filePath);
+    const carried = Object.keys(back.metadata).sort();
+    /*
+     * `WorldEdit` is in there because the sample carries one and unknown
+     * metadata survives a save, which is the rule for every container here --
+     * the same reason opening a WorldEdit file and saving it stopped destroying
+     * its `Platforms`. What must *not* survive is the five this app recomputes.
+     */
+    equal("the derived metadata does not reach the document", carried, [
+      "Author",
+      "Description",
+      "Name",
+      "TimeCreated",
+      "WorldEdit",
+    ]);
+    for (const derived of ["EnclosingSize", "TotalBlocks", "TotalVolume", "RegionCount", "TimeModified"]) {
+      check(`...${derived} in particular`, !(derived in back.metadata));
+    }
+  }
+
+  {
+    // One answer for the extension, and four containers to give it for.
+    equal("a litematic is called .litematic", schematicExtension("litematic"), "litematic");
+    for (const format of SCHEMATIC_FORMATS) {
+      equal(
+        `${format}: writers.ts agrees with shared/schematic.ts`,
+        extensionFor(format),
+        schematicExtension(format),
+      );
+    }
+  }
+
+  {
+    /*
+     * The region is named after the schematic, so a named document puts its
+     * lists under a key the panel cannot know in advance. Looked up by name
+     * rather than by position, an Apply that renamed the schematic would report
+     * its own block entities as missing.
+     */
+    const doc = sampleDocument("litematic");
+    doc.offset = null;
+    doc.worldOrigin = null;
+    doc.metadata = { ...doc.metadata, Name: { type: "string", value: "Castle" } };
+    const filePath = path.join(workDir, "named.litematic");
+    await saveDocument(doc, filePath, { format: "litematic" });
+    const { parsed } = await parseNbt(await readFile(filePath));
+    const regions = ((parsed.value as unknown as NbtCompound).Regions as { value: NbtCompound })
+      .value;
+    equal("the region takes the schematic's name", Object.keys(regions), ["Castle"]);
+
+    const history = createHistory();
+    const shown = schematicNbtText(doc);
+    check("the panel offers it", shown.editable);
+    const before = doc.blockEntities.size;
+    applyNbt(doc, history, shown.text, shown.revision, "NBT");
+    equal("...and applying it back keeps the block entities", doc.blockEntities.size, before);
+  }
+
+  {
+    // Converting between containers, which is what the format union buys.
+    const doc = sampleDocument("sponge3");
+    const asLitematic = path.join(workDir, "converted.litematic");
+    await saveDocument(doc, asLitematic, { format: "litematic" });
+    const viaLitematic = documentFromLoaded(await loadStructure(asLitematic), asLitematic);
+    const backToSponge = path.join(workDir, "converted-back.schem");
+    await saveDocument(viaLitematic, backToSponge, { format: "sponge3" });
+    const round = documentFromLoaded(await loadStructure(backToSponge), backToSponge);
+    equal("sponge3 -> litematic -> sponge3 keeps the grid", grid(round), grid(doc));
+    equal("...and the palette", names(round), names(doc));
+    equal("...and the block entities", round.blockEntities.size, doc.blockEntities.size);
+  }
+}
 
   // --- cropping to the content ---------------------------------------------
   console.log("\n--- crop on save ---");
@@ -806,8 +1260,32 @@ console.log("\n--- eras ---");
   // MCEdit works in both eras -- lossily above 1.13, which the writers already
   // report through `degraded`, and natively below it.
   check("MCEdit is offered in both", formatSupportsVersion("mcedit", "JE_1_12_2") && formatSupportsVersion("mcedit", "JE_1_20_4"));
-  equal("a flat version gets all three", formatsFor("JE_1_20_4"), ["sponge3", "sponge2", "mcedit"]);
+  equal("a flat version gets all four", formatsFor("JE_1_20_4"), [
+    "sponge3",
+    "litematic",
+    "sponge2",
+    "mcedit",
+  ]);
   equal("nothing is refused there", refusalFor("sponge3", "JE_1_20_4"), null);
+
+  /*
+   * Litematica needs one release more than the era does, and that is the whole
+   * of why this rule is not `eraOf`. 1.13 is flat and can be Sponge; a
+   * .litematic claiming it is converted by the mod's own reader.
+   */
+  equal("1.13 gets no litematic", formatsFor("JE_1_13"), ["sponge3", "sponge2", "mcedit"]);
+  equal("...and 1.13.2 does", formatsFor("JE_1_13_2"), [
+    "sponge3",
+    "litematic",
+    "sponge2",
+    "mcedit",
+  ]);
+  check(
+    "...refused by its own sentence, not the Flattening one",
+    (refusalFor("litematic", "JE_1_13") ?? "").includes("1.13.2") &&
+      !(refusalFor("litematic", "JE_1_13") ?? "").includes("flattened names"),
+    refusalFor("litematic", "JE_1_13") ?? "",
+  );
 
   /*
    * A legacy version has a perfectly real DataVersion -- what it does not have
@@ -999,6 +1477,17 @@ console.log("\n--- the tag the panel names is the tag the file uses ---");
     return Array.isArray(raw) ? raw.map(Number) : null;
   }
 
+  /*
+   * The three that have somewhere to put a vector. Litematica does not, and is
+   * checked below rather than here: `anchorLocation` answers `null` for it, and
+   * a loop that quietly skipped a `null` would pass just as well with a real
+   * location deleted.
+   */
+  const located = (location: TagLocation | null): TagLocation => {
+    if (location === null) throw new Error("this format has no such tag");
+    return location;
+  };
+
   for (const format of ["sponge2", "sponge3", "mcedit"] as const) {
     const doc = format === "mcedit" ? legacySafeDocument() : sampleDocument(format);
     const filePath = path.join(workDir, `located-${format}.${extensionFor(format)}`);
@@ -1010,13 +1499,13 @@ console.log("\n--- the tag the panel names is the tag the file uses ---");
       format === "sponge3" ? (root.Schematic as { value: NbtCompound }).value : root;
 
     equal(
-      `${format}: the anchor is at ${tagPathLabel(anchorLocation(format))}`,
-      vectorAt(payload, anchorLocation(format)),
+      `${format}: the anchor is at ${tagPathLabel(located(anchorLocation(format)))}`,
+      vectorAt(payload, located(anchorLocation(format))),
       [...doc.offset!],
     );
     equal(
-      `${format}: the origin is at ${tagPathLabel(originLocation(format))}`,
-      vectorAt(payload, originLocation(format)),
+      `${format}: the origin is at ${tagPathLabel(located(originLocation(format)))}`,
+      vectorAt(payload, located(originLocation(format))),
       [...doc.worldOrigin!],
     );
 
@@ -1029,28 +1518,38 @@ console.log("\n--- the tag the panel names is the tag the file uses ---");
      */
     check(
       `${format}: and they are not the same place`,
-      tagPathLabel(anchorLocation(format)) !== tagPathLabel(originLocation(format)),
-      tagPathLabel(anchorLocation(format)),
+      tagPathLabel(located(anchorLocation(format))) !== tagPathLabel(located(originLocation(format))),
+      tagPathLabel(located(anchorLocation(format))),
     );
   }
 
   // Read as a person reads it, since that is the only thing it is for.
-  equal("v3 keeps the anchor at the top level", tagPathLabel(anchorLocation("sponge3")), "Offset");
+  equal("v3 keeps the anchor at the top level", tagPathLabel(located(anchorLocation("sponge3"))), "Offset");
   equal(
     "...and v2 does not, whatever its `Offset` tag suggests",
-    tagPathLabel(anchorLocation("sponge2")),
+    tagPathLabel(located(anchorLocation("sponge2"))),
     "Metadata.WEOffsetX/Y/Z",
   );
   equal(
     "MCEdit keeps both at the root",
-    [tagPathLabel(anchorLocation("mcedit")), tagPathLabel(originLocation("mcedit"))],
+    [tagPathLabel(located(anchorLocation("mcedit"))), tagPathLabel(located(originLocation("mcedit")))],
     ["WEOffsetX/Y/Z", "WEOriginX/Y/Z"],
   );
   equal(
     "and v3's origin is the one that is nested",
-    tagPathLabel(originLocation("sponge3")),
+    tagPathLabel(located(originLocation("sponge3"))),
     "Metadata.WorldEdit.Origin",
   );
+
+  /*
+   * And Litematica has neither, which is a fact about the container rather than
+   * a gap in the table. It stores a region `Position` and an `EnclosingSize`
+   * and has no concept of a paste anchor at all, so pointing these at some
+   * plausible tag would be the exact mistake the pair exists to prevent -- the
+   * file would round-trip through this app and mean nothing to the mod.
+   */
+  equal("a litematic has nowhere to keep an anchor", anchorLocation("litematic"), null);
+  equal("...nor a world origin", originLocation("litematic"), null);
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

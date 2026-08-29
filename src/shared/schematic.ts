@@ -8,7 +8,7 @@
  * and touches no Electron, so both processes can read it.
  */
 
-export type SchematicFormat = "sponge2" | "sponge3" | "mcedit";
+export type SchematicFormat = "sponge2" | "sponge3" | "mcedit" | "litematic";
 
 /**
  * Every container the app can write, best first.
@@ -16,18 +16,34 @@ export type SchematicFormat = "sponge2" | "sponge3" | "mcedit";
  * Ordered rather than a set: a format picker that has to sort its own options
  * is a picker whose order can drift from this file's.
  */
-export const SCHEMATIC_FORMATS: readonly SchematicFormat[] = ["sponge3", "sponge2", "mcedit"];
+export const SCHEMATIC_FORMATS: readonly SchematicFormat[] = [
+  "sponge3",
+  "litematic",
+  "sponge2",
+  "mcedit",
+];
 
 /** How each container is described to a human. */
 export const SCHEMATIC_FORMAT_LABEL: Readonly<Record<SchematicFormat, string>> = {
   sponge2: "Sponge v2 (.schem)",
   sponge3: "Sponge v3 (.schem)",
   mcedit: "MCEdit legacy (.schematic)",
+  litematic: "Litematica (.litematic)",
 };
 
-/** The extension each container is conventionally stored under. */
+/**
+ * The extension each container is conventionally stored under.
+ *
+ * **This is the only copy.** It was written out three times — here, as
+ * `extensionFor` in `writers.ts`, and inline in `App.svelte` — which was
+ * harmless while the answer was a single ternary and stopped being harmless the
+ * moment a fourth container arrived: two of the three would have gone on
+ * calling a `.litematic` a `.schem`, and the file would have saved.
+ */
 export function schematicExtension(format: SchematicFormat): string {
-  return format === "mcedit" ? "schematic" : "schem";
+  if (format === "mcedit") return "schematic";
+  if (format === "litematic") return "litematic";
+  return "schem";
 }
 
 /**
@@ -61,15 +77,31 @@ export interface TagLocation {
   readonly kind: "vector" | "triple";
 }
 
-/** Where the paste anchor is stored. `doc.offset`'s home. */
-export function anchorLocation(format: SchematicFormat): TagLocation {
+/**
+ * Where the paste anchor is stored. `doc.offset`'s home.
+ *
+ * `null` for a container that has nowhere to put one, which Litematica is: it
+ * has a region `Position` and a `Metadata.EnclosingSize` and no concept of a
+ * paste anchor at all. Nullable rather than pointed at some plausible tag,
+ * because these two functions exist precisely to stop the app naming a tag that
+ * does not hold what it says — inventing `Metadata.WEOffsetX` here would be
+ * the same mistake in a new container, and the file would even round-trip
+ * through this app while meaning nothing to Litematica.
+ */
+export function anchorLocation(format: SchematicFormat): TagLocation | null {
+  if (format === "litematic") return null;
   if (format === "sponge3") return { path: [], tag: "Offset", kind: "vector" };
   if (format === "sponge2") return { path: ["Metadata"], tag: "WEOffset", kind: "triple" };
   return { path: [], tag: "WEOffset", kind: "triple" };
 }
 
-/** Where the world position of the minimum corner is stored. `doc.worldOrigin`. */
-export function originLocation(format: SchematicFormat): TagLocation {
+/**
+ * Where the world position of the minimum corner is stored. `doc.worldOrigin`.
+ *
+ * `null` for Litematica, for `anchorLocation`'s reason.
+ */
+export function originLocation(format: SchematicFormat): TagLocation | null {
+  if (format === "litematic") return null;
   if (format === "sponge3") return { path: ["Metadata", "WorldEdit"], tag: "Origin", kind: "vector" };
   if (format === "sponge2") return { path: [], tag: "Offset", kind: "vector" };
   return { path: [], tag: "WEOrigin", kind: "triple" };

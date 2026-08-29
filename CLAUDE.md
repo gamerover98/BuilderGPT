@@ -221,6 +221,109 @@ corner; `doc.worldOrigin` is the absolute world position of that corner.
 WorldEdit's own readers recover the anchor as `Origin - Offset`, so neither is
 derivable from the other and a file carries both.
 
+**There is a fourth container, and it is the one people actually swap builds
+in.** Litematica's `.litematic` is NBT like the other three, carries a full
+block-state palette like Sponge, and is read and written whole — palette,
+block entities, entities, `Metadata`.
+
+**Half of it was already written.** `readBlockEntities` and `readEntities` in
+`loader_formats.ts` are deliberately permissive, and Litematica spells a tile
+entity with a lowercase `id` and three separate int coordinates (MCEdit's
+spelling) and an entity with `id` and a `Pos` of three doubles (Sponge's). Both
+were handled years before this container arrived. Reading 509 chests out of a
+real file needed no new code at that layer at all.
+
+**The packing is `litematic_bits.ts`, and it is none of the three this app
+already had.** Sponge v2 packs into a byte stream, v3 into varints, and modern
+Minecraft chunks pack into longs *without* letting an entry cross a long
+boundary. Litematica's crosses: an entry starts at bit `i * bits` from the least
+significant bit of long 0, and runs into the next long if it has to. Width is
+`max(2, bits for the largest index)` and the array is `ceil(bits * cells / 64)`
+longs.
+
+The difference is **invisible at 8 bits**, where the two arrangements agree
+exactly — and 8 bits is what an ordinary schematic's palette needs. So the
+checks are at 2, 5, 9 and at a 257-entry palette, which are the widths where a
+straddling packer and an aligned one diverge and where "bits for the count" and
+"bits for the largest index" disagree. Verified against two real files as well:
+241 entries over 64x46x88 gives 8 bits and 32,384 longs, 367 over 122x145x54
+gives 9 and 134,334, and both repack byte-identical.
+
+**Several regions become one box, and it takes two of them to see any of the
+arithmetic.** A litematic may hold any number of named regions, each with its
+own position, size and palette; a document is one box, so the union becomes the
+document and each region is written in at its own offset. A `Size` may be
+*negative*, meaning the region runs back from `Position`, so the corner its
+array is indexed from is `Position + Size + 1`.
+
+With a single region none of that is observable: a wrong corner translates the
+whole document and the union translates it back, so the box comes out the right
+size holding the right blocks. And a 1x1x1 region cannot see the sign either,
+because `Position + Size + 1` is `Position` exactly when `Size` is -1. The check
+therefore builds *two* regions, one of them two wide and stated backwards.
+Litematica normalises on save, so no file anyone is likely to open carries one
+— which is the argument for constructing it by hand rather than waiting for a
+fixture.
+
+What the merge loses is the *partition*: saving puts one region back where there
+were three. The blocks, the block entities and the entities all survive; the
+seams do not, and keeping them would need a second notion of what a document is.
+
+**The floor is 1.13.2, one release later than this app's own flat era.**
+Litematica's reader converts the palette of anything whose schematic `Version`
+is below 5 *or* whose `MinecraftDataVersion` is below 1631, so a `.litematic`
+claiming 1.13 opens in the mod as the wrong blocks rather than as an error.
+`formatsFor` is where that lives, and `refusalFor` grew a second sentence:
+sending someone who picked Litematica for 1.13 to read about flattened block
+names would be true and useless, because 1.13 *has* those.
+
+**Which `Version` gets stamped is chosen from the document's DataVersion**, 7
+from 1.20.5 and 6 below it. Always 7 writes files Litematica below 1.20.6
+refuses outright; always 6 puts component-shaped item NBT under a label
+promising the older shape. `SubVersion` is written only when it is not zero,
+because Litematica reads it as `get("SubVersion", 0)` and a version 5 file never
+had the tag.
+
+**It is the one container that cannot omit its version.** Sponge leaves the
+`DataVersion` tag out when there is none and MCEdit has no such tag at all, but
+Litematica reads the file *according to* `MinecraftDataVersion`. So
+`litematicCanCarry(null)` is false and the save is refused by name: stamping
+1631 on a document that named no version would tell every reader downstream it
+was cut from 1.13.2.
+
+**`TotalBlocks` counts what `paletteEntryIsAir` already calls air**, which is
+the mod's own rule and comes out free. Checked against a real file whose
+metadata says 24,705 where a naive non-air count says 24,759 — the difference
+being its 54 `cave_air` cells. Worth knowing before somebody "fixes" the count
+by walking the voxels directly.
+
+**`anchorLocation` and `originLocation` return `null` now, and Litematica is
+why.** It has a region `Position` and a `Metadata.EnclosingSize` and no concept
+of a paste anchor at all. Pointing those functions at some plausible tag would
+be the exact mistake they were added to prevent, in a new container — and the
+file would even round-trip through this app while meaning nothing to the mod. So
+`WriteResult` grew **`dropped`** beside `degraded`, which is a different
+question: a degraded block is in the file, approximated, and a dropped thing is
+simply not there. The Anchor panel and the NBT panel both say so.
+
+**And `schematicExtension` is the only copy now.** It was written out three
+times — in `shared/schematic.ts`, as `extensionFor` in `writers.ts`, and
+inline in `App.svelte` — which was harmless while there were three containers
+and two answers. A fourth would have had two of the three go on calling a
+`.litematic` a `.schem`, and the file would have saved.
+
+The five `Metadata` fields the writer recomputes — `EnclosingSize`,
+`TotalBlocks`, `TotalVolume`, `RegionCount`, `TimeModified` — are lifted out
+of the bag on the way in, for `readMetadata`'s reason: each is a function of the
+blocks, so a copy left behind goes stale on the first edit and is written back
+out as fact. `TimeCreated` is deliberately *not* lifted; it is the one time in
+that compound this app does not own.
+
+The panel's tripwire covers this container too, with one stated exception: the
+two clocks are normalised out of both sides, because `TimeModified` is stamped
+when the file is written and the panel's tree is built when the panel opens, so
+comparing them would fail at random.
+
 **Sponge v2 and v3 both spell a tag `Offset` and do not mean the same vector by
 it.** This is the one real incompatibility between the two, it is silent in both
 directions — a file written with them swapped loads, looks right and pastes

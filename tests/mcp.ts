@@ -99,6 +99,7 @@ function fakeLifecycle(over: Partial<Lifecycle> & { log?: string[] } = {}): Life
         filePath: options.filePath ?? "C:/builds/x.schem",
         format: "sponge3" as const,
         degraded: [],
+    dropped: [],
         cropped: null,
       };
     },

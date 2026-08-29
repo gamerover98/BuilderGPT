@@ -40,6 +40,7 @@
  */
 
 import type { SchematicFormat } from "./schematic.js";
+import { LITEMATIC_MIN_LABEL, litematicCanCarry } from "./litematica_versions.js";
 
 export type McEra = "legacy" | "flat";
 
@@ -143,9 +144,26 @@ export function eraOf(name: string): McEra {
  * The whole point of this module. MCEdit is in both lists because it works in
  * both eras — lossily above 1.13, which `writers.ts` already reports through
  * `degraded`, and natively below it.
+ *
+ * **Litematica needs one release more than the era does.** The era rule is
+ * about the Flattening and is right about Sponge: 1.13 has flattened block
+ * names, so a Sponge palette can be written for it. Litematica's own reader
+ * converts the palette of anything below DataVersion 1631, so a `.litematic`
+ * claiming 1.13 or 1.13.1 comes back as the wrong blocks rather than as an
+ * error. `litematicCanCarry` holds that line; `litematica_versions.ts` holds
+ * the reasoning.
+ *
+ * An unknown version name gets `flat` from `eraOf` and still does not get
+ * litematic, because `dataVersionOf` has no number for it — and a container
+ * that must stamp a `MinecraftDataVersion` cannot be offered for a version
+ * whose number this build has never heard of. Sponge is still there, so
+ * nobody is left unable to save.
  */
 export function formatsFor(name: string): readonly SchematicFormat[] {
-  return eraOf(name) === "legacy" ? ["mcedit"] : ["sponge3", "sponge2", "mcedit"];
+  if (eraOf(name) === "legacy") return ["mcedit"];
+  return litematicCanCarry(dataVersionOf(name))
+    ? ["sponge3", "litematic", "sponge2", "mcedit"]
+    : ["sponge3", "sponge2", "mcedit"];
 }
 
 /** Whether a container can carry a version at all. */
@@ -163,6 +181,18 @@ export function formatSupportsVersion(format: SchematicFormat, name: string): bo
 export function refusalFor(format: SchematicFormat, name: string): string | null {
   if (formatSupportsVersion(format, name)) return null;
   const label = mcVersion(name)?.label ?? name;
+  /*
+   * Two refusals, because there are two reasons and only one of them is the
+   * Flattening. Sending someone who picked Litematica for 1.13 to read about
+   * flattened block names would be true and useless: 1.13 *has* those.
+   */
+  if (format === "litematic") {
+    return (
+      `Litematica converts the palette of any schematic older than ${LITEMATIC_MIN_LABEL}, so a ` +
+      `.litematic claiming ${label} would open in the mod as the wrong blocks rather than as an ` +
+      `error. Write ${LITEMATIC_MIN_LABEL} or newer, or save it as Sponge.`
+    );
+  }
   return (
     `Sponge schematics store blocks as flattened names like minecraft:oak_stairs[facing=north], ` +
     `which did not exist before 1.13. ${label} is older than that, so it can only be written as ` +

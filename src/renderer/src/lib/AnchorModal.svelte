@@ -130,8 +130,20 @@
     }
   }
 
-  /** `Offset`, `Metadata.WEOffsetX/Y/Z`, … — whichever this file will use. */
-  const storedAt = $derived(tagPathLabel(anchorLocation(format)));
+  /**
+   * `Offset`, `Metadata.WEOffsetX/Y/Z`, … — whichever this file will use, or
+   * `null` for a container that has nowhere to keep one.
+   *
+   * Litematica is that container. The anchor still exists in the document and
+   * the marker still shows in the viewport; what changes is that saving drops
+   * it, and this panel is the only place that could say so. Naming a plausible
+   * tag instead would be the failure this whole pair of functions was added to
+   * fix, in a new format.
+   */
+  const storedAt = $derived.by(() => {
+    const location = anchorLocation(format);
+    return location === null ? null : tagPathLabel(location);
+  });
 
   function preset(next: [number, number, number]): void {
     draft = [String(next[0]), String(next[1]), String(next[2])];
@@ -213,12 +225,16 @@
 
           {#if offset !== null}
             <p class="hint stored">
-              {t("anchor.stored", {
-                tag: storedAt,
-                x: offset[0],
-                y: offset[1],
-                z: offset[2],
-              })}
+              {#if storedAt === null}
+                {t("anchor.notStored")}
+              {:else}
+                {t("anchor.stored", {
+                  tag: storedAt,
+                  x: offset[0],
+                  y: offset[1],
+                  z: offset[2],
+                })}
+              {/if}
             </p>
           {/if}
 

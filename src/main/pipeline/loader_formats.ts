@@ -26,10 +26,20 @@ import type {
   NbtTag,
   PaletteEntry,
 } from "./types.js";
+import { paletteEntryCacheKey } from "./types.js";
 
 // Re-exported: these two started here, and moved to `types.ts` once block
 // entities gave the document model a reason to name them too.
 export type { NbtCompound, NbtTag } from "./types.js";
+import {
+  LITEMATIC_MIN_LABEL,
+  LITEMATIC_MIN_VERSION,
+} from "../../shared/litematica_versions.js";
+import {
+  bitsPerEntry,
+  longPairsToBigints,
+  unpackLitematicStates,
+} from "./litematic_bits.js";
 
 /**
  * Raised when the file parses as NBT but is not a schematic this app can read.
@@ -437,6 +447,16 @@ export function readMetadata(
  * why the two share every decoder below the container.
  */
 function detectFormat(root: NbtCompound): { format: SchematicFormat; payload: NbtCompound } {
+  /*
+   * Litematica first, and it has to be: its root carries neither `Width` nor
+   * `Palette`, so it would fall past every branch below to the error -- but
+   * `Regions` beside `Version` is a pair no other container here has, and
+   * matching on the pair rather than on `Regions` alone is what keeps this from
+   * claiming some future file that happens to have a compound by that name.
+   */
+  if (root.Regions !== undefined && root.Version !== undefined) {
+    return { format: "litematic", payload: root };
+  }
   const nested = root.Schematic;
   if (nested && typeof nested.value === "object" && nested.value !== null) {
     return { format: "sponge3", payload: nested.value as NbtCompound };
@@ -749,11 +769,269 @@ function mcEditVector(
  * `legacyBlockTable` is only consulted for MCEdit files; passing `null` makes
  * those fail with an explanatory error instead of silently decoding to air.
  */
+// --- Litematica ------------------------------------------------------------
+
+/**
+ * The `Metadata` fields this app recomputes on the way out.
+ *
+ * Lifted rather than kept, for `readMetadata`'s reason: every one of them is
+ * derived from the blocks, so a copy left in the bag goes stale on the first
+ * edit and is then written back out as fact. `TimeCreated` is deliberately
+ * *not* here -- it is the one time in that compound this app does not own, and
+ * a file that came from somebody else keeps theirs.
+ */
+export const LITEMATIC_DERIVED = [
+  "EnclosingSize",
+  "TotalBlocks",
+  "TotalVolume",
+  "RegionCount",
+  "TimeModified",
+];
+
+/**
+ * A litematic's `Metadata`, minus the fields this app recomputes.
+ *
+ * `readMetadata`'s counterpart, and shared with the NBT panel for that
+ * function's reason: the panel builds the tree the writer would write, so it
+ * has to strip exactly what the writer restamps or an Apply that edited nothing
+ * would adopt a `TotalBlocks` from before the last edit.
+ */
+export function readLitematicMetadata(tag: NbtTag | undefined): NbtCompound {
+  const metadata: NbtCompound =
+    tag && tag.type === "compound" && tag.value !== null && typeof tag.value === "object"
+      ? { ...(tag.value as NbtCompound) }
+      : {};
+  for (const key of LITEMATIC_DERIVED) delete metadata[key];
+  return metadata;
+}
+
+/** `BlockStatePalette`: a list of `{ Name, Properties? }`, not Sponge's map. */
+function readLitematicPalette(tag: NbtTag | undefined): PaletteEntry[] {
+  return compoundList(tag).map((entry) => {
+    const name = stringOf(entry.Name);
+    const properties: Record<string, string> = {};
+    const props = entry.Properties;
+    if (
+      props &&
+      props.type === "compound" &&
+      props.value !== null &&
+      typeof props.value === "object"
+    ) {
+      for (const [key, valueTag] of Object.entries(props.value as NbtCompound)) {
+        const value = stringOf(valueTag);
+        if (value !== null) properties[key] = value;
+      }
+    }
+    return { namespacedName: namespaced(name ?? "minecraft:air"), properties };
+  });
+}
+
+/** One region's box, in the schematic's own coordinates. */
+interface LitematicBox {
+  readonly min: [number, number, number];
+  readonly size: [number, number, number];
+}
+
+/**
+ * Where a region actually sits, given that `Size` may be negative.
+ *
+ * A negative component means the region runs *back* from `Position`, so the
+ * corner its block array is indexed from is `Position + Size + 1` rather than
+ * `Position`. Litematica normalises on save, so every file anyone is likely to
+ * open has positive sizes and the two agree -- which is exactly why this is
+ * written down rather than assumed away. Getting the sign wrong mirrors the
+ * region about its own corner, and a mirrored build still looks like a build.
+ */
+function litematicBox(region: NbtCompound): LitematicBox {
+  const axis = (tag: NbtTag | undefined, key: string): number => {
+    if (!tag || tag.type !== "compound" || tag.value === null || typeof tag.value !== "object") {
+      return 0;
+    }
+    return numberOf((tag.value as NbtCompound)[key]) ?? 0;
+  };
+  const at = (key: string): [number, number] => {
+    const p = axis(region.Position, key);
+    const s = axis(region.Size, key);
+    return [s < 0 ? p + s + 1 : p, Math.abs(s)];
+  };
+  const [minX, width] = at("x");
+  const [minY, height] = at("y");
+  const [minZ, length] = at("z");
+  return { min: [minX, minY, minZ], size: [width, height, length] };
+}
+
+/**
+ * Litematica, schematic version 5 and up.
+ *
+ * ## Several regions become one box
+ *
+ * A litematic may hold any number of named regions, each with its own position,
+ * size and palette; this app has one document with one box. So the union of the
+ * regions becomes the document, each region is written into it at its own
+ * offset, and the palettes are merged. A cell no region covers is air, which is
+ * what the gap between two regions already was.
+ *
+ * What that loses is the *partition*: saving puts one region back where there
+ * were three. The blocks, the block entities and the entities all survive; the
+ * seams do not. Keeping them would need a second notion of what a document is,
+ * and a file that came apart into three documents would be worse.
+ *
+ * ## The union's minimum corner becomes (0,0,0)
+ *
+ * The grid has no negative index, so a region at a negative `Position` has to
+ * move. Nothing records where it was, and deliberately: `Position` is a
+ * displacement inside the schematic rather than a world coordinate, so writing
+ * it into `worldOrigin` would claim a position in a world nobody named.
+ * Litematica has no paste anchor either, which is why `anchorLocation` answers
+ * `null` for this container.
+ */
+function decodeLitematic(root: NbtCompound): DecodedSchematic {
+  const version = numberOf(root.Version);
+  if (version === null) {
+    throw new SchematicFormatError("This looks like a Litematica schematic but carries no Version");
+  }
+  if (version < LITEMATIC_MIN_VERSION) {
+    throw new SchematicFormatError(
+      `This is a Litematica schematic of version ${version}. Version ${LITEMATIC_MIN_VERSION} ` +
+        `(Minecraft ${LITEMATIC_MIN_LABEL}) is the oldest that can be read: below it the palette ` +
+        `is pre-Flattening numeric ids, which is a different table and a different decoder. ` +
+        `Opening it in Litematica and saving it again converts it.`,
+    );
+  }
+
+  const regionsTag = root.Regions;
+  const regionsValue =
+    regionsTag &&
+    regionsTag.type === "compound" &&
+    regionsTag.value !== null &&
+    typeof regionsTag.value === "object"
+      ? (regionsTag.value as NbtCompound)
+      : {};
+  const regions = Object.entries(regionsValue)
+    .map(([name, tag]) => {
+      const body = asCompound(tag, `Regions.${name}`);
+      return { body, box: litematicBox(body) };
+    })
+    .filter((entry) => entry.box.size[0] > 0 && entry.box.size[1] > 0 && entry.box.size[2] > 0);
+
+  if (regions.length === 0) {
+    throw new SchematicFormatError(
+      "This Litematica schematic has no regions with any volume in them",
+    );
+  }
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  for (const { box } of regions) {
+    minX = Math.min(minX, box.min[0]);
+    minY = Math.min(minY, box.min[1]);
+    minZ = Math.min(minZ, box.min[2]);
+    maxX = Math.max(maxX, box.min[0] + box.size[0] - 1);
+    maxY = Math.max(maxY, box.min[1] + box.size[1] - 1);
+    maxZ = Math.max(maxZ, box.min[2] + box.size[2] - 1);
+  }
+  const width = maxX - minX + 1;
+  const height = maxY - minY + 1;
+  const length = maxZ - minZ + 1;
+
+  // Air first, so a cell no region covers is index 0 without a second pass.
+  const palette: PaletteEntry[] = [{ namespacedName: "minecraft:air", properties: {} }];
+  const paletteIndex = new Map<string, number>([[paletteEntryCacheKey(palette[0]), 0]]);
+  const indices = new Int32Array(width * height * length);
+  const blockEntities: BlockEntityRecord[] = [];
+  const entities: EntityRecord[] = [];
+
+  for (const { body, box } of regions) {
+    const local = readLitematicPalette(body.BlockStatePalette);
+    /*
+     * Merged per region, because each carries its own palette. One shared cache
+     * would be wrong the moment two regions number the same block differently,
+     * which is the ordinary case rather than a strange one.
+     */
+    const remap = local.map((entry) => {
+      const key = paletteEntryCacheKey(entry);
+      const found = paletteIndex.get(key);
+      if (found !== undefined) return found;
+      const next = palette.length;
+      palette.push(entry);
+      paletteIndex.set(key, next);
+      return next;
+    });
+
+    const [rw, rh, rl] = box.size;
+    const statesTag = body.BlockStates;
+    const words =
+      statesTag && statesTag.type === "longArray" && Array.isArray(statesTag.value)
+        ? longPairsToBigints(statesTag.value as [number, number][])
+        : [];
+    const packed = unpackLitematicStates(words, bitsPerEntry(local.length), rw * rh * rl);
+
+    const dx = box.min[0] - minX;
+    const dy = box.min[1] - minY;
+    const dz = box.min[2] - minZ;
+    for (let y = 0; y < rh; y += 1) {
+      for (let z = 0; z < rl; z += 1) {
+        for (let x = 0; x < rw; x += 1) {
+          const value = remap[packed[y * rw * rl + z * rw + x]] ?? 0;
+          if (value === 0) continue;
+          // The document's own YZX order, which is Sponge's and MCEdit's too.
+          indices[(y + dy) * width * length + (z + dz) * width + (x + dx)] = value;
+        }
+      }
+    }
+
+    /*
+     * Read by the same two functions the other three containers use, and that
+     * is worth saying out loud rather than glossing: Litematica spells a tile
+     * entity with a lowercase `id` and separate `x`/`y`/`z` ints, which is
+     * MCEdit's spelling, and an entity with `id` and a `Pos` of three doubles,
+     * which is Sponge's. Both were already handled, permissively, years before
+     * this container arrived.
+     */
+    for (const record of readBlockEntities(body.TileEntities)) {
+      blockEntities.push({
+        ...record,
+        pos: [record.pos[0] + dx, record.pos[1] + dy, record.pos[2] + dz],
+      });
+    }
+    for (const record of readEntities(body.Entities)) {
+      entities.push({
+        ...record,
+        pos: [record.pos[0] + dx, record.pos[1] + dy, record.pos[2] + dz],
+      });
+    }
+  }
+
+  return {
+    format: "litematic",
+    width,
+    height,
+    length,
+    palette,
+    indices,
+    unmappedLegacyIds: [],
+    blockEntities,
+    entities,
+    offset: null,
+    worldOrigin: null,
+    metadata: readLitematicMetadata(root.Metadata),
+    dataVersion: numberOf(root.MinecraftDataVersion),
+  };
+}
+
 export function decodeSchematic(
   root: NbtCompound,
   legacyBlockTable: LegacyBlockTable | null,
 ): DecodedSchematic {
   const { format, payload } = detectFormat(unwrapRoot(root));
+
+  if (format === "litematic") {
+    return decodeLitematic(payload);
+  }
 
   if (format === "mcedit") {
     if (!legacyBlockTable) {

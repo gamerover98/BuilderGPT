@@ -312,6 +312,8 @@ export const en = {
     "This anchor is outside the schematic, which is allowed: the player who copied it may have been standing clear of the build.",
   "anchor.stored":
     "In this file it is stored as {tag} = [{x}, {y}, {z}] — the anchor's position, negated.",
+  "anchor.notStored":
+    "This container has nowhere to keep an anchor, so saving drops it. The marker stays in the viewport and the vector stays in the document \u2014 the file simply will not carry it.",
   "anchor.viewTitle": "In the viewport",
   "anchor.showMarker": "Show the anchor marker",
   "anchor.markerHint":
@@ -328,6 +330,8 @@ export const en = {
   "nbt.originClear": "Clear",
   "nbt.whereHint":
     "In this container the paste anchor is {anchor} and the origin is {origin}. The two are different vectors and each format spells them differently, so the tag you want may not be the one you expect.",
+  "nbt.whereNone":
+    "This container keeps neither a paste anchor nor a world origin, so neither appears below and saving drops both. Save it as Sponge if the file has to carry them.",
   "nbt.omittedHint":
     "The palette and the block data are left out ({tags}): they are the schematic itself, and are rewritten from the grid every time it is saved.",
   "nbt.readOnly":
@@ -614,6 +618,7 @@ export const en = {
   "status.wentBack": "Went back to that version",
   "status.created": "New schematic created.",
   "status.saved": "Saved {name}",
+  "status.dropped": "This container cannot carry {things}, so the file does not have it.",
   "status.cropped": "Trimmed to fit the build: {from} → {to}",
   "status.degraded":
     "{count} block type(s) cannot keep their block state in this format and will come back " +

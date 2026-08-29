@@ -210,7 +210,12 @@ const FILE_FILTERS: Readonly<
   "resource-pack": [{ name: "Resource pack", extensions: ["zip"] }],
   // `.schematic` is the legacy MCEdit container; the loader reads it via the
   // vendored pre-1.13 block table (pipeline/loader_formats.ts).
-  schem: [{ name: "Schematic", extensions: ["schem", "schematic"] }],
+  schem: [
+    {
+      name: "Schematic",
+      extensions: ["schem", "schematic", "litematic", "mcfunction"],
+    },
+  ],
 };
 
 /**
@@ -1197,6 +1202,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         filePath: result.filePath,
         format: result.format,
         degraded: [...result.degraded],
+        dropped: [...result.dropped],
         cropped: result.cropped,
         state: shellState(session),
       };

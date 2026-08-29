@@ -39,12 +39,24 @@ import {
   documentSize,
   type SchematicDocument,
 } from "../domain/document.js";
+import { schematicExtension } from "../../shared/schematic.js";
 import {
   loadLegacyBlockTable,
   parsePaletteEntry,
   type LegacyBlockTable,
   type SchematicFormat,
 } from "../pipeline/loader_formats.js";
+import {
+  LITEMATIC_MIN_DATA_VERSION,
+  LITEMATIC_MIN_LABEL,
+  litematicCanCarry,
+  litematicVersionFor,
+} from "../../shared/litematica_versions.js";
+import {
+  bigintsToLongPairs,
+  bitsPerEntry,
+  packLitematicStates,
+} from "../pipeline/litematic_bits.js";
 import {
   paletteEntryCacheKey,
   paletteEntryIsAir,
@@ -77,6 +89,27 @@ export class UnrepresentableBlocksError extends Error {
   }
 }
 
+/**
+ * A version this container cannot honestly claim.
+ *
+ * Named rather than folded into the generic write error because the fix is
+ * different: this is not a broken document, it is the wrong container for the
+ * version it carries, and the sentence has to say which way to move.
+ */
+export class UnwritableVersionError extends Error {
+  constructor(public readonly dataVersion: number | null) {
+    super(
+      dataVersion === null
+        ? `A .litematic has to say which Minecraft version it was cut from, and this document ` +
+            `names none. Pick a version of ${LITEMATIC_MIN_LABEL} or newer, or save it as Sponge.`
+        : `Litematica converts the palette of any schematic older than ${LITEMATIC_MIN_LABEL} ` +
+            `(DataVersion ${LITEMATIC_MIN_DATA_VERSION}), so a .litematic claiming DataVersion ` +
+            `${dataVersion} would open in the mod as the wrong blocks. Save it as Sponge instead.`,
+    );
+    this.name = "UnwritableVersionError";
+  }
+}
+
 export interface WriteOptions {
   /** Defaults to the document's own format, which is what "Save" means. */
   format?: SchematicFormat;
@@ -95,6 +128,17 @@ export interface WriteResult {
    * which always can.
    */
   readonly degraded: readonly string[];
+  /**
+   * What the container cannot carry **at all**, by name.
+   *
+   * A different question from `degraded`, and keeping them apart is the point.
+   * A degraded block is still in the file, approximated; a dropped thing is
+   * simply not there. Litematica has no paste anchor and no world origin, so a
+   * document that had one saves without it and says so — which is the only
+   * honest answer, because the alternative is inventing a tag and the one after
+   * that is losing the vector in silence.
+   */
+  readonly dropped: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +628,215 @@ function buildMcEdit(
 }
 
 // ---------------------------------------------------------------------------
+// Litematica
+// ---------------------------------------------------------------------------
+
+/** `prismarine-nbt` spells a long `[high, low]`, both 32-bit signed. */
+function longTag(value: number): NbtTag {
+  const big = BigInt(Math.trunc(value));
+  return {
+    type: "long",
+    value: [
+      Number(BigInt.asIntN(32, big >> 32n)),
+      Number(BigInt.asIntN(32, big & 0xffffffffn)),
+    ],
+  };
+}
+
+/** A string tag's value, for the one metadata field the writer reads back. */
+function stringOfTag(tag: NbtTag | undefined): string | null {
+  return tag !== undefined && tag.type === 'string' && typeof tag.value === 'string'
+    ? tag.value
+    : null;
+}
+
+/** `{ x, y, z }` as three ints, which is how Litematica spells a vector. */
+export function xyzTag(x: number, y: number, z: number): NbtTag {
+  return { type: "compound", value: { x: int(x), y: int(y), z: int(z) } };
+}
+
+/**
+ * An empty list of compounds, written rather than omitted.
+ *
+ * `compoundList` omits an empty list on purpose, because an NBT list has to
+ * declare an element type it has no elements of and readers disagree about what
+ * belongs there. Here the element type is not in doubt — Litematica reads
+ * these four with an explicit compound type — and every real `.litematic`
+ * carries them empty rather than absent. Matching the files removes a guess
+ * about a reader this repo cannot run.
+ */
+export function emptyCompoundList(): NbtTag {
+  return { type: "list", value: { type: "compound", value: [] } };
+}
+
+/**
+ * `TileEntities`: MCEdit's spelling, which is also Litematica's.
+ *
+ * Lowercase `id`, three separate int coordinates, and the payload inline. Not
+ * `spongeBlockEntities`' shape, and not a variant of it: this is the same
+ * arrangement `readBlockEntities` was already reading permissively, which is
+ * why opening one of these needed no new code at all.
+ */
+export function litematicBlockEntities(
+  records: Iterable<BlockEntityRecord>,
+): NbtCompound[] {
+  const out: NbtCompound[] = [];
+  for (const record of records) {
+    out.push({
+      ...record.nbt,
+      id: str(record.id),
+      x: int(record.pos[0]),
+      y: int(record.pos[1]),
+      z: int(record.pos[2]),
+    });
+  }
+  return out;
+}
+
+/** `Entities`: lowercase `id`, and `Pos` as three doubles. */
+export function litematicEntities(records: readonly EntityRecord[]): NbtCompound[] {
+  return records.map((record) => ({
+    ...record.nbt,
+    id: str(record.id),
+    Pos: {
+      type: "list",
+      value: { type: "double", value: [record.pos[0], record.pos[1], record.pos[2]] },
+    },
+  }));
+}
+
+/**
+ * The region's name, which is also the schematic's.
+ *
+ * Shared with the NBT panel because the panel shows the tree the writer would
+ * write, and a panel that put the list under `Regions.Unnamed` while the file
+ * put it under `Regions.Castle` would read as the block entities vanishing on
+ * save.
+ */
+export function litematicRegionName(doc: SchematicDocument): string {
+  return stringOfTag(doc.metadata.Name) ?? "Unnamed";
+}
+
+/**
+ * The `Metadata` compound, derived fields and all.
+ *
+ * One definition, for `spongeMetadata`'s reason and one more: `TotalBlocks` has
+ * to be counted the way Litematica counts it, and that turns out to be free.
+ * `paletteEntryIsAir` already folds `cave_air` and `void_air` in with air,
+ * which is exactly the mod's own rule -- checked against a real file whose
+ * metadata says 24,705 where a naive non-air count says 24,759, the difference
+ * being its 54 `cave_air` cells. Worth knowing before somebody "fixes" the
+ * count by walking the voxels directly.
+ *
+ * `Name` goes in first and the derived fields last, which is `spongeMetadata`'s
+ * pair of orderings for its pair of reasons: a file that arrived named keeps
+ * its name, and a stale `TotalBlocks` the bag was carrying cannot override the
+ * one just counted. The loader already lifts the derived five out on the way
+ * in, so this is the belt to that pair of braces.
+ */
+export function litematicMetadata(doc: SchematicDocument, now = Date.now()): NbtCompound {
+  const [width, height, length] = documentSize(doc);
+  const air = doc.palette.map((entry) => paletteEntryIsAir(entry));
+  let placed = 0;
+  for (const index of doc.voxels) {
+    if (air[index] !== true) placed += 1;
+  }
+  return {
+    Name: str(litematicRegionName(doc)),
+    Author: str(""),
+    Description: str(""),
+    TimeCreated: longTag(now),
+    ...doc.metadata,
+    EnclosingSize: xyzTag(width, height, length),
+    RegionCount: int(1),
+    TotalBlocks: int(placed),
+    TotalVolume: int(width * height * length),
+    TimeModified: longTag(now),
+  };
+}
+
+/**
+ * One region, named, at `Position` zero.
+ *
+ * The reader merges however many regions a file has into one box; this writes
+ * one back. That asymmetry is the container's, not a shortcut: a document is
+ * one box, and there is no information left in it that says where the seams
+ * were.
+ *
+ * `Name` is the region's name as well as the schematic's, which is what
+ * Litematica does for a single-region save and what the sample files carry.
+ */
+function buildLitematic(
+  doc: SchematicDocument,
+  dataVersion: number,
+): { root: unknown; dropped: string[] } {
+  const [width, height, length] = documentSize(doc);
+  const palette = buildLocalPalette(doc);
+
+  const bits = bitsPerEntry(palette.entries.length);
+  const values = new Int32Array(width * height * length);
+  let cursor = 0;
+  forEachCellYzx(doc, palette, (localIndex) => {
+    values[cursor] = localIndex;
+    cursor += 1;
+  });
+
+  const paletteEntries: NbtCompound[] = palette.entries.map((entry) => {
+    const properties = Object.entries(entry.properties);
+    return compound({
+      Name: str(entry.namespacedName),
+      // Omitted when empty, which is what Litematica writes for a stateless
+      // block: `Properties: {}` is a compound nobody needs and the mod does not
+      // produce.
+      Properties:
+        properties.length === 0
+          ? undefined
+          : {
+              type: "compound",
+              value: Object.fromEntries(properties.map(([key, value]) => [key, str(value)])),
+            },
+    });
+  });
+
+  const name = litematicRegionName(doc);
+  const region: NbtCompound = {
+    Position: xyzTag(0, 0, 0),
+    Size: xyzTag(width, height, length),
+    BlockStatePalette: { type: "list", value: { type: "compound", value: paletteEntries } },
+    BlockStates: {
+      type: "longArray",
+      value: bigintsToLongPairs(packLitematicStates(values, bits)),
+    },
+    TileEntities:
+      compoundList(litematicBlockEntities(doc.blockEntities.values())) ?? emptyCompoundList(),
+    Entities: compoundList(litematicEntities(doc.entities)) ?? emptyCompoundList(),
+    PendingBlockTicks: emptyCompoundList(),
+    PendingFluidTicks: emptyCompoundList(),
+  };
+
+  const version = litematicVersionFor(dataVersion);
+  const root = {
+    type: "compound",
+    name: "",
+    value: compound({
+      MinecraftDataVersion: int(dataVersion),
+      Version: int(version.version),
+      // Absent, not zero, before schematic version 6: Litematica reads it as
+      // `get("SubVersion", 0)`, so writing a 0 would be writing a tag that era
+      // never had.
+      SubVersion: version.subVersion === 0 ? undefined : int(version.subVersion),
+      Metadata: { type: "compound", value: litematicMetadata(doc) },
+      Regions: { type: "compound", value: { [name]: { type: "compound", value: region } } },
+    }),
+  };
+
+  const dropped: string[] = [];
+  if (doc.offset !== null) dropped.push("the paste anchor");
+  if (doc.worldOrigin !== null) dropped.push("the world origin");
+  return { root, dropped };
+}
+
+// ---------------------------------------------------------------------------
 // Entry points
 // ---------------------------------------------------------------------------
 
@@ -596,8 +849,24 @@ export async function writeDocument(
 
   let root: unknown;
   let degraded: readonly string[] = [];
+  let dropped: readonly string[] = [];
 
-  if (format === "mcedit") {
+  if (format === "litematic") {
+    /*
+     * Refused rather than defaulted, and this is the one container with no
+     * escape: Sponge omits its `DataVersion` when there is none and MCEdit has
+     * no such tag, but a litematic must carry a `MinecraftDataVersion` and
+     * Litematica reads the file according to it. Stamping 1631 on a document
+     * that named no version would tell every reader downstream it was cut from
+     * 1.13.2.
+     */
+    if (!litematicCanCarry(dataVersion)) {
+      throw new UnwritableVersionError(dataVersion);
+    }
+    const built = buildLitematic(doc, dataVersion as number);
+    root = built.root;
+    dropped = built.dropped;
+  } else if (format === "mcedit") {
     if (!options.legacyBlocksPath) {
       throw new Error(
         "Writing a legacy .schematic needs the block conversion table (legacy_blocks.json)",
@@ -612,7 +881,7 @@ export async function writeDocument(
   }
 
   const raw = writeUncompressed(root as never, "big");
-  return { bytes: await gzip(raw), format, degraded };
+  return { bytes: await gzip(raw), format, degraded, dropped };
 }
 
 /** Writes the document to disk. Creates the containing directory if needed. */
@@ -627,7 +896,15 @@ export async function saveDocument(
   return result;
 }
 
-/** The extension a format is conventionally stored under. */
+/**
+ * The extension a format is conventionally stored under.
+ *
+ * Delegated rather than answered here. This was a second copy of the same
+ * ternary and `App.svelte` held a third, which was harmless while there were
+ * three containers and two answers: adding a fourth would have had two of the
+ * three go on calling a `.litematic` a `.schem`, and the file would have saved
+ * under the wrong name without anything failing.
+ */
 export function extensionFor(format: SchematicFormat): string {
-  return format === "mcedit" ? "schematic" : "schem";
+  return schematicExtension(format);
 }

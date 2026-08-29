@@ -81,6 +81,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
     type TransformRequest,
   } from "../../shared/ipc.js";
   import type { SchematicFormat } from "../../shared/schematic.js";
+import { schematicExtension } from "../../shared/schematic.js";
   import {
     DEFAULT_SETTINGS,
     DEFAULT_PREVIEW_SETTINGS,
@@ -835,7 +836,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
    */
   let dragDepth = 0;
 
-  const SCHEMATIC_EXTENSIONS = [".schem", ".schematic"];
+  const SCHEMATIC_EXTENSIONS = [".schem", ".schematic", ".litematic"];
 
   function isSchematicPath(filePath: string): boolean {
     const lower = filePath.toLowerCase();
@@ -2828,7 +2829,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
       }
       docState = response.state;
       status = {
-        tone: response.degraded.length > 0 ? "warn" : "ok",
+        tone: response.degraded.length > 0 || response.dropped.length > 0 ? "warn" : "ok",
         text: t("status.saved", { name: response.filePath.split(/[\\/]/).pop() ?? "" }),
         detail: [
           response.cropped
@@ -2842,6 +2843,14 @@ import VersionsModal from "./lib/VersionsModal.svelte";
                 count: response.degraded.length,
                 blocks: response.degraded.slice(0, 3).join(", "),
               })
+            : null,
+          /*
+           * A different sentence from `degraded`, because it is a different
+           * loss. A degraded block is in the file, approximated; a dropped
+           * thing is not there at all, and the container has nowhere to put it.
+           */
+          response.dropped.length > 0
+            ? t("status.dropped", { things: response.dropped.join(", ") })
             : null,
         ]
           .filter((note) => note !== null)
@@ -2928,7 +2937,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
 
   /** Where Save As opens: this file's own folder and name, or a plain default. */
   function suggestedSavePath(format: SchematicFormat): string {
-    const extension = format === "mcedit" ? "schematic" : "schem";
+    const extension = schematicExtension(format);
     const current = docState?.filePath;
     if (current === null || current === undefined) return `untitled.${extension}`;
     const cut = current.length - (current.split(/[\\/]/).pop() ?? "").length;

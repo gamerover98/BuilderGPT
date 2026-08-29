@@ -1060,6 +1060,17 @@ export interface SaveSuccess {
    */
   degraded: string[];
   /**
+   * What the container could not carry at all, by name — "the paste anchor",
+   * "the world origin".
+   *
+   * Not the same list as `degraded` and deliberately not folded into it: a
+   * degraded block is in the file, approximated, and a dropped thing is simply
+   * absent. Litematica has no anchor tag and no origin tag, so a document that
+   * had either saves without it, and the only alternative to saying so is
+   * losing the vector in silence.
+   */
+  dropped: string[];
+  /**
    * The schematic was trimmed to its content before being written, and by how
    * much. `null` when it was already tight, or when there was nothing but air
    * to bound.

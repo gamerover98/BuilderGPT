@@ -91,8 +91,14 @@
    * went looking for a `WE*` key in `Metadata` — which is where WorldEdit's
    * *MCEdit* files keep it — finds nothing and concludes it was never written.
    */
-  const anchorAt = $derived(tagPathLabel(anchorLocation(format)));
-  const originAt = $derived(tagPathLabel(originLocation(format)));
+  const anchorAt = $derived.by(() => {
+    const location = anchorLocation(format);
+    return location === null ? null : tagPathLabel(location);
+  });
+  const originAt = $derived.by(() => {
+    const location = originLocation(format);
+    return location === null ? null : tagPathLabel(location);
+  });
 
   const dirty = $derived(draft !== text);
   const originComplete = $derived(
@@ -165,7 +171,13 @@
             {t("nbt.originClear")}
           </button>
         </div>
-        <p class="hint">{t("nbt.whereHint", { anchor: anchorAt, origin: originAt })}</p>
+        <p class="hint">
+        {#if anchorAt === null || originAt === null}
+          {t("nbt.whereNone")}
+        {:else}
+          {t("nbt.whereHint", { anchor: anchorAt, origin: originAt })}
+        {/if}
+      </p>
       </section>
 
       <section class="text">

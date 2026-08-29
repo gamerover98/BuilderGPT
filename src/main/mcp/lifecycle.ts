@@ -55,6 +55,7 @@ export interface Lifecycle {
     filePath: string;
     format: SchematicFormat;
     degraded: readonly string[];
+    dropped: readonly string[];
     /**
      * The box the file was trimmed to, or `null` if nothing was trimmed.
      *

@@ -51,6 +51,7 @@ import { parseSnbt, stringifySnbt } from "../domain/snbt.js";
 import {
   readBlockEntities,
   readEntities,
+  readLitematicMetadata,
   readMetadata,
   type SchematicFormat,
 } from "../pipeline/loader_formats.js";
@@ -63,7 +64,12 @@ import type {
 import {
   compound,
   compoundList,
+  emptyCompoundList,
   int,
+  litematicBlockEntities,
+  litematicEntities,
+  litematicMetadata,
+  litematicRegionName,
   mcEditEntities,
   mcEditEntries,
   short,
@@ -71,7 +77,12 @@ import {
   spongeEntities,
   spongeMetadata,
   str,
+  xyzTag,
 } from "./writers.js";
+import {
+  LITEMATIC_MIN_DATA_VERSION,
+  litematicVersionFor,
+} from "../../shared/litematica_versions.js";
 
 /** Raised when the submitted text is well-formed NBT that this cannot accept. */
 export class NbtApplyError extends Error {
@@ -98,7 +109,18 @@ export const MAX_NBT_ENTRIES = 20_000;
 export const MAX_NBT_TEXT = 2_000_000;
 
 /** Which tags this refuses to let the text change, per format. */
-const STRUCTURAL = ["Width", "Height", "Length", "Version", "Materials", "PaletteMax"];
+const STRUCTURAL = [
+  "Width",
+  "Height",
+  "Length",
+  "Version",
+  "Materials",
+  "PaletteMax",
+  // Litematica's. `Version` is already above and means the same kind of thing;
+  // `SubVersion` is derived from the DataVersion exactly as `Version` is, so
+  // typing a different one could not stick and refusing beats ignoring.
+  "SubVersion",
+];
 
 /**
  * Tags a document can genuinely be without, so deleting one is an instruction
@@ -114,6 +136,11 @@ const STRUCTURAL = ["Width", "Height", "Length", "Version", "Materials", "Palett
  */
 const OPTIONAL = [
   "Offset",
+  // Litematica's spelling of `DataVersion`, optional for its reason: a document
+  // that names no version is a real state, and `writeDocument` refuses the save
+  // rather than stamping one.
+  "MinecraftDataVersion",
+  "SubVersion",
   "WEOffsetX",
   "WEOffsetY",
   "WEOffsetZ",
@@ -141,7 +168,23 @@ export interface SchematicNbt {
 
 /** Where each format keeps its block-entity list, and what it calls it. */
 function blockEntityKey(format: SchematicFormat): string {
-  return format === "mcedit" ? "TileEntities" : "BlockEntities";
+  return format === "mcedit" || format === "litematic" ? "TileEntities" : "BlockEntities";
+}
+
+/**
+ * The one region in a litematic tree, whatever it is called.
+ *
+ * By position rather than by name, and that is the point: the region is named
+ * after `Metadata.Name`, so editing the schematic's name in the panel renames
+ * the key the very text is submitted under. Looked up by name, an Apply that
+ * renamed the schematic would report its own block entities as missing.
+ */
+function litematicRegion(compoundOf: NbtCompound): NbtCompound | undefined {
+  const regions = compoundOf.Regions;
+  if (!regions || regions.type !== "compound" || regions.value === null) return undefined;
+  const first = Object.values(regions.value as NbtCompound)[0];
+  if (!first || first.type !== "compound" || first.value === null) return undefined;
+  return first.value as NbtCompound;
 }
 
 /**
@@ -171,6 +214,47 @@ export function schematicNbtTree(doc: SchematicDocument, withLists = true): NbtC
       WEOriginX: doc.worldOrigin === null ? undefined : int(doc.worldOrigin[0]),
       WEOriginY: doc.worldOrigin === null ? undefined : int(doc.worldOrigin[1]),
       WEOriginZ: doc.worldOrigin === null ? undefined : int(doc.worldOrigin[2]),
+    });
+  }
+
+  if (doc.format === "litematic") {
+    /*
+     * The file's own shape, minus the two tags that *are* the schematic. The
+     * block entities and the entities live inside the region rather than at the
+     * root, which is Sponge v3's arrangement in a different container -- and,
+     * like v3, that is why the walk in `parseHeader` needs a nested check of its
+     * own: the top-level one sees `Regions` present and holding something, and
+     * cannot tell that the list inside it has gone.
+     */
+    const name = litematicRegionName(doc);
+    const [w, h, l] = documentSize(doc);
+    const written = litematicVersionFor(doc.dataVersion ?? LITEMATIC_MIN_DATA_VERSION);
+    return compound({
+      MinecraftDataVersion: doc.dataVersion === null ? undefined : int(doc.dataVersion),
+      Version: int(written.version),
+      SubVersion: written.subVersion === 0 ? undefined : int(written.subVersion),
+      Metadata: { type: "compound", value: litematicMetadata(doc) },
+      Regions: {
+        type: "compound",
+        value: {
+          [name]: {
+            type: "compound",
+            value: compound({
+              Position: xyzTag(0, 0, 0),
+              Size: xyzTag(w, h, l),
+              TileEntities: withLists
+                ? compoundList(litematicBlockEntities(doc.blockEntities.values())) ??
+                  emptyCompoundList()
+                : undefined,
+              Entities: withLists
+                ? compoundList(litematicEntities(doc.entities)) ?? emptyCompoundList()
+                : undefined,
+              PendingBlockTicks: withLists ? emptyCompoundList() : undefined,
+              PendingFluidTicks: withLists ? emptyCompoundList() : undefined,
+            }),
+          },
+        },
+      },
     });
   }
 
@@ -222,6 +306,11 @@ export function schematicNbtTree(doc: SchematicDocument, withLists = true): NbtC
 export function omittedTags(format: SchematicFormat): string[] {
   if (format === "mcedit") return ["Blocks", "Data", "AddBlocks"];
   if (format === "sponge3") return ["Blocks.Palette", "Blocks.Data"];
+  // The region is named after the schematic, so the path is written with a
+  // wildcard rather than with a name this function has no document to look up.
+  if (format === "litematic") {
+    return ["Regions.*.BlockStatePalette", "Regions.*.BlockStates"];
+  }
   return ["Palette", "PaletteMax", "BlockData"];
 }
 
@@ -320,6 +409,9 @@ interface Parsed {
  * look or a list would be read as missing from the very text that produced it.
  */
 function blockEntityTagOf(compoundOf: NbtCompound, format: SchematicFormat): NbtTag | undefined {
+  if (format === "litematic") {
+    return litematicRegion(compoundOf)?.TileEntities;
+  }
   if (format !== "sponge3") {
     return compoundOf[blockEntityKey(format)];
   }
@@ -328,6 +420,17 @@ function blockEntityTagOf(compoundOf: NbtCompound, format: SchematicFormat): Nbt
     return undefined;
   }
   return (blocks.value as NbtCompound).BlockEntities;
+}
+
+/**
+ * The same question for entities, which only Litematica nests.
+ *
+ * Sponge and MCEdit both keep `Entities` at the root; a litematic keeps it
+ * beside the block entities inside the region. One function, so the read and
+ * the apply cannot disagree about where to look.
+ */
+function entitiesTagOf(compoundOf: NbtCompound, format: SchematicFormat): NbtTag | undefined {
+  return format === "litematic" ? litematicRegion(compoundOf)?.Entities : compoundOf.Entities;
 }
 
 /**
@@ -360,6 +463,7 @@ function parseHeader(doc: SchematicDocument, text: string, expected: NbtCompound
   }
 
   const mcedit = doc.format === "mcedit";
+  const litematic = doc.format === "litematic";
   const listKey = blockEntityKey(doc.format);
 
   const blockEntityTag = blockEntityTagOf(submitted, doc.format);
@@ -370,6 +474,29 @@ function parseHeader(doc: SchematicDocument, text: string, expected: NbtCompound
   }
   if (doc.format === "sponge3" && "Blocks" in submitted) {
     requireCompound(submitted.Blocks, "Blocks");
+  }
+  if (doc.format === "litematic") {
+    const region = litematicRegion(submitted);
+    if (region === undefined) {
+      throw new NbtApplyError("Regions is missing its one region compound");
+    }
+    /*
+     * The nested half of `STRUCTURAL`. The size is the schematic's own and is
+     * changed through Dimensions, not by typing here; the position is always
+     * zero, because the reader merges however many regions a file had into one
+     * box and there is nothing left that says where the seams were.
+     */
+    const expectedRegion = litematicRegion(expected);
+    for (const key of ["Size", "Position"] as const) {
+      if (!sameTag(region[key], expectedRegion?.[key])) {
+        throw new NbtApplyError(
+          `Regions.${key} is decided by the schematic itself and cannot be changed here`,
+        );
+      }
+    }
+    if (entitiesTagOf(submitted, doc.format) === undefined) {
+      throw new NbtApplyError("Entities is missing. To empty a list, write it as []");
+    }
   }
 
   /**
@@ -401,7 +528,19 @@ function parseHeader(doc: SchematicDocument, text: string, expected: NbtCompound
   let worldOrigin: readonly [number, number, number] | null;
   let metadata: NbtCompound;
 
-  if (mcedit) {
+  if (litematic) {
+    /*
+     * Neither vector exists in this container, so neither is read and neither
+     * is invented. `anchorLocation` says the same thing from the renderer's
+     * side; a document that had one keeps it in memory and loses it on save,
+     * which the Anchor panel says out loud.
+     */
+    offset = null;
+    worldOrigin = null;
+    metadata = sameTag(submitted.Metadata, expected.Metadata)
+      ? doc.metadata
+      : readLitematicMetadata(submitted.Metadata);
+  } else if (mcedit) {
     offset = mcEditTriple("WEOffset");
     worldOrigin = mcEditTriple("WEOrigin");
     metadata = {};
@@ -439,8 +578,9 @@ function parseHeader(doc: SchematicDocument, text: string, expected: NbtCompound
   }
 
   // Block entities and entities, through the loader's own decoders.
+  const entitiesTag = entitiesTagOf(submitted, doc.format);
   const blockEntities = readBlockEntities(blockEntityTag);
-  const entities = readEntities(submitted.Entities);
+  const entities = readEntities(entitiesTag);
 
   if (blockEntities.length !== listLength(blockEntityTag)) {
     throw new NbtApplyError(
@@ -449,10 +589,10 @@ function parseHeader(doc: SchematicDocument, text: string, expected: NbtCompound
       } of them has neither`,
     );
   }
-  if (entities.length !== listLength(submitted.Entities)) {
+  if (entities.length !== listLength(entitiesTag)) {
     throw new NbtApplyError(
       `Every entry in Entities needs an id and a position; ${
-        listLength(submitted.Entities) - entities.length
+        listLength(entitiesTag) - entities.length
       } of them has neither`,
     );
   }
@@ -477,9 +617,15 @@ function parseHeader(doc: SchematicDocument, text: string, expected: NbtCompound
     header: {
       offset,
       worldOrigin,
-      dataVersion: mcedit ? null : submitted.DataVersion === undefined
+      dataVersion: mcedit
         ? null
-        : requireNumber(submitted.DataVersion, "DataVersion"),
+        : litematic
+          ? submitted.MinecraftDataVersion === undefined
+            ? null
+            : requireNumber(submitted.MinecraftDataVersion, "MinecraftDataVersion")
+          : submitted.DataVersion === undefined
+            ? null
+            : requireNumber(submitted.DataVersion, "DataVersion"),
       metadata,
       entities,
     },

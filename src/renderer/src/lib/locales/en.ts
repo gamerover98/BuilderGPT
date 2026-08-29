@@ -618,6 +618,7 @@ export const en = {
   "status.wentBack": "Went back to that version",
   "status.created": "New schematic created.",
   "status.saved": "Saved {name}",
+  "status.opened": "Opened, with something to say about it.",
   "status.dropped": "This container cannot carry {things}, so the file does not have it.",
   "status.cropped": "Trimmed to fit the build: {from} → {to}",
   "status.degraded":

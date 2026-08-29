@@ -836,7 +836,7 @@ import { schematicExtension } from "../../shared/schematic.js";
    */
   let dragDepth = 0;
 
-  const SCHEMATIC_EXTENSIONS = [".schem", ".schematic", ".litematic"];
+  const SCHEMATIC_EXTENSIONS = [".schem", ".schematic", ".litematic", ".mcfunction"];
 
   function isSchematicPath(filePath: string): boolean {
     const lower = filePath.toLowerCase();
@@ -2260,7 +2260,16 @@ import { schematicExtension } from "../../shared/schematic.js";
       anchor = null;
       inspection = null;
       inspectedAt = null;
-      status = null;
+      /*
+       * Only a `.mcfunction` ever brings notes: a container either parses or it
+       * does not, while a list of commands can be partly read. Shown as a
+       * warning rather than swallowed, because "half the build is in a file I
+       * could not find" is indistinguishable from "the app lost it".
+       */
+      status =
+        response.notes === undefined || response.notes.length === 0
+          ? null
+          : { tone: "warn", text: t("status.opened"), detail: response.notes.join(" · ") };
       /*
        * A conversation is about a schematic, but *which* one is main's call now
        * -- `adoptSubject` clears the log when another file is opened and keeps

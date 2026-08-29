@@ -115,6 +115,16 @@ export interface DocumentSession {
    * rather than a wrong picture.
    */
   sent?: { token: string; chunks: Map<string, Float32Array> } | null;
+  /**
+   * What the reader had to say about the file it came from.
+   *
+   * Only a `.mcfunction` ever fills this: an NBT container either parses or it
+   * does not, but a list of commands can be *partly* read -- lines that are
+   * neither `setblock` nor `fill` are not in the build, and a `function` call
+   * that resolves to nothing is a whole file's worth of it missing. Silence
+   * there would read as the app having lost half the schematic.
+   */
+  notes?: readonly string[];
 }
 
 let current: DocumentSession | null = null;
@@ -162,10 +172,22 @@ export async function openDocument(
   const loaded = await loadStructure(filePath, {
     legacyBlocksPath: options.legacyBlocksPath ?? null,
   });
+  /*
+   * A `.mcfunction` is read but never *becomes* the document's format: it has
+   * no metadata, no anchor tag, no DataVersion and no NBT root. So the document
+   * is a Sponge v3 one with **no path**, and Save falls through to Save As on
+   * its own -- which `saveDocument` has done since the day the third caller
+   * turned out not to have that check written out.
+   *
+   * Keeping the path would be worse than losing it: a plain Save would write a
+   * Sponge file over the `.mcfunction` it came from, under that name.
+   */
+  const imported = loaded.sourceKind === "mcfunction";
   current = {
-    doc: documentFromLoaded(loaded, filePath),
+    doc: documentFromLoaded(loaded, imported ? null : filePath),
     history: createHistory(),
     mesh: null,
+    notes: loaded.notes,
   };
   return current;
 }

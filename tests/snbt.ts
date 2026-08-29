@@ -356,6 +356,38 @@ console.log("\n--- errors carry a position ---");
 }
 
 console.log("");
+
+// --- one line, for a command ------------------------------------------------
+//
+// `stringifySnbt(tag, true)` exists for exactly one caller and one reason: a
+// `.mcfunction` is **one command per line**, so a chest's contents written the
+// readable way break the `setblock` carrying them across a dozen lines, every
+// one of which the game then tries to run as a command of its own. The panel
+// had never had a reason to care, because a text area has as many lines as it
+// likes.
+console.log("\n--- compact ---");
+{
+  const nested = parseSnbt('{Items: [{id: "minecraft:stone", Count: 1b}], Lock: ""}');
+  const compact = stringifySnbt(nested, true);
+  check("nothing in it is a newline", !compact.includes(String.fromCharCode(10)), compact);
+  check("...nor a stray space", !compact.includes(" "), compact);
+
+  // The point is not the spelling, it is that it still parses -- and to the
+  // same tree, so the compact form is a formatting choice and nothing else.
+  equal(
+    "and it means the same thing",
+    stringifySnbt(parseSnbt(compact)),
+    stringifySnbt(nested),
+  );
+
+  // The pretty form is unchanged, which is the half a regression would break
+  // quietly: the NBT panel is the other caller and it wants the lines.
+  check(
+    "the readable form still has its lines",
+    stringifySnbt(nested).includes(String.fromCharCode(10)),
+  );
+}
+
 if (failures === 0) {
   console.log("=== ALL CHECKS PASSED ===");
 } else {

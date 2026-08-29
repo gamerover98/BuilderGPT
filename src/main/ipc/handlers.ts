@@ -835,7 +835,14 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
        */
       await adoptSubject(filePath);
       forgetCheckpointMemo();
-      return { ok: true, state: shellState(session), project: await projectNotes(filePath) };
+      return {
+        ok: true,
+        state: shellState(session),
+        project: await projectNotes(filePath),
+        ...(session.notes === undefined || session.notes.length === 0
+          ? {}
+          : { notes: [...session.notes] }),
+      };
     } catch (err) {
       // Moved, deleted, or no longer readable: take it off the list rather than
       // leave an entry whose only behaviour is to produce this same error.

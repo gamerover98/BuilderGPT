@@ -47,6 +47,7 @@ import {
 import { loadStructure } from "../src/main/pipeline/loader.js";
 import { contentBounds, cropToContent } from "../src/main/domain/crop.js";
 import { paletteEntryCacheKey, type PaletteEntry } from "../src/main/pipeline/types.js";
+import { posKey } from "../src/main/domain/document.js";
 import {
   extensionFor,
   int,
@@ -55,6 +56,15 @@ import {
 } from "../src/main/services/writers.js";
 import { dataVersionFor } from "../src/main/services/versions.js";
 import { bitsPerEntry } from "../src/main/pipeline/litematic_bits.js";
+import { parseMcfunction } from "../src/main/pipeline/mcfunction.js";
+import {
+  buildMcfunction,
+  mcfunctionCommands,
+  saveMcfunction,
+} from "../src/main/services/mcfunction_writer.js";
+
+/** Written out rather than typed, because this file is checked in as LF. */
+const NEWLINE = String.fromCharCode(10);
 import {
   LITEMATIC_MIN_DATA_VERSION,
   LITEMATIC_VERSIONS,
@@ -1102,6 +1112,415 @@ console.log("\n--- litematic ---");
     equal("sponge3 -> litematic -> sponge3 keeps the grid", grid(round), grid(doc));
     equal("...and the palette", names(round), names(doc));
     equal("...and the block entities", round.blockEntities.size, doc.blockEntities.size);
+  }
+}
+
+
+// --- .mcfunction ------------------------------------------------------------
+//
+// The one format here that is not a container: a list of commands, and what
+// makes it a schematic is that `setblock` and `fill` are enough to describe a
+// build. Everything else -- the size, the frame, where the palette starts --
+// is worked out from the commands.
+//
+// The referee is the same round trip as everywhere else, and it is a stronger
+// one here than it looks: the writer decomposes the grid into boxes and the
+// reader replays them in order, so a decomposition that overlapped, missed a
+// cell or grew past a block entity comes back as a different document.
+console.log("\n--- mcfunction ---");
+{
+  const stone: PaletteEntry = { namespacedName: "minecraft:stone", properties: {} };
+  const glass: PaletteEntry = { namespacedName: "minecraft:glass", properties: {} };
+
+  const commandsOf = (text: string): string[] =>
+    text
+      .split(NEWLINE)
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("#"));
+
+  {
+    // The whole document, block entities and all.
+    const doc = sampleDocument("sponge3");
+    const target = path.join(workDir, "sample.mcfunction");
+    const built = await saveMcfunction(doc, target);
+    equal("one file is enough for a small build", built.files.length, 1);
+
+    const back = documentFromLoaded(await loadStructure(target), target);
+    equal("the grid survives", grid(back), grid(doc));
+    equal("the palette survives", names(back), names(doc));
+    equal("the block entities survive", back.blockEntities.size, doc.blockEntities.size);
+    equal(
+      "the size survives, which is what writing the air buys",
+      [back.width, back.height, back.length],
+      [doc.width, doc.height, doc.length],
+    );
+  }
+
+  {
+    /*
+     * `fill` is the whole reason this is usable. One setblock per cell would be
+     * 4,096 commands for this box and a quarter of a million for an ordinary
+     * schematic -- past the point where the game stops reading and says
+     * nothing.
+     */
+    const doc = createDocument({ width: 16, height: 16, length: 16, format: "sponge3" });
+    for (let x = 0; x < 16; x += 1) {
+      for (let y = 0; y < 16; y += 1) {
+        for (let z = 0; z < 16; z += 1) setBlock(doc, x, y, z, stone);
+      }
+    }
+    const commands = mcfunctionCommands(doc);
+    equal("a solid box is one fill", commands.length, 1);
+    check("...and it is a fill, not a setblock", commands[0].startsWith("fill "), commands[0]);
+  }
+
+  {
+    /*
+     * No box past the volume limit. A `fill` beyond it changes no blocks at all
+     * and reports nothing useful, so the file looks fine and the build comes
+     * out with holes -- which nothing in this repo could ever observe. Hence a
+     * check on the boxes rather than on the result.
+     */
+    const side = 64;
+    const doc = createDocument({ width: side, height: side, length: side, format: "sponge3" });
+    for (let x = 0; x < side; x += 1) {
+      for (let y = 0; y < side; y += 1) {
+        for (let z = 0; z < side; z += 1) setBlock(doc, x, y, z, stone);
+      }
+    }
+    const commands = mcfunctionCommands(doc);
+    const volumes = commands.map((line) => {
+      const parts = line.split(/\s+/);
+      if (parts[0] !== "fill") return 1;
+      const at = (i: number): number => Number(parts[i].slice(1) === "" ? 0 : parts[i].slice(1));
+      return (
+        (Math.abs(at(4) - at(1)) + 1) *
+        (Math.abs(at(5) - at(2)) + 1) *
+        (Math.abs(at(6) - at(3)) + 1)
+      );
+    });
+    check(
+      "no fill covers more cells than the game will change",
+      volumes.every((volume) => volume <= MAX_FILL_VOLUME),
+      String(Math.max(...volumes)),
+    );
+    equal("...so the box is split rather than truncated", volumes.reduce((a, b) => a + b, 0), side ** 3);
+  }
+
+  {
+    /*
+     * A block entity is never inside a box. `fill` carries one block argument
+     * for the whole region, so a chest merged into one would come back empty --
+     * or would fill the region with copies of its contents.
+     */
+    const doc = createDocument({ width: 8, height: 8, length: 8, format: "sponge3" });
+    for (let x = 0; x < 8; x += 1) {
+      for (let y = 0; y < 8; y += 1) {
+        for (let z = 0; z < 8; z += 1) setBlock(doc, x, y, z, stone);
+      }
+    }
+    setBlock(doc, 4, 4, 4, { namespacedName: "minecraft:chest", properties: { facing: "north" } });
+    setBlockEntity(doc, 4, 4, 4, {
+      id: "minecraft:chest",
+      pos: [4, 4, 4],
+      nbt: { Items: { type: "list", value: { type: "compound", value: [] } } },
+    });
+
+    const commands = mcfunctionCommands(doc);
+    const chest = commands.filter((line) => line.includes("minecraft:chest"));
+    equal("the chest is one command", chest.length, 1);
+    check("...a setblock, not a fill", chest[0].startsWith("setblock "), chest[0]);
+    check("...carrying its contents", chest[0].includes("{Items:"), chest[0]);
+    check(
+      "...on one line, because a function is one command per line",
+      !chest[0].includes(NEWLINE),
+      chest[0],
+    );
+
+    const target = path.join(workDir, "chest.mcfunction");
+    await saveMcfunction(doc, target);
+    const back = documentFromLoaded(await loadStructure(target), target);
+    equal("and it comes back", back.blockEntities.size, 1);
+    equal("...with the block", getBlock(back, 4, 4, 4).namespacedName, "minecraft:chest");
+    equal("...and its state", getBlock(back, 4, 4, 4).properties.facing, "north");
+  }
+
+
+  {
+    /*
+     * Two chests side by side, same block state, different contents. This is
+     * the only shape that can see the rule: a chest surrounded by *stone* stops
+     * a box on the block value alone, so a writer that had forgotten block
+     * entities entirely would still get that case right. Here the two cells
+     * agree on everything the palette knows, and merging them into one `fill`
+     * would give the second chest the first one's contents.
+     */
+    const doc = createDocument({ width: 4, height: 1, length: 1, format: "sponge3" });
+    const chest: PaletteEntry = {
+      namespacedName: "minecraft:chest",
+      properties: { facing: "north" },
+    };
+    const item = (id: string): NbtCompound => ({
+      Items: {
+        type: "list",
+        value: {
+          type: "compound",
+          value: [
+            {
+              id: { type: "string", value: id },
+              Count: { type: "byte", value: 1 },
+              Slot: { type: "byte", value: 0 },
+            },
+          ],
+        },
+      },
+    });
+    /*
+     * The empty one goes **first**, and the order is the whole test.
+     *
+     * A recorded cell is handled before any box begins, so two of them side by
+     * side come out as two commands even from a writer that has never heard of
+     * block entities. The only cell a box ever *grows into* is one that comes
+     * later in the walk -- so the box has to start on an identical block with
+     * no record of its own, which is an ordinary document: a chest placed and
+     * left empty, beside two that were filled.
+     */
+    setBlock(doc, 0, 0, 0, chest);
+    for (const x of [1, 2]) {
+      setBlock(doc, x, 0, 0, chest);
+      setBlockEntity(doc, x, 0, 0, {
+        id: "minecraft:chest",
+        pos: [x, 0, 0],
+        nbt: item(x === 1 ? "minecraft:diamond" : "minecraft:coal"),
+      });
+    }
+
+    const commands = mcfunctionCommands(doc);
+    const chests = commands.filter((line) => line.includes("minecraft:chest"));
+    equal("three adjacent chests are three commands", chests.length, 3);
+    check(
+      "...none of them a fill, so no box swallowed a record",
+      chests.every((line) => line.startsWith("setblock ")),
+      chests.join(" | "),
+    );
+
+    const target = path.join(workDir, "chests.mcfunction");
+    await saveMcfunction(doc, target);
+    const back = documentFromLoaded(await loadStructure(target), target);
+    equal("both come back", back.blockEntities.size, 2);
+    const carried = [1, 2].map((x) =>
+      JSON.stringify(back.blockEntities.get(posKey(x, 0, 0))?.nbt ?? null),
+    );
+    check("...with their own contents", carried[0].includes("diamond"), carried[0]);
+    check("...not the same ones twice", carried[1].includes("coal"), carried[1]);
+  }
+
+  {
+    /*
+     * Splitting. Every cell of a checkerboard is its own box, so this is the
+     * cheapest way to a document that will not fit in one function.
+     *
+     * What splitting buys is that each part is runnable on its own. It does
+     * *not* raise the ceiling -- a function's budget covers what it calls --
+     * which is why the dispatcher says so rather than leaving the user to
+     * wonder where the roof went.
+     */
+    const side = 42;
+    const doc = createDocument({ width: side, height: side, length: side, format: "sponge3" });
+    for (let x = 0; x < side; x += 1) {
+      for (let y = 0; y < side; y += 1) {
+        for (let z = 0; z < side; z += 1) {
+          if ((x + y + z) % 2 === 0) setBlock(doc, x, y, z, stone);
+        }
+      }
+    }
+    const built = buildMcfunction(doc, { stem: "big" });
+    check(
+      "a build past the limit is split",
+      built.commands > MAX_COMMANDS_PER_FUNCTION,
+      String(built.commands),
+    );
+    equal("...into a dispatcher and its parts", built.files.length, 3);
+    equal("the dispatcher comes first", built.files[0].name, "big.mcfunction");
+    equal("...and the parts are numbered", built.files[1].name, "big_0.mcfunction");
+    for (const part of built.files.slice(1)) {
+      check(
+        `${part.name} fits in one function`,
+        commandsOf(part.text).length <= MAX_COMMANDS_PER_FUNCTION,
+        String(commandsOf(part.text).length),
+      );
+    }
+    check(
+      "the dispatcher warns that splitting does not lift the limit",
+      built.files[0].text.includes("does not"),
+      built.files[0].text.split(NEWLINE)[0],
+    );
+    equal(
+      "...and calls each part once",
+      commandsOf(built.files[0].text),
+      ["function big:big_0", "function big:big_1"],
+    );
+  }
+
+  {
+    /*
+     * `~ ~ ~` is where the function is run from, which is exactly what the
+     * anchor means -- so the coordinates carry it for free, and this is the
+     * one thing a `.mcfunction` keeps that Litematica cannot.
+     */
+    const doc = createDocument({ width: 4, height: 4, length: 4, format: "sponge3" });
+    setBlock(doc, 1, 2, 3, stone);
+    doc.offset = [-1, 0, -1];
+    const target = path.join(workDir, "anchored.mcfunction");
+    await saveMcfunction(doc, target);
+    const text = await readFile(target, "utf8");
+    check(
+      "the coordinates are written from the anchor",
+      text.includes("setblock ~ ~2 ~2 minecraft:stone"),
+      commandsOf(text).find((line) => line.includes("stone")) ?? "",
+    );
+
+    const back = documentFromLoaded(await loadStructure(target), target);
+    equal("...and reading it back recovers the anchor", back.offset, [-1, 0, -1]);
+    equal("...with the block where it was", getBlock(back, 1, 2, 3).namespacedName, "minecraft:stone");
+  }
+
+  {
+    // Entities have no command with a way back, so they are named, not halved.
+    const doc = sampleDocument("sponge3");
+    doc.entities = [{ id: "minecraft:armor_stand", pos: [1, 1, 1], nbt: {} }];
+    doc.worldOrigin = [10, 20, 30];
+    const built = buildMcfunction(doc, { stem: "lossy" });
+    equal("what it cannot carry is named", [...built.dropped], ["1 entity", "the world origin"]);
+  }
+
+  // --- reading commands ------------------------------------------------------
+  {
+    const parsed = parseMcfunction(
+      [
+        "# a comment",
+        "",
+        "  setblock ~ ~ ~ stone  ",
+        "fill ~1 ~ ~ ~2 ~ ~ minecraft:glass",
+        "say hello",
+        "function pack:more",
+        "scoreboard players set @a x 1",
+      ].join(NEWLINE),
+    );
+    equal("two commands are read", parsed.commands.length, 2);
+    equal("...the call is noted", [...parsed.calls], ["pack:more"]);
+    equal("...and the rest is counted, not ignored", parsed.ignored, 2);
+    equal(
+      "an id with no namespace means minecraft:",
+      parsed.commands[0].entry.namespacedName,
+      "minecraft:stone",
+    );
+  }
+
+  {
+    /*
+     * The block argument cannot be split on whitespace: a chest's contents have
+     * spaces in them, and cutting there leaves two halves that each fail to
+     * parse. The scan is a depth counter over brackets, braces and quotes.
+     */
+    const parsed = parseMcfunction(
+      'setblock ~ ~ ~ chest[facing=north]{Items: [{id: "minecraft:stone", Count: 1b}]} replace',
+    );
+    equal("the block survives its own spaces", parsed.commands.length, 1);
+    equal(
+      "...with its state",
+      parsed.commands[0].entry.properties.facing,
+      "north",
+    );
+    check("...and its NBT", parsed.commands[0].nbt !== null);
+    check(
+      "...and the trailing word is read as the mode",
+      parsed.commands[0].shape === "solid",
+    );
+  }
+
+  {
+    // The modes that decide which cells are written are honoured, because
+    // ignoring them writes a solid box where the file asked for a frame.
+    const shell = parseMcfunction("fill ~ ~ ~ ~2 ~2 ~2 stone hollow");
+    equal("hollow is read as a shape", shell.commands[0].shape, "hollow");
+    const outline = parseMcfunction("fill ~ ~ ~ ~2 ~2 ~2 stone outline");
+    equal("...and so is outline", outline.commands[0].shape, "outline");
+    const keep = parseMcfunction("fill ~ ~ ~ ~2 ~2 ~2 stone keep");
+    check("keep writes only into air", keep.commands[0].onlyAir);
+    const over = parseMcfunction("fill ~ ~ ~ ~2 ~2 ~2 stone replace minecraft:dirt");
+    equal(
+      "...and a filter is the block it may write over",
+      over.commands[0].onlyOver?.namespacedName,
+      "minecraft:dirt",
+    );
+  }
+
+  {
+    /*
+     * A file that mixes `~2` with `2` describes two builds in two frames, and
+     * picking one silently is how a structure comes out with half of itself
+     * somewhere else.
+     */
+    let mixed: string | null = null;
+    try {
+      parseMcfunction(["setblock ~ ~ ~ stone", "setblock 4 4 4 stone"].join(NEWLINE));
+    } catch (err) {
+      mixed = err instanceof Error ? err.message : String(err);
+    }
+    check("mixing the two coordinate kinds is refused", mixed !== null);
+    check("...by name", (mixed ?? "").includes("relative"), mixed ?? "");
+
+    let local: string | null = null;
+    try {
+      parseMcfunction("setblock ^ ^ ^1 stone");
+    } catch (err) {
+      local = err instanceof Error ? err.message : String(err);
+    }
+    check("local (^) coordinates are refused too", local !== null);
+    check(
+      "...because they need a facing a schematic has not got",
+      (local ?? "").includes("looking"),
+      local ?? "",
+    );
+  }
+
+  {
+    // A file with nothing placeable in it is refused with what it did find,
+    // rather than opening as an empty schematic.
+    const target = path.join(workDir, "empty.mcfunction");
+    await writeFile(target, "say hello" + NEWLINE + "function nowhere:at_all" + NEWLINE, "utf8");
+    let refused: string | null = null;
+    try {
+      await loadStructure(target);
+    } catch (err) {
+      refused = err instanceof Error ? err.message : String(err);
+    }
+    check("a file with no blocks is refused", refused !== null);
+    check(
+      "...naming the call it could not follow",
+      (refused ?? "").includes("nowhere:at_all"),
+      refused ?? "",
+    );
+  }
+
+  {
+    /*
+     * A dispatcher is followed to its sibling, which is the shape every
+     * converter writes and the shape of the reference files this was built
+     * against: one line calling a file next to it.
+     */
+    const doc = createDocument({ width: 3, height: 1, length: 1, format: "sponge3" });
+    setBlock(doc, 0, 0, 0, stone);
+    setBlock(doc, 2, 0, 0, glass);
+    const parts = path.join(workDir, "split_0.mcfunction");
+    await saveMcfunction(doc, parts);
+    const dispatcher = path.join(workDir, "split.mcfunction");
+    await writeFile(dispatcher, "function anything:split_0" + NEWLINE, "utf8");
+
+    const back = documentFromLoaded(await loadStructure(dispatcher), dispatcher);
+    equal("the dispatcher's blocks are the ones it calls", grid(back), grid(doc));
+    equal("...and the ignored count is zero", countBlocks(back), countBlocks(doc));
   }
 }
 

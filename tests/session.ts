@@ -8,7 +8,7 @@
  * with nothing open is refused rather than crashing the main process.
  */
 
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -2606,6 +2606,49 @@ console.log("\n--- breaking takes the box back ---");
       getBlock(session.doc, 1, 0, 2).properties.south,
       "false",
     );
+  }
+}
+
+
+// --- opening a .mcfunction is importing, not opening -------------------------
+//
+// A list of commands has no metadata, no anchor tag, no DataVersion and no NBT
+// root, so a document never *becomes* one: it comes in as Sponge v3 and, most
+// of all, **with no path**. Keeping the path would be worse than losing it --
+// a plain Save would then write a Sponge file over the `.mcfunction` it came
+// from, under that name, and the user would have one file that is neither.
+console.log("\n--- importing a mcfunction ---");
+{
+  const workDir = await mkdtemp(path.join(tmpdir(), "sas-import-"));
+  try {
+    const target = path.join(workDir, "house.mcfunction");
+    await writeFile(
+      target,
+      ["setblock ~ ~ ~ minecraft:stone", "setblock ~2 ~ ~ minecraft:glass"].join(
+        String.fromCharCode(10),
+      ),
+      "utf8",
+    );
+
+    const session = await openDocument(target);
+    equal("it opens", countBlocks(session.doc), 2);
+    equal("...as a container that can hold everything", session.doc.format, "sponge3");
+    equal("...and with no file to save over", session.doc.filePath, null);
+
+    /*
+     * So Save falls through to Save As, which `saveSession` already does by
+     * refusing without a target rather than by every call site remembering to
+     * check.
+     */
+    let refused = false;
+    try {
+      await saveSession(session);
+    } catch (err) {
+      refused = err instanceof NoSaveTargetError;
+    }
+    check("saving asks where to put it", refused);
+  } finally {
+    await rm(workDir, { recursive: true, force: true });
   }
 }
 

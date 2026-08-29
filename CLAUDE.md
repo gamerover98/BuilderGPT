@@ -324,6 +324,103 @@ two clocks are normalised out of both sides, because `TimeModified` is stamped
 when the file is written and the panel's tree is built when the panel opens, so
 comparing them would fail at random.
 
+**A `.mcfunction` is read and written, and it is not a container.** It has no
+metadata, no anchor tag, no `DataVersion` and no NBT root — what makes it a
+schematic is only that `setblock` and `fill` are enough to describe a build. So
+it is a `FileKind` and not a `SchematicFormat`: opening one produces a **Sponge
+v3 document with no path**, and Save falls through to Save As on its own, which
+`saveDocument` has done since the day the third caller turned out not to have
+that check written out. Keeping the path would be worse than losing it — a
+plain Save would write a Sponge file over the `.mcfunction`, under that name.
+
+**The frame is the anchor, and that is the one thing this format keeps that
+Litematica cannot.** `~ ~ ~` is wherever the function is run from, which is
+exactly what a paste anchor means, so the coordinates carry it for free:
+reading sets `doc.offset` from the minimum corner, writing emits every
+coordinate relative to it. Absolute coordinates name a world position instead
+and set `worldOrigin`; a file cannot carry both, because **mixing the two kinds
+is refused by name.** A file that mixes `~2` with `2` describes two builds in
+two frames, and picking one quietly is how a structure comes out with half of
+itself somewhere else. `^` is refused too: it is relative to where the player is
+*looking*, which a schematic has no answer for.
+
+**Every line that is neither `setblock`, `fill`, `function` nor a comment is
+counted and reported.** A file full of `summon` and `data merge` that opened as
+an empty schematic with no explanation would read as the app being broken, and
+the count is the difference between "there is nothing here" and "there is
+plenty here that I cannot place". `DocumentSession.notes` carries it to the
+status line, and it is the only thing that ever fills that field: a container
+either parses or it does not, and only a list of commands can be *partly* read.
+
+**`function <ns>:<path>` is followed**, because the reference file this was
+built against is a one-line dispatcher and the blocks are next door. Two shapes,
+because two are in circulation: a real datapack's
+`data/<namespace>/function/<path>.mcfunction` — `functions`, plural, before
+1.21 — found by walking up from the file being opened to its `data`
+directory, and the sibling by basename, which is what every converter writes. A
+call that resolves to nothing is a note, not a silence. Cycles stop at the
+visited set and the walk stops at a file cap.
+
+**The block argument cannot be split on whitespace.** `chest[facing=north]{Items:
+[{id: "minecraft:stone", Count: 1b}]}` has spaces inside it, and cutting there
+leaves two halves that each fail to parse. It is scanned with a depth counter
+over brackets, braces and quotes, and that scan is also what tells a trailing
+`replace` apart from a block called `replace`.
+
+**The modes that decide *which cells* are written are honoured.** `hollow` and
+`outline` write a shell, `keep` writes only into air, and `fill … replace
+<filter>` writes only over a named block. Ignoring them would not fail — it
+would produce a solid box where the file asked for a frame, silently. `destroy`
+and `strict` change what happens to the *old* block in a live world and mean
+nothing to an empty grid, so they are accepted and do nothing. Commands are
+applied **in order**, which is what makes `keep` and the filter mean anything at
+all: both ask what is already in the cell.
+
+**Runs of one block become `fill`, and that is what makes the format usable.**
+One `setblock` per cell is a quarter of a million commands for an ordinary
+schematic, and the game stops reading a function after 65,536 of them **with no
+error**. Greedy growth in one fixed order — a run along x, extended along z
+while the whole row matches, then along y while the whole plate does — takes
+the two real files to 10,877 commands from 259,072 cells and 32,441 from
+955,260.
+
+Three constraints, each a way to fail in silence:
+
+- **No box past `MAX_FILL_VOLUME`.** Beyond it the game changes no blocks at all
+  and reports nothing useful, so the file looks fine and the build comes out
+  with holes.
+- **A cell with a block entity is never inside a box**, because `fill` carries
+  one block argument for the whole region. The check for this needs an
+  *unrecorded* block identical to a recorded one, and **placed before it in the
+  walk**: two recorded chests side by side are each emitted before any box
+  begins, so they come out right even from a writer that has never heard of
+  block entities. Only a box that grows *into* a pinned cell can see the rule.
+- **The parts are split at `MAX_COMMANDS_PER_FUNCTION`**, so each is runnable on
+  its own. Splitting does **not** raise the ceiling: a function's budget covers
+  what it calls, so the dispatcher says so in a comment rather than leaving the
+  user to wonder where the roof went.
+
+**Air is written.** A schematic is a volume, not a scattering of blocks: a file
+that placed only the solid cells would come back sized to whatever the outermost
+block happened to be, and would leave existing terrain inside the build. `fill`
+is what makes it affordable — the empty half of a schematic is a handful of
+large boxes.
+
+**`stringifySnbt` grew a `compact` flag for one caller.** A function is one
+command per line, so a chest's contents written the readable way break the
+`setblock` carrying them across a dozen lines, every one of which the game then
+tries to run as a command of its own. Found by round-tripping a real file with
+509 chests in it; the NBT panel had never had a reason to care, because a text
+area has as many lines as it likes.
+
+**The two floors are different releases, and `command_syntax.json` records
+why.** `setblock <pos> <block>` with a flattened id is **1.13**; a `.litematic`
+needs Litematica's reader not to convert it, which is **1.13.2**. The mode word
+is deliberately left off both commands: omitted means `replace`, which is what a
+schematic wants, and it is the one spelling every release from 1.13 accepts.
+1.21.5 added `strict` and relaxed `replace`, both additions the bare form never
+had to know about.
+
 **Sponge v2 and v3 both spell a tag `Offset` and do not mean the same vector by
 it.** This is the one real incompatibility between the two, it is silent in both
 directions — a file written with them swapped loads, looks right and pastes

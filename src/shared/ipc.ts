@@ -1382,6 +1382,15 @@ export type DocumentStateResponse = Result<{
    * a list of conversations to refresh at the same moment anyway.
    */
   chat?: ChatState;
+  /**
+   * What the reader had to say about the file, for the status line.
+   *
+   * Only ever set by `openDocument`, and only ever by a `.mcfunction`: every
+   * container either parses or does not, while a list of commands can be partly
+   * read. Optional so the other twenty handlers that answer with a
+   * `DocumentStateResponse` are unchanged.
+   */
+  notes?: string[];
 }>;
 export type DocumentMeshResponse = Result<DocumentMesh>;
 export type EditResponse = Result<EditSuccess>;

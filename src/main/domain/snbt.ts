@@ -120,9 +120,11 @@ function isBulky(elementType: string): boolean {
   return elementType === "compound" || elementType === "list";
 }
 
-function writeValue(type: string, value: unknown, depth: number): string {
-  const pad = "  ".repeat(depth + 1);
-  const closePad = "  ".repeat(depth);
+function writeValue(type: string, value: unknown, depth: number, compact = false): string {
+  const pad = compact ? "" : "  ".repeat(depth + 1);
+  const closePad = compact ? "" : "  ".repeat(depth);
+  const br = compact ? "" : "\n";
+  const gap = compact ? "" : " ";
 
   if (type === "compound") {
     const entries = Object.entries((value ?? {}) as NbtCompound);
@@ -130,9 +132,12 @@ function writeValue(type: string, value: unknown, depth: number): string {
       return "{}";
     }
     const body = entries
-      .map(([name, tag]) => `${pad}${key(name)}: ${writeValue(tag.type, tag.value, depth + 1)}`)
-      .join(",\n");
-    return `{\n${body}\n${closePad}}`;
+      .map(
+        ([name, tag]) =>
+          `${pad}${key(name)}:${gap}${writeValue(tag.type, tag.value, depth + 1, compact)}`,
+      )
+      .join(`,${br}`);
+    return `{${br}${body}${br}${closePad}}`;
   }
 
   if (type === "list") {
@@ -142,10 +147,10 @@ function writeValue(type: string, value: unknown, depth: number): string {
       return "[]";
     }
     const elementType = inner.type ?? "end";
-    const parts = items.map((item) => writeValue(elementType, item, depth + 1));
-    return isBulky(elementType)
+    const parts = items.map((item) => writeValue(elementType, item, depth + 1, compact));
+    return isBulky(elementType) && !compact
       ? `[\n${parts.map((part) => pad + part).join(",\n")}\n${closePad}]`
-      : `[${parts.join(", ")}]`;
+      : `[${parts.join(compact ? "," : ", ")}]`;
   }
 
   const header = ARRAY_HEADER[type];
@@ -154,15 +159,25 @@ function writeValue(type: string, value: unknown, depth: number): string {
     const elementType = ARRAY_ELEMENT[type];
     // One line whatever the length. These are bulk data by definition, and a
     // heightmap down the side of the panel is worse than a long line.
-    return `[${header};${items.length === 0 ? "" : ` ${items.map((item) => scalar(elementType, item)).join(", ")}`}]`;
+    const joined = items.map((item) => scalar(elementType, item)).join(compact ? "," : ", ");
+    return `[${header};${items.length === 0 ? "" : `${gap}${joined}`}]`;
   }
 
   return scalar(type, value);
 }
 
-/** A tag as SNBT text, pretty-printed over as many lines as it needs. */
-export function stringifySnbt(tag: NbtTag): string {
-  return writeValue(tag.type, tag.value, 0);
+/**
+ * A tag as SNBT text, pretty-printed over as many lines as it needs.
+ *
+ * `compact` puts it on one line instead, and exists for one caller: a
+ * `.mcfunction` is **one command per line**, so a chest's contents written the
+ * readable way would break the `setblock` carrying them across a dozen lines,
+ * every one of which the game would then try to run as a command of its own.
+ * Found by round-tripping a real file with 509 chests in it — the panel had
+ * never had a reason to care, because a text area has as many lines as it likes.
+ */
+export function stringifySnbt(tag: NbtTag, compact = false): string {
+  return writeValue(tag.type, tag.value, 0, compact);
 }
 
 // ---------------------------------------------------------------------------

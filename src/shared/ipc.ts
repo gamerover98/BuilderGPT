@@ -7,6 +7,7 @@
  */
 
 import type { SchematicFormat } from "./schematic.js";
+import { SCHEMATIC_FORMAT_LABEL, SCHEMATIC_FORMATS } from "./schematic.js";
 import type {
   ExportType,
   KeyStorageStatus,
@@ -117,6 +118,15 @@ export const IPC = {
    * this one changes none of them.
    */
   docResize: "bgpt:doc:resize",
+  /**
+   * One file into another, without opening either.
+   *
+   * A verb of its own rather than a mode of `docSaveAs`, because it does not
+   * touch the open document at all — and because `.mcfunction` is a thing a
+   * file can be and not a thing a document can be, so there is no format to
+   * "save as" there.
+   */
+  convertFile: "bgpt:file:convert",
   docUndo: "bgpt:doc:undo",
   docRedo: "bgpt:doc:redo",
   docInspect: "bgpt:doc:inspect",
@@ -431,8 +441,12 @@ export interface PickFileRequest {
    * both Sponge v2 and v3, and Electron's save dialog reports the chosen path
    * but not which filter produced it. So the format is decided *before* the
    * dialog opens, and this makes the dialog agree with it.
+   *
+   * A `FileKind` rather than a `SchematicFormat`, because the converter writes
+   * `.mcfunction` too and a dialog that could not offer the extension about to
+   * be written would suggest one name and produce another.
    */
-  format?: SchematicFormat;
+  format?: FileKind;
 }
 
 export interface PickFileResponse {
@@ -910,6 +924,58 @@ export interface ResizeRequest {
    */
   confirmLoss?: boolean;
 }
+
+/**
+ * What a file may be, which is one more thing than what a document may be.
+ *
+ * `.mcfunction` is read and written and is not a container: no metadata, no
+ * anchor tag, no `DataVersion`, no NBT root. `SchematicFormat` is what a
+ * document can carry; this is what a path on disk can hold.
+ */
+export type FileKind = SchematicFormat | "mcfunction";
+
+/** Every kind the converter can write, best first. */
+export const FILE_KINDS: readonly FileKind[] = [...SCHEMATIC_FORMATS, "mcfunction"];
+
+/** How each is described to a human. */
+export const FILE_KIND_LABEL: Readonly<Record<FileKind, string>> = {
+  ...SCHEMATIC_FORMAT_LABEL,
+  mcfunction: "Datapack function (.mcfunction)",
+};
+
+export interface ConvertRequest {
+  /** The file to read. */
+  source: string;
+  /** Where to write. The extension is replaced with the chosen kind's own. */
+  target: string;
+  format: FileKind;
+  /**
+   * The Minecraft version to stamp, by name. Omitted keeps the source's.
+   *
+   * Named rather than sent as a `DataVersion` for `SaveRequest`'s reason: main
+   * has to be able to refuse a container the version cannot live in, and
+   * `null` is both "no tag" and "pre-Flattening".
+   */
+  version?: string;
+  /** Only for `.mcfunction`: the datapack namespace the dispatcher names. */
+  namespace?: string;
+}
+
+export type ConvertResponse = Result<{
+  format: FileKind;
+  /** Every file written; a `.mcfunction` may be several. */
+  files: string[];
+  /** Anything moved aside to make room, because nothing is overwritten. */
+  backedUp: string[];
+  size: [number, number, number];
+  blocks: number;
+  /** Blocks whose exact state the chosen container could not carry. */
+  degraded: string[];
+  /** What it could not carry at all, by name. */
+  dropped: string[];
+  /** What the reader had to say, which only a `.mcfunction` ever fills. */
+  notes: string[];
+}>;
 
 export interface DocumentMesh {
   mesh: MeshPayload;
@@ -1530,6 +1596,8 @@ export interface BgptApi {
   applyEdit(request: EditRequest): Promise<EditResponse>;
   /** Set the schematic's size. Refuses a lossy shrink without `confirmLoss`. */
   resizeDocument(request: ResizeRequest): Promise<EditResponse>;
+  /** One file into another. Never overwrites; touches no open document. */
+  convertFile(request: ConvertRequest): Promise<ConvertResponse>;
   undo(): Promise<EditResponse>;
   redo(): Promise<EditResponse>;
   inspectBlock(x: number, y: number, z: number): Promise<InspectResponse>;

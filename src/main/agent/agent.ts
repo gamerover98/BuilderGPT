@@ -100,6 +100,14 @@ export interface AgentRequest {
   history: ModelMessage[];
   selection: Region | null;
   allowedBlocks: ReadonlySet<string>;
+  /**
+   * Where `legacy_blocks.json` is, for `convert_schematic`.
+   *
+   * Carried on the request rather than resolved in `tools.ts` for the reason
+   * `allowedBlocks` is: `services/resources.ts` imports Electron, and both
+   * modules have to stay reachable from the suites.
+   */
+  legacyBlocksPath?: string | null;
   onStep?: (step: AgentStep) => void;
   /**
    * Where the running commentary goes.
@@ -367,6 +375,7 @@ export async function runAgent(request: AgentRequest): Promise<AgentResult> {
         tx,
         selection: request.selection,
         allowedBlocks: request.allowedBlocks,
+        legacyBlocksPath: request.legacyBlocksPath ?? null,
         onStep: (step) => {
           if (step.id !== undefined) summaries.set(step.id, step.summary);
           steps.push({ tool: step.tool, summary: step.summary });

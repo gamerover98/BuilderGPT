@@ -72,6 +72,22 @@ const READ_ONLY = new Set([
 ]);
 
 /**
+ * The tools that answer without a schematic open.
+ *
+ * A different question from `READ_ONLY`, and the two are not the same set:
+ * `describe_block` is both, and `convert_schematic` is neither — it writes a
+ * file, so it is not read-only, and it reads no document, so refusing it
+ * because none is open would be refusing it for a reason that has nothing to do
+ * with it.
+ *
+ * Without this, `describe_block` was refused with "No schematic is open" for a
+ * question about Minecraft. Nobody reported it, because a client that has
+ * connected to this app usually has one open — which is exactly the kind of
+ * wrongness that survives.
+ */
+const NO_DOCUMENT = new Set(["describe_block", "convert_schematic"]);
+
+/**
  * The tools a careful client should confirm before running.
  *
  * `destructiveHint` is advisory — a client is free to ignore it — but the ones
@@ -184,6 +200,26 @@ function refusingScope(name: string): ToolContext["tx"] {
   };
 }
 
+/**
+ * The document a tool listed in `NO_DOCUMENT` is handed when there is none.
+ *
+ * `refusingScope`'s idiom, for its reason: every access throws by name, rather
+ * than passing `null` and letting the first read be a `TypeError` about a
+ * property of null, from inside a tool, with nothing in the message saying
+ * which tool or why. It is the tripwire for `NO_DOCUMENT` itself — list a
+ * tool that reads the schematic and the very first call says so.
+ */
+function refusingDocument(name: string): ToolContext["doc"] {
+  return new Proxy({} as ToolContext["doc"], {
+    get(_target, property) {
+      throw new Error(
+        `${name} is listed in NO_DOCUMENT in mcp/tools.ts but read doc.${String(property)}. ` +
+          `Take it out of that set: it needs a schematic open.`,
+      );
+    },
+  });
+}
+
 export interface CallOutcome {
   /** What the tool returned, as MCP's structured content. */
   result: unknown;
@@ -250,7 +286,7 @@ export async function callTool(
   }
 
   const session = options.lifecycle.session();
-  if (session === null) {
+  if (session === null && !NO_DOCUMENT.has(name)) {
     /*
      * A refusal rather than a transport error, so the model reads it and can
      * say something useful. It names the way forward, because a client that has
@@ -272,6 +308,17 @@ export async function callTool(
    * than broken.
    */
   if (owned !== null) {
+    /*
+     * `NO_DOCUMENT` holds only `TOOL_SPECS` names, so a document tool always
+     * has a session by here. Said out loud rather than narrowed away: listing
+     * one of these there would otherwise surface as a `TypeError` from inside
+     * `paste_clipboard`, naming neither the tool nor the mistake.
+     */
+    if (session === null) {
+      throw new Error(
+        `${name} is a document tool and cannot be listed in NO_DOCUMENT: it needs one open.`,
+      );
+    }
     const run = async (): Promise<CallOutcome> => {
       const result = await owned.run(session, args ?? {});
       if (owned.changesDocument) options.onChanged(session);
@@ -289,7 +336,7 @@ export async function callTool(
 
   let summary = name;
   const context: ToolContext = {
-    doc: session.doc,
+    doc: session === null ? refusingDocument(name) : session.doc,
     // Replaced by the real recorder inside the transaction below. A read-only
     // tool keeps this one, which is what lets those skip the transaction — and
     // says so loudly if the classification was wrong.
@@ -304,6 +351,19 @@ export async function callTool(
   if (isReadOnly(name)) {
     const result = await spec.run(context, args, `mcp-${name}`);
     return { result, summary };
+  }
+
+  /*
+   * Queued, because it writes files, but with no transaction: there is nothing
+   * to record and there may be no document to record it against. `session`
+   * being null past this point is exactly the `NO_DOCUMENT` case, and the
+   * branch below would otherwise dereference it.
+   */
+  if (session === null) {
+    return await serialised(async () => {
+      const result = await spec.run(context, args, `mcp-${name}`);
+      return { result, summary };
+    });
   }
 
   return await serialised(async () => {

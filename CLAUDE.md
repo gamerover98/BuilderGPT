@@ -421,6 +421,57 @@ schematic wants, and it is the one spelling every release from 1.13 accepts.
 1.21.5 added `strict` and relaxed `replace`, both additions the bare form never
 had to know about.
 
+**Converting is a verb of its own, and `services/convert.ts` holds no format
+code.** "Convert" used to be a gesture — open the file, Save As in the other
+container — which went through the open document and was wrong twice: it
+costs the user whatever they had open, and it has no answer at all for
+`.mcfunction`, which is read but can never *be* a document's format, so there
+was nothing to save *as*. The converter loads with `loadStructure`, builds with
+`documentFromLoaded` and writes with `writeDocument` or the mcfunction writer,
+so a conversion cannot be right in a way that opening the file is not.
+
+**It never overwrites.** A file already at the destination is moved aside under
+a timestamp through `resolveOutputPath` — `save_document_as`'s rule, arrived
+at from the same direction, because this verb is reachable by an agent and a
+badly guessed path should cost a rename rather than somebody's build. For a
+`.mcfunction` **every part's name is reserved**, not just the dispatcher's: the
+set shrinks. Export as eight parts, edit down, export as five, and `_5` through
+`_7` sit there from last time beside a dispatcher that no longer calls them.
+
+**And it never crops.** `saveSession` trims to content because saving ends an
+editing session and the room you made to build in is not part of the build. A
+conversion is a fact about a file: quietly handing back a smaller one would make
+the two disagree about what the schematic is.
+
+`convert_schematic` is in **`TOOL_SPECS`**, so the chat and MCP get it from one
+definition — the rule `tests/mcp.ts` states from both sides. That needed
+`NO_DOCUMENT` in `mcp/tools.ts`, which is a **third** question beside `readOnly`
+and `changesDocument`: `describe_block` is read-only and needs no document,
+`convert_schematic` is neither read-only (it writes a file) nor a document tool.
+Before it, `describe_block` came back "No schematic is open" for a question
+about Minecraft — nobody reported it, because a client connected to this app
+usually has one open, which is exactly the kind of wrongness that survives.
+`refusingDocument` is its tripwire, `refusingScope`'s idiom for `refusingScope`'s
+reason.
+
+**The version is refused before anything is written**, by the same `refusalFor`
+the format picker asks. Two containers guard themselves and one does not, which
+is why the check is here rather than left to the writers: a litematic refuses a
+DataVersion it cannot carry on its own, and Sponge has no such guard —
+without this, a pre-Flattening version would be stamped onto a file whose
+palette holds flattened block names, which opens fine and misbehaves in game.
+
+One consequence falls out of two rules meeting and is worth knowing before it is
+reported: **a `.mcfunction` cannot become a `.litematic` without being told a
+version.** Commands carry no `DataVersion`, and Litematica is the one container
+that cannot omit one. The refusal says to pick one, and the panel offers the
+picker for exactly that case.
+
+The converter's button is the one in that row that is **never disabled**.
+Converting a `.litematic` somebody sent you is a thing to do before there is
+anything open at all, so requiring a document would be a rule with nothing
+behind it.
+
 **Sponge v2 and v3 both spell a tag `Offset` and do not mean the same vector by
 it.** This is the one real incompatibility between the two, it is silent in both
 directions — a file written with them swapped loads, looks right and pastes

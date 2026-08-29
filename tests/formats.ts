@@ -57,6 +57,7 @@ import {
 import { dataVersionFor } from "../src/main/services/versions.js";
 import { bitsPerEntry } from "../src/main/pipeline/litematic_bits.js";
 import { parseMcfunction } from "../src/main/pipeline/mcfunction.js";
+import { convertFile, extensionForKind } from "../src/main/services/convert.js";
 import {
   buildMcfunction,
   mcfunctionCommands,
@@ -1521,6 +1522,225 @@ console.log("\n--- mcfunction ---");
     const back = documentFromLoaded(await loadStructure(dispatcher), dispatcher);
     equal("the dispatcher's blocks are the ones it calls", grid(back), grid(doc));
     equal("...and the ignored count is zero", countBlocks(back), countBlocks(doc));
+  }
+}
+
+
+// --- converting one file into another ---------------------------------------
+//
+// The verb that makes the four-and-a-half kinds worth having. There is no
+// format code in `convert.ts` at all -- it loads with `loadStructure`, builds a
+// document with `documentFromLoaded` and writes with `writeDocument` or the
+// mcfunction writer -- so what is checked here is the wiring and the two rules
+// it adds on top: it never overwrites, and it never crops.
+console.log("\n--- convert ---");
+{
+  const stone: PaletteEntry = { namespacedName: "minecraft:stone", properties: {} };
+
+  /** A roomy box with a small build off-centre, so a crop would be visible. */
+  const roomy = (): SchematicDocument => {
+    const doc = createDocument({
+      width: 12,
+      height: 8,
+      length: 12,
+      format: "sponge3",
+      dataVersion: 3837,
+    });
+    for (let x = 4; x <= 6; x += 1) {
+      for (let z = 4; z <= 6; z += 1) setBlock(doc, x, 2, z, stone);
+    }
+    return doc;
+  };
+
+  {
+    // Every pair, through the app's own reader and writer.
+    const start = path.join(workDir, "start.schem");
+    await saveDocument(roomy(), start, { format: "sponge3" });
+
+    for (const format of ["litematic", "sponge2", "mcfunction"] as const) {
+      const target = path.join(workDir, `via-${format}.${extensionForKind(format)}`);
+      const out = await convertFile({ source: start, target, format });
+      equal(`sponge3 -> ${format}: the size is unchanged`, [...out.size], [12, 8, 12]);
+      equal(`...and the blocks are all there`, out.blocks, 9);
+
+      const back = documentFromLoaded(await loadStructure(out.files[0]), out.files[0]);
+      equal(`...and it reads back the same`, grid(back), grid(roomy()));
+    }
+  }
+
+  {
+    /*
+     * It does not crop, and that is the difference from Save. `saveSession`
+     * trims to content because saving ends an editing session and the room you
+     * made to build in is not part of the build; a conversion is a fact about a
+     * file, and quietly handing back a smaller one would make the two disagree
+     * about what the schematic is.
+     */
+    const start = path.join(workDir, "roomy.schem");
+    await saveDocument(roomy(), start, { format: "sponge3" });
+    const target = path.join(workDir, "roomy.litematic");
+    const out = await convertFile({ source: start, target, format: "litematic" });
+    equal("a conversion keeps the empty room", [...out.size], [12, 8, 12]);
+  }
+
+  {
+    /*
+     * Nothing is overwritten. This verb is reachable by an agent, and an agent
+     * that guesses a path badly should cost a rename rather than somebody's
+     * build -- `save_document_as`'s rule, arrived at from the same direction.
+     */
+    const start = path.join(workDir, "twice.schem");
+    await saveDocument(roomy(), start, { format: "sponge3" });
+    const target = path.join(workDir, "twice-out.litematic");
+    const first = await convertFile({ source: start, target, format: "litematic" });
+    equal("the first run backs nothing up", [...first.backedUp], []);
+    const second = await convertFile({ source: start, target, format: "litematic" });
+    equal("the second moves the first aside", second.backedUp.length, 1);
+    check(
+      "...under a timestamp, not a number",
+      (second.backedUp[0] ?? "").includes(".bak."),
+      second.backedUp[0] ?? "",
+    );
+    // And the file that was moved is still readable, which is the whole point.
+    const rescued = documentFromLoaded(
+      await loadStructure(second.backedUp[0]),
+      second.backedUp[0],
+    );
+    equal("...and it still holds what it held", grid(rescued), grid(roomy()));
+  }
+
+  {
+    /*
+     * A `.mcfunction` may be several files, and every one of their names is
+     * reserved -- not just the dispatcher's. A part left to overwrite is the
+     * half of the rule that never gets noticed: export as eight parts, edit
+     * down, export as five, and `_5` through `_7` are still there from last
+     * time, beside a dispatcher that no longer calls them.
+     */
+    const side = 42;
+    const doc = createDocument({ width: side, height: side, length: side, format: "sponge3" });
+    for (let x = 0; x < side; x += 1) {
+      for (let y = 0; y < side; y += 1) {
+        for (let z = 0; z < side; z += 1) {
+          if ((x + y + z) % 2 === 0) setBlock(doc, x, y, z, stone);
+        }
+      }
+    }
+    const start = path.join(workDir, "many.schem");
+    await saveDocument(doc, start, { format: "sponge3" });
+    const target = path.join(workDir, "many.mcfunction");
+    const first = await convertFile({ source: start, target, format: "mcfunction" });
+    check("it comes out as several files", first.files.length > 2, String(first.files.length));
+    const second = await convertFile({ source: start, target, format: "mcfunction" });
+    equal(
+      "...and every one of them is reserved on the way back",
+      second.backedUp.length,
+      first.files.length,
+    );
+  }
+
+  {
+    /*
+     * The version is refused by the same function the format picker asks, so a
+     * `.litematic` is refused for 1.13 here for the reason it is refused there.
+     * Before anything is written, because a file already moved aside for a
+     * conversion that then failed is a rename nobody asked for.
+     */
+    const start = path.join(workDir, "versioned.schem");
+    await saveDocument(roomy(), start, { format: "sponge3" });
+    let refused: string | null = null;
+    try {
+      await convertFile({
+        source: start,
+        target: path.join(workDir, "refused.litematic"),
+        format: "litematic",
+        version: "JE_1_13",
+      });
+    } catch (err) {
+      refused = err instanceof Error ? err.message : String(err);
+    }
+    check("1.13 as a litematic is refused", refused !== null);
+    check("...by name", (refused ?? "").includes("1.13.2"), refused ?? "");
+
+    /*
+     * And the *Sponge* case, which is the one only this check can see. A
+     * litematic refuses a version it cannot carry on its own, in the writer, so
+     * removing the check here changes nothing for it. Sponge has no such guard:
+     * without `refusalFor`, a pre-Flattening version would be written into a
+     * file whose palette holds flattened block names, and that file opens fine
+     * and misbehaves in game -- the exact failure `formatsFor` exists for.
+     */
+    let legacy: string | null = null;
+    try {
+      await convertFile({
+        source: start,
+        target: path.join(workDir, "legacy.schem"),
+        format: "sponge3",
+        version: "JE_1_12_2",
+      });
+    } catch (err) {
+      legacy = err instanceof Error ? err.message : String(err);
+    }
+    check("a pre-Flattening version as Sponge is refused", legacy !== null);
+    check(
+      "...with the Flattening sentence, not the Litematica one",
+      (legacy ?? "").includes("flattened names"),
+      legacy ?? "",
+    );
+
+    const stamped = await convertFile({
+      source: start,
+      target: path.join(workDir, "stamped.schem"),
+      format: "sponge3",
+      version: "JE_1_16_5",
+    });
+    const back = documentFromLoaded(
+      await loadStructure(stamped.files[0]),
+      stamped.files[0],
+    );
+    equal("...and a version that fits is stamped", back.dataVersion, dataVersionOf("JE_1_16_5"));
+  }
+
+  {
+    // The one direction that only exists because of the converter: commands in,
+    // a container out. Save As could never do this -- a document is not a
+    // `.mcfunction`, so there was nothing to save *as*.
+    const doc = createDocument({ width: 4, height: 2, length: 4, format: "sponge3" });
+    setBlock(doc, 1, 1, 1, stone);
+    const commands = path.join(workDir, "in.mcfunction");
+    await saveMcfunction(doc, commands);
+    const target = path.join(workDir, "out.litematic");
+
+    /*
+     * And it needs a version told to it, which is the honest consequence of two
+     * rules meeting: a `.mcfunction` carries no `DataVersion`, and a
+     * `.litematic` is the one container that cannot omit one -- Litematica
+     * reads the file *according to* it. So the refusal is the right answer, and
+     * the panel offers the picker for exactly this case.
+     */
+    let needsVersion: string | null = null;
+    try {
+      await convertFile({ source: commands, target, format: "litematic" });
+    } catch (err) {
+      needsVersion = err instanceof Error ? err.message : String(err);
+    }
+    check("commands carry no version, so a litematic is refused", needsVersion !== null);
+    check(
+      "...saying to pick one",
+      (needsVersion ?? "").includes("Pick a version"),
+      needsVersion ?? "",
+    );
+
+    const out = await convertFile({
+      source: commands,
+      target,
+      format: "litematic",
+      version: "JE_1_20_5",
+    });
+    equal("mcfunction -> litematic keeps the size", [...out.size], [4, 2, 4]);
+    const back = documentFromLoaded(await loadStructure(out.files[0]), out.files[0]);
+    equal("...and the block", grid(back), grid(doc));
+    equal("...and comes out a litematic", back.format, "litematic");
   }
 }
 

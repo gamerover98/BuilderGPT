@@ -22,6 +22,9 @@ import {
   type EditRequest,
   type ResizeRequest,
   type EditResponse,
+  type ConvertRequest,
+  type ConvertResponse,
+  FILE_KIND_LABEL,
   type ChatState,
   type ConversationList,
   type RestoreResponse,
@@ -200,6 +203,7 @@ import {
   useHost,
 } from "../mcp/server.js";
 import { VERSION_NAMES } from "../services/versions.js";
+import { convertFile, extensionForKind } from "../services/convert.js";
 
 /** File-picking kinds only; `directory` takes the folder branch instead. */
 const FILE_FILTERS: Readonly<
@@ -443,11 +447,14 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
      */
     if (req.kind === "save-schematic") {
       const format = req.format ?? "sponge3";
-      const extension = schematicExtension(format);
+      // `FileKind`, not `SchematicFormat`: the converter writes `.mcfunction`
+      // too, and a dialog that could not offer the extension it is about to
+      // write would suggest one name and produce another.
+      const extension = extensionForKind(format);
       const options: Electron.SaveDialogOptions = {
-        title: `Save as ${SCHEMATIC_FORMAT_LABEL[format]}`,
+        title: `Save as ${FILE_KIND_LABEL[format]}`,
         defaultPath: req.defaultPath ?? undefined,
-        filters: [{ name: SCHEMATIC_FORMAT_LABEL[format], extensions: [extension] }],
+        filters: [{ name: FILE_KIND_LABEL[format], extensions: [extension] }],
         properties: ["createDirectory", "showOverwriteConfirmation"],
       };
       const saved = window
@@ -971,6 +978,41 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     },
   );
 
+  /*
+   * File in, file out, and the open document is not consulted at all -- which
+   * is why this is not a mode of `docSaveAs`. It is also the only handler here
+   * that answers without a session, because there is nothing about it that
+   * needs one.
+   */
+  ipcMain.handle(
+    IPC.convertFile,
+    async (_event, request: ConvertRequest): Promise<ConvertResponse> => {
+      try {
+        const result = await convertFile({
+          source: request.source,
+          target: request.target,
+          format: request.format,
+          ...(request.version === undefined ? {} : { version: request.version }),
+          ...(request.namespace === undefined ? {} : { namespace: request.namespace }),
+          legacyBlocksPath: legacyBlocksPath(),
+        });
+        return {
+          ok: true,
+          format: result.format,
+          files: [...result.files],
+          backedUp: [...result.backedUp],
+          size: [...result.size] as [number, number, number],
+          blocks: result.blocks,
+          degraded: [...result.degraded],
+          dropped: [...result.dropped],
+          notes: [...result.notes],
+        };
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
+
   ipcMain.handle(IPC.docSetNbt, async (_event, request: SetNbtRequest): Promise<EditResponse> => {
     try {
       const session = requireSession();
@@ -1436,6 +1478,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
           selection: req.selection,
           signal: controller.signal,
           allowedBlocks: await loadAllowedBlocks(resourcesDir()),
+          legacyBlocksPath: legacyBlocksPath(),
           onStep: (step) => {
             if (window && !window.isDestroyed()) {
               window.webContents.send(IPC.agentStep, {

@@ -82,6 +82,8 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   } from "../../shared/ipc.js";
   import type { SchematicFormat } from "../../shared/schematic.js";
 import { schematicExtension } from "../../shared/schematic.js";
+import type { FileKind } from "../../shared/ipc.js";
+import ConvertModal from "./lib/ConvertModal.svelte";
   import {
     DEFAULT_SETTINGS,
     DEFAULT_PREVIEW_SETTINGS,
@@ -2944,6 +2946,100 @@ import { schematicExtension } from "../../shared/schematic.js";
     await saveDocument(choice.format, picked.path, choice.version);
   }
 
+
+  /*
+   * The converter, which is the one panel here that is not about the open
+   * document -- so it is also the one whose button is never disabled.
+   * Converting a `.litematic` somebody sent you is a thing to do before there
+   * is anything open at all.
+   */
+  let convertOpen = $state(false);
+  let convertBusy = $state(false);
+  let convertSource = $state("");
+  let convertTarget = $state("");
+  let convertError = $state("");
+  let convertReport = $state("");
+
+  async function pickConvertSource(): Promise<void> {
+    const picked = await api().pickFile({ kind: "schem" });
+    if (picked.path) {
+      convertSource = picked.path;
+      convertError = "";
+      convertReport = "";
+    }
+  }
+
+  async function pickConvertTarget(format: FileKind): Promise<void> {
+    /*
+     * The format goes to the dialog, because the extension cannot be recovered
+     * from a path -- `.schem` is both Sponge versions -- and a dialog that
+     * suggested one name while main wrote another would be the same silence
+     * `pickFile` already forces the extension to avoid.
+     */
+    const stem = convertSource.split(/[\\/]/).pop()?.replace(/\.[^.]*$/, "") ?? "converted";
+    const picked = await api().pickFile({
+      kind: "save-schematic",
+      format,
+      defaultPath: stem,
+    });
+    if (picked.path) {
+      convertTarget = picked.path;
+      convertError = "";
+      convertReport = "";
+    }
+  }
+
+  async function runConversion(request: {
+    source: string;
+    target: string;
+    format: FileKind;
+    version?: string;
+  }): Promise<void> {
+    convertBusy = true;
+    convertError = "";
+    convertReport = "";
+    try {
+      const response = await api().convertFile(request);
+      if (!response.ok) {
+        convertError = response.message;
+        return;
+      }
+      /*
+       * Reported afterwards, by name, rather than promised beforehand: every
+       * cost a conversion can have is a fact about the *source*, and the panel
+       * has not read it. Nothing is overwritten in the meantime, so
+       * convert-then-say is the honest order.
+       */
+      convertReport = [
+        t("convert.wrote", {
+          count: response.files.length,
+          name: response.files[0]?.split(/[\\/]/).pop() ?? "",
+          size: response.size.join(String.fromCharCode(215)),
+          blocks: response.blocks.toLocaleString(),
+        }),
+        response.backedUp.length > 0
+          ? t("convert.backedUp", { count: response.backedUp.length })
+          : null,
+        response.degraded.length > 0
+          ? t("status.degraded", {
+              count: response.degraded.length,
+              blocks: response.degraded.slice(0, 3).join(", "),
+            })
+          : null,
+        response.dropped.length > 0
+          ? t("status.dropped", { things: response.dropped.join(", ") })
+          : null,
+        ...response.notes,
+      ]
+        .filter((note) => note !== null)
+        .join(" \u00b7 ");
+    } catch (err) {
+      convertError = err instanceof Error ? err.message : String(err);
+    } finally {
+      convertBusy = false;
+    }
+  }
+
   /** Where Save As opens: this file's own folder and name, or a plain default. */
   function suggestedSavePath(format: SchematicFormat): string {
     const extension = schematicExtension(format);
@@ -3200,6 +3296,22 @@ import { schematicExtension } from "../../shared/schematic.js";
   onclose={() => (voidOpen = false)}
 />
 
+<ConvertModal
+  open={convertOpen}
+  busy={convertBusy}
+  error={convertError}
+  report={convertReport}
+  source={convertSource}
+  target={convertTarget}
+  onpicksource={() => void pickConvertSource()}
+  onpicktarget={(format) => void pickConvertTarget(format)}
+  onconvert={(request) => void runConversion(request)}
+  onclose={() => {
+    convertOpen = false;
+    convertError = "";
+  }}
+/>
+
 <DimensionsModal
   open={docState !== null && dimensionsOpen}
   size={docState?.size ?? [1, 1, 1]}
@@ -3340,6 +3452,19 @@ import { schematicExtension } from "../../shared/schematic.js";
       already mixes both. They sit before the gear, which carries the auto
       margin, so they land at the trailing edge beside it.
     -->
+    <!--
+      Never disabled, unlike its neighbours: this one converts a file on disk
+      and does not consult the open document at all, so needing one open would
+      be a rule with nothing behind it.
+    -->
+    <button
+      class="nbt-open"
+      onclick={() => (convertOpen = true)}
+      title={t("convert.openHint")}
+    >
+      {t("convert.open")}
+    </button>
+
     <button
       class="nbt-open"
       disabled={docState === null}

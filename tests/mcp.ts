@@ -1150,5 +1150,67 @@ try {
   await rm(workDir, { recursive: true, force: true });
 }
 
+
+// --- the tools that answer without a schematic open --------------------------
+//
+// `NO_DOCUMENT` is a different question from `READ_ONLY`, and the two are not
+// the same set: `describe_block` is both, and `convert_schematic` is neither --
+// it writes a file, so it is not read-only, and it reads no document, so
+// refusing it because none is open would be refusing it for a reason that has
+// nothing to do with it.
+//
+// Before this, `describe_block` came back "No schematic is open" for a question
+// about Minecraft. Nobody reported it, because a client connected to this app
+// usually has one open, which is exactly the kind of wrongness that survives.
+console.log("\n--- answering with nothing open ---");
+{
+  closeDocument();
+  const sink = { changed: 0 };
+
+  const described = await callTool(
+    "describe_block",
+    { blocks: ["minecraft:campfire"] },
+    options(sink),
+  );
+  check("describe_block answers with nothing open", described.result !== undefined);
+
+  /*
+   * And a tool that *does* read the document is still refused, in the sentence
+   * that says what to do about it. That is the half that fails if somebody adds
+   * a name to `NO_DOCUMENT` to make an error go away.
+   */
+  let refused: string | null = null;
+  try {
+    await callTool("get_schematic_info", {}, options(sink));
+  } catch (err) {
+    refused = err instanceof Error ? err.message : String(err);
+  }
+  check("...while one that reads it is not", refused !== null);
+  check(
+    "...saying which way forward",
+    (refused ?? "").includes("open_document"),
+    refused ?? "",
+  );
+
+  let converted: string | null = null;
+  try {
+    await callTool(
+      "convert_schematic",
+      { source: "C:/nowhere/absent.schem", target: "C:/nowhere/out.litematic", format: "litematic" },
+      options(sink),
+    );
+  } catch (err) {
+    converted = err instanceof Error ? err.message : String(err);
+  }
+  check("convert_schematic gets past the document check", converted !== null);
+  check(
+    "...and fails on the file it was given instead",
+    !(converted ?? "").includes("No schematic is open"),
+    converted ?? "",
+  );
+
+  equal("...and nothing told the window anything", sink.changed, 0);
+}
+
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

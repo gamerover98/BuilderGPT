@@ -61,6 +61,7 @@ import {
 import { stringifySnbt } from "../domain/snbt.js";
 import type { PaletteEntry } from "../pipeline/types.js";
 import { MAX_COMMANDS_PER_FUNCTION, MAX_FILL_VOLUME } from "../../shared/command_syntax.js";
+import { resolveOutputPath } from "./output.js";
 
 export interface McfunctionFile {
   /** File name only; the caller decides the directory. */
@@ -74,6 +75,10 @@ export interface McfunctionOutput {
   readonly commands: number;
   /** What the format cannot carry at all, by name. */
   readonly dropped: readonly string[];
+  /** Absolute paths, once they have been written. Empty from `buildMcfunction`. */
+  readonly written?: readonly string[];
+  /** Anything moved aside to make room for them. */
+  readonly backedUp?: readonly string[];
 }
 
 export interface McfunctionOptions {
@@ -309,7 +314,18 @@ export function buildMcfunction(
   };
 }
 
-/** Writes the set beside `filePath`, whose own name decides the stem. */
+/**
+ * Writes the set beside `filePath`, whose own name decides the stem.
+ *
+ * **Nothing is overwritten**, and this is the one writer where that is a rule
+ * rather than a courtesy. A container is one file, so Save As replacing it is
+ * exactly what the native dialog already asked about; this writes a *set*, and
+ * the set shrinks. Export a build as eight parts, edit it down, export again as
+ * five, and `_5` through `_7` are still sitting there from last time {EM} a
+ * dispatcher that no longer calls them, beside parts that no longer belong to
+ * anything. Reserving every name through `resolveOutputPath` turns that into
+ * three timestamped files instead of three lies.
+ */
 export async function saveMcfunction(
   doc: SchematicDocument,
   filePath: string,
@@ -317,10 +333,24 @@ export async function saveMcfunction(
 ): Promise<McfunctionOutput> {
   const directory = path.dirname(filePath);
   const stem = path.basename(filePath).replace(/\.mcfunction$/i, "");
+  /*
+   * Built before anything is reserved, because the set of names is not known
+   * until the commands have been counted.
+   */
   const built = buildMcfunction(doc, { stem, ...options });
   await mkdir(directory, { recursive: true });
+
+  const written: string[] = [];
+  const backedUp: string[] = [];
   for (const file of built.files) {
-    await writeFile(path.join(directory, file.name), file.text, "utf8");
+    const reserved = await resolveOutputPath(
+      directory,
+      file.name.replace(/\.mcfunction$/, ""),
+      "mcfunction",
+    );
+    await writeFile(reserved.filePath, file.text, "utf8");
+    written.push(reserved.filePath);
+    if (reserved.backedUpTo !== null) backedUp.push(reserved.backedUpTo);
   }
-  return built;
+  return { ...built, written, backedUp };
 }

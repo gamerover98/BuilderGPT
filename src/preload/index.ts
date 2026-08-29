@@ -16,6 +16,8 @@ import {
   type AgentResponse,
   type ChatState,
   type ConversationList,
+  type ConvertRequest,
+  type ConvertResponse,
   type RestoreResponse,
   type AgentStepEvent,
   type TraceEvent,
@@ -114,6 +116,8 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docApply, request) as Promise<EditResponse>,
   resizeDocument: (request: ResizeRequest) =>
     ipcRenderer.invoke(IPC.docResize, request) as Promise<EditResponse>,
+  convertFile: (request: ConvertRequest) =>
+    ipcRenderer.invoke(IPC.convertFile, request) as Promise<ConvertResponse>,
   undo: () => ipcRenderer.invoke(IPC.docUndo) as Promise<EditResponse>,
   redo: () => ipcRenderer.invoke(IPC.docRedo) as Promise<EditResponse>,
   inspectBlock: (x: number, y: number, z: number) =>

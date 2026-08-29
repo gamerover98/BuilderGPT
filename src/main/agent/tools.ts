@@ -44,6 +44,17 @@
 
 import { jsonSchema, tool, type Tool } from "ai";
 
+import { FILE_KINDS, FILE_KIND_LABEL, type FileKind } from "../../shared/ipc.js";
+import { convertFile } from "../services/convert.js";
+
+interface ConvertArgs {
+  source?: string;
+  target?: string;
+  format?: FileKind;
+  version?: string;
+  namespace?: string;
+}
+
 import {
   countBlocks,
   getBlock,
@@ -200,6 +211,16 @@ export interface ToolContext {
    * in one step, which it does whenever it builds two walls.
    */
   onStep?: (step: { tool: string; summary: string; id?: string }) => void;
+  /**
+   * Where `legacy_blocks.json` is, for the one tool that reads and writes
+   * files rather than the open document.
+   *
+   * Passed in rather than resolved here for `LoadStructureOptions`' reason:
+   * `services/resources.ts` imports Electron, and this module has to stay
+   * reachable from the suites. `null` means MCEdit is simply not available,
+   * which `convert_schematic` reports by name rather than by crashing.
+   */
+  legacyBlocksPath?: string | null;
 }
 
 /**
@@ -351,6 +372,71 @@ export interface ToolSpec {
 }
 
 export const TOOL_SPECS: readonly ToolSpec[] = [
+  {
+    /**
+     * The second tool here that is not about the open document, and the first
+     * that writes anything outside it.
+     *
+     * It exists because "convert this file" had no answer that did not go
+     * through the editor: opening a file and saving it in another container
+     * costs the user whatever they had open, and `.mcfunction` cannot be a
+     * document's format at all, so there was nothing to save *as*.
+     *
+     * In `TOOL_SPECS` rather than in MCP's own table so the chat and an
+     * external client get the same tool from one definition -- the rule
+     * `tests/mcp.ts` states from both sides. It reads no document, which is
+     * what `NO_DOCUMENT` in `mcp/tools.ts` is for.
+     */
+    name: "convert_schematic",
+    description:
+      "Convert a schematic file on disk into another format, without opening it. Reads .schem (Sponge v2 and v3), .schematic (MCEdit), .litematic and .mcfunction, and writes any of them. The open document is untouched, and an existing file at the destination is moved aside with a timestamp rather than overwritten. A .mcfunction may come out as several files with a dispatcher.",
+    schema: {
+      type: "object",
+      properties: {
+        source: { type: "string" },
+        target: { type: "string" },
+        format: {
+          type: "string",
+          enum: ["sponge3", "sponge2", "mcedit", "litematic", "mcfunction"],
+        },
+        version: { type: "string" },
+        namespace: { type: "string" },
+      },
+      required: ["source", "target", "format"],
+      additionalProperties: false,
+    },
+    async run(context, args: ConvertArgs, id) {
+      const source = typeof args?.source === "string" ? args.source : "";
+      const target = typeof args?.target === "string" ? args.target : "";
+      const format = args?.format;
+      if (source === "" || target === "") {
+        throw new Error("Pass both `source` and `target` as file paths.");
+      }
+      if (format === undefined || !FILE_KINDS.includes(format)) {
+        throw new Error(`\`format\` must be one of ${FILE_KINDS.join(", ")}.`);
+      }
+      step(context, "convert_schematic", `converting to ${FILE_KIND_LABEL[format]}`, id);
+
+      const result = await convertFile({
+        source,
+        target,
+        format,
+        ...(typeof args.version === "string" ? { version: args.version } : {}),
+        ...(typeof args.namespace === "string" ? { namespace: args.namespace } : {}),
+        legacyBlocksPath: context.legacyBlocksPath ?? null,
+      });
+      return {
+        files: result.files,
+        format: result.format,
+        size: result.size,
+        blocks: result.blocks,
+        backedUp: result.backedUp,
+        degraded: result.degraded,
+        dropped: result.dropped,
+        notes: result.notes,
+      };
+    },
+  },
   {
     name: "get_schematic_info",
     description:

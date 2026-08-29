@@ -615,7 +615,7 @@ what the inventory never offered. That is the same failure the hand-written
 `DEFAULT_STATE` had, one layer down, and it is the argument for generating a set
 rather than curating one.
 
-**Four vendored datasets, four generators, four skills.** The pattern is the
+**Six vendored datasets, six generators, six skills.** The pattern is the
 same each time and it is the one to copy: the answers are looked up, recorded
 with where they came from, and the generator replaces only the rows between two
 markers. Running with nothing new must change no bytes — if it rewrites the file
@@ -627,6 +627,8 @@ every time, the ordering or the formatting has drifted and *that* is the bug.
 | `resources/block_states.json` | `gen-block-states.mjs` | `mc-blockstates` |
 | `resources/block_properties.json` | `gen-block-properties.mjs` | `mc-blockproperties` |
 | `block_id_list.txt` | `gen-block-list.mjs` | `mc-block-models` (for what the ids must draw as) |
+| `resources/litematica_versions.json` | `gen-litematica-versions.mjs` | `mc-litematic` |
+| `resources/command_syntax.json` | `gen-command-syntax.mjs` | `mc-commands` |
 
 The skills' trust rules deliberately differ, and the difference is the point.
 `mc-versions` buys trust with **two independent sources that agree**, because a
@@ -646,6 +648,48 @@ two sources disagree the game's own registry is a genuine arbiter. It settled
 one already: minecraft.wiki's `Block_states` page says sign and banner
 `rotation` changed default from 0 to 8 in 26.1 while its own `Sign` page says
 the default has always been 0, and the vendored 26.2 registry says `8`.
+
+`mc-litematic` and `mc-commands` split along the same line, and the split lands
+between the two halves of one file rather than between two files. A
+`.mcfunction`'s **syntax** is mechanically detectable — the writer emits it, the
+reader parses it back, and a wrong form cannot survive the round trip — so one
+source is enough. Its **limits** cannot fail here at all: a function past
+`max_command_sequence_length` has its remaining commands ignored with no error,
+and a `fill` past `max_block_modifications` places nothing and reports nothing.
+Neither is a property of the file, so no test can ever see it, and those rows
+are corroborated. A Litematica `Version` is the `mc-versions` case outright:
+wrong, and Litematica opens the file and *converts* it.
+
+**Two generators cross-check their DataVersions against `mc_versions.json`**,
+which is the corroborated one, and refuse rather than write their own number.
+Two datasets naming one fact is how they come to disagree, and that check has
+already earned itself: the first draft of `litematica_versions.json` recorded
+1.18 as 2825, which is a snapshot, where the verified table says 2860. Nothing
+downstream would have noticed — the file saves, opens, and is converted by
+Litematica for everyone on 1.18.0 or 1.18.1.
+
+**The two new floors are different releases, and that is the finding rather than
+an oversight.** A `.mcfunction` needs `setblock <pos> <block>` with a flattened
+id, which is **1.13**. A `.litematic` needs Litematica's reader not to convert
+it, and that reader converts anything whose schematic `Version` is below 5 *or*
+whose `MinecraftDataVersion` is below 1631 — so the floor there is **1.13.2**,
+one release later than this app's own `flat` era begins. `tests/formats.ts`
+states the inequality out loud, because "harmonising" the two to 1.13 is a tidy
+edit that would put every 1.13-tagged litematic through a palette conversion.
+
+Litematic **block storage** stopped moving at version 5: the palette, the packed
+longs and `Position`/`Size` are the same in 5, 6 and 7, and what changed is what
+goes inside an entity or a block entity — which this app carries verbatim, as
+it already does for Sponge. So one decoder reads all three, and the only
+version-dependent decision on the way out is which number to stamp: 7 from
+1.20.5, because always-7 writes files Litematica below 1.20.6 refuses outright
+and always-6 puts component-shaped item NBT under a label promising the older
+shape.
+
+`litematicCanCarry(null)` is **false**, and that is not timidity. A litematic
+must carry a `MinecraftDataVersion`; Sponge may omit its tag and MCEdit has
+none, so this is the one container with no escape, and defaulting to 1631 would
+tell every reader downstream that a build was cut from a version nobody named.
 
 **There are two ways into a document and neither is a panel.** The File menu and
 the start screen — the card the empty viewport shows. That is the answer to a

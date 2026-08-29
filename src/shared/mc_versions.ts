@@ -79,6 +79,7 @@ export const MC_VERSIONS: readonly McVersionInfo[] = [
   { name: "JE_1_21_1", label: "1.21.1", era: "flat", dataVersion: 3955 },
   { name: "JE_1_21", label: "1.21", era: "flat", dataVersion: 3953 },
   { name: "JE_1_20_6", label: "1.20.6", era: "flat", dataVersion: 3839 },
+  { name: "JE_1_20_5", label: "1.20.5", era: "flat", dataVersion: 3837 },
   { name: "JE_1_20_4", label: "1.20.4", era: "flat", dataVersion: 3700 },
   { name: "JE_1_20_2", label: "1.20.2", era: "flat", dataVersion: 3578 },
   { name: "JE_1_20_1", label: "1.20.1", era: "flat", dataVersion: 3465 },

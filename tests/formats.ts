@@ -46,6 +46,19 @@ import {
   UnrepresentableBlocksError,
 } from "../src/main/services/writers.js";
 import { dataVersionFor } from "../src/main/services/versions.js";
+import {
+  LITEMATIC_MIN_DATA_VERSION,
+  LITEMATIC_VERSIONS,
+  litematicCanCarry,
+  litematicVersionFor,
+} from "../src/shared/litematica_versions.js";
+import {
+  COMMAND_FORMS,
+  MAX_COMMANDS_PER_FUNCTION,
+  MAX_FILL_VOLUME,
+  MCFUNCTION_MIN_DATA_VERSION,
+  commandLimit,
+} from "../src/shared/command_syntax.js";
 import { dataVersionFor as _unusedDataVersionFor, VERSION_NAMES } from "../src/main/services/versions.js";
 import {
   anchorLocation,
@@ -59,6 +72,8 @@ import {
   formatsFor,
   formatSupportsVersion,
   MC_VERSION_NAMES,
+  MC_VERSIONS,
+  mcVersion,
   refusalFor,
   versionNameOf,
 } from "../src/shared/mc_versions.js";
@@ -856,6 +871,115 @@ console.log("\n--- eras ---");
 // who set an anchor, looked where the app told them, and found a different
 // vector would report the anchor as never written -- and be reasoning correctly
 // from a false sentence.
+
+// --- the two vendored tables the new containers read ------------------------
+//
+// Both are generated from JSON with provenance, and both hold numbers nothing
+// in this repo can otherwise observe: a wrong Litematica `Version` produces a
+// file Litematica opens and silently converts, and a wrong command limit
+// produces a function the game truncates without an error. So the facts are
+// stated here as well as in the data, which is what makes a regenerated table
+// that lost a row fail rather than quietly change what gets written.
+console.log("\n--- litematic and mcfunction floors ---");
+{
+  /*
+   * Newest first is not cosmetic: `litematicVersionFor` returns the first row a
+   * DataVersion reaches, so a table sorted the other way would answer 5 for
+   * everything and every file this app wrote would claim 1.13.2.
+   */
+  const versions = LITEMATIC_VERSIONS.map((row) => row.version);
+  equal("the litematic table is newest first", versions, [...versions].sort((a, b) => b - a));
+  check("...and has the three writable versions", versions.length >= 3, versions.join(","));
+
+  /*
+   * The boundaries, from both sides. One release below each is the case that
+   * catches a table built with `>` where it wanted `>=`, or a row whose
+   * DataVersion landed on a snapshot rather than the release.
+   */
+  equal("1.13.2 writes version 5", litematicVersionFor(1631).version, 5);
+  equal("1.14 still writes 5", litematicVersionFor(1952).version, 5);
+  equal("1.18 moves to 6", litematicVersionFor(2860).version, 6);
+  equal("...and 1.17.1 does not", litematicVersionFor(2859).version, 5);
+  equal("1.20.5 moves to 7", litematicVersionFor(3837).version, 7);
+  equal("...and 1.20.4 does not", litematicVersionFor(3700).version, 6);
+
+  equal("5 wrote no SubVersion", litematicVersionFor(1631).subVersion, 0);
+  equal("6 and 7 write 1", litematicVersionFor(3837).subVersion, 1);
+
+  /*
+   * The floor is 1.13.2 and not 1.13, and the difference is the whole reason
+   * this table exists: Litematica converts the palette of anything below
+   * DataVersion 1631, so a file claiming 1.13 comes back as the wrong blocks
+   * rather than as an error.
+   */
+  check("1.13 cannot be a litematic", !litematicCanCarry(1519));
+  check("...but 1.13.2 can", litematicCanCarry(1631));
+  check("a document with no version cannot", !litematicCanCarry(null));
+
+  /*
+   * The two floors differ on purpose, and this states it so nobody harmonises
+   * them. `setblock` needs flattened ids, which is 1.13; a litematic needs
+   * Litematica not to convert it, which is 1.13.2.
+   */
+  check(
+    "the mcfunction floor is a release earlier",
+    MCFUNCTION_MIN_DATA_VERSION < LITEMATIC_MIN_DATA_VERSION,
+    `${MCFUNCTION_MIN_DATA_VERSION} vs ${LITEMATIC_MIN_DATA_VERSION}`,
+  );
+  equal("...and it is 1.13", MCFUNCTION_MIN_DATA_VERSION, mcVersion("JE_1_13")?.dataVersion ?? -1);
+  equal(
+    "...while the litematic floor is 1.13.2",
+    LITEMATIC_MIN_DATA_VERSION,
+    mcVersion("JE_1_13_2")?.dataVersion ?? -1,
+  );
+
+  /*
+   * Every release a litematic row names has to be the same release
+   * `mc_versions.json` knows, which is the corroborated table. The generator
+   * refuses on disagreement; this says it again, because a table edited by hand
+   * never meets the generator.
+   */
+  for (const row of LITEMATIC_VERSIONS) {
+    equal(
+      `version ${row.version} agrees with the version table about ${row.since}`,
+      row.sinceDataVersion,
+      MC_VERSIONS.find((entry) => entry.label === row.since)?.dataVersion ?? null,
+    );
+  }
+
+  /*
+   * The two constants the mcfunction writer uses are read out of the limits
+   * table rather than written beside it, which is the whole point of vendoring
+   * them -- there is no second copy of 32,768 to drift. `commandLimit` throwing
+   * is what keeps that true: a regenerated table that had dropped a row would
+   * otherwise fall back to a number nobody checked.
+   */
+  equal("a fill may cover 32,768 cells", MAX_FILL_VOLUME, 32768);
+  equal("a function may hold 65,536 commands", MAX_COMMANDS_PER_FUNCTION, 65536);
+  let refused = false;
+  try {
+    commandLimit("no_such_rule");
+  } catch {
+    refused = true;
+  }
+  check("an unknown limit throws rather than defaulting", refused);
+
+  /*
+   * The forms are the ones the writer emits, without a mode word. Omitted means
+   * `replace`, and it is the one spelling every release from 1.13 accepts --
+   * 1.21.5 added `strict` without touching it.
+   */
+  const setblock = COMMAND_FORMS.find((form) => form.command === "setblock");
+  check("setblock is in the table", setblock !== undefined);
+  check(
+    "...in the form the writer emits, with no mode word",
+    setblock?.syntax === "setblock <pos> <block>",
+    setblock?.syntax ?? "missing",
+  );
+  const fill = COMMAND_FORMS.find((form) => form.command === "fill");
+  check("...and so is fill", fill?.syntax === "fill <from> <to> <block>", fill?.syntax ?? "missing");
+}
+
 console.log("\n--- the tag the panel names is the tag the file uses ---");
 {
   /** Walks a `TagLocation` into a parsed root and returns the three numbers. */

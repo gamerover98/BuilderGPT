@@ -1,0 +1,119 @@
+{
+  "$comment": [
+    "Litematica's own schematic format versions, with where each number came from.",
+    "",
+    "Generated and maintained by the `mc-litematic` skill (.claude/skills/mc-litematic).",
+    "`node scripts/gen-litematica-versions.mjs` turns this into the table in",
+    "src/shared/litematica_versions.ts; editing that table by hand is fine right up until",
+    "someone regenerates it.",
+    "",
+    "The `Version` tag decides how Litematica reads the file, and reading it wrong is silent:",
+    "a file whose Version is below 5, or whose MinecraftDataVersion is below 1631, is run",
+    "through convertBlockStatePalette_1_12_to_1_13_2 -- so a modern palette under an old",
+    "label comes back converted, not refused. That is why these numbers are looked up and",
+    "corroborated rather than remembered.",
+    "",
+    "`since` is the oldest Minecraft release whose Litematica writes this Version, and",
+    "`sinceDataVersion` is that release's DataVersion, which is what this app actually",
+    "compares against -- the document carries a DataVersion, not a release name."
+  ],
+  "checkedAt": "2026-08-29",
+  "sources": {
+    "litematica": "https://github.com/maruohon/litematica -- SCHEMATIC_VERSION and SCHEMATIC_VERSION_SUB in src/main/java/fi/dy/masa/litematica/schematic/LitematicaSchematic.java, read per branch",
+    "litematica-fork": "https://github.com/sakura-ryoko/litematica -- the same file on the modern branch, where development continues",
+    "litemapy": "https://github.com/SmylerMC/litemapy -- LITEMATIC_VERSION, LITEMATIC_SUBVERSION and MC_DATA_VERSION in litemapy/info.py"
+  },
+  "versions": [
+    {
+      "version": 7,
+      "subVersion": 1,
+      "since": "1.20.5",
+      "sinceDataVersion": 3837,
+      "note": "Item stacks carry data components. Litematica below 1.20.6 refuses to read it.",
+      "verified": true,
+      "sources": ["litematica", "litematica-fork"],
+      "evidence": [
+        "sakura-ryoko/litematica@26.2: SCHEMATIC_VERSION = 7, SCHEMATIC_VERSION_SUB = 1, and a named MINECRAFT_DATA_VERSION_1_20_4 = 3700 used as the downgrade boundary",
+        "maruohon/litematica@pre-rewrite/fabric/1.21.1-masa: SCHEMATIC_VERSION = 7",
+        "maruohon/litematica@pre-rewrite/fabric/1.20.x: SCHEMATIC_VERSION = 6, which brackets the change to after 1.20.4"
+      ]
+    },
+    {
+      "version": 6,
+      "subVersion": 1,
+      "since": "1.18",
+      "sinceDataVersion": 2860,
+      "note": "SubVersion appears, at 1, after the sleeping-entity position fix.",
+      "verified": true,
+      "sources": ["litematica", "litemapy"],
+      "evidence": [
+        "maruohon/litematica@pre-rewrite/fabric/1.18.x: SCHEMATIC_VERSION = 6, SCHEMATIC_VERSION_SUB = 1",
+        "maruohon/litematica@pre-rewrite/fabric/1.17.x: SCHEMATIC_VERSION = 5 and no SCHEMATIC_VERSION_SUB, which brackets the change to 1.18",
+        "SmylerMC/litemapy litemapy/info.py: LITEMATIC_VERSION = 6 paired with MC_DATA_VERSION = 2975, which is 1.18.2"
+      ]
+    },
+    {
+      "version": 5,
+      "subVersion": 0,
+      "since": "1.13.2",
+      "sinceDataVersion": 1631,
+      "note": "The Flattening. PendingFluidTicks appears. Block storage has not changed since.",
+      "verified": true,
+      "sources": ["litematica", "litematica-fork"],
+      "evidence": [
+        "maruohon/litematica@pre-rewrite/rift/1.13.2: SCHEMATIC_VERSION = 5, MINECRAFT_DATA_VERSION = 1631",
+        "maruohon/litematica@pre-rewrite/fabric/1.14.x, 1.16.x, 1.17.x: SCHEMATIC_VERSION = 5, unchanged across all three",
+        "sakura-ryoko/litematica@26.2 still names it: SCHEMATIC_VERSION_1_13_2 = 5, MINECRAFT_DATA_VERSION_1_13_2 = 1631"
+      ]
+    },
+    {
+      "version": 4,
+      "subVersion": 0,
+      "since": null,
+      "sinceDataVersion": null,
+      "note": "Nobody has told us what changed here. Below the Flattening either way.",
+      "verified": false,
+      "sources": [],
+      "evidence": [
+        "readFromNBT branches on >= 2, >= 3 and >= 5; 4 is passed over in silence by every branch that was read"
+      ]
+    },
+    {
+      "version": 3,
+      "subVersion": 0,
+      "since": null,
+      "sinceDataVersion": null,
+      "note": "PendingBlockTicks appears. Pre-Flattening palette.",
+      "verified": false,
+      "sources": ["litematica"],
+      "evidence": [
+        "maruohon/litematica@pre-rewrite/fabric/1.20.x readFromNBT: `if (version >= 3)` reads PendingBlockTicks",
+        "which Minecraft release first wrote it is not recorded in any source that was read"
+      ]
+    },
+    {
+      "version": 2,
+      "subVersion": 0,
+      "since": null,
+      "sinceDataVersion": null,
+      "note": "Tile entity positions move inside the tile entity tag. Pre-Flattening palette.",
+      "verified": false,
+      "sources": ["litematica"],
+      "evidence": [
+        "maruohon/litematica@pre-rewrite/fabric/1.20.x readFromNBT: `if (version >= 2)` switches to the standard reader"
+      ]
+    },
+    {
+      "version": 1,
+      "subVersion": 0,
+      "since": null,
+      "sinceDataVersion": null,
+      "note": "The original. readTileEntitiesFromNBT_v1 and readEntitiesFromNBT_v1.",
+      "verified": false,
+      "sources": ["litematica"],
+      "evidence": [
+        "maruohon/litematica@pre-rewrite/fabric/1.20.x readFromNBT: the v1 branch"
+      ]
+    }
+  ]
+}

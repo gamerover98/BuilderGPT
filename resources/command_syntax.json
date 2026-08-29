@@ -1,0 +1,102 @@
+{
+  "$comment": [
+    "The two commands this app writes into a .mcfunction, and the limits that decide how.",
+    "",
+    "Generated and maintained by the `mc-commands` skill (.claude/skills/mc-commands).",
+    "`node scripts/gen-command-syntax.mjs` turns this into the tables in",
+    "src/shared/command_syntax.ts; editing those by hand is fine right up until someone",
+    "regenerates them.",
+    "",
+    "Two kinds of fact live here and they are not held to the same standard.",
+    "",
+    "The **syntax** is mechanically detectable: the writer emits it, the reader parses it",
+    "back, and tests/formats.ts fails if the two disagree. One source is enough, because a",
+    "wrong answer cannot survive a round trip.",
+    "",
+    "The **limits** are not. A file that exceeds max_command_sequence_length is truncated by",
+    "the game with no error, and one whose fill exceeds max_block_modifications simply does",
+    "not place those blocks. Nothing in this repo can see either. So those are corroborated,",
+    "and the app writes strictly inside them.",
+    "",
+    "`sinceDataVersion` is what the app actually compares against, because a document carries",
+    "a DataVersion rather than a release name. It must agree with resources/mc_versions.json;",
+    "the generator refuses if it does not."
+  ],
+  "checkedAt": "2026-08-29",
+  "sources": {
+    "wiki-setblock": "https://minecraft.wiki/w/Commands/setblock",
+    "wiki-fill": "https://minecraft.wiki/w/Commands/fill",
+    "wiki-function": "https://minecraft.wiki/w/Function_(Java_Edition)",
+    "wiki-gamerule": "https://minecraft.wiki/w/Game_rule"
+  },
+  "forms": [
+    {
+      "command": "setblock",
+      "syntax": "setblock <pos> <block>",
+      "since": "1.13",
+      "sinceDataVersion": 1519,
+      "note": "The mode word is left off on purpose: omitted means `replace`, which is what a schematic wants, and it is the one spelling every release from 1.13 accepts. 1.21.5 added `strict` as a further option without touching this form.",
+      "verified": true,
+      "sources": ["wiki-setblock"],
+      "evidence": [
+        "Current syntax: setblock <pos> <block> [destroy|keep|replace|strict], default replace",
+        "History: 1.11 (16w32a) added block state support; 1.21.5 (25w02a) added the strict option"
+      ]
+    },
+    {
+      "command": "fill",
+      "syntax": "fill <from> <to> <block>",
+      "since": "1.13",
+      "sinceDataVersion": 1519,
+      "note": "Same reasoning as setblock. 1.21.5 made `replace` non-terminal and added `strict`; both are relaxations, so the bare form kept working.",
+      "verified": true,
+      "sources": ["wiki-fill"],
+      "evidence": [
+        "Current syntax: fill <from> <to> <block> [outline|hollow|destroy|strict|replace|keep]",
+        "History: 1.11 (16w32a) added block state support; 1.21.5 (25w02a) replace no longer terminal, strict added"
+      ]
+    },
+    {
+      "command": "block-argument",
+      "syntax": "<namespace:id>[state=value,...]{nbt}",
+      "since": "1.13",
+      "sinceDataVersion": 1519,
+      "note": "The namespace may be left off and defaults to `minecraft:`. Flattened ids arrived with 1.13, which is what makes that the floor rather than 1.11, when the bracket syntax itself was added.",
+      "verified": true,
+      "sources": ["wiki-setblock", "wiki-fill"],
+      "evidence": [
+        "wiki: the block argument format is block_id[block_states]{data_tags}, both optional"
+      ]
+    }
+  ],
+  "limits": [
+    {
+      "name": "max_command_sequence_length",
+      "formerName": "maxCommandChainLength",
+      "renamedIn": "1.21.11",
+      "value": 65536,
+      "applies": "commands run inside one function",
+      "note": "Commands past it are ignored, with no error. This is why a large build is split across files with a dispatcher rather than written as one.",
+      "verified": true,
+      "sources": ["wiki-function", "wiki-gamerule"],
+      "evidence": [
+        "wiki-function: the total number of commands run inside a function obeys max_command_sequence_length, 65,536 by default; any beyond it are ignored",
+        "wiki-gamerule: renamed to snake_case in 25w44a (1.21.11)"
+      ]
+    },
+    {
+      "name": "max_block_modifications",
+      "formerName": "commandModificationBlockLimit",
+      "renamedIn": "1.21.11",
+      "value": 32768,
+      "applies": "blocks changed by one /fill, /clone or /fillbiome",
+      "note": "A fill past it places nothing and says nothing useful, so no box this app writes may exceed it.",
+      "verified": true,
+      "sources": ["wiki-fill", "wiki-gamerule"],
+      "evidence": [
+        "wiki-gamerule: default 32768, introduced 1.19.4 (23w03a) as commandModificationBlockLimit, renamed max_block_modifications in 25w44a",
+        "wiki-fill: the volume limit is controlled by that game rule"
+      ]
+    }
+  ]
+}

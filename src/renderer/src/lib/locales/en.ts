@@ -18,6 +18,26 @@ import type { Catalog } from "../i18n_core.js";
 export const en = {
   "app.title": "Schematic AI Studio",
 
+  "about.title": "About",
+  "about.version": "Version {version}",
+  "about.tagline":
+    "An AI-assisted 3D editor for Minecraft schematics. Open a build, select part of it, and " +
+    "either edit it by hand or ask for the change in plain language — the AI works on the " +
+    "schematic itself, not on a description of it.",
+  "about.free":
+    "Free software, and free of charge. No subscription, no credits, no paid tier and no " +
+    "feature held back — it is open source under the Apache 2.0 licence and it will stay " +
+    "that way.",
+  "about.runtime": "Built on",
+  "about.credits": "Credits",
+  "about.credit.origin": "the original Python implementation this desktop version derives from",
+  "about.credit.faithful": "the resource pack that textures the 3D view, used under its own licence",
+  "about.credit.libraries":
+    "Electron, Svelte, Three.js, prismarine-nbt, QuickJS and the Vercel AI SDK",
+  "about.credit.more": "The full list is in the project’s README.",
+  "about.repository": "Repository",
+  "about.license": "Licence",
+
   "bridge.missing":
     "This page is not running inside the Schematic AI Studio desktop app, so the backend is " +
     "unavailable. Start it with `npm run dev` (or the packaged app) rather than " +

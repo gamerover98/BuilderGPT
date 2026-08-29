@@ -1260,6 +1260,28 @@ from a field where nothing on screen suggests it. They stay on the keyboard
 handler, behind `isTyping`, alongside the buttons in the document bar.
 `tests/services.ts` asserts the absence, because it looks like an omission.
 
+**The Help menu is unconditional, where the Edit menu is not, and that is one
+rule rather than an exception to it.** Edit is hidden with nothing open because
+every row it could show would be dead; About answers exactly as well with no
+document as with one — it names the version, what this is derived from, and
+that it costs nothing. Copying Edit's conditional would hide it precisely on the
+empty start screen, which is where somebody looking the app over for the first
+time goes looking. It carries **no accelerator**, which is conventional for the
+item and also keeps the row out of the flight-mode argument entirely: a key that
+was never claimed cannot be handed back wrong.
+
+**The version in it comes from `app.getVersion()`, over IPC, not from a constant
+compiled into the renderer.** A vite `define` would have worked and would have
+put a second copy of the number beside `package.json` — and of two copies the
+one that goes stale is the one on screen, in the box a person reads at the exact
+moment they are about to report something. `AppInfo` carries the Electron,
+Chromium and Node versions beside it because `process.versions` is free and
+those four lines are the whole of a bug report's header.
+
+Nothing in the app said any of this before. The licence, the origin and the
+"free, and staying free" were in `README.md` alone, which is to say on GitHub
+alone, which is to say nowhere at all for anyone who installed the thing.
+
 **In flight, Ctrl belongs to the camera, and only main can honour that.** With
 the pointer locked the keyboard is flying: Ctrl is the sprint modifier and WASD
 is the direction. So every Ctrl+letter the app binds is also a way of moving —
@@ -1810,8 +1832,11 @@ agent reaches the same endpoint with the same key resolved the same way; two
 places deciding what a provider means is how you get something that works in
 generation and not in chat.
 
-**OpenCode's API key is required per model, not per provider.** 9 of its 61
-models are free; the rest bill per token. `openCodeModelRequiresKey` in
+**OpenCode's API key is required per model, not per provider.** Some of its
+models are free; the rest bill per token, and the proportion moves -- the
+vendored snapshot was 9 of 61 when this was written and is 26 of 87 now, which
+is why neither number belongs in a sentence anybody reads as a fact about the
+app. `openCodeModelRequiresKey` in
 `shared/ipc.ts` is the rule, `ipc/handlers.ts` is where it is enforced, and the
 renderer only mirrors it. Missing metadata fails *open* — a models.dev outage
 must not make free models unusable.

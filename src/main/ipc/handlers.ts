@@ -9,7 +9,7 @@
  * method` strings on the other side.
  */
 
-import { BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
 
 import {
   IPC,
@@ -28,6 +28,7 @@ import {
   type ChatState,
   type ConversationList,
   type RestoreResponse,
+  type AppInfo,
   type Failure,
   type FailureKind,
   type GenerateRequest,
@@ -374,6 +375,31 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     const settings = await getSettings();
     return await regenerateMcpToken(settings.mcp);
   });
+
+  /*
+   * What the About box says, and main is the only one that can say it.
+   *
+   * `app.getVersion()` reads the version out of the packaged `package.json` at
+   * runtime. The alternative was a vite `define`, which would have worked and
+   * would have put a second copy of the number into the renderer bundle -- and
+   * of the two copies the one that goes stale is the one on screen, in the box
+   * a person reads precisely when they are about to report something.
+   *
+   * `app.getName()` is still `buildergpt`: that is install identity and the
+   * userData directory, not branding, so the box shows `APP_NAME` beside it
+   * rather than instead of it.
+   */
+  ipcMain.handle(
+    IPC.appInfo,
+    async (): Promise<AppInfo> => ({
+      name: app.getName(),
+      version: app.getVersion(),
+      electron: process.versions.electron ?? "",
+      chrome: process.versions.chrome ?? "",
+      node: process.versions.node ?? "",
+      platform: process.platform,
+    }),
+  );
 
   ipcMain.handle(IPC.settingsGet, async (): Promise<Settings> => await getSettings());
 

@@ -245,6 +245,9 @@ const api: BgptApi = {
   onMenuClose: (listener) => subscribe(IPC.menuClose, listener),
   onMenuUndo: (listener) => subscribe(IPC.menuUndo, listener),
   onMenuRedo: (listener) => subscribe(IPC.menuRedo, listener),
+  onMenuAbout: (listener) => subscribe(IPC.menuAbout, listener),
+
+  getAppInfo: () => ipcRenderer.invoke(IPC.appInfo),
 };
 
 /**

@@ -222,7 +222,7 @@ export const IPC = {
   /*
    * main → renderer, one per menu verb.
    *
-   * Eight channels rather than one `menuCommand` carrying a string, because a
+   * Nine channels rather than one `menuCommand` carrying a string, because a
    * string would be exactly the generic dispatcher rule R-2 refuses — and
    * because the channel walk in `tests/services.ts` only catches a menu item
    * that was declared and never wired if each verb has a name of its own.
@@ -239,6 +239,16 @@ export const IPC = {
   menuClose: "bgpt:menu:close",
   menuUndo: "bgpt:menu:undo",
   menuRedo: "bgpt:menu:redo",
+  /**
+   * Help → About.
+   *
+   * The one menu verb that is answerable with nothing open, which is why
+   * the Help menu is unconditional where Edit is not.
+   */
+  menuAbout: "bgpt:menu:about",
+
+  /** What the app is: name, version, and the runtime under it. */
+  appInfo: "bgpt:app:info",
 
   /** main → renderer: one tool call the agent just made. */
   agentStep: "bgpt:agent:step",
@@ -267,6 +277,33 @@ export const IPC = {
   /** main → renderer, `ipcRenderer.on`. Replaces `st.progress`. */
   progress: "bgpt:progress",
 } as const;
+
+// ---------------------------------------------------------------------------
+// What the app is
+// ---------------------------------------------------------------------------
+
+/**
+ * The About box's facts, and main is the only one that has them.
+ *
+ * The version is `app.getVersion()` rather than a constant compiled into
+ * the bundle. A vite `define` would have worked and would have put a second
+ * copy of the number beside `package.json`, where the two can disagree —
+ * and the one that would be wrong is the one on screen, in the box somebody
+ * reads before filing a bug.
+ *
+ * The three runtime versions cost nothing (`process.versions`) and are the
+ * rest of that same bug report.
+ */
+export interface AppInfo {
+  /** `app.getName()`: still `buildergpt`, which is the userData directory. */
+  name: string;
+  version: string;
+  electron: string;
+  chrome: string;
+  node: string;
+  /** `process.platform`, as-is. */
+  platform: string;
+}
 
 // ---------------------------------------------------------------------------
 // Progress
@@ -1743,4 +1780,8 @@ export interface BgptApi {
   onMenuClose(listener: () => void): () => void;
   onMenuUndo(listener: () => void): () => void;
   onMenuRedo(listener: () => void): () => void;
+  onMenuAbout(listener: () => void): () => void;
+
+  /** Name, version and runtime. Asked once, when the About box is opened. */
+  getAppInfo(): Promise<AppInfo>;
 }

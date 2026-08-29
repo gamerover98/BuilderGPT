@@ -100,6 +100,7 @@ import {
   type Snapshot,
 } from "../src/main/services/snapshots_core.js";
 import {
+  APP_NAME,
   escapeMenuLabel,
   menuModel,
   recentLabels,
@@ -1086,6 +1087,8 @@ console.log("\n--- application menu ---");
     at(menuModel(state), "File")?.submenu ?? [];
   const editMenu = (state: Parameters<typeof menuModel>[0]): MenuItemModel[] =>
     at(menuModel(state), "Edit")?.submenu ?? [];
+  const helpMenu = (state: Parameters<typeof menuModel>[0]): MenuItemModel[] =>
+    at(menuModel(state), "Help")?.submenu ?? [];
 
   const empty = { hasDocument: false, recents: [] as RecentDocument[], keysToCamera: false };
   const open = { hasDocument: true, recents: [] as RecentDocument[], keysToCamera: false };
@@ -1111,6 +1114,33 @@ console.log("\n--- application menu ---");
   equal("Redo is on with a document", at(editMenu(open), "Redo")?.enabled, true);
   // The File menu is never conditional: it is the only way to get a document.
   equal("File is there either way", at(menuModel(empty), "File")?.label, "File");
+
+  /*
+   * Help is unconditional too, and this is the check that says so out loud.
+   *
+   * The Edit menu two lines up is the tempting pattern to copy and it is the
+   * wrong one here: Edit is hidden with nothing open because every row it could
+   * show would be dead, while About answers exactly as well with no document as
+   * with one. Copying the conditional would hide it on the empty start screen,
+   * which is the one moment somebody looking the app over is most likely to go
+   * looking for what it is.
+   */
+  equal("Help is there with nothing open", at(menuModel(empty), "Help")?.label, "Help");
+  equal("...and with a document", at(menuModel(open), "Help")?.label, "Help");
+  equal("About works with nothing open", at(helpMenu(empty), "About Schematic AI Studio")?.enabled, true);
+  equal("...and names the app", helpMenu(open)[0]?.label, `About ${APP_NAME}`);
+
+  /*
+   * And no accelerator on it, stated because it looks like an omission.
+   *
+   * Conventional for the item, and it keeps the row out of the flight-mode
+   * argument entirely: `releaseAccelerators` has to hand back every key the
+   * menu declares while the pointer is locked, and a key that was never claimed
+   * cannot be got wrong.
+   */
+  for (const item of helpMenu(open)) {
+    equal(`${item.label ?? "?"} has no accelerator`, item.accelerator, undefined);
+  }
 
   /*
    * No accelerator on Undo/Redo, and this is the check that keeps it that way.

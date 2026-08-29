@@ -30,7 +30,8 @@ export type MenuCommand =
   | "saveAs"
   | "close"
   | "undo"
-  | "redo";
+  | "redo"
+  | "about";
 
 export interface MenuItemModel {
   /** Absent for a separator or a plain container. */
@@ -237,6 +238,28 @@ export function menuModel(state: MenuState): MenuItemModel[] {
       ],
     });
   }
+
+  /*
+   * Help is unconditional, and that is the Edit menu's rule rather than an
+   * exception to it.
+   *
+   * Edit is hidden with nothing open because with no document there is nothing
+   * it could ever offer — every row would be dead. About is exactly as
+   * answerable with nothing open as it is with a schematic loaded: it names the
+   * version, what this is derived from, and that it costs nothing. Hiding it
+   * would be the same mistake pointing the other way, and it would hide it
+   * precisely on the empty start screen, where somebody looking the app over
+   * for the first time is most likely to go looking.
+   *
+   * No accelerator, deliberately. It is conventional for the item, and it keeps
+   * this row out of the flight-mode argument entirely: `releaseAccelerators`
+   * has to hand back every key the menu declares while the pointer is locked,
+   * and a key that was never claimed cannot be got wrong.
+   */
+  menus.push({
+    label: "Help",
+    submenu: [{ command: "about", label: `About ${APP_NAME}`, enabled: true }],
+  });
 
   /*
    * In flight the menu keeps its keys to itself.

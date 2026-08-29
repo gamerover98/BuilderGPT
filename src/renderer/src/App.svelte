@@ -20,6 +20,7 @@
   import { showsIndicator } from "./lib/mcp_status.js";
   import type { McpActivity, McpStatus } from "../../shared/ipc.js";
   import InspectorPanel from "./lib/InspectorPanel.svelte";
+  import AboutModal from "./lib/AboutModal.svelte";
   import AnchorModal from "./lib/AnchorModal.svelte";
   import DimensionsModal from "./lib/DimensionsModal.svelte";
 import VoidBlockModal from "./lib/VoidBlockModal.svelte";
@@ -68,6 +69,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
     type ProjectNotes,
     type ChatState,
     type ConversationSummary,
+    type AppInfo,
     type DocumentState,
     type EditResponse,
     type OpenCodeModelInfo,
@@ -1192,6 +1194,10 @@ import ConvertModal from "./lib/ConvertModal.svelte";
       api().onMenuClose(() => void closeDocument()),
       api().onMenuUndo(() => void undoAnything()),
       api().onMenuRedo(() => void redoAnything()),
+      api().onMenuAbout(() => {
+        aboutOpen = true;
+        if (appInfo === null) void loadAppInfo();
+      }),
     ];
 
     return () => {
@@ -1526,6 +1532,30 @@ import ConvertModal from "./lib/ConvertModal.svelte";
    * closed.
    */
   let versionsOpen = $state(false);
+
+  /**
+   * The About box, and the facts it shows.
+   *
+   * Opened only from Help → About, which is main's menu, so there is no
+   * button and no palette entry to keep in step with it.
+   *
+   * `appInfo` is fetched on first open rather than at mount: it never
+   * changes, nothing else reads it, and asking for it at startup would put
+   * one more round trip in front of the first paint for a panel most
+   * sessions never open.
+   */
+  let aboutOpen = $state(false);
+  let appInfo = $state<AppInfo | null>(null);
+
+  async function loadAppInfo(): Promise<void> {
+    try {
+      appInfo = await api().getAppInfo();
+    } catch {
+      // The box is worth showing without it: the name, the licence and the
+      // credits do not depend on main having answered, and the two rows
+      // that do already draw a dash while `appInfo` is null.
+    }
+  }
 
   /**
    * Whether the start screen has been put away for now.
@@ -3344,6 +3374,8 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   onorigin={(origin) => void changeWorldOrigin(origin)}
   onclose={() => (nbtOpen = false)}
 />
+
+<AboutModal open={aboutOpen} info={appInfo} onclose={() => (aboutOpen = false)} />
 
 <VersionsModal
   open={docState !== null && versionsOpen}

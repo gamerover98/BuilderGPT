@@ -81,7 +81,7 @@ export class OutputDirectoryError extends Error {
  * moment the user picks the folder, rather than after a paid LLM call.
  */
 export async function assertWritableDirectory(dir: string): Promise<void> {
-  const probe = path.join(dir, `.buildergpt-write-test-${process.pid}`);
+  const probe = path.join(dir, `.schematic-ai-studio-write-test-${process.pid}`);
   try {
     await mkdir(dir, { recursive: true });
     await writeFile(probe, "", "utf-8");

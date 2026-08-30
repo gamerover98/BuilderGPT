@@ -3,12 +3,28 @@
 An Electron desktop app for editing Minecraft schematics, by hand and by AI.
 Node/TypeScript main process, Svelte 5 renderer, Three.js viewport.
 
-The product name is **Schematic AI Studio**. Technical identifiers are
-deliberately *not* renamed: `package.json`'s `name` is still `buildergpt`
-because that is what `app.getName()` resolves to and therefore what the userData
-directory is called, `appId` is install identity, and the IPC channels are
-prefixed `bgpt:`. Rename branding; leave identifiers alone unless there is a
-concrete benefit.
+The product name is **Schematic AI Studio**. At 1.0.0 the two *install*
+identifiers were renamed with it — `package.json`'s `name` is
+`schematic-ai-studio` and `appId` is `it.gamerover98.schematicaistudio` — which
+is a one-time cost taken deliberately before the app had an audience: the name
+is what `app.getName()` returns and therefore what Electron calls the userData
+directory, so an older install's settings, encrypted keys, conversations and
+version history sit under `buildergpt` and are not read. Nothing migrates them.
+
+**The IPC channels stay `bgpt:` and the contextBridge key stays `window.bgpt`.**
+Those are internal wire names that no user ever sees, so renaming them is churn
+with a failure mode — main and preload disagreeing on a channel — and no
+benefit. Rename branding; leave a wire name alone unless there is a concrete
+reason.
+
+**A rename has one pair with nothing linking it: `package.json`'s `name` and
+the `app` string in `resources/mcp-bridge.mjs`.** The bridge is dependency-free
+plain Node run by the *client's* node, so it cannot import the manifest, and
+nothing fails at build time when the two drift. They drifted on exactly this
+rename, and the symptom is that every part of the app keeps working while the
+stdio bridge alone reports the server is off with it plainly running.
+`tests/mcp.ts` spawns the bridge against a fake `APPDATA`, which is the only
+check that can see it.
 
 It began as a Python/Streamlit generator and was ported in full, then grew an
 editor around the generated output. The Python sources are gone from the working
@@ -1269,6 +1285,39 @@ empty start screen, which is where somebody looking the app over for the first
 time goes looking. It carries **no accelerator**, which is conventional for the
 item and also keeps the row out of the flight-mode argument entirely: a key that
 was never claimed cannot be handed back wrong.
+
+**The icon has one master and every other size is generated.** `build/logo.png`
+is the file a human edits; `scripts/gen-icons.mjs` writes the nine
+`build/icons/<n>x<n>.png` electron-builder wants for Linux, the `build/icon.png`
+it cuts the `.ico` and `.icns` from, and the two 256px copies the About box and
+the README header read. Nothing `.ico`-shaped is committed: electron-builder
+generates both from `build/icon.png`, and ffmpeg cannot write a
+multi-resolution `.ico` at all, so a hand-rolled one would be strictly worse
+than the tool's own.
+
+`release/.icon-ico/icon.ico` is that generated cache under a gitignored
+directory, which is why the old mark was findable only there and looked like a
+source with no origin. It was never missing; it was `build/icon.png`, under a
+name that does not say it is the master.
+
+**The premultiply pair in that script is load-bearing.** `scale` does not
+premultiply alpha, so it interpolates the RGB of fully transparent pixels —
+`(0,0,0,0)` in a generated PNG — into the opaque ones beside them. Measured on
+this master at 16px, semi-transparent edge pixels come out **41.8/255 darker**
+without the pair than with it: a dark halo tracing the mark, worst at the sizes
+where one pixel of fringe is a fifth of the icon. It reads as artwork that was
+cut out badly rather than as a missing flag, so the script checks both filters
+by name and refuses to write anything without them. Running it with an
+unchanged master must rewrite no bytes — the six data generators' rule, for the
+same reason.
+
+**And `appIconPath()` is the one helper in `resources.ts` that cannot use
+`resourcesDir()`.** `build/` is a build *input* and does not ship, so the
+packaged copy is a flat `icon.png` placed by `extraResources` while the dev copy
+is the master's own directory. It exists because `BrowserWindow` had **no
+`icon:` at all** — macOS ignores the field and a packaged Windows window takes
+its icon from the executable, so what it actually buys is development on every
+platform, where the alternative was Electron's own logo, and Linux everywhere.
 
 **The version in it comes from `app.getVersion()`, over IPC, not from a constant
 compiled into the renderer.** A vite `define` would have worked and would have

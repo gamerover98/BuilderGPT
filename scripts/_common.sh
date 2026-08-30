@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared helpers for the BuilderGPT shell scripts.
+# Shared helpers for the Schematic AI Studio shell scripts.
 #
 # Source this from build.sh / start.sh / check.sh. It is not meant to be run
 # directly.

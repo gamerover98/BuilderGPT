@@ -1,10 +1,11 @@
 <div align="center">
    <h1>Schematic AI Studio</h1>
+   <img src="images/logo.png" alt="" width="160" height="160">
    <p><em>An AI-assisted 3D editor for Minecraft schematics. Free, and staying free.</em></p>
    <img src="https://img.shields.io/badge/Electron-desktop-47848F" alt="Electron">
    <img src="https://img.shields.io/badge/TypeScript-strict-3178C6" alt="TypeScript">
    <img src="https://img.shields.io/badge/MCP-server-6E44FF" alt="MCP server">
-   <img src="https://img.shields.io/github/license/gamerover98/BuilderGPT" alt="License">
+   <img src="https://img.shields.io/github/license/gamerover98/Schematic-Ai-Studio" alt="License">
    <br>
    <img src="images/001.png" alt="Schematic AI Studio"/>
    <p>
@@ -22,6 +23,7 @@ files and converts between all of them.
 **It is a desktop app**: _one installer and nothing else to set up_.
 </br>Download the latest version from the
 [releases page](https://github.com/gamerover98/Schematic-AI-Studio/releases).
+
 ---
 
 <div align="center">
@@ -329,6 +331,8 @@ This project is built on the work of other people.
   `.litematic` version history and its data packing.
 - **[models.dev](https://models.dev)** — the OpenCode model catalogue that
   provides pricing and capability data.
+- **[ChatGPT](https://chatgpt.com)** — the application icon was generated with
+  it.
 
 And the libraries it is made of: [Electron](https://www.electronjs.org/),
 [Svelte](https://svelte.dev/), [Three.js](https://threejs.org/),

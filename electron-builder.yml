@@ -1,9 +1,15 @@
-# `appId` is install identity, not branding: changing it would make an upgrade
-# look like a different application and orphan the installed copy. Same reason
-# `package.json`'s `name` stays `buildergpt` — that is what `app.getName()`
-# resolves to, and therefore what the userData directory is called, so renaming
-# it would strand every existing settings file and generated schematic.
-appId: ai.cynia.buildergpt
+# Both of these moved at 1.0.0, and both have a cost that is paid once.
+#
+# `appId` is install identity: an installed copy carrying the old
+# `ai.cynia.buildergpt` is not upgraded by an installer carrying this one, it is
+# installed beside it. And `package.json`'s `name` is what `app.getName()`
+# resolves to, which is what Electron calls the userData directory — so an
+# existing install's settings, encrypted API keys, conversations, checkpoints
+# and version history are all still under the old directory and are not read.
+#
+# That was worth doing before there was an audience and would not be after.
+# Nothing migrates them: see the note in `services/resources.ts`.
+appId: it.gamerover98.schematicaistudio
 productName: Schematic AI Studio
 copyright: Copyright © CyniaAI Team
 
@@ -29,6 +35,16 @@ extraResources:
   # pack can be swapped or updated without touching code.
   - from: resources
     to: resources
+  # The window icon, for `services/resources.ts`'s `appIconPath()`.
+  #
+  # `build/` is electron-builder's *buildResources* directory and is not in
+  # `files`, so nothing under it exists at runtime -- the .ico embedded in the
+  # .exe and the .icns in the .app are generated from `build/icon.png` at
+  # package time and are not the same thing as a file the app can read. This
+  # entry is what puts the window icon on Linux, where the running process has
+  # to supply its own.
+  - from: build/icon.png
+    to: icon.png
 
 # No asarUnpack list, and no native rebuild step: the sandbox is QuickJS
 # compiled to WebAssembly, shipped by the "singlefile" variant that embeds the

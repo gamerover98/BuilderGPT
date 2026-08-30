@@ -1,4 +1,4 @@
-# Shared helpers for the BuilderGPT PowerShell scripts.
+# Shared helpers for the Schematic AI Studio PowerShell scripts.
 #
 # Dot-source this from build.ps1 / start.ps1 / check.ps1. It is not meant to be
 # run directly.

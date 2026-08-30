@@ -1051,7 +1051,7 @@ try {
 
     // The bridge looks for `mcp.json` under the platform's config directory,
     // and both of the ones it consults come from the environment.
-    const fakeUserData = path.join(workDir, "userdata", "buildergpt");
+    const fakeUserData = path.join(workDir, "userdata", "schematic-ai-studio");
     await mkdir(fakeUserData, { recursive: true });
     await writeFile(
       path.join(fakeUserData, "mcp.json"),

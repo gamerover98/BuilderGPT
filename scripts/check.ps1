@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Runs every automated check for BuilderGPT: typecheck plus every test suite.
+    Runs every automated check for Schematic AI Studio: typecheck plus every test suite.
 
 .DESCRIPTION
     Runs, in order:

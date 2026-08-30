@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts BuilderGPT in development mode.
+# Starts Schematic AI Studio in development mode.
 #
 # Runs `npm run dev` (electron-vite dev): builds the main and preload bundles,
 # starts the Vite dev server for the renderer, and launches the Electron window
@@ -16,5 +16,5 @@ set -euo pipefail
 
 install_dependencies_if_missing
 
-write_step 'Starting BuilderGPT (development mode)'
+write_step 'Starting Schematic AI Studio (development mode)'
 run_npm run dev

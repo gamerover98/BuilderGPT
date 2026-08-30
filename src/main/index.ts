@@ -18,6 +18,7 @@ import { installMenu } from "./menu.js";
 import { isDirty } from "./domain/history.js";
 import { currentSession } from "./services/session.js";
 import { discardPrompt } from "./services/discard_prompt.js";
+import { appIconPath } from "./services/resources.js";
 import { stopMcpServer } from "./mcp/server.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -42,6 +43,13 @@ function createWindow(): void {
      */
     backgroundColor: "#0b0f14",
     title: "Schematic AI Studio", // run_app.py:6 set a title too
+    /*
+     * Without this the dev run shows Electron's own logo, which it always has.
+     * See `appIconPath()`: macOS ignores this and a packaged Windows build
+     * takes its icon from the executable, so this row is for development on
+     * every platform and for Linux in a packaged build too.
+     */
+    icon: appIconPath(),
     webPreferences: {
       preload: path.join(dirname, "../preload/index.cjs"),
       contextIsolation: true,

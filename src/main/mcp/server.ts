@@ -52,7 +52,7 @@ import { type McpActivity, type McpStatus } from "../../shared/ipc.js";
 import { type McpSettings } from "../../shared/settings.js";
 import { acceptsRequest, chooseToken } from "./policy.js";
 import { callTool, describeTools } from "./tools.js";
-import { shell } from "electron";
+import { app, shell } from "electron";
 
 import {
   adoptDocument,
@@ -316,7 +316,13 @@ function lifecycleHost(): Lifecycle {
 
 function buildMcpServer(): Server {
   const server = new Server(
-    { name: "schematic-ai-studio", version: "3.0.0" },
+    /*
+     * The version an MCP client sees for this server. Read from the manifest
+     * rather than written here: it was a literal "3.0.0", which the drop to
+     * 1.0.0 left behind, and a hardcoded one is only ever right on the day it
+     * is typed. Nothing downstream validates it, so it goes stale in silence.
+     */
+    { name: "schematic-ai-studio", version: app.getVersion() },
     {
       capabilities: { tools: {} },
       instructions:

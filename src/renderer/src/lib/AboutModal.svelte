@@ -19,6 +19,17 @@
    */
   import type { AppInfo } from "../../../shared/ipc.js";
   import { t } from "./i18n.svelte.js";
+  /*
+   * The only asset import in the renderer. Vite emits it under
+   * `out/renderer/assets/` and references it by relative URL, which the CSP's
+   * `img-src 'self' data:` covers -- as it would the inlined `data:` form vite
+   * uses for small files, so neither outcome needs a policy change.
+   *
+   * It is generated into the renderer's own tree by `scripts/gen-icons.mjs`
+   * rather than imported across the vite root from `build/`, which would work
+   * only for as long as `server.fs.allow`'s search kept reaching the repo root.
+   */
+  import logo from "../assets/logo.png";
 
   interface Props {
     open: boolean;
@@ -31,7 +42,7 @@
 
   let dialog = $state<HTMLDivElement | undefined>(undefined);
 
-  const REPOSITORY = "https://github.com/gamerover98/BuilderGPT";
+  const REPOSITORY = "https://github.com/gamerover98/Schematic-Ai-Studio";
   const UPSTREAM = "https://github.com/CyniaAI/BuilderGPT";
   const FAITHFUL = "https://faithfulpack.net/";
   const LICENSE = "https://www.apache.org/licenses/LICENSE-2.0";
@@ -90,6 +101,13 @@
       </header>
 
       <div class="body">
+        <!--
+          `alt=""` on purpose: the app name is the very next element, so a
+          screen reader given alt text here would announce the name twice. It
+          also keeps this out of the catalogue, where `tests/ui.ts` objects to
+          both a key with no message and a message nobody asks for.
+        -->
+        <img class="logo" src={logo} alt="" width="72" height="72" />
         <p class="name">{t("app.title")}</p>
         <p class="version">
           {t("about.version", { version: info?.version ?? "—" })}
@@ -197,6 +215,16 @@
     min-height: 0;
     padding: 4px 18px 12px;
     overflow-y: auto;
+  }
+
+  /* Sized in CSS as well as in the attributes: the attributes reserve the
+     square before the file loads, these keep it right if the generated asset
+     is ever regenerated at another size. */
+  .logo {
+    display: block;
+    width: 72px;
+    height: 72px;
+    margin: 4px 0 10px;
   }
 
   .name {

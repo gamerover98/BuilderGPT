@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs every automated check for BuilderGPT: typecheck plus the test suites.
+# Runs every automated check for Schematic AI Studio: typecheck plus the test suites.
 #
 #   typecheck   tsc over main/preload/shared, svelte-check over the renderer
 #   hello       smallest possible proof the QuickJS/WASM sandbox loads

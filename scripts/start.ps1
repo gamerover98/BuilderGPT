@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Starts BuilderGPT in development mode.
+    Starts Schematic AI Studio in development mode.
 
 .DESCRIPTION
     Runs `npm run dev` (electron-vite dev): builds the main and preload bundles,
@@ -19,5 +19,5 @@ param()
 
 Install-DependenciesIfMissing
 
-Write-Step 'Starting BuilderGPT (development mode)'
+Write-Step 'Starting Schematic AI Studio (development mode)'
 Invoke-Npm run dev

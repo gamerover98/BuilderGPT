@@ -644,7 +644,7 @@ try {
     "a writable folder leaves no probe file behind",
     await (async () => {
       await assertWritableDirectory(outDir);
-      return (await readdir(outDir)).every((n) => !n.startsWith(".buildergpt-write-test"));
+      return (await readdir(outDir)).every((n) => !n.startsWith(".schematic-ai-studio-write-test"));
     })(),
   );
 

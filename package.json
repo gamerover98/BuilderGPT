@@ -1,10 +1,10 @@
 {
-  "name": "buildergpt",
+  "name": "schematic-ai-studio",
   "version": "1.0.0",
   "private": true,
   "description": "Schematic AI Studio — an AI-assisted 3D editor for Minecraft schematics",
   "author": "gamerover98",
-  "homepage": "https://github.com/gamerover98/BuilderGPT",
+  "homepage": "https://github.com/gamerover98/Schematic-Ai-Studio",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./out/main/index.js",
@@ -35,7 +35,8 @@
     "smoke:mcp": "tsx tests/mcp.ts",
     "smoke:autosave": "tsx tests/autosave.ts",
     "smoke:ui": "tsx tests/ui.ts",
-    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json"
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
+    "gen:icons": "node scripts/gen-icons.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.27",

@@ -295,7 +295,6 @@ export const IPC = {
  * rest of that same bug report.
  */
 export interface AppInfo {
-  /** `app.getName()`: still `buildergpt`, which is the userData directory. */
   name: string;
   version: string;
   electron: string;

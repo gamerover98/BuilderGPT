@@ -118,6 +118,18 @@ export function openCodeSnapshotPath(): string {
   return path.join(resourcesDir(), "resources", "opencode_models.json");
 }
 
+/*
+ * Everything below hangs off `app.getPath("userData")`, which Electron names
+ * after `app.getName()` -- that is, after `package.json`'s `name`.
+ *
+ * That name changed at 1.0.0, from `buildergpt` to `schematic-ai-studio`, so an
+ * install predating the rename has its settings, encrypted API keys,
+ * conversations, checkpoints and version history under the old directory and
+ * this app does not read them. Nothing migrates: the files are still there and
+ * are recoverable by hand, and writing a migration for an app with no audience
+ * yet would be more code to be wrong than the case is worth.
+ */
+
 /**
  * Where crash-recovery snapshots live.
  *
@@ -185,6 +197,28 @@ export function mcpBridgeFile(): string {
 }
 
 /**
+ * The application icon, as a file the running process can read.
+ *
+ * The one helper here that cannot use `resourcesDir()`, and the reason is worth
+ * stating: the master lives in `build/`, which is electron-builder's
+ * *buildResources* directory -- a build input, not something that ships. What
+ * ships from it is the .ico embedded in the .exe and the .icns inside the .app,
+ * and neither of those is a file this process could open. So `electron-builder.yml`
+ * copies `build/icon.png` to a flat `icon.png` beside the executable, and the
+ * two lookups genuinely differ rather than differing by an oversight.
+ *
+ * macOS ignores `BrowserWindow.icon` entirely and Windows takes a packaged
+ * window's icon from the executable, so what this is actually for is **every
+ * platform in development** -- where the alternative is Electron's own logo --
+ * and **Linux everywhere**, where the running process has to supply its own.
+ */
+export function appIconPath(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "icon.png")
+    : path.join(app.getAppPath(), "build", "icon.png");
+}
+
+/**
  * Where the MCP server writes its URL and token, for the stdio bridge to read.
  *
  * A file rather than a fixed port, because the port can be `0` — and because a
@@ -197,5 +231,5 @@ export function mcpDiscoveryFile(): string {
 
 /** `temp_uploads/` (component.py:296, 352), relocated likewise. */
 export function tempDir(): string {
-  return path.join(app.getPath("temp"), "buildergpt");
+  return path.join(app.getPath("temp"), "schematic-ai-studio");
 }

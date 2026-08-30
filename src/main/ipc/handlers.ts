@@ -385,9 +385,10 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
    * of the two copies the one that goes stale is the one on screen, in the box
    * a person reads precisely when they are about to report something.
    *
-   * `app.getName()` is still `buildergpt`: that is install identity and the
-   * userData directory, not branding, so the box shows `APP_NAME` beside it
-   * rather than instead of it.
+   * `app.getName()` is `schematic-ai-studio` -- the userData directory rather
+   * than branding, which is why the box shows `APP_NAME` beside it rather than
+   * instead of it. The two are deliberately not the same string: one is a
+   * directory name and the other is a title.
    */
   ipcMain.handle(
     IPC.appInfo,

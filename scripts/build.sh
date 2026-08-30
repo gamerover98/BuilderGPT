@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Typechecks and builds the BuilderGPT Electron app, optionally packaging it.
+# Typechecks and builds the Schematic AI Studio Electron app, optionally packaging it.
 #
 # Usage:
 #   scripts/build.sh                 # typecheck + build into out/

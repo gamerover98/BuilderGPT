@@ -38,13 +38,20 @@ import process from "node:process";
 /**
  * Where Electron puts `userData` for this app, per platform.
  *
- * `buildergpt` and not the product name: `app.getName()` resolves to
- * `package.json`'s `name`, which is deliberately still the old identifier —
- * renaming it would move every user's settings, conversations and version
- * history to a new directory and look like data loss.
+ * This string has to equal `package.json`'s `name`, because that is what
+ * `app.getName()` resolves to and therefore what Electron calls the directory.
+ * The two are a pair with nothing linking them: this file is dependency-free
+ * plain Node run by the *client's* node, so it cannot import the manifest, and
+ * nothing here fails at build time when they drift.
+ *
+ * They drifted once, on the rename to `schematic-ai-studio`, and the symptom is
+ * worth recognising: everything about the app keeps working and only the stdio
+ * bridge stops finding it, reporting that the server is off while it is plainly
+ * running. `tests/mcp.ts` spawns this file against a fake APPDATA for that
+ * reason -- it is the only check that can see the pair disagree.
  */
 function userDataDir() {
-  const app = "buildergpt";
+  const app = "schematic-ai-studio";
   if (platform() === "win32") {
     return path.join(process.env.APPDATA ?? path.join(homedir(), "AppData", "Roaming"), app);
   }

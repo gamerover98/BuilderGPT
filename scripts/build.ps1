@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Typechecks and builds the BuilderGPT Electron app, optionally packaging it.
+    Typechecks and builds the Schematic AI Studio Electron app, optionally packaging it.
 
 .DESCRIPTION
     Runs `npm run build` (typecheck + electron-vite build), producing

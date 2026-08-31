@@ -82,11 +82,30 @@ import {
    *
    * Not a nicety at this length: arrowing down a 920-row list without it moves
    * a selection the user cannot see, which reads as the keys doing nothing.
+   *
+   * **`list.scrollTop`, never `scrollIntoView`.** That method scrolls *every*
+   * scrollable ancestor, and this list lives inside a floating tool window
+   * that is watched by a `ResizeObserver` -- so a row wide enough to overflow
+   * made it scroll the panel, the panel relaid out, the observer fired, and
+   * the browser stopped delivering updates. Silently: that loop is reported as
+   * an error *event*, not as anything the console shows in red, so the app
+   * simply stopped responding while the viewport went on drawing and the main
+   * process went on answering. It cost a long time to find from the outside.
+   *
+   * Writing one number touches nothing above this element, which is the whole
+   * point. The `min-width: 0` in the styles keeps the row from overflowing in
+   * the first place; this makes it not matter if something ever does again.
    */
   $effect(() => {
     if (!open || list === undefined) return;
     const row = list.children[highlighted] as HTMLElement | undefined;
-    row?.scrollIntoView({ block: "nearest" });
+    if (row === undefined) return;
+    const top = row.offsetTop;
+    const bottom = top + row.offsetHeight;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (bottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = bottom - list.clientHeight;
+    }
   });
 
   function choose(block: string): void {
@@ -254,7 +273,16 @@ import {
     overflow: hidden;
   }
 
+  /*
+   * `min-width: 0` is the load-bearing line here, not the ellipsis.
+   *
+   * A flex item will not shrink below its content by default, so without it a
+   * long block id makes the row *wider than the button* -- which this row could
+   * never do while it was `display: block`. An overflowing row is what turns
+   * the `scrollIntoView` below into something that scrolls ancestors.
+   */
   .dropdown button > span:first-child {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

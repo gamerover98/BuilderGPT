@@ -717,7 +717,9 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: "replace_blocks",
     description:
-      "Replace one block with another inside a region. Defaults to the user's selection. Block states must match exactly — check get_palette for the spelling.",
+      "Replace one block with another inside a region. Defaults to the user's selection. " +
+      "Naming `from` without states matches the block in every state it appears in; " +
+      "spell the states out to match only that one. get_palette shows what is there.",
     schema: {
       type: "object",
       properties: {
@@ -745,11 +747,21 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
         changed,
         region,
         ...notes,
-        // A zero here is the single most common way an edit "does nothing":
-        // the state string did not match. Say so rather than reporting success.
+        /*
+         * A zero is the commonest way an edit does nothing, so it is said out
+         * loud rather than reported as success.
+         *
+         * It used to advise checking the spelling *including block states*,
+         * which was advice for a rule that no longer holds: a name on its own
+         * now matches the block in every state. So a miss means the block is
+         * not in the region, and sending the model back to add states would
+         * only narrow a search that already found nothing.
+         */
         note:
           changed === 0
-            ? `Nothing matched ${paletteEntryCacheKey(from)}. Check get_palette for the exact spelling, including block states.`
+            ? `Nothing matched ${paletteEntryCacheKey(from)}. A name on its own matches the ` +
+              `block in every state, so it is not in this region at all. get_palette shows ` +
+              `what the schematic actually contains.`
             : undefined,
       };
     },

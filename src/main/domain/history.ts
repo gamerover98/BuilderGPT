@@ -43,7 +43,6 @@ import {
 } from "../pipeline/types.js";
 import { deriveConnections } from "./connect.js";
 import {
-  internPalette,
   posKey,
   resizeDocument,
   setBlock,
@@ -356,16 +355,62 @@ class Recorder implements TransactionScope {
     return count;
   }
 
+  /**
+   * Rewrites every cell in `region` holding `from`.
+   *
+   * **`from` is a pattern, and naming no properties means the block in any
+   * state.** That is what the rest of the codebase already assumed it was: it
+   * is the stated reason `replace_blocks` parses its `from` with `toEntry`
+   * rather than `toPlacedEntry`, so that asking to take out the campfires does
+   * not quietly become asking for the ones that happen to face north.
+   *
+   * It was not one. `from` was interned and compared as an exact index, so a
+   * bare name matched only a palette entry that carried no properties at all --
+   * and interning it *added* that entry, leaving a dead row behind on every
+   * miss. On a flat document that reads as an occasional puzzle. On a legacy
+   * one it is total: `legacy_blocks.json` gives a state to 1,449 of its 1,682
+   * rows, so a `.schematic` opens with `grass_block[snowy=false]` and
+   * `oak_fence[east=false,...]` in its palette and *nothing a person can type*
+   * matches any of it. Every replace answered `changed: 0`.
+   *
+   * Spelling the state out still means exactly that state, which is how you
+   * take out one stair orientation and leave the others.
+   *
+   * The palette may grow underneath this: `setBlock` interns `to` if it is new.
+   * Reading past the end of `wanted` yields `undefined`, which is falsy and is
+   * the right answer -- a row added during the pass is `to`, and rewriting what
+   * has just been written is precisely what must not happen.
+   */
   replace(region: Region, from: PaletteEntry, to: PaletteEntry): number {
-    // Matched on the interned index rather than by comparing names at every
-    // cell: one lookup up front, then an integer compare per voxel.
-    const fromIndex = internPalette(this.doc, from);
+    const exact = Object.keys(from.properties).length > 0;
+    const key = paletteEntryCacheKey(from);
+    /*
+     * Decided once over the palette, then read per voxel. Comparing names at
+     * every cell would be a string compare per block; this is an array read,
+     * which is what the interned-index version bought and is worth keeping.
+     */
+    const wanted = new Uint8Array(this.doc.palette.length);
+    let any = false;
+    for (let i = 0; i < this.doc.palette.length; i += 1) {
+      const entry = this.doc.palette[i];
+      const hit = exact
+        ? paletteEntryCacheKey(entry) === key
+        : entry.namespacedName === from.namespacedName;
+      if (hit) {
+        wanted[i] = 1;
+        any = true;
+      }
+    }
+    // Nothing to match, and deliberately nothing interned: a miss must not
+    // leave a palette entry for a block the schematic does not contain.
+    if (!any) return 0;
+
     let count = 0;
     for (let x = region.minX; x <= region.maxX; x += 1) {
       for (let y = region.minY; y <= region.maxY; y += 1) {
         for (let z = region.minZ; z <= region.maxZ; z += 1) {
           const index = x * this.doc.height * this.doc.length + y * this.doc.length + z;
-          if (this.doc.voxels[index] === fromIndex && this.setBlock(x, y, z, to)) {
+          if (wanted[this.doc.voxels[index]] === 1 && this.setBlock(x, y, z, to)) {
             count += 1;
           }
         }

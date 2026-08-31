@@ -180,6 +180,53 @@ Nothing sends a break from outside the box today, because a break comes from a
 pick and the block therefore exists; the guard exists so that stays true, and
 `tests/session.ts` fails without it.
 
+**A `replace`'s `from` is a pattern, and naming no state means the block in any
+state.** That is what the rest of the codebase already assumed: it is the stated
+reason `replace_blocks` parses its `from` with `toEntry` rather than
+`toPlacedEntry`, so that "take out the campfires" does not quietly become "take
+out the ones that happen to face north and be alight".
+
+It was not one. `from` was interned and compared as an exact palette index, so a
+bare name matched only an entry carrying no properties at all -- and interning it
+*added* that entry, leaving a dead row behind on every miss.
+
+On a flat document that reads as an occasional puzzle. **On a legacy one it is
+total**, which is where it was found and why it took a report to find:
+`legacy_blocks.json` gives a state to **1,449 of its 1,682 rows**, so a
+`.schematic` opens holding `grass_block[snowy=false]` and
+`oak_fence[east=false,south=false,north=false,west=false]` and *nothing a person
+can type* matches any of it. Every replace answered `changed: 0`. The suites
+missed it because they replace inside fixtures they built themselves, where the
+entry has no state to disagree about.
+
+Spelling the state out still means exactly that state, which is how you take out
+one stair orientation and leave the others. The match is decided once over the
+palette into a `Uint8Array` and read per voxel, so it costs what the interned
+index cost. The palette may grow underneath the pass -- `setBlock` interns `to`
+if it is new -- and reading past the end yields `undefined`, which is falsy and
+is the right answer: a row added during the pass *is* `to`.
+
+**`scrollIntoView` scrolls every scrollable ancestor, and this app has a
+floating panel that watches its own geometry.** `BlockPicker`'s dropdown keeps
+the highlighted row in view; it did so with `scrollIntoView({block:"nearest"})`,
+which was harmless only because the row could not overflow. Making that row a
+flex container -- to push a legacy `ID:DATA` to the trailing edge -- removed
+that accident: a flex item does not shrink below its content without
+`min-width: 0`, so a long block id made the row wider than the button.
+
+From there: the browser scrolled the panel the list sits in, `ToolWindow`'s
+`ResizeObserver` found the panel out of bounds and called `onmove`, the panel
+moved, and the observer fired again. The browser stops that loop by emitting an
+*ErrorEvent*, not a console error -- so the app simply stopped updating while
+the viewport went on drawing (its own `requestAnimationFrame` chain owes Svelte
+nothing) and the main process went on answering (the menu still opened). A
+silent, total freeze with a clean console, reachable only by typing in the one
+field whose value changes per keystroke.
+
+The list's own CSS had already written the rule down -- *"The list scrolls, not
+the panel"* -- and `scrollIntoView` had been quietly breaking it. It writes
+`list.scrollTop` now, which touches nothing above itself.
+
 **`replace` deliberately does not grow.** It rewrites blocks that are already
 there and there are none outside the box, so growing first would add air and
 then replace nothing in it — a resize the user did not ask for and would have

@@ -53,6 +53,17 @@ extraResources:
 asar: true
 
 win:
+  # Stated rather than left to the buildResources scan, and `build/icons/` is
+  # why. With that directory present app-builder cuts the .ico from the *set*
+  # and takes its largest member -- so the 1024px entry went in under a
+  # directory record that says 256 (an .ico stores 256 as a literal 0 and has
+  # no way to say more), and NSIS refused the installer outright with
+  # "invalid icon file size". NSIS tops out at 256, and the icon set exists for
+  # Linux, which wants every size it can get. One input each, then.
+  #
+  # `mac` and `linux` are deliberately left on the scan: an .icns holds 1024
+  # and Apple asks for it, and the Linux set *is* that directory.
+  icon: build/icon.png
   target:
     - target: nsis
       arch: [x64]

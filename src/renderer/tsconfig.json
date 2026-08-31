@@ -1,0 +1,4 @@
+{
+  "//": "Not a fourth config: it extends tsconfig.web.json unchanged, and exists only so that editors find the *renderer's* settings for a renderer file. They discover a config by walking up from the file looking for `tsconfig.json` by name, which from here used to reach the repo root -- and the root one mirrors tsconfig.node.json, so a .svelte file was being resolved with `lib: ES2022` and `types: [node, electron]`. The visible symptom is `import logo from \"../assets/logo.png\"` reported as TS2307 in the IDE while `npm run typecheck` is green, because vite/client's asset declarations are in the web config's `types` and nowhere else.",
+  "extends": "../../tsconfig.web.json"
+}

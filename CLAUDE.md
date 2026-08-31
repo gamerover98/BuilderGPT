@@ -1289,11 +1289,25 @@ was never claimed cannot be handed back wrong.
 **The icon has one master and every other size is generated.** `build/logo.png`
 is the file a human edits; `scripts/gen-icons.mjs` writes the nine
 `build/icons/<n>x<n>.png` electron-builder wants for Linux, the `build/icon.png`
-it cuts the `.ico` and `.icns` from, and the two 256px copies the About box and
-the README header read. Nothing `.ico`-shaped is committed: electron-builder
-generates both from `build/icon.png`, and ffmpeg cannot write a
-multi-resolution `.ico` at all, so a hand-rolled one would be strictly worse
-than the tool's own.
+the `.ico` is cut from, and the two 256px copies the About box and the README
+header read. Nothing `.ico`-shaped is committed: electron-builder generates it,
+and ffmpeg cannot write a multi-resolution `.ico` at all, so a hand-rolled one
+would be strictly worse than the tool's own.
+
+**`win.icon` is stated, and the icon set is why it has to be.** Left to the
+buildResources scan, app-builder cuts the `.ico` from `build/icons/` rather than
+from `build/icon.png` and takes the *largest* member — so adding a 1024px file
+to that directory put a 1024px image into the `.ico` under a directory record
+saying 256, which is the largest number an `.ico` can express (it stores 256 as
+a literal `0` and has no room for more). NSIS refused the installer outright:
+`invalid icon file size`, from `MUI_INTERFACE`, naming the generated cache and
+nothing about where it came from. The scan is right for the other two and is
+left alone — an `.icns` holds 1024 and Apple asks for it, and the Linux set *is*
+that directory — so this is one platform disagreeing with the others about what
+the biggest useful icon is, rather than a rule with an exception.
+
+Worth knowing before the next size is added: the working `.ico` has **one**
+entry, 256px, and always did. That is not a degraded result to be improved on.
 
 `release/.icon-ico/icon.ico` is that generated cache under a gitignored
 directory, which is why the old mark was findable only there and looked like a
@@ -1431,6 +1445,21 @@ names neither the value nor the channel. Spreading does not help —
 calls the `$state.snapshot` rune, which is only compiled inside `.svelte` and
 `.svelte.js/ts` modules. In a plain `.ts` it typechecks and then throws
 `rune_outside_svelte` at runtime, so `svelte-check` will not catch the mistake.
+
+**`src/renderer/tsconfig.json` exists so an editor finds the renderer's own
+settings, and it is not a fourth config.** It extends `tsconfig.web.json` and
+adds nothing. An editor discovers a config by walking up from the file looking
+for `tsconfig.json` **by name** — `tsconfig.web.json` is not a name anything
+searches for — so from a `.svelte` file that walk used to reach the repo root,
+whose config mirrors `tsconfig.node.json`. A renderer file was therefore being
+resolved with `lib: ES2022` and `types: [node, electron]`.
+
+The symptom is narrow enough to look like one broken line rather than a wrong
+config: `import logo from "../assets/logo.png"` reported as TS2307 in the IDE
+while `npm run typecheck` is green, because vite/client's asset declarations
+reach the renderer through the web config's `types` and through nothing else.
+The `/// <reference types="vite/client" />` in `global.d.ts` cannot help — under
+the root config that file is not in the program at all.
 
 **`coerceSettings` whitelists every field by name.** It runs on read *and* on
 write, and it does not spread. A field added to `Settings` but not to that

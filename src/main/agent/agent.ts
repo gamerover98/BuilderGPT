@@ -39,6 +39,11 @@
 import { generateText, stepCountIs, streamText, type ModelMessage } from "ai";
 
 import type { TraceItem } from "../../shared/ipc.js";
+import {
+  documentEra,
+  documentVersionName,
+  mcVersion,
+} from "../../shared/mc_versions.js";
 import { formatJson, TraceRecorder, type TraceSink } from "../services/trace.js";
 import { runTransactionAsync, summarizeTransaction, type BlockTally } from "../domain/history.js";
 import type { Region } from "../domain/document.js";
@@ -177,6 +182,9 @@ const SYSTEM_PROMPT = [
   "  spelling is not, because a replace that matches nothing reports zero and changes nothing.",
   "- Block ids are namespaced and carry their block states, e.g. minecraft:oak_stairs[facing=north].",
   "  get_palette shows exactly how each block in this schematic is spelled.",
+  "- A schematic is for one Minecraft version, and get_schematic_info reports it. Before 1.13 the",
+  "  set of blocks is much smaller and anything newer is refused by name; the spelling does not",
+  "  change, only what exists. describe_block answers that for a specific block.",
   "- When the user has a selection, tools default to it. Do not restate its coordinates unless you",
   "  mean somewhere else.",
   // The old wording was "rather than hundreds of set_block calls", which a
@@ -213,8 +221,31 @@ function describeDocument(session: DocumentSession, selection: Region | null): s
     .map(([block, count]) => `  ${block} x${count}`)
     .join("\n");
 
+  /*
+   * Which Minecraft this is for, said before anything else about the blocks.
+   *
+   * It was not said at all. The model was handed a size, a coordinate range and
+   * a palette, and left to assume a modern game -- so on a 1.12 schematic it
+   * reached for blocks that did not exist yet, and found out at save time from
+   * a writer, about blocks it had built around an hour earlier.
+   *
+   * The legacy sentence names the constraint *and* says not to change how
+   * blocks are spelled, because the obvious inference from "this is 1.12" is to
+   * start writing numeric ids -- and this app takes flattened names in both
+   * eras and does the conversion itself.
+   */
+  const era = documentEra(doc.format, doc.dataVersion);
+  const name = documentVersionName(doc.format, doc.dataVersion);
+  const version = (name === null ? null : mcVersion(name)?.label) ?? "an unstated version";
+
   const lines = [
     `Schematic: ${doc.width}x${doc.height}x${doc.length} (x, y up, z), ${countBlocks(doc)} non-air blocks.`,
+    era === "legacy"
+      ? `Minecraft ${version}, which is before the Flattening: only blocks that existed ` +
+        `then can be placed, and anything added in 1.13 or later is refused by name. ` +
+        `Still name blocks the modern way (minecraft:oak_fence) -- converting them to ` +
+        `numeric ids is this app's job. describe_block says whether a block exists here.`
+      : `Minecraft ${version}.`,
     `Valid coordinates: x 0-${doc.width - 1}, y 0-${doc.height - 1}, z 0-${doc.length - 1}. There is nothing above` +
       ` y=${doc.height - 1} until you resize.`,
     top === "" ? "It is empty." : `Most common blocks:\n${top}`,

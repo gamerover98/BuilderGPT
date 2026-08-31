@@ -25,6 +25,7 @@
    * a cathedral quietly changing what a break wrote into the file. It is now
    * remembered per path, beside the version and the container.
    */
+  import type { LegacyIndex } from "../../../shared/legacy_ids.js";
   import { VOID_OPACITY } from "../../../shared/settings.js";
   import BlockPicker from "./BlockPicker.svelte";
   import { t } from "./i18n.svelte.js";
@@ -39,6 +40,8 @@
     blocks: readonly string[];
     /** What this schematic can hold; see `BlockPicker`. */
     placeable?: ReadonlySet<string> | null;
+    /** Passed straight to the block fields; see `BlockPicker`. */
+    legacy?: LegacyIndex | null;
     /** A failure from main, shown here: the app banner is behind the scrim. */
     error: string;
     /**
@@ -60,6 +63,7 @@
     busy,
     blocks,
     placeable = null,
+    legacy = null,
     error,
     onblock,
     onopacity,
@@ -167,6 +171,7 @@
           placeholder="minecraft:air"
           {blocks}
           {placeable}
+          {legacy}
           onchange={(next) => onblock(next, replaceExisting)}
         />
       </label>

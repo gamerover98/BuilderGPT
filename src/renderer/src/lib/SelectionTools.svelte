@@ -12,6 +12,7 @@
    * anything tracked here. The renderer holds no schematic; there is one copy
    * of the truth and it is in the main process.
    */
+  import type { LegacyIndex } from "../../../shared/legacy_ids.js";
   import type { ClipboardInfo, PaletteCount, RegionSpec, TransformRequest } from "../../../shared/ipc.js";
   import BlockPicker from "./BlockPicker.svelte";
   import { t } from "./i18n.svelte.js";
@@ -23,6 +24,8 @@
     blocks: readonly string[];
     /** Passed straight to the block fields; see `BlockPicker`. */
     placeable?: ReadonlySet<string> | null;
+    /** Passed straight to the block fields; see `BlockPicker`. */
+    legacy?: LegacyIndex | null;
     /**
      * The block Fill writes and the one Creative mode places. Owned by the app,
      * because the viewport places it too and the two must not disagree about
@@ -91,6 +94,7 @@
     busy,
     blocks,
     placeable = null,
+    legacy = null,
     block,
     onblockchange,
     palette,
@@ -181,6 +185,7 @@
         placeholder="minecraft:stone"
         {blocks}
         {placeable}
+        {legacy}
         onchange={onblockchange}
       />
       <button
@@ -211,6 +216,7 @@
         placeholder="minecraft:cobblestone"
         {blocks}
         {placeable}
+        {legacy}
         onchange={onreplacefromchange}
       />
       <button

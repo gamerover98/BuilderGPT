@@ -99,3 +99,44 @@ export function buildLegacyIndex(table: Readonly<Record<string, string>>): Legac
 
   return { byName, byId, names };
 }
+
+/**
+ * The `ID:DATA` a block name is stored as, or `null`.
+ *
+ * The **base name** only, and that limit is the honest part rather than a gap.
+ * `35:14` answers what block this is; it does not answer which *state* an
+ * entry carrying `[facing=north]` will be written as, because several metadata
+ * values flatten to one name and picking one of them here would be a precise
+ * claim built from a vague question.
+ *
+ * So this labels the places that list bare block names -- the creative grid,
+ * the block field -- and deliberately does not label the materials list, which
+ * shows full states. The exact state a palette entry maps to is
+ * `buildReverseLegacyTable`'s `byState`, in main, where the writer already asks
+ * it.
+ */
+export function legacyIdFor(index: LegacyIndex | null, block: string): string | null {
+  if (index === null) return null;
+  const found = index.byName.get(legacyBaseName(block));
+  return found === undefined ? null : legacyIdLabel(found);
+}
+
+/**
+ * Turns an `ID:DATA` somebody typed into the block it means.
+ *
+ * Anything that is not a legacy id is returned untouched, so this can sit in
+ * front of the ordinary parse without a mode: `minecraft:stone` has a colon in
+ * it and is not one, and `35:14` on a table that has no such row is a typo
+ * rather than an invitation to guess.
+ *
+ * The answer carries its states -- `53:0` is
+ * `minecraft:oak_stairs[half=bottom,shape=outer_right,facing=east]`, because
+ * that is what the metadata value *means*. Resolving to the bare name would
+ * throw away the half of the id that is not the id.
+ */
+export function resolveBlockInput(text: string, index: LegacyIndex | null): string {
+  if (index === null) return text;
+  const id = parseLegacyId(text);
+  if (id === null) return text;
+  return index.byId.get(legacyIdLabel(id)) ?? text;
+}

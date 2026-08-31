@@ -13,6 +13,11 @@
    * text field, which was the thing this replaced.
    */
   import { searchBlocks } from "./block_search.js";
+import {
+  legacyIdFor,
+  resolveBlockInput,
+  type LegacyIndex,
+} from "../../../shared/legacy_ids.js";
   import { t } from "./i18n.svelte.js";
 
   interface Props {
@@ -28,10 +33,26 @@
      * field and not in that one.
      */
     placeable?: ReadonlySet<string> | null;
+    /**
+     * The pre-Flattening table, when this schematic is one.
+     *
+     * Two jobs: every row is labelled with the `ID:DATA` the file will store,
+     * and typing one *finds* the block. On a legacy schematic that is the
+     * vocabulary the file is in, and it is the one somebody arrives with.
+     */
+    legacy?: LegacyIndex | null;
     onchange: (block: string) => void;
   }
 
-  const { id, value, placeholder, blocks, placeable = null, onchange }: Props = $props();
+  const {
+    id,
+    value,
+    placeholder,
+    blocks,
+    placeable = null,
+    legacy = null,
+    onchange,
+  }: Props = $props();
 
   let open = $state(false);
   let highlighted = $state(0);
@@ -46,7 +67,15 @@
   const offered = $derived(
     placeable === null ? blocks : blocks.filter((block) => placeable.has(block)),
   );
-  const matches = $derived(searchBlocks(offered, value));
+  /*
+   * `35:14` typed here finds red wool.
+   *
+   * Resolved before the search rather than as a separate mode: anything that
+   * is not a legacy id comes back untouched, so the ordinary case pays
+   * nothing and there is no state for the two vocabularies to get out of.
+   */
+  const query = $derived(resolveBlockInput(value, legacy));
+  const matches = $derived(searchBlocks(offered, query));
 
   /**
    * Keeps the highlighted row on screen.
@@ -138,7 +167,10 @@
               choose(block);
             }}
           >
-            {block}
+            <span>{block}</span>
+            {#if legacyIdFor(legacy, block)}
+              <span class="legacy">{legacyIdFor(legacy, block)}</span>
+            {/if}
           </button>
         </li>
       {/each}
@@ -148,6 +180,19 @@
 </div>
 
 <style>
+  /*
+   * The `ID:DATA` sits at the trailing edge of the row, on a legacy schematic
+   * only. Right-aligned rather than beside the name so the column of numbers
+   * lines up and can be read down.
+   */
+  li button .legacy {
+    flex: none;
+    margin-left: auto;
+    padding-left: 10px;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.6;
+  }
+
   .picker {
     position: relative;
   }
@@ -186,8 +231,15 @@
     list-style: none;
   }
 
+  /*
+   * A flex row rather than a block, so the legacy id can be pushed to the
+   * trailing edge. The ellipsis moves with it: `text-overflow` needs the
+   * element that actually overflows, which is now the name rather than the
+   * button.
+   */
   .dropdown button {
-    display: block;
+    display: flex;
+    align-items: baseline;
     width: 100%;
     box-sizing: border-box;
     text-align: left;
@@ -199,6 +251,10 @@
     font: inherit;
     font-size: 12px;
     cursor: pointer;
+    overflow: hidden;
+  }
+
+  .dropdown button > span:first-child {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

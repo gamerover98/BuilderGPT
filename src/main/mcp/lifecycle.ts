@@ -33,6 +33,7 @@
 import path from "path";
 
 import { type SchematicFormat } from "../../shared/schematic.js";
+import { documentEra, documentVersionName } from "../../shared/mc_versions.js";
 import { mayDelete, mayReplaceDocument, withinRoot, type Verdict } from "./policy.js";
 import { type DocumentSession } from "../services/session.js";
 
@@ -152,6 +153,14 @@ function describe(session: DocumentSession | null, dirty: boolean): unknown {
     length: doc.length,
     format: doc.format,
     dataVersion: doc.dataVersion,
+    /*
+     * The raw tag is not an answer a model can use: 1343 means nothing and
+     * `null` means either "no tag" or "pre-Flattening", which are very
+     * different things. `era` separates them and `version` is what a person
+     * calls it.
+     */
+    version: documentVersionName(doc.format, doc.dataVersion),
+    era: documentEra(doc.format, doc.dataVersion),
     unsavedChanges: dirty,
   };
 }
@@ -273,7 +282,7 @@ export const LIFECYCLE_SPECS: readonly LifecycleSpec[] = [
         length: { type: "integer" },
         format: {
           type: "string",
-          enum: ["sponge3", "sponge2", "mcedit"],
+          enum: ["sponge3", "sponge2", "mcedit", "litematic"],
           description: "Container format. Defaults to sponge3.",
         },
         version: {
@@ -361,7 +370,7 @@ export const LIFECYCLE_SPECS: readonly LifecycleSpec[] = [
       type: "object",
       properties: {
         path: { type: "string" },
-        format: { type: "string", enum: ["sponge3", "sponge2", "mcedit"] },
+        format: { type: "string", enum: ["sponge3", "sponge2", "mcedit", "litematic"] },
       },
       required: ["path"],
       additionalProperties: false,

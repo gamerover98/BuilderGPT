@@ -18,6 +18,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
 import { createServer } from "http";
 import { tmpdir } from "os";
 import path from "path";
+import { fileURLToPath } from "url";
 
 import { TOOL_SPECS, buildTools, type ToolContext } from "../src/main/agent/tools.js";
 import { callTool, describeTools, findTool, isReadOnly, serialised } from "../src/main/mcp/tools.js";
@@ -82,6 +83,14 @@ function equal(label: string, actual: unknown, expected: unknown): void {
   }
   check(label, ok);
 }
+
+/** The vendored flattening table, for the tools that read it. */
+const LEGACY_BLOCKS = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "resources",
+  "legacy_blocks.json",
+);
 
 const ALLOWED = new Set([
   "minecraft:stone",
@@ -163,6 +172,10 @@ function options(sink: { changed: number }, lifecycle?: Lifecycle) {
     selection: null,
     allowedBlocks: ALLOWED,
     lifecycle: lifecycle ?? fakeLifecycle(),
+    // Without this `describe_block` cannot answer what a block was before the
+    // Flattening, and `convert_schematic` cannot write MCEdit at all -- which
+    // is the gap this field was added to close.
+    legacyBlocksPath: LEGACY_BLOCKS,
     onChanged: (_session: DocumentSession) => {
       sink.changed += 1;
     },
@@ -463,12 +476,17 @@ try {
   // --- but `from` is a pattern, not a placement -----------------------------
   //
   // The sharp edge of the change above, and the way it would have gone wrong.
-  // `Recorder.replace` interns `from` and matches on the palette *index*, so
-  // the state has to be identical -- which is what `replace_blocks`' own
-  // description and its zero-result note already say. Filling in the defaults
-  // on that side would quietly change which blocks a replacement finds: "take
-  // out the campfires" would take out the ones that happen to face north and be
-  // alight, and report a healthy count for those.
+  // Writing the default states onto `from` would quietly change which blocks a
+  // replacement finds: "take out the campfires" would take out the ones that
+  // happen to face north and be alight, and report a healthy count for those.
+  //
+  // This comment used to add that `Recorder.replace` matched on an exact
+  // palette index, "which is what `replace_blocks`' own description already
+  // says". Both were true and both were the bug: a name on its own then matched
+  // only an entry carrying no properties at all, so on a legacy schematic --
+  // where nearly every entry carries states -- no replace ever matched
+  // anything. A bare name is a pattern over every state now, which is what the
+  // `toEntry` choice was always for.
   console.log("\n--- replace matches on what it was given ---");
   {
     const session = open();
@@ -1231,6 +1249,84 @@ console.log("\n--- answering with nothing open ---");
 
   equal("...and nothing told the window anything", sink.changed, 0);
 }
+// --- the model is told which Minecraft it is working in ---------------------
+/*
+ * It was not, and nothing in ten tool descriptions said the words legacy,
+ * Flattening, 1.12 or DataVersion. `get_schematic_info` reported the container
+ * and not the version, so a model driving a 1.12 schematic reached for modern
+ * blocks all turn and met the objection at save time, from a writer.
+ */
+console.log("\n--- the model is told which Minecraft it is working in ---");
+{
+  const sink = { changed: 0 };
+
+  {
+    closeDocument();
+    newDocument({ width: 4, height: 4, length: 4 }, "mcedit", 1343);
+    const info = (await callTool("get_schematic_info", {}, options(sink))).result as {
+      era: string;
+      version: string;
+      dataVersion: number | null;
+      blocks: string;
+    };
+    equal("a legacy schematic says so", info.era, "legacy");
+    equal("...and names the version a person would", info.version, "1.12.2");
+    equal("...beside the raw tag, which is what the file carries", info.dataVersion, 1343);
+    check(
+      "...and says what that costs, in words a model can act on",
+      info.blocks.includes("before the Flattening") && info.blocks.includes("refused"),
+      info.blocks,
+    );
+    /*
+     * And it says *not* to change how blocks are spelled. That is the obvious
+     * wrong inference from "this is 1.12", and this app takes flattened names
+     * in both eras.
+     */
+    check(
+      "...while telling it to keep naming blocks the modern way",
+      info.blocks.includes("minecraft:oak_fence"),
+      info.blocks,
+    );
+  }
+
+  {
+    closeDocument();
+    newDocument({ width: 4, height: 4, length: 4 }, "sponge3", 3700);
+    const info = (await callTool("get_schematic_info", {}, options(sink))).result as {
+      era: string;
+      version: string;
+    };
+    equal("a flat schematic says so too", info.era, "flat");
+    equal("...and names its version", info.version, "1.20.4");
+  }
+
+  {
+    /*
+     * `describe_block` answers the era question in the only way it is allowed
+     * to.
+     *
+     * It is in `NO_DOCUMENT` -- answered before any schematic exists, with a
+     * `doc` that throws on every read -- so it cannot say whether *this*
+     * document can hold a block. It can say what the block was before the
+     * Flattening, which is a fact about Minecraft, and a `null` there is the
+     * same sentence as "it did not exist yet".
+     */
+    const answer = (
+      await callTool(
+        "describe_block",
+        { blocks: ["minecraft:red_wool", "minecraft:deepslate"] },
+        options(sink),
+      )
+    ).result as { blocks: { block: string; legacyId: string | null }[] };
+    equal("a pre-Flattening block names its id:data", answer.blocks[0].legacyId, "35:14");
+    equal(
+      "...and one added later names none, which is the answer",
+      answer.blocks[1].legacyId,
+      null,
+    );
+  }
+}
+
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

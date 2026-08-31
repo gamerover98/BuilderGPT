@@ -75,6 +75,11 @@ import { executeJsBuild } from "../core.js";
 import { loadLegacyBlockTable, parsePaletteEntry } from "../pipeline/loader_formats.js";
 import { legacyBlockNames } from "../services/writers.js";
 import {
+  buildLegacyIndex,
+  legacyIdLabel,
+  type LegacyIndex,
+} from "../../shared/legacy_ids.js";
+import {
   documentEra,
   documentVersionName,
   mcVersion,
@@ -194,6 +199,41 @@ function toEntry(block: string): PaletteEntry {
  * `shared/block_states.ts` -- so this inherits that policy rather than opening
  * a second one.
  */
+/**
+ * The legacy index, memoised on the table it came from.
+ *
+ * `buildLegacyIndex` walks 1,682 rows, and `describe_block` may be called once
+ * per block in a batch. `loadLegacyBlockTable` already hands back the same
+ * object every time, which is what makes identity a sound key here.
+ */
+/** `"35:14"`, or `null` for a block the pre-Flattening game never had. */
+function legacyIdOf(index: LegacyIndex | null, name: string): string | null {
+  if (index === null) return null;
+  const found = index.byName.get(name);
+  return found === undefined ? null : legacyIdLabel(found);
+}
+
+let cachedIdIndex: { table: object; index: LegacyIndex } | null = null;
+function legacyIdIndex(table: Readonly<Record<string, string>>): LegacyIndex {
+  if (cachedIdIndex !== null && cachedIdIndex.table === table) return cachedIdIndex.index;
+  const index = buildLegacyIndex(table);
+  cachedIdIndex = { table, index };
+  return index;
+}
+
+/**
+ * How to say this document's Minecraft version to a model.
+ *
+ * A label rather than the raw `DataVersion`, because 1343 is not something a
+ * model can reason about and "1.12.2" is. `documentVersionName` falls back
+ * inside the document's own era, so a legacy file that names no version still
+ * gets a legacy answer rather than a flat one.
+ */
+function versionLabel(doc: SchematicDocument): string {
+  const name = documentVersionName(doc.format, doc.dataVersion);
+  return (name === null ? null : mcVersion(name)?.label) ?? "an unstated version";
+}
+
 function toPlacedEntry(block: string): PaletteEntry {
   const entry = toEntry(block);
   return {
@@ -484,7 +524,10 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: "get_schematic_info",
     description:
-      "Size, block count and format of the schematic being edited, plus the user's current selection if they have one. Call this first.",
+      "Size, block count, container format and **Minecraft version** of the schematic " +
+      "being edited, plus the user's current selection if they have one. Call this " +
+      "first: the version decides which blocks may be placed at all, and before 1.13 " +
+      "that set is much smaller than the modern one.",
     schema: {
       type: "object",
       properties: {},
@@ -499,6 +542,30 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
         length: doc.length,
         blockCount: countBlocks(doc),
         format: doc.format,
+        /*
+         * The version, said three ways, because the model needs a different one
+         * for each job: `era` decides which blocks it may place, `version` is
+         * what a person calls it, and `dataVersion` is the raw tag -- `null`
+         * when the file carries none, which MCEdit never does.
+         *
+         * None of this was reported before. The model was told the container and
+         * not the version, so on a 1.12 schematic it placed modern blocks all
+         * turn and met the objection at save time, from a writer, about blocks
+         * it had long since built around.
+         */
+        dataVersion: doc.dataVersion,
+        version: versionLabel(doc),
+        era: documentEra(doc.format, doc.dataVersion),
+        blocks:
+          documentEra(doc.format, doc.dataVersion) === "legacy"
+            ? `This schematic is for Minecraft ${versionLabel(doc)}, which is before the ` +
+              `Flattening. Blocks are stored as numeric id:data pairs there, so only the ` +
+              `few hundred that existed then can be placed -- minecraft:deepslate and ` +
+              `anything else added in 1.13 or later will be refused by name. Name blocks ` +
+              `the modern way anyway (minecraft:oak_fence); the conversion is this app's ` +
+              `job. describe_block says whether one exists here.`
+            : `This schematic is for Minecraft ${versionLabel(doc)}. Blocks are named the ` +
+              `flattened way, minecraft:oak_stairs[facing=north].`,
         coordinates:
           "x is 0..width-1, y is 0..height-1 (y up), z is 0..length-1. All coordinates are inclusive.",
         selection: selection ? normalizeRegion(doc, selection) : null,
@@ -590,6 +657,15 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
         id,
       );
 
+      /*
+       * The pre-Flattening table, when this build can reach it. `null` means
+       * the answer is simply not offered -- better than claiming every block is
+       * modern because a resource file could not be read.
+       */
+      const legacy =
+        context.legacyBlocksPath === undefined || context.legacyBlocksPath === null
+          ? null
+          : legacyIdIndex(await loadLegacyBlockTable(context.legacyBlocksPath));
       const blocks = asked.map((each) => {
         // Deliberately not `toPlacedEntry` for the *name*: an id the caller
         // spelled with states already is still a question about the block, and
@@ -632,6 +708,18 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
           // no entry in the state registry; a misspelling has neither.
           placeable: context.allowedBlocks.has(name),
           known: isKnownBlock(name),
+          /*
+           * What this block was before the Flattening, or `null` if it was
+           * nothing -- which is the same as saying it did not exist yet.
+           *
+           * The era question, asked in the only way this tool is allowed to ask
+           * it. `describe_block` is in `NO_DOCUMENT`: it is answered before any
+           * schematic exists and its `doc` is a proxy that throws on every read,
+           * so it cannot say whether *this* document can hold the block. It can
+           * say whether Minecraft ever could before 1.13, which is a fact about
+           * the game and is what the question is really after.
+           */
+          legacyId: legacyIdOf(legacy, name),
           placedAs: paletteEntryCacheKey(placed),
           properties,
           note: !context.allowedBlocks.has(name)
@@ -695,7 +783,9 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: "fill_region",
     description:
-      "Fill a region with one block. Defaults to the user's selection. Use minecraft:air to clear.",
+      "Fill a region with one block. Defaults to the user's selection. Use minecraft:air to " +
+      "clear. The block has to exist in the schematic's Minecraft version, which " +
+      "get_schematic_info reports.",
     schema: {
       type: "object",
       properties: { ...regionSchema.properties, block: { type: "string" } },
@@ -769,7 +859,10 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
 
   {
     name: "set_block",
-    description: "Place a single block at one coordinate.",
+    description:
+      "Place a single block at one coordinate. The block has to exist in the schematic's " +
+      "Minecraft version -- get_schematic_info reports it, and before 1.13 the set is much " +
+      "smaller.",
     schema: {
       type: "object",
       properties: {

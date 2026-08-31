@@ -43,7 +43,7 @@ jobs:
       build_number: ${{ steps.pick.outputs.build_number }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # The duplicate-tag guard below reads the tag list. Shallow, there are
           # no tags to read and the guard silently guards nothing.
@@ -114,9 +114,9 @@ jobs:
             artifacts: release/*.AppImage
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 25
           cache: npm
@@ -124,7 +124,7 @@ jobs:
       # The Electron binary and electron-builder's own toolchain downloads are
       # by far the heaviest part of a cold run.
       - name: Cache Electron downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/electron
@@ -154,9 +154,10 @@ jobs:
         shell: bash
         env:
           BUILD_NUMBER: ${{ needs.version.outputs.build_number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run package:${{ matrix.platform }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.platform }}
           # Named paths rather than the whole of `release/`, which also holds
@@ -175,9 +176,13 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      # v7, where upload above is v6. Not a typo and not tidiable: the two
+      # actions reached the node24 runtime at different majors, and the
+      # node20 deprecation warning is exactly what pinning them to the same
+      # number brings back.
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true

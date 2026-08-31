@@ -34,6 +34,26 @@ import {
   withinRoot,
 } from "../src/main/mcp/policy.js";
 import { countBlocks, getBlock } from "../src/main/domain/document.js";
+
+/*
+ * An absolute path, spelled the way the platform running this spells one.
+ *
+ * These fixtures used to say `C:/builds/x.schem`, which is absolute on Windows
+ * and **relative everywhere else** -- there is no drive letter on Linux, so
+ * `withinRoot` resolved it *under* the root and the path doubled:
+ * `.../C:/builds/C:/builds/x.schem`. That is `path.resolve(root, candidate)`
+ * doing exactly the right thing with a string that is only a path on one
+ * operating system, so the fixture is what was wrong and not the rule.
+ *
+ * Worth knowing because of how it failed. Two of the three checks reported a
+ * doubled path and read as a normalisation bug; the third reported that a file
+ * had been trashed when the run expected nothing at all -- the "you may not
+ * delete the open document" guard comparing `.../open.schem` against
+ * `.../C:/builds/open.schem`, finding them different, and standing aside. A
+ * guard that silently stops guarding is the failure this suite exists to catch,
+ * and here it was the test's own doing.
+ */
+const abs = (...parts: string[]): string => path.resolve("/", ...parts);
 import { paletteEntryCacheKey } from "../src/main/pipeline/types.js";
 import {
   applyEdit,
@@ -96,7 +116,7 @@ function fakeLifecycle(over: Partial<Lifecycle> & { log?: string[] } = {}): Life
     save: async (_session, options) => {
       log.push(`save:${options.filePath ?? "(same)"}`);
       return {
-        filePath: options.filePath ?? "C:/builds/x.schem",
+        filePath: options.filePath ?? abs("builds", "x.schem"),
         format: "sponge3" as const,
         degraded: [],
     dropped: [],
@@ -107,11 +127,11 @@ function fakeLifecycle(over: Partial<Lifecycle> & { log?: string[] } = {}): Life
       log.push("close");
       closeDocument();
     },
-    recents: async () => [{ filePath: "C:/builds/a.schem", openedAt: 1 }],
+    recents: async () => [{ filePath: abs("builds", "a.schem"), openedAt: 1 }],
     trash: async (filePath) => {
       log.push(`trash:${filePath}`);
     },
-    root: async () => "C:/builds",
+    root: async () => abs("builds"),
     allowDelete: async () => false,
     refusalFor: () => null,
     announce: () => {
@@ -129,7 +149,7 @@ function fakeLifecycle(over: Partial<Lifecycle> & { log?: string[] } = {}): Life
     },
     generate: async (prompt) => {
       log.push(`generate:${prompt}`);
-      return { filePath: "C:/builds/made.schem", blocks: 12 };
+      return { filePath: abs("builds", "made.schem"), blocks: 12 };
     },
     ...over,
   };
@@ -735,7 +755,7 @@ try {
 
     let raised: string | null = null;
     try {
-      await callTool("open_document", { path: "C:/builds/other.schem" }, options(sink, dirty));
+      await callTool("open_document", { path: abs("builds", "other.schem") }, options(sink, dirty));
     } catch (err) {
       raised = err instanceof Error ? err.message : String(err);
     }
@@ -746,11 +766,11 @@ try {
     // because what is open has changed.
     await callTool(
       "open_document",
-      { path: "C:/builds/other.schem", discardUnsavedChanges: true },
+      { path: abs("builds", "other.schem"), discardUnsavedChanges: true },
       options(sink, dirty),
     );
     equal("...until the user says to discard", log, [
-      `open:${path.resolve("C:/builds/other.schem")}`,
+      `open:${abs("builds", "other.schem")}`,
       "announce",
     ]);
   }
@@ -765,7 +785,7 @@ try {
     try {
       await callTool(
         "delete_document",
-        { path: "C:/builds/old.schem" },
+        { path: abs("builds", "old.schem") },
         options(sink, fakeLifecycle({ log })),
       );
     } catch (err) {
@@ -775,19 +795,19 @@ try {
     equal("...and nothing was trashed", log, []);
 
     const allowed = fakeLifecycle({ log, allowDelete: async () => true });
-    await callTool("delete_document", { path: "C:/builds/old.schem" }, options(sink, allowed));
+    await callTool("delete_document", { path: abs("builds", "old.schem") }, options(sink, allowed));
     equal("...with the flag on it goes to the trash", log, [
-      `trash:${path.resolve("C:/builds/old.schem")}`,
+      `trash:${abs("builds", "old.schem")}`,
     ]);
 
     // The file that is open is refused even with the flag on: the app must not
     // be left editing something that no longer exists.
     log.length = 0;
     const session = currentSession();
-    if (session !== null) session.doc.filePath = path.resolve("C:/builds/open.schem");
+    if (session !== null) session.doc.filePath = abs("builds", "open.schem");
     let onOpen: string | null = null;
     try {
-      await callTool("delete_document", { path: "C:/builds/open.schem" }, options(sink, allowed));
+      await callTool("delete_document", { path: abs("builds", "open.schem") }, options(sink, allowed));
     } catch (err) {
       onOpen = err instanceof Error ? err.message : String(err);
     }
@@ -1196,7 +1216,7 @@ console.log("\n--- answering with nothing open ---");
   try {
     await callTool(
       "convert_schematic",
-      { source: "C:/nowhere/absent.schem", target: "C:/nowhere/out.litematic", format: "litematic" },
+      { source: abs("nowhere", "absent.schem"), target: abs("nowhere", "out.litematic"), format: "litematic" },
       options(sink),
     );
   } catch (err) {

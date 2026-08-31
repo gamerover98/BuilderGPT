@@ -1373,6 +1373,31 @@ again, which is what makes a suite added tomorrow covered with no edit to any
 YAML — the script was already suited to it, with colours off a TTY, `npm ci`
 only when `node_modules` is absent, and no early abort.
 
+**Running that gate on both operating systems earned itself on the first run.**
+`tests/mcp.ts` spelled its fixtures `C:/builds/x.schem`, which is absolute on
+Windows and **relative everywhere else** — there is no drive letter on Linux —
+so `withinRoot`'s `path.resolve(root, candidate)` placed it *under* the root and
+the path doubled: `.../C:/builds/C:/builds/x.schem`. Windows was green and Linux
+was not, on the same commit.
+
+The rule was right and the fixture was wrong, which is the part worth keeping
+straight: resolving a relative candidate under the root and letting an absolute
+one replace it is exactly the semantics that function wants. The string simply
+was not a path on the machine running it, and `abs()` in that file now spells an
+absolute path the way the running platform spells one.
+
+Two of the three failures reported a doubled path and read as a normalisation
+bug. The third reported a file trashed where the run expected nothing at all —
+the "you may not delete the open document" guard comparing the resolved
+candidate against the open file, finding them different because one had doubled,
+and standing aside. A guard that quietly stops guarding is the failure this
+suite exists to catch, and here the suite had done it to itself.
+
+Only that suite was affected. `tests/services.ts` and `tests/document.ts` carry
+the same spelling, and their paths never reach `path.resolve` — `pathsMatch` is
+a string comparison — so they are opaque fixtures that behave identically
+everywhere.
+
 **`BUILD_NUMBER` is set on develop and deliberately not on master.**
 electron-builder reads it from the environment by itself and folds it into the
 Windows file version as `major.minor.patch.<n>`, substituting `0` for anything

@@ -38,9 +38,9 @@ jobs:
         os: [ubuntu-22.04, windows-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           # Matches the developer's own toolchain. Note that this is the
           # *build* toolchain only: the shipped app runs Electron's bundled

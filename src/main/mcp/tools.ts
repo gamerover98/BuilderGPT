@@ -232,6 +232,18 @@ export interface CallOptions {
   selection: Region | null;
   allowedBlocks: ReadonlySet<string>;
   /**
+   * Where `legacy_blocks.json` is.
+   *
+   * This was simply not passed, and two things went quietly wrong for it.
+   * `convert_schematic` is in `TOOL_SPECS` precisely so the chat and MCP get
+   * one definition -- and over MCP it reported MCEdit unavailable, which is a
+   * tool that works in the chat and not here, the failure that arrangement
+   * exists to prevent. And the version guard reads the same table, so without
+   * it a model driving a 1.12 schematic over MCP could place blocks the chat
+   * would refuse.
+   */
+  legacyBlocksPath?: string | null;
+  /**
    * The file-level verbs and everything they need to reach.
    *
    * Also how a block-editing tool finds the open document: `lifecycle.session()`
@@ -343,6 +355,7 @@ export async function callTool(
     tx: refusingScope(name),
     selection: options.selection,
     allowedBlocks: options.allowedBlocks,
+    legacyBlocksPath: options.legacyBlocksPath ?? null,
     onStep: (step) => {
       summary = step.summary;
     },

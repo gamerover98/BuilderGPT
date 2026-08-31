@@ -498,21 +498,26 @@ export interface EditingSettings {
    * would throw away the room they made to build in.
    */
   autoGrow: boolean;
-  /**
-   * What empty space is made of. `""` means air, which is the default and
-   * is what a schematic has always been full of.
+  /*
+   * `voidBlock` used to be here and deliberately is not any more.
    *
-   * Set it to water and an underwater build stops being a build in a
-   * vacuum: breaking a block leaves water behind, which is what the game
-   * would do and what the file has to say for the paste to come out right.
-   * Lava, barrier and structure void are the other obvious ones.
+   * What empty space is made of is a fact about *one schematic*, not a
+   * preference about editing: it is written into that file when a block is
+   * broken, and an underwater jetty and a cathedral have different answers.
+   * As a global it followed you from document to document silently changing
+   * what a break wrote, which is the wrong direction for a setting that
+   * ends up in somebody's file.
    *
-   * It does three things at once and they are separate mechanisms: it is
-   * **written** when a block is broken, it is **drawn** over every empty
-   * cell, and it is **ignored by the pointer** so a click reaches whatever
-   * is behind it.
+   * It lives on the open session and is remembered per path in
+   * `ProjectNotes`, beside the version and the container -- the sidecar that
+   * already answers "what is this schematic for". See
+   * `services/conversation_store.ts`.
+   *
+   * `voidOpacity` stayed, and the split is the rule rather than an
+   * inconsistency: opacity is about *looking* at empty space and never
+   * reaches the file, so it is a preference and belongs to the person, not
+   * to the schematic.
    */
-  voidBlock: string;
   /**
    * How solid the void block looks, 0 to 1.
    *
@@ -528,12 +533,32 @@ export interface EditingSettings {
 
 export const DEFAULT_EDITING_SETTINGS: EditingSettings = {
   autoGrow: true,
-  voidBlock: "",
   voidOpacity: 0.4,
 };
 
 /** What the void block's opacity may be. Never 0; see `voidOpacity`. */
 export const VOID_OPACITY = { min: 0.05, max: 1 } as const;
+
+/**
+ * What empty space is made of, normalised. `""` is air.
+ *
+ * Every spelling of air heals to `""`, and that is load-bearing rather than
+ * tidiness: `fillVoid` rewrites the *air palette entry* into the chosen block,
+ * so a void block that is itself air would intern air over air and hand the
+ * mesher a palette in which every index is void and none of them draws
+ * anything -- the expensive way of doing exactly what the default already does
+ * for free.
+ *
+ * Here rather than in `settings_coerce.ts`, where it began, because it is no
+ * longer a setting: main normalises it on the way onto the session and the
+ * renderer needs the same answer to decide what a break will write.
+ */
+export function normaliseVoidBlock(raw: unknown): string {
+  const value = typeof raw === "string" ? raw.trim() : "";
+  if (value === "") return "";
+  const bare = value.split("[")[0].replace(/^minecraft:/, "");
+  return bare === "air" ? "" : value;
+}
 
 /**
  * What a schematic may be resized to by hand, per axis.

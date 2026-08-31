@@ -24,7 +24,8 @@
  */
 
 import type { ChatEntry, TraceItem } from "../../shared/ipc.js";
-import type { SchematicFormat } from "../../shared/schematic.js";
+import { SCHEMATIC_FORMATS, type SchematicFormat } from "../../shared/schematic.js";
+import { normaliseVoidBlock } from "../../shared/settings.js";
 
 /** Bumped when the stored shape changes in a way older readers cannot take. */
 export const CONVERSATION_FORMAT = 1;
@@ -72,6 +73,17 @@ export interface ProjectNotes {
   format?: SchematicFormat;
   /** What the user says this build is. Not shown yet; recorded for the panel. */
   description?: string;
+  /**
+   * What empty space is made of in this schematic. `""` is air.
+   *
+   * Here rather than in `Settings` because it is written *into this file*:
+   * breaking a block writes it, so an underwater jetty and a cathedral want
+   * different answers and a global one followed you silently between them.
+   *
+   * Absent means air, which is what every schematic written before this was
+   * full of -- so an old sidecar needs no migration and reads correctly.
+   */
+  voidBlock?: string;
 }
 
 export interface ConversationRecord {
@@ -95,11 +107,25 @@ export function coerceProject(raw: unknown): ProjectNotes | undefined {
   const source = raw as Partial<ProjectNotes>;
   const notes: ProjectNotes = {};
   if (typeof source.version === "string" && source.version !== "") notes.version = source.version;
-  if (source.format === "sponge2" || source.format === "sponge3" || source.format === "mcedit") {
-    notes.format = source.format;
+  /*
+   * Checked against the format list rather than against three names written
+   * out here, which is how this came to drop `litematic` in silence: the
+   * fourth container was added to `SchematicFormat` and this line was not,
+   * so a `.litematic` remembered its container and then opened Save As on
+   * Sponge, with nothing failing anywhere.
+   */
+  if (SCHEMATIC_FORMATS.includes(source.format as SchematicFormat)) {
+    notes.format = source.format as SchematicFormat;
   }
   if (typeof source.description === "string" && source.description !== "") {
     notes.description = source.description;
+  }
+  // Normalised on the way in, not only on the way out: every spelling of air
+  // has to reach `fillVoid` as the empty string. A sidecar written by hand
+  // or by an older build is exactly where the other spelling comes from.
+  if (typeof source.voidBlock === "string") {
+    const block = normaliseVoidBlock(source.voidBlock);
+    if (block !== "") notes.voidBlock = block;
   }
   return Object.keys(notes).length === 0 ? undefined : notes;
 }

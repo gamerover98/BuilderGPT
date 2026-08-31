@@ -19,6 +19,11 @@
    * The last of those has a consequence worth reading before it is met: with
    * water chosen, water placed by hand is unpickable too. There is no way to
    * have both, and this is the half that was asked for.
+   *
+   * **The choice belongs to the schematic, not to the app.** It used to be a
+   * global setting, which meant it followed you from an underwater build to
+   * a cathedral quietly changing what a break wrote into the file. It is now
+   * remembered per path, beside the version and the container.
    */
   import { VOID_OPACITY } from "../../../shared/settings.js";
   import BlockPicker from "./BlockPicker.svelte";
@@ -32,12 +37,44 @@
     busy: boolean;
     /** Every id the app can place; the picker searches it. */
     blocks: readonly string[];
-    onblock: (block: string) => void;
+    /** What this schematic can hold; see `BlockPicker`. */
+    placeable?: ReadonlySet<string> | null;
+    /** A failure from main, shown here: the app banner is behind the scrim. */
+    error: string;
+    /**
+     * `replaceExisting` rewrites the cells already holding the old answer.
+     *
+     * Carried with the block rather than as a verb of its own, because the
+     * two questions are asked at the same moment: choosing water is when
+     * somebody wants to know whether the air already there becomes water.
+     */
+    onblock: (block: string, replaceExisting: boolean) => void;
     onopacity: (opacity: number) => void;
     onclose: () => void;
   }
 
-  const { open, block, opacity, busy, blocks, onblock, onopacity, onclose }: Props = $props();
+  const {
+    open,
+    block,
+    opacity,
+    busy,
+    blocks,
+    placeable = null,
+    error,
+    onblock,
+    onopacity,
+    onclose,
+  }: Props = $props();
+
+  /**
+   * Whether choosing also rewrites what is already there.
+   *
+   * Off by default and reset every time the panel opens, because it is a
+   * destructive-shaped answer to a question that is usually about drawing.
+   * Sticky, it would eventually rewrite a document somebody was only
+   * looking at.
+   */
+  let replaceExisting = $state(false);
 
   let dialog = $state<HTMLDivElement | undefined>(undefined);
 
@@ -59,6 +96,18 @@
     "minecraft:structure_void",
   ] as const;
 
+  /*
+   * Cut to what this schematic can hold. `structure_void` arrived in 1.10 and
+   * `barrier` in 1.8, so a legacy document can be offered some of these and
+   * not others -- and a preset that is refused the moment it is clicked is
+   * worse than one that is not there.
+   */
+  const offered = $derived(
+    SUGGESTED.filter(
+      (candidate) => candidate === "" || placeable === null || placeable.has(candidate),
+    ),
+  );
+
   function onKeydown(event: KeyboardEvent): void {
     if (event.key === "Escape") {
       event.stopPropagation();
@@ -67,7 +116,12 @@
   }
 
   $effect(() => {
-    if (open) dialog?.focus();
+    if (!open) return;
+    replaceExisting = false;
+    // Over the viewport, where the canvas may hold the pointer: a panel on
+    // top of a camera still turning underneath is the documented failure.
+    document.exitPointerLock();
+    dialog?.focus();
   });
 </script>
 
@@ -95,11 +149,11 @@
       <p class="hint">{t("void.hint")}</p>
 
       <div class="presets" role="group" aria-label={t("void.presets")}>
-        {#each SUGGESTED as candidate (candidate)}
+        {#each offered as candidate (candidate)}
           <button
             class:active={block === candidate}
             disabled={busy}
-            onclick={() => onblock(candidate)}
+            onclick={() => onblock(candidate, replaceExisting)}
           >
             {candidate === "" ? t("void.air") : candidate.replace("minecraft:", "")}
           </button>
@@ -112,7 +166,8 @@
           value={block}
           placeholder="minecraft:air"
           {blocks}
-          onchange={(next) => onblock(next)}
+          {placeable}
+          onchange={(next) => onblock(next, replaceExisting)}
         />
       </label>
 
@@ -133,6 +188,26 @@
           oninput={(event) => onopacity(Number(event.currentTarget.value))}
         />
       </label>
+
+      <!--
+        Ticked, choosing also rewrites the cells that hold the *previous*
+        answer -- the air a schematic has always been full of, or whatever was
+        chosen before. One transaction, so it is one Ctrl+Z.
+
+        It is a checkbox beside the picker rather than a button of its own
+        because it is not a separate act: nobody wants to convert a build to
+        water without also making water what a break writes, and offering the
+        two apart would let the file and the tool disagree.
+      -->
+      <label class="field check">
+        <input type="checkbox" bind:checked={replaceExisting} disabled={busy} />
+        <span>{t("void.replace")}</span>
+      </label>
+      <p class="note">{t("void.replaceHint")}</p>
+
+      {#if error}
+        <p class="error">{error}</p>
+      {/if}
 
       <p class="note">{t("void.pickNote")}</p>
 
@@ -229,6 +304,30 @@
 
   .inert {
     opacity: 0.5;
+  }
+
+  /* A checkbox reads left-to-right, unlike the label-above fields above it. */
+  .field.check {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .field.check input {
+    margin: 0;
+  }
+
+  .field.check > span {
+    color: var(--text);
+  }
+
+  .error {
+    margin: 0;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--bg-input);
+    color: var(--text);
+    font-size: 11px;
   }
 
   .note {

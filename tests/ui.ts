@@ -2023,6 +2023,58 @@ console.log("\n--- creative inventory ---");
     inventoryBlocks(["minecraft:stone", "minecraft:oak_planks"], "oak").length === 1,
   );
 
+  /*
+   * And the version filter, which this module used to argue against having.
+   *
+   * The old comment said filtering by version would mean guessing when each
+   * block was added. That is true above 1.13 and it is *not* true at the
+   * Flattening: `legacy_blocks.json` enumerates every block a pre-Flattening
+   * file can name, and it is the same table `buildMcEdit` refuses a save on.
+   * Generalising from the hard half to the easy one let a 1.12 schematic offer
+   * deepslate -- placeable, drawable, and fatal at save time.
+   */
+  const legacy = new Set([
+    "minecraft:stone",
+    "minecraft:oak_planks",
+  ]);
+  equal(
+    "a restriction cuts the list",
+    inventoryBlocks(
+      ["minecraft:stone", "minecraft:deepslate", "minecraft:oak_planks"],
+      "",
+      legacy,
+    ),
+    ["minecraft:stone", "minecraft:oak_planks"],
+  );
+  equal(
+    "...and a search cannot reach past it",
+    inventoryBlocks(["minecraft:deepslate"], "deepslate", legacy),
+    [],
+  );
+  /*
+   * `null` is no restriction, and it has to be a distinct answer from an empty
+   * set: the table is fetched over IPC, so there is a moment at start-up when
+   * nothing has arrived. An empty set there would empty the inventory, which
+   * reads as the app being broken rather than as a file not having landed.
+   */
+  equal(
+    "no restriction is not the same as an empty one",
+    inventoryBlocks(["minecraft:deepslate"], "", null),
+    ["minecraft:deepslate"],
+  );
+  equal(
+    "...and an empty set really does offer nothing",
+    inventoryBlocks(["minecraft:deepslate"], "", new Set()),
+    [],
+  );
+  // Air is out whatever the era: there is nothing to pick up.
+  equal(
+    "air is still excluded under a restriction",
+    inventoryBlocks(["minecraft:air", "minecraft:stone"], "", legacy),
+    ["minecraft:stone"],
+  );
+
+
   equal("a label loses its namespace and its underscores", blockLabel("minecraft:oak_planks"), "oak planks");
   equal("...and its block states", blockLabel("minecraft:oak_stairs[facing=north]"), "oak stairs");
 }

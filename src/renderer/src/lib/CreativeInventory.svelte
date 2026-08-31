@@ -26,13 +26,23 @@
     blocks: readonly string[];
     /** Shown beside the search, so the target is never a mystery. */
     version: string;
+    /**
+     * The names this schematic can hold, or `null` for no restriction.
+     *
+     * Only a legacy document supplies one: `legacy_blocks.json` says exactly
+     * which blocks a pre-Flattening file can name, and it is the same table
+     * the writer refuses a save on. Above 1.13 there is no such data and
+     * nothing is cut -- see `inventoryBlocks`.
+     */
+    placeable?: ReadonlySet<string> | null;
     /** What the chosen block is for — named so the title can say it. */
     purpose: "hand" | "fill" | "replace";
     onclose: () => void;
     onpick: (block: string) => void;
   }
 
-  const { open, blocks, version, purpose, onclose, onpick }: Props = $props();
+  const { open, blocks, version,
+    placeable = null, purpose, onclose, onpick }: Props = $props();
 
   const TILE = 68;
   const COLUMNS = 8;
@@ -43,7 +53,7 @@
   let scroller = $state<HTMLDivElement | undefined>(undefined);
   let search = $state<HTMLInputElement | undefined>(undefined);
 
-  const filtered = $derived(inventoryBlocks(blocks, query));
+  const filtered = $derived(inventoryBlocks(blocks, query, placeable));
   const view = $derived(
     gridWindow({
       count: filtered.length,

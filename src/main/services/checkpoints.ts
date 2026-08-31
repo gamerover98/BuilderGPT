@@ -148,7 +148,11 @@ export async function readCheckpoint(
 
   const history = createHistory();
   history.savedDepth = -1;
-  return { session: { doc, history, mesh: null }, messages };
+  // `voidBlock` is left at air here and seeded by whoever puts this on
+  // screen, exactly as `openDocument` leaves it: the sidecar lives under
+  // `userData` and reading it needs Electron, which this module is kept
+  // clear of so the suites can reach it. See `adoptProjectNotes`.
+  return { session: { doc, history, mesh: null, voidBlock: "" }, messages };
 }
 
 /** Whether a checkpoint is still on disk, so the UI can offer it or not. */

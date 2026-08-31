@@ -162,22 +162,25 @@ export function coerceEditing(raw: unknown): EditingSettings {
     // to mean the old behaviour, not the safe-looking one.
     autoGrow: source.autoGrow !== false,
     /*
-     * Air is stored as the empty string, and an id that *says* air is
-     * healed into it rather than kept.
+     * `voidBlock` is deliberately absent, and its normaliser moved rather
+     * than went away.
      *
-     * Two spellings of the same state is how they come to disagree: one of
-     * them would make `fillVoid` intern air over air and hand the mesher a
-     * palette full of void indices that draw nothing, which is the
-     * expensive way of doing exactly what the default already does.
+     * What empty space is made of is a fact about one schematic -- it is
+     * written into that file when a block is broken -- so it lives on the
+     * open session and is remembered per path in `ProjectNotes`. As a
+     * global it followed you between documents quietly changing what a
+     * break wrote.
+     *
+     * The air-heals-to-empty-string rule is still needed wherever the
+     * value now enters, or `fillVoid` interns air over air; it is
+     * `normaliseVoidBlock` in `shared/settings.ts`.
+     *
+     * A settings file written by an older build still carries the key. It
+     * is simply not read, which is this function's whole contract: only
+     * what is named survives.
      */
-    voidBlock: voidBlock(source.voidBlock),
     voidOpacity: opacity(source.voidOpacity),
   };
-}
-
-function voidBlock(raw: unknown): string {
-  const value = typeof raw === "string" ? raw.trim() : "";
-  return value === "" || isAir(value) ? "" : value;
 }
 
 function opacity(raw: unknown): number {

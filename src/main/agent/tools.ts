@@ -72,7 +72,13 @@ import {
   type RegionTransform,
 } from "../domain/transform.js";
 import { executeJsBuild } from "../core.js";
-import { parsePaletteEntry } from "../pipeline/loader_formats.js";
+import { loadLegacyBlockTable, parsePaletteEntry } from "../pipeline/loader_formats.js";
+import { legacyBlockNames } from "../services/writers.js";
+import {
+  documentEra,
+  documentVersionName,
+  mcVersion,
+} from "../../shared/mc_versions.js";
 import { paletteEntryCacheKey, type PaletteEntry } from "../pipeline/types.js";
 import { MAX_DOCUMENT_VOLUME, MAX_EDIT_VOLUME } from "../services/session.js";
 import { orderRegion } from "../domain/grow.js";
@@ -318,7 +324,25 @@ function resolveRegion(context: ToolContext, args: Partial<RegionArgs>): Resolve
   return resolved;
 }
 
-function checkBlockAllowed(context: ToolContext, entry: PaletteEntry): void {
+/**
+ * Whether a model may write this block into the open document.
+ *
+ * Two questions, and they fail for different reasons and want different
+ * sentences. **Can this app place it at all** is the registry, and a failure
+ * there is a typo. **Can this schematic hold it** is the version, and a
+ * failure there is a block that exists in Minecraft but not in the one this
+ * file is for -- `minecraft:deepslate` in a 1.12 schematic. Telling a model
+ * "check the spelling" about a correctly spelled block sends it round a loop
+ * it cannot get out of.
+ *
+ * The version half only ever restricts a *legacy* document, from the same
+ * table `buildMcEdit` decides the save on. There is no equivalent data for the
+ * flat era, and inventing it would refuse blocks that do exist.
+ *
+ * Async because the table is read from disk. It is memoised, so this costs a
+ * map lookup after the first call in a session.
+ */
+async function checkBlockAllowed(context: ToolContext, entry: PaletteEntry): Promise<void> {
   if (!context.allowedBlocks.has(entry.namespacedName)) {
     // Named, not silently swapped for stone: the model can correct a typo or
     // choose something else, but only if it is told.
@@ -327,6 +351,26 @@ function checkBlockAllowed(context: ToolContext, entry: PaletteEntry): void {
         `Use get_palette to see what the schematic already uses.`,
     );
   }
+  if (entry.namespacedName === "minecraft:air") return;
+
+  const { format, dataVersion } = context.doc;
+  if (documentEra(format, dataVersion) !== "legacy") return;
+  const tablePath = context.legacyBlocksPath;
+  // No table, no claim. Refusing everything because a resource is missing
+  // would be worse than the problem it guards against.
+  if (tablePath === undefined || tablePath === null) return;
+
+  const names = legacyBlockNames(await loadLegacyBlockTable(tablePath));
+  if (names.has(entry.namespacedName)) return;
+  const name = documentVersionName(format, dataVersion);
+  const label = (name === null ? null : mcVersion(name)?.label) ?? "this version";
+  throw new Error(
+    `${entry.namespacedName} does not exist in Minecraft ${label}, which is what ` +
+      `this schematic is for. Before 1.13 blocks were numeric ids and the set is ` +
+      `much smaller. Use get_schematic_info to see the version, get_palette to ` +
+      `see what this schematic already uses, or ask the user to change the ` +
+      `schematic's Minecraft version.`,
+  );
 }
 
 function describeRegion(region: Region): string {
@@ -661,7 +705,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
     async run(context, args: Partial<RegionArgs> & { block: string }, id) {
       const { region, ...notes } = resolveRegion(context, args ?? {});
       const entry = toPlacedEntry(args.block);
-      checkBlockAllowed(context, entry);
+      await checkBlockAllowed(context, entry);
       if (regionVolume(region) > MAX_EDIT_VOLUME) {
         throw new Error(`That region covers ${regionVolume(region)} blocks, more than one edit may touch.`);
       }
@@ -689,7 +733,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
       // `from` is a pattern and `to` is a placement -- see `toPlacedEntry`.
       const from = toEntry(args.from);
       const to = toPlacedEntry(args.to);
-      checkBlockAllowed(context, to);
+      await checkBlockAllowed(context, to);
       step(
         context,
         "replace_blocks",
@@ -727,7 +771,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
     },
     async run(context, args: { x: number; y: number; z: number; block: string }, id) {
       const entry = toPlacedEntry(args.block);
-      checkBlockAllowed(context, entry);
+      await checkBlockAllowed(context, entry);
       step(context, "set_block", `placing ${entry.namespacedName} at (${args.x},${args.y},${args.z})`, id);
       const changed = context.tx.setBlock(args.x, args.y, args.z, entry);
       return {

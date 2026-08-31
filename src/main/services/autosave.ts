@@ -151,7 +151,11 @@ export async function restoreAutosave(dir: string): Promise<DocumentSession | nu
   // `savedDepth` of -1 is unreachable, which is the point: the document differs
   // from disk and there is no sequence of undos that can prove otherwise.
   history.savedDepth = -1;
-  return { doc, history, mesh: null };
+  // `voidBlock` is left at air here and seeded by whoever puts this on
+  // screen, exactly as `openDocument` leaves it: the sidecar lives under
+  // `userData` and reading it needs Electron, which this module is kept
+  // clear of so the suites can reach it. See `adoptProjectNotes`.
+  return { doc, history, mesh: null, voidBlock: "" };
 }
 
 /**

@@ -124,6 +124,13 @@ const block = (name: string, properties: Record<string, string> = {}): PaletteEn
   properties,
 });
 
+import {
+  buildLegacyIndex,
+  legacyIdLabel,
+  parseLegacyId,
+} from "../src/shared/legacy_ids.js";
+import { loadLegacyBlockTable } from "../src/main/pipeline/loader_formats.js";
+import { buildReverseLegacyTable } from "../src/main/services/writers.js";
 const LEGACY_BLOCKS = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -2190,6 +2197,62 @@ console.log("\n--- the tag the panel names is the tag the file uses ---");
   equal("a litematic has nowhere to keep an anchor", anchorLocation("litematic"), null);
   equal("...nor a world origin", originLocation("litematic"), null);
 }
+// --- the legacy id table, read both ways ------------------------------------
+/*
+ * `shared/legacy_ids.ts` exists because three places now ask which `ID:DATA` a
+ * block name maps to: the MCEdit writer, the inventory that labels a legacy
+ * schematic with what its file will really store, and the block field that
+ * accepts one typed in. The answer involves a tie-break, and two
+ * implementations of a tie-break is how they come to disagree.
+ */
+console.log("\n--- the legacy id table, read both ways ---");
+{
+  const table = await loadLegacyBlockTable(LEGACY_BLOCKS);
+  const index = buildLegacyIndex(table);
+
+  /*
+   * Seventy-four modern states come from more than one `id:meta`. Water is the
+   * one everybody meets: `8:0` is still water and `9:0` is flowing, and both
+   * flatten to `minecraft:water[level=0]`. Lowest wins, so the answer does not
+   * depend on which order the JSON happened to be written in.
+   */
+  equal("water resolves to the lower of its two ids", index.byName.get("minecraft:water"), {
+    id: 8,
+    meta: 0,
+  });
+  equal("...and reads back", index.byId.get("8:0"), table["8:0"]);
+
+  // The writer and the shared index are one table, not two that agree.
+  const reverse = buildReverseLegacyTable(table);
+  let mismatched = 0;
+  for (const [name, id] of index.byName) {
+    const theirs = reverse.byName.get(name);
+    if (theirs === undefined || theirs.id !== id.id || theirs.meta !== id.meta) mismatched += 1;
+  }
+  equal("the writer names blocks the same way, on every row", mismatched, 0);
+  equal("...over the whole table", index.byName.size, reverse.byName.size);
+
+  /*
+   * The name set is what the editor refuses against, so it has to be exactly
+   * what the writer can encode -- not a superset, which would let a block
+   * through to fail at save time, and not a subset, which would refuse one that
+   * is fine.
+   */
+  check("a 1.12 block is in the set", index.names.has("minecraft:oak_fence"));
+  check("...and a 1.17 one is not", !index.names.has("minecraft:deepslate"));
+  equal("the set is exactly what can be named", index.names.size, index.byName.size);
+
+  // A legacy id is a shape, not just a string with a colon in it. This decides
+  // whether something typed into the block field is an id at all, and
+  // `minecraft:stone` has a colon too.
+  equal("a plain pair parses", parseLegacyId("35:14"), { id: 35, meta: 14 });
+  equal("...with spaces round it", parseLegacyId("  35:14  "), { id: 35, meta: 14 });
+  equal("a block id does not", parseLegacyId("minecraft:stone"), null);
+  equal("nor does a nibble out of range", parseLegacyId("35:16"), null);
+  equal("nor an empty string", parseLegacyId(""), null);
+  equal("and it round-trips", legacyIdLabel({ id: 35, meta: 14 }), "35:14");
+}
+
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

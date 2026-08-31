@@ -29,6 +29,7 @@ import {
   type DocumentStateResponse,
   type EditRequest,
   type ResizeRequest,
+  type VoidBlockRequest,
   type EditResponse,
   type GenerateRequest,
   type GenerateResponse,
@@ -88,6 +89,8 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.clipboardWrite, text) as Promise<void>,
   getDefaultOutputDir: () => ipcRenderer.invoke(IPC.defaultOutputDir) as Promise<string>,
   listBlocks: () => ipcRenderer.invoke(IPC.blocksList) as Promise<string[]>,
+  listLegacyBlocks: () =>
+    ipcRenderer.invoke(IPC.blocksLegacy) as Promise<Record<string, string>>,
   getBlockIcons: (req) => ipcRenderer.invoke(IPC.blockIcons, req) as Promise<BlockIconsResponse>,
   warmBlockIcons: () => ipcRenderer.invoke(IPC.blockIconsWarm) as Promise<number>,
 
@@ -116,6 +119,8 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docApply, request) as Promise<EditResponse>,
   resizeDocument: (request: ResizeRequest) =>
     ipcRenderer.invoke(IPC.docResize, request) as Promise<EditResponse>,
+  setVoidBlock: (request: VoidBlockRequest) =>
+    ipcRenderer.invoke(IPC.docSetVoidBlock, request) as Promise<EditResponse>,
   convertFile: (request: ConvertRequest) =>
     ipcRenderer.invoke(IPC.convertFile, request) as Promise<ConvertResponse>,
   undo: () => ipcRenderer.invoke(IPC.docUndo) as Promise<EditResponse>,

@@ -349,6 +349,7 @@ function buildMcpServer(): Server {
         // document", which is the honest answer rather than a guessed one.
         selection: null,
         allowedBlocks: (await host?.allowedBlocks()) ?? new Set<string>(),
+        legacyBlocksPath: legacyBlocksPath(),
         lifecycle: lifecycleHost(),
         onChanged: announceDocument,
       });

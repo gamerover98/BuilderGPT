@@ -52,6 +52,20 @@ export const IPC = {
   /** Every block the app can place — the same set the agent is judged against. */
   blocksList: "bgpt:blocks:list",
   /**
+   * The pre-Flattening block table, `"id:meta"` to a modern spelling.
+   *
+   * Sent whole and once, because the renderer needs it read both ways: to
+   * stop offering blocks a legacy schematic cannot hold, to label the ones it
+   * can with the `ID:DATA` the file will really store, and to accept one typed
+   * into the block field. About 1,700 short strings.
+   *
+   * It is main's to read -- `resources/` is resolved there and the renderer
+   * touches no filesystem -- but the *rule* for inverting it is in
+   * `shared/legacy_ids.ts`, so both sides agree on which `id:meta` a name maps
+   * to when several produce it.
+   */
+  blocksLegacy: "bgpt:blocks:legacy",
+  /**
    * Geometry for a handful of blocks, so the inventory can draw them.
    *
    * A handful and not all of them: the grid is virtualised and asks for what is
@@ -118,6 +132,18 @@ export const IPC = {
    * this one changes none of them.
    */
   docResize: "bgpt:doc:resize",
+  /**
+   * Choose what empty space is made of in the open schematic.
+   *
+   * A document verb rather than a settings write, and that is the fix as
+   * much as it is the plumbing. It used to go through `setSettings`, which
+   * writes the store and stops -- so the choice landed on disk and the
+   * viewport went on showing the previous one until the schematic was
+   * closed and reopened. Answering with a `DocumentState` puts it on the
+   * same path as every other document change, where refreshing the mesh is
+   * what the caller already does.
+   */
+  docSetVoidBlock: "bgpt:doc:void:set",
   /**
    * One file into another, without opening either.
    *
@@ -888,6 +914,15 @@ export interface DocumentState {
    * anywhere said which.
    */
   dataVersion: number | null;
+  /**
+   * What empty space is made of in this document. `""` is air.
+   *
+   * On the state because the renderer decides what a *break* writes, and it
+   * used to read that out of the global settings object it holds. Now that
+   * the answer belongs to the document, being told is the only way the
+   * renderer can have it right the instant a different schematic opens.
+   */
+  voidBlock: string;
   /** Monotonic; the renderer uses it to tell whether its mesh is stale. */
   revision: number;
 }
@@ -947,6 +982,22 @@ export type EditRequest =
  * because a delta would be ambiguous about which side it grew from. Growth
  * lands at the far side, so every coordinate already on screen stays valid.
  */
+/**
+ * What empty space should be made of, and whether to rewrite what already is.
+ */
+export interface VoidBlockRequest {
+  /** The block id, with states if it has any. `""` means air. */
+  block: string;
+  /**
+   * Also replace every cell holding the *previous* answer.
+   *
+   * Off by default, and it has to be: the choice on its own moves no block,
+   * while this rewrites the document. One transaction, so it is one Ctrl+Z --
+   * but it is still an edit somebody has to ask for.
+   */
+  replaceExisting?: boolean;
+}
+
 export interface ResizeRequest {
   width: number;
   height: number;
@@ -1595,6 +1646,8 @@ export interface BgptApi {
   copyToClipboard(text: string): Promise<void>;
   getDefaultOutputDir(): Promise<string>;
   listBlocks(): Promise<string[]>;
+  /** The pre-Flattening block table; `{}` when it cannot be read. */
+  listLegacyBlocks(): Promise<Record<string, string>>;
   /** Geometry for the blocks the inventory is about to draw. */
   getBlockIcons(req: BlockIconsRequest): Promise<BlockIconsResponse>;
   /** Settles the atlas for the whole block list. Resolves with its version. */
@@ -1632,6 +1685,8 @@ export interface BgptApi {
   applyEdit(request: EditRequest): Promise<EditResponse>;
   /** Set the schematic's size. Refuses a lossy shrink without `confirmLoss`. */
   resizeDocument(request: ResizeRequest): Promise<EditResponse>;
+  /** Choose what empty space is made of in the open schematic. */
+  setVoidBlock(request: VoidBlockRequest): Promise<EditResponse>;
   /** One file into another. Never overwrites; touches no open document. */
   convertFile(request: ConvertRequest): Promise<ConvertResponse>;
   undo(): Promise<EditResponse>;

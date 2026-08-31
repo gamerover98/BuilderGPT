@@ -21,6 +21,8 @@
     busy: boolean;
     /** The registry to search — the same set the agent is judged against. */
     blocks: readonly string[];
+    /** Passed straight to the block fields; see `BlockPicker`. */
+    placeable?: ReadonlySet<string> | null;
     /**
      * The block Fill writes and the one Creative mode places. Owned by the app,
      * because the viewport places it too and the two must not disagree about
@@ -88,6 +90,7 @@
     selection,
     busy,
     blocks,
+    placeable = null,
     block,
     onblockchange,
     palette,
@@ -177,6 +180,7 @@
         value={block}
         placeholder="minecraft:stone"
         {blocks}
+        {placeable}
         onchange={onblockchange}
       />
       <button
@@ -206,6 +210,7 @@
         value={replaceFrom}
         placeholder="minecraft:cobblestone"
         {blocks}
+        {placeable}
         onchange={onreplacefromchange}
       />
       <button

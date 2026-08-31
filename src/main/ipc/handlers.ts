@@ -21,6 +21,7 @@ import {
   type DocumentStateResponse,
   type EditRequest,
   type ResizeRequest,
+  type VoidBlockRequest,
   type EditResponse,
   type ConvertRequest,
   type ConvertResponse,
@@ -69,8 +70,15 @@ import {
   type TransformRequest,
 } from "../../shared/ipc.js";
 import { SCHEMATIC_FORMAT_LABEL, schematicExtension } from "../../shared/schematic.js";
-import { dataVersionOf, refusalFor } from "../../shared/mc_versions.js";
 import {
+  dataVersionOf,
+  documentEra,
+  documentVersionName,
+  mcVersion,
+  refusalFor,
+} from "../../shared/mc_versions.js";
+import {
+  normaliseVoidBlock,
   providerRequiresApiKey,
   type KeyStorageStatus,
   type PreviewSettings,
@@ -81,6 +89,9 @@ import {
   type DocumentSession,
   adoptDocument,
   applyEdit,
+  BlockNotInVersionError,
+  type EditOptions,
+  setSessionVoidBlock,
   OutsideDocumentError,
   ResizeWouldLoseBlocksError,
   resizeSession,
@@ -118,7 +129,8 @@ import {
   setWorldEditAnchor,
   setWorldOrigin,
 } from "../services/schematic_nbt.js";
-import { UnrepresentableBlocksError } from "../services/writers.js";
+import { legacyBlockNames, UnrepresentableBlocksError } from "../services/writers.js";
+import { loadLegacyBlockTable } from "../pipeline/loader_formats.js";
 import { AgentCancelledError, runAgent } from "../agent/agent.js";
 import {
   adoptSubject,
@@ -571,6 +583,20 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     async (): Promise<string[]> => [...(await loadAllowedBlocks(resourcesDir()))].sort(),
   );
 
+  /*
+   * Read here rather than bundled into the renderer: it is a `resources/`
+   * file, and the renderer touches no filesystem. An unreadable table is not
+   * an error -- it means the legacy features degrade to what the app did
+   * before them, which is better than refusing to show an inventory.
+   */
+  ipcMain.handle(IPC.blocksLegacy, async (): Promise<Record<string, string>> => {
+    try {
+      return await loadLegacyBlockTable(legacyBlocksPath());
+    } catch {
+      return {};
+    }
+  });
+
   ipcMain.handle(
     IPC.blockIcons,
     async (_event, req: BlockIconsRequest): Promise<BlockIconsResponse> => {
@@ -806,6 +832,35 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   // every mutating call rather than on a separate round trip, because there is
   // no case where the renderer wants one without the other.
 
+  /**
+   * What an edit is allowed to do to the open document.
+   *
+   * Assembled here rather than read inside `session.ts`, which stays clear of
+   * the settings store and of `resources/` so the suites can reach it. Three
+   * separate answers arrive by this one route, which is what stops a caller
+   * getting two of them and forgetting the third.
+   *
+   * The block restriction exists only for the legacy era, and that asymmetry is
+   * honest rather than lazy: `legacy_blocks.json` says exactly which blocks a
+   * pre-Flattening file can name, and this app has no equivalent data for the
+   * flat era. Guessing there would hide blocks that do exist, which is the one
+   * failure a user cannot work around.
+   */
+  const editOptionsFor = async (session: DocumentSession): Promise<EditOptions> => {
+    const settings = await getSettings();
+    const { format, dataVersion } = session.doc;
+    const legacy = documentEra(format, dataVersion) === "legacy";
+    const name = documentVersionName(format, dataVersion);
+    return {
+      autoGrow: settings.editing.autoGrow,
+      voidBlock: session.voidBlock,
+      placeableNames: legacy
+        ? legacyBlockNames(await loadLegacyBlockTable(legacyBlocksPath()))
+        : null,
+      versionLabel: (name === null ? null : mcVersion(name)?.label) ?? "this version",
+    };
+  };
+
   const failure = (err: unknown): Failure => {
     if (err instanceof NoDocumentError) {
       return { ok: false, kind: "invalid-input", message: err.message };
@@ -819,6 +874,11 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       return { ok: false, kind: "needs-confirmation", message: err.message };
     }
     if (err instanceof OutsideDocumentError) {
+      return { ok: false, kind: "invalid-input", message: err.message };
+    }
+    if (err instanceof BlockNotInVersionError) {
+      // Its message already names the block, the version and the way out.
+      // Wrapping it would bury the only sentence that helps.
       return { ok: false, kind: "invalid-input", message: err.message };
     }
     if (err instanceof UnrepresentableBlocksError) {
@@ -869,10 +929,19 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
        */
       await adoptSubject(filePath);
       forgetCheckpointMemo();
+      /*
+       * What empty space is made of comes back with the file.
+       *
+       * Read here rather than in `openDocument`, which is Electron-free so
+       * the suites can reach it -- the sidecar lives under `userData`. Same
+       * split as the conversation, and the same reason.
+       */
+      const notes = await projectNotes(filePath);
+      session.voidBlock = normaliseVoidBlock(notes?.voidBlock);
       return {
         ok: true,
         state: shellState(session),
-        project: await projectNotes(filePath),
+        project: notes,
         ...(session.notes === undefined || session.notes.length === 0
           ? {}
           : { notes: [...session.notes] }),
@@ -939,10 +1008,6 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       try {
         const { settings } = request;
         const session = requireSession();
-        // The void block lives in `editing` rather than `preview`, because it
-        // is written into the file as well as drawn -- so it comes from the
-        // store rather than from the payload the renderer sent.
-        const stored = await getSettings();
         const mesh = await documentMesh(
           session,
           {
@@ -950,7 +1015,11 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
             fallbackResourcePackPath: await defaultResourcePackPath(),
             biomeColor: settings.biomeColor,
             showMarkers: settings.showMarkers,
-            voidBlock: stored.editing.voidBlock,
+            // The document's own, not a setting: what empty space is made of
+            // is written into this file, so it belongs to it. It reaches the
+            // mesh key in `documentMesh`, which is what makes changing it
+            // redraw instead of returning the cached picture.
+            voidBlock: session.voidBlock,
             waterColor: settings.waterColor,
             blockLight: settings.blockLight,
             occlusion: settings.ambientOcclusion,
@@ -976,19 +1045,39 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   ipcMain.handle(IPC.docApply, async (_event, request: EditRequest): Promise<EditResponse> => {
     try {
       const session = requireSession();
-      // Whether an edit outside the box may move the box is a setting, and
-      // main is where it has to be honoured -- `session.ts` may not read the
-      // store, which imports Electron and is out of the suites' reach.
-      const settings = await getSettings();
-      const changed = applyEdit(session, request, {
-        autoGrow: settings.editing.autoGrow,
-        voidBlock: settings.editing.voidBlock,
-      });
+      const changed = applyEdit(session, request, await editOptionsFor(session));
       return { ok: true, changed, state: shellState(session) };
     } catch (err) {
       return failure(err);
     }
   });
+
+  ipcMain.handle(
+    IPC.docSetVoidBlock,
+    async (_event, request: VoidBlockRequest): Promise<EditResponse> => {
+      try {
+        const session = requireSession();
+        const changed = setSessionVoidBlock(session, request.block, {
+          replaceExisting: request.replaceExisting === true,
+        });
+        /*
+         * Written through immediately, not left until the next save.
+         *
+         * A document with no path has no sidecar and keeps the value on the
+         * session until it gets one -- the rule conversations and version
+         * history already follow. Persisting here as well as in `docSave` is
+         * what makes the choice survive a crash, which is the one case where
+         * "it would have been saved eventually" is worth nothing.
+         */
+        if (session.doc.filePath !== null) {
+          await rememberProject(session.doc.filePath, { voidBlock: session.voidBlock });
+        }
+        return { ok: true, changed, state: shellState(session) };
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
 
   ipcMain.handle(
     IPC.docResize,
@@ -1271,6 +1360,11 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
        */
       await rememberProject(result.filePath, {
         format: result.format,
+        // Always written, including the empty string, because "this
+        // schematic is back to air" is an answer and `rememberProject`
+        // merges rather than replaces -- omitting it would leave the old
+        // choice standing after somebody deliberately cleared it.
+        voidBlock: session.voidBlock,
         ...(request.version === undefined ? {} : { version: request.version }),
       });
       return {

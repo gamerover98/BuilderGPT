@@ -115,6 +115,7 @@ import {
 } from "../src/main/domain/grow.js";
 import {
   DEFAULT_EDITING_SETTINGS,
+  normaliseVoidBlock,
   DEFAULT_HOTBAR,
   DEFAULT_MCP_SETTINGS,
   DEFAULT_SETTINGS,
@@ -1428,7 +1429,6 @@ console.log("\n--- settings coercion ---");
   // round-trip written with the default in it.
   const editing = {
     autoGrow: false,
-    voidBlock: "minecraft:lava",
     voidOpacity: 0.75,
   } satisfies EditingSettings;
 
@@ -1458,26 +1458,35 @@ console.log("\n--- settings coercion ---");
    * index is void and none of them draws anything -- the expensive way of
    * doing precisely what the default already does for free.
    */
-  for (const spelling of [
-    "minecraft:air",
-    "air",
-    "  minecraft:air  ",
-  ]) {
+  for (const spelling of ["minecraft:air", "air", "  minecraft:air  "]) {
     equal(
       `${JSON.stringify(spelling)} is stored as no void block at all`,
-      coerceEditing({ voidBlock: spelling }).voidBlock,
+      normaliseVoidBlock(spelling),
       "",
     );
   }
-  equal(
-    "a real block survives, trimmed",
-    coerceEditing({ voidBlock: "  minecraft:water  " }).voidBlock,
-    "minecraft:water",
-  );
+  equal("a real block survives, trimmed", normaliseVoidBlock("  minecraft:water  "), "minecraft:water");
   equal(
     "...and so does one carrying a state",
-    coerceEditing({ voidBlock: "minecraft:water[level=0]" }).voidBlock,
+    normaliseVoidBlock("minecraft:water[level=0]"),
     "minecraft:water[level=0]",
+  );
+  equal("...and air carrying one is still air", normaliseVoidBlock("minecraft:air[x=1]"), "");
+  equal("anything that is not a string is air", normaliseVoidBlock(undefined), "");
+
+  /*
+   * `voidBlock` is gone from the settings, and this states it rather than
+   * leaving it to the type.
+   *
+   * What empty space is made of is written into one schematic, so it belongs
+   * to the document; as a global it followed you between files silently
+   * changing what a break wrote. `coerceEditing` names every field it keeps,
+   * so a settings file from an older build still carrying the key must come
+   * back without it -- and that is a runtime fact, not a compile-time one.
+   */
+  check(
+    "an older settings file's void block is not carried into `editing`",
+    !("voidBlock" in coerceEditing({ voidBlock: "minecraft:lava" })),
   );
 
   /*
@@ -1496,11 +1505,6 @@ console.log("\n--- settings coercion ---");
     "junk falls back to the default",
     coerceEditing({ voidOpacity: "quite" }).voidOpacity,
     DEFAULT_EDITING_SETTINGS.voidOpacity,
-  );
-  equal(
-    "a missing editing block is air",
-    coerceEditing(undefined).voidBlock,
-    "",
   );
 
   const settings = {
@@ -1872,6 +1876,43 @@ console.log("\n--- project notes ---");
   equal("a partial set keeps what it has", coerceProject({ format: "sponge2", extra: 1 }), {
     format: "sponge2",
   });
+
+  /*
+   * `litematic` used to be dropped here, in silence.
+   *
+   * The fourth container was added to `SchematicFormat` and this whitelist was
+   * written out as three names, so a `.litematic` remembered its container and
+   * then opened Save As on Sponge -- with nothing failing anywhere, because a
+   * missing note is a legal state. It is checked against the format list now,
+   * which is why a fifth container cannot repeat it.
+   */
+  equal("the fourth container is remembered like the other three", coerceProject({ format: "litematic" }), {
+    format: "litematic",
+  });
+
+  /*
+   * What empty space is made of rides here too, and for the reason the whole
+   * sidecar exists: it is written into *this* file when a block is broken, so
+   * an underwater jetty and a cathedral want different answers. As a global
+   * setting it followed you between them, silently changing what a break wrote.
+   */
+  equal("the void block is remembered per file", coerceProject({ voidBlock: "minecraft:water" }), {
+    voidBlock: "minecraft:water",
+  });
+  equal(
+    "...carrying its state, because that is what a break writes",
+    coerceProject({ voidBlock: "minecraft:water[level=0]" }),
+    { voidBlock: "minecraft:water[level=0]" },
+  );
+  /*
+   * Air is absence, both ways round. A sidecar written by an older build, or
+   * by hand, can spell it out; storing that rather than nothing would make
+   * `fillVoid` intern air over air and hand the mesher a palette in which every
+   * index is void and none of them draws anything.
+   */
+  equal("air is no answer at all", coerceProject({ voidBlock: "minecraft:air" }), undefined);
+  equal("...however it is spelled", coerceProject({ voidBlock: "  air  " }), undefined);
+  equal("...and an empty one is the same", coerceProject({ voidBlock: "" }), undefined);
 
   /*
    * A record with notes and no conversations survives. Someone can set a

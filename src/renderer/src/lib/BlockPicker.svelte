@@ -20,10 +20,18 @@
     value: string;
     placeholder?: string;
     blocks: readonly string[];
+    /**
+     * The only names this schematic can hold, or `null` for no restriction.
+     *
+     * Air is deliberately *not* excluded here, unlike the creative grid: a
+     * fill with air is how you clear a region, so it is a real answer in this
+     * field and not in that one.
+     */
+    placeable?: ReadonlySet<string> | null;
     onchange: (block: string) => void;
   }
 
-  const { id, value, placeholder, blocks, onchange }: Props = $props();
+  const { id, value, placeholder, blocks, placeable = null, onchange }: Props = $props();
 
   let open = $state(false);
   let highlighted = $state(0);
@@ -35,7 +43,10 @@
    */
   let list = $state<HTMLUListElement | undefined>(undefined);
 
-  const matches = $derived(searchBlocks(blocks, value));
+  const offered = $derived(
+    placeable === null ? blocks : blocks.filter((block) => placeable.has(block)),
+  );
+  const matches = $derived(searchBlocks(offered, value));
 
   /**
    * Keeps the highlighted row on screen.
@@ -107,10 +118,10 @@
         keyboard selection one off from what is drawn.
       -->
       <p class="count">
-        {#if matches.length === blocks.length}
-          {t("blocks.all", { count: blocks.length })}
+        {#if matches.length === offered.length}
+          {t("blocks.all", { count: offered.length })}
         {:else}
-          {t("blocks.matches", { count: matches.length, total: blocks.length })}
+          {t("blocks.matches", { count: matches.length, total: offered.length })}
         {/if}
       </p>
       <ul role="listbox" bind:this={list}>

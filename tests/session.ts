@@ -16,7 +16,18 @@ import { fileURLToPath } from "url";
 import { documentSize, getBlock, setBlock, setBlockEntity } from "../src/main/domain/document.js";
 import { DOCUMENT_SIZE } from "../src/shared/settings.js";
 import {
+  DEFAULT_LEGACY_VERSION,
+  dataVersionOf,
+  documentEra,
+  documentVersionName,
+} from "../src/shared/mc_versions.js";
+import type { SchematicFormat } from "../src/shared/schematic.js";
+import { legacyBlockNames } from "../src/main/services/writers.js";
+import { loadLegacyBlockTable } from "../src/main/pipeline/loader_formats.js";
+import {
   applyEdit,
+  BlockNotInVersionError,
+  setSessionVoidBlock,
   OutsideDocumentError,
   ResizeWouldLoseBlocksError,
   resizeSession,
@@ -2651,6 +2662,400 @@ console.log("\n--- importing a mcfunction ---");
     await rm(workDir, { recursive: true, force: true });
   }
 }
+// --- choosing what empty space is made of -----------------------------------
+console.log("\n--- choosing what empty space is made of ---");
+{
+  /*
+   * Emptiness is matched the way `fillVoid` matches it: by palette key, not by
+   * bare name against the raw setting string.
+   *
+   * Those are two vocabularies. The picker hands back
+   * `minecraft:water[level=0]`, and a cell holding it has the *name*
+   * `minecraft:water` -- so the old comparison never matched, and a break into
+   * that void quietly went back to growing the box while `preview.ts` was
+   * already drawing those same cells as empty. One feature, two halves,
+   * disagreeing about which cells were void.
+   */
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  const changed = applyEdit(
+    session,
+    {
+      kind: "setBlock",
+      x: 9,
+      y: 0,
+      z: 0,
+      block: { namespacedName: "minecraft:water", properties: { level: "0" } },
+    },
+    { voidBlock: "minecraft:water[level=0]" },
+  );
+  equal("a stated void block matches a cell carrying the same state", changed, 0);
+  equal("...so breaking into it still does not grow", session.doc.width, 4);
+}
+
+{
+  /*
+   * And the asymmetry that makes it a key match rather than a name match: a
+   * *different* state is a different block, so it is an ordinary placement and
+   * grows like one. `fillVoid` draws it the same way.
+   */
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  applyEdit(
+    session,
+    { kind: "setBlock", x: 9, y: 0, z: 0, block: { namespacedName: "minecraft:water" } },
+    { voidBlock: "minecraft:water[level=0]" },
+  );
+  equal("a different state is an ordinary block and grows", session.doc.width, 10);
+}
+
+{
+  /*
+   * The choice on its own moves no block, so it leaves nothing to undo.
+   *
+   * It changes what empty space is *drawn* as and what a future break will
+   * *write*. Putting that on the undo stack would make Ctrl+Z after a session
+   * of building take back a preference rather than the wall you just placed.
+   */
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  const before = documentState(session).undoDepth;
+  const changed = setSessionVoidBlock(session, "minecraft:water");
+  equal("choosing alone changes no blocks", changed, 0);
+  equal("...and leaves the undo stack alone", documentState(session).undoDepth, before);
+  equal("...but the document now says what it is made of", session.voidBlock, "minecraft:water");
+  equal("...as the renderer will be told", documentState(session).voidBlock, "minecraft:water");
+}
+
+{
+  /*
+   * Asked for, the rewrite is one transaction: a swap of every empty cell in
+   * the schematic is one Ctrl+Z, not one per cell.
+   */
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  setBlock(session.doc, 1, 1, 1, { namespacedName: "minecraft:stone", properties: {} });
+  const before = documentState(session).undoDepth;
+  const changed = setSessionVoidBlock(session, "minecraft:water", { replaceExisting: true });
+  equal("the air already there becomes the new void block", changed, 63);
+  equal("...in one undoable step", documentState(session).undoDepth, before + 1);
+  equal("...leaving the blocks alone", getBlock(session.doc, 1, 1, 1).namespacedName, "minecraft:stone");
+  equal("...and filling the rest", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:water");
+
+  undoEdit(session);
+  equal("undo puts the air back", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:air");
+  equal(
+    "...and the choice itself is not undone, because it was never an edit",
+    session.voidBlock,
+    "minecraft:water",
+  );
+
+}
+
+{
+  /*
+   * Going back to air is the same operation rather than a special case: `""`
+   * means air on both sides of the swap, so there is no separate "clear" verb
+   * to keep in step with this one.
+   */
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  setSessionVoidBlock(session, "minecraft:water", { replaceExisting: true });
+  equal("the water went in", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:water");
+  const back = setSessionVoidBlock(session, "", { replaceExisting: true });
+  equal("going back to air replaces the water", back, 64);
+  equal("...and the document says so", session.voidBlock, "");
+  equal("...cell by cell", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:air");
+}
+
+{
+  // Choosing what is already chosen is not an edit, whatever the checkbox says.
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  setSessionVoidBlock(session, "minecraft:water");
+  const before = documentState(session).undoDepth;
+  equal(
+    "re-choosing the same block does nothing",
+    setSessionVoidBlock(session, "minecraft:water", { replaceExisting: true }),
+    0,
+  );
+  equal("...and leaves no undo step", documentState(session).undoDepth, before);
+  // Every spelling of air is the same answer, so this is not a change either.
+  setSessionVoidBlock(session, "");
+  equal("air normalises", setSessionVoidBlock(session, "minecraft:air"), 0);
+  equal("...to the empty string", session.voidBlock, "");
+}
+
+// --- a legacy schematic refuses blocks that did not exist yet ---------------
+/*
+ * Reported as: on a .schematic you can place 1.13+ blocks. It was exactly that.
+ *
+ * Nothing in `applyEdit` had ever read the version. The only enforcement was
+ * `buildMcEdit`, which throws over the whole palette when the user finally asks
+ * to save -- a correct objection arriving hours late, about blocks that have
+ * since been built around.
+ */
+console.log("\n--- a legacy schematic refuses blocks that did not exist yet ---");
+{
+  const names = legacyBlockNames(await loadLegacyBlockTable(LEGACY_BLOCKS));
+  const legacy = { placeableNames: names, versionLabel: "1.12.2" };
+  const refusal = (run: () => void): string | null => {
+    try {
+      run();
+      return null;
+    } catch (err) {
+      return err instanceof BlockNotInVersionError
+        ? err.message
+        : `wrong error: ${String(err)}`;
+    }
+  };
+
+  {
+    const session = newDocument({ width: 4, height: 4, length: 4 }, "mcedit", 1343);
+    const message = refusal(() =>
+      applyEdit(
+        session,
+        { kind: "setBlock", x: 1, y: 1, z: 1, block: { namespacedName: "minecraft:deepslate" } },
+        legacy,
+      ),
+    );
+    check("placing a 1.13+ block is refused", message !== null);
+    check("...naming the block", message?.includes("minecraft:deepslate") === true, message ?? "");
+    check("...and the version", message?.includes("1.12.2") === true, message ?? "");
+    /*
+     * The way out is part of the message, and that is not politeness. Without
+     * it this is a dead end that reads as the app refusing to let you build:
+     * the schematic can have its version changed, and nothing else on screen
+     * says so.
+     */
+    check("...and the way out", message?.includes("version") === true, message ?? "");
+    equal("nothing was written", getBlock(session.doc, 1, 1, 1).namespacedName, "minecraft:air");
+  }
+
+  {
+    // Fill and replace go through the same guard.
+    const session = newDocument({ width: 4, height: 4, length: 4 }, "mcedit", 1343);
+    check(
+      "filling with one is refused too",
+      refusal(() =>
+        applyEdit(
+          session,
+          {
+            kind: "fill",
+            region: { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 1, maxZ: 1 },
+            block: { namespacedName: "minecraft:deepslate" },
+          },
+          legacy,
+        ),
+      ) !== null,
+    );
+    check(
+      "...and replacing into one",
+      refusal(() =>
+        applyEdit(
+          session,
+          {
+            kind: "replace",
+            region: { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 1, maxZ: 1 },
+            from: { namespacedName: "minecraft:stone" },
+            to: { namespacedName: "minecraft:deepslate" },
+          },
+          legacy,
+        ),
+      ) !== null,
+    );
+  }
+
+  {
+    /*
+     * The **from** of a replace is deliberately not guarded.
+     *
+     * It is a pattern over what is already in the document, not something being
+     * written. Refusing it would make: take out the block some other tool put
+     * here, impossible -- which is precisely when somebody needs it.
+     */
+    const session = newDocument({ width: 4, height: 4, length: 4 }, "mcedit", 1343);
+    equal(
+      "searching for a block the version cannot hold is allowed",
+      applyEdit(
+        session,
+        {
+          kind: "replace",
+          region: { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 1, maxZ: 1 },
+          from: { namespacedName: "minecraft:deepslate" },
+          to: { namespacedName: "minecraft:stone" },
+        },
+        legacy,
+      ),
+      0,
+    );
+  }
+
+  {
+    /*
+     * **Names, not states**, and that is the line rather than a shortcut.
+     *
+     * `buildMcEdit` treats a missing *name* as fatal and a state it cannot
+     * carry as `degraded` -- written as the base block and reported. So a
+     * waterlogged fence is a legal thing to build on a 1.12 schematic and a
+     * documented lossy save, not a mistake. Guarding states here would refuse
+     * it, and the editor would be stricter than the writer for no reason.
+     */
+    const session = newDocument({ width: 4, height: 4, length: 4 }, "mcedit", 1343);
+    equal(
+      "a state the format cannot carry is still placed",
+      applyEdit(
+        session,
+        {
+          kind: "setBlock",
+          x: 1,
+          y: 1,
+          z: 1,
+          block: { namespacedName: "minecraft:oak_fence", properties: { waterlogged: "true" } },
+        },
+        legacy,
+      ),
+      1,
+    );
+    equal(
+      "...as the block it names",
+      getBlock(session.doc, 1, 1, 1).namespacedName,
+      "minecraft:oak_fence",
+    );
+  }
+
+  {
+    // Air is always allowed: a document you cannot empty a cell in is not an
+    // editor, and a break is how air gets written.
+    const session = newDocument({ width: 4, height: 4, length: 4 }, "mcedit", 1343);
+    setBlock(session.doc, 1, 1, 1, { namespacedName: "minecraft:stone", properties: {} });
+    equal(
+      "breaking a block still works",
+      applyEdit(
+        session,
+        { kind: "setBlock", x: 1, y: 1, z: 1, block: { namespacedName: "minecraft:air" } },
+        legacy,
+      ),
+      1,
+    );
+  }
+
+  {
+    /*
+     * And a flat document is not restricted at all. This app has no per-block
+     * introduction data above 1.13, so there is nothing honest to check
+     * against -- and hiding a block that does exist is the one failure a user
+     * cannot work around.
+     */
+    const session = newDocument({ width: 4, height: 4, length: 4 }, "sponge3", 3700);
+    equal(
+      "a flat document places whatever it likes",
+      applyEdit(session, {
+        kind: "setBlock",
+        x: 1,
+        y: 1,
+        z: 1,
+        block: { namespacedName: "minecraft:deepslate" },
+      }),
+      1,
+    );
+  }
+}
+
+// --- which era a document is in ---------------------------------------------
+/*
+ * The keystone, and the one worth checking hardest: four separate features
+ * read this answer, and when it is wrong they are all wrong quietly.
+ *
+ * The failure it replaces: a `.schematic` loaded from disk has no DataVersion
+ * -- MCEdit has no such tag -- so `versionNameOf` gave `null`, `eraOf("")`
+ * gave its permissive `flat`, and every legacy schematic in the app presented
+ * itself as 1.13+. The inventory offered it deepslate and the editor placed
+ * it; the objection arrived at save time, from `buildMcEdit`, a long way from
+ * the click.
+ */
+console.log("\n--- which era a document is in ---");
+{
+  // Every way a document can come to exist, as a table. The pairs are what
+  // each path really produces -- the block below builds two of them for real.
+  const cases: [string, SchematicFormat, number | null, string][] = [
+    ["a 1.12 .schematic off disk", "mcedit", null, "legacy"],
+    ["a Sponge file with a tag", "sponge3", 3700, "flat"],
+    ["a Sponge file that omitted the tag", "sponge2", null, "flat"],
+    ["a .litematic, which must carry one", "litematic", 4189, "flat"],
+    ["a .mcfunction, read as Sponge v3", "sponge3", null, "flat"],
+    ["a new document at 1.12.2", "mcedit", 1343, "legacy"],
+    ["a new document at 1.8.8", "mcedit", null, "legacy"],
+    ["a modern build saved as MCEdit", "mcedit", 3700, "flat"],
+  ];
+  for (const [label, format, dataVersion, era] of cases) {
+    equal(label, documentEra(format, dataVersion), era);
+  }
+
+  /*
+   * The last row is what makes this more than a format check.
+   *
+   * Keying the era on the container alone is the tempting one-liner, and it is
+   * wrong in the direction that costs something: saving a modern build as
+   * MCEdit is a legitimate lossy thing to do -- it is what `degraded` reports
+   * on -- and reading that document as legacy would refuse every block in it.
+   */
+  check(
+    "the era is not decided by the container alone",
+    documentEra("mcedit", 3700) !== documentEra("mcedit", null),
+  );
+
+  // The version name falls back inside the document's own era rather than to a
+  // global default, which for a legacy file would be a flat version displayed
+  // against it.
+  equal(
+    "a legacy file with no tag names one anyway",
+    documentVersionName("mcedit", null),
+    DEFAULT_LEGACY_VERSION,
+  );
+  equal(
+    "...and that name is itself legacy",
+    documentEra("mcedit", dataVersionOf(DEFAULT_LEGACY_VERSION)),
+    "legacy",
+  );
+  equal("a flat file with no tag names none", documentVersionName("sponge3", null), null);
+  equal("an exact tag wins over the fallback", documentVersionName("mcedit", 1343), "JE_1_12_2");
+}
+
+{
+  /*
+   * The same rule against a real file rather than a table, because the pairs
+   * above are only true if the loader really produces them.
+   */
+  const dir = await mkdtemp(path.join(tmpdir(), "sas-era-"));
+  try {
+    const built = newDocument({ width: 4, height: 4, length: 4 }, "sponge3", 3700);
+    applyEdit(built, {
+      kind: "setBlock",
+      x: 1,
+      y: 1,
+      z: 1,
+      block: { namespacedName: "minecraft:stone" },
+    });
+    equal(
+      "a new Sponge document is flat",
+      documentEra(built.doc.format, built.doc.dataVersion),
+      "flat",
+    );
+
+    const saved = await saveSession(built, {
+      filePath: path.join(dir, "era.schematic"),
+      format: "mcedit",
+      legacyBlocksPath: LEGACY_BLOCKS,
+    });
+    const reopened = await openDocument(saved.filePath, { legacyBlocksPath: LEGACY_BLOCKS });
+    equal("an MCEdit file comes back with no DataVersion", reopened.doc.dataVersion, null);
+    equal("...and in the mcedit container", reopened.doc.format, "mcedit");
+    equal(
+      "...so it reads as legacy, which is what it now is",
+      documentEra(reopened.doc.format, reopened.doc.dataVersion),
+      "legacy",
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    closeDocument();
+  }
+}
+
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

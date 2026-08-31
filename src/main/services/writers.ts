@@ -46,6 +46,7 @@ import {
   type LegacyBlockTable,
   type SchematicFormat,
 } from "../pipeline/loader_formats.js";
+import { buildLegacyIndex, type LegacyId } from "../../shared/legacy_ids.js";
 import {
   LITEMATIC_MIN_DATA_VERSION,
   LITEMATIC_MIN_LABEL,
@@ -423,10 +424,6 @@ function buildSponge(doc: SchematicDocument, version: 2 | 3, dataVersion: number
 // MCEdit
 // ---------------------------------------------------------------------------
 
-interface LegacyId {
-  readonly id: number;
-  readonly meta: number;
-}
 
 interface ReverseLegacyTable {
   /** Exact `name[sorted=states]` -> id:meta. */
@@ -453,7 +450,20 @@ export function buildReverseLegacyTable(table: LegacyBlockTable): ReverseLegacyT
     return cachedReverse.reverse;
   }
   const byState = new Map<string, LegacyId>();
-  const byName = new Map<string, LegacyId>();
+  /*
+   * The name half is the shared index's, not a second copy of it.
+   *
+   * "Which `id:meta` does this name map to" is asked in three places now --
+   * here, the inventory's legacy labels, and the block field that accepts one
+   * typed in -- and the answer involves a tie-break (seventy-four states have
+   * more than one candidate). Two implementations of a tie-break is how they
+   * come to disagree.
+   *
+   * `byState` stays here because it is a different job: it re-keys through
+   * `paletteEntryCacheKey` so property order cannot decide a match, and that
+   * lives in `main/pipeline/`, where the renderer cannot follow.
+   */
+  const { byName } = buildLegacyIndex(table);
 
   const rank = (a: LegacyId, b: LegacyId) => a.id - b.id || a.meta - b.meta;
 
@@ -473,10 +483,6 @@ export function buildReverseLegacyTable(table: LegacyBlockTable): ReverseLegacyT
       byState.set(stateKey, candidate);
     }
 
-    const existingName = byName.get(entry.namespacedName);
-    if (!existingName || rank(candidate, existingName) < 0) {
-      byName.set(entry.namespacedName, candidate);
-    }
   }
 
   const reverse: ReverseLegacyTable = { byState, byName };
@@ -484,9 +490,35 @@ export function buildReverseLegacyTable(table: LegacyBlockTable): ReverseLegacyT
   return reverse;
 }
 
+let cachedNames: { table: LegacyBlockTable; names: ReadonlySet<string> } | null = null;
+
+/**
+ * Every block a pre-Flattening file can name.
+ *
+ * The editor's guard for a legacy document, and it is deliberately the *same*
+ * table `buildMcEdit` decides the save on -- so the two cannot disagree about
+ * what "exists in 1.12" means. Before this the only enforcement was at save
+ * time: you could place, fill and replace with `minecraft:deepslate` on a 1.12
+ * schematic all afternoon, and find out from `UnrepresentableBlocksError` a
+ * long way from the click that caused it.
+ *
+ * **Names, not states**, and that is the line rather than a simplification.
+ * `buildMcEdit` treats a missing *name* as fatal and a state it cannot carry as
+ * `degraded` -- written as the base block and reported. Guarding on states here
+ * would refuse `oak_fence[waterlogged=true]`, which is a legal thing to build
+ * and a documented lossy save, not a mistake.
+ */
+export function legacyBlockNames(table: LegacyBlockTable): ReadonlySet<string> {
+  if (cachedNames && cachedNames.table === table) return cachedNames.names;
+  const names = buildLegacyIndex(table).names;
+  cachedNames = { table, names };
+  return names;
+}
+
 /** Test seam: drops the memoised inversion. */
 export function resetReverseLegacyCacheForTests(): void {
   cachedReverse = null;
+  cachedNames = null;
 }
 
 export function mcEditEntries(

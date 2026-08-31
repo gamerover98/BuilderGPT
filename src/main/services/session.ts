@@ -71,7 +71,10 @@ import {
 export { NotSquareError, type RegionTransform };
 import { loadStructure } from "../pipeline/loader.js";
 import type { PaletteEntry } from "../pipeline/types.js";
+import { paletteEntryCacheKey } from "../pipeline/types.js";
+import { parsePaletteEntry } from "../pipeline/loader_formats.js";
 import { hasProperty } from "../../shared/block_states.js";
+import { normaliseVoidBlock } from "../../shared/settings.js";
 import { DOCUMENT_SIZE } from "../../shared/settings.js";
 import { buildDocumentPreview, type DocumentPreviewOptions } from "./preview.js";
 import type { ChunkMeshCache } from "../pipeline/chunked_mesh.js";
@@ -115,6 +118,24 @@ export interface DocumentSession {
    * rather than a wrong picture.
    */
   sent?: { token: string; chunks: Map<string, Float32Array> } | null;
+  /**
+   * What empty space is made of in *this* document. `""` is air.
+   *
+   * On the session rather than in `Settings`, and that is the whole change:
+   * a break writes this block into the file, so it is a fact about one
+   * schematic. As a global it followed you between documents quietly
+   * changing what a break wrote.
+   *
+   * Seeded from `ProjectNotes` when the document has a path and written
+   * back there on save. A document with **no path has no sidecar**, so the
+   * value lives here for the session and is persisted at the first save --
+   * the same rule conversations and version history already follow.
+   *
+   * Not on `SchematicDocument`: it is not part of the schematic, it does
+   * not belong on the undo stack, and putting it there would make it a
+   * thing `history.ts` had to capture and restore.
+   */
+  voidBlock: string;
   /**
    * What the reader had to say about the file it came from.
    *
@@ -187,6 +208,10 @@ export async function openDocument(
     doc: documentFromLoaded(loaded, imported ? null : filePath),
     history: createHistory(),
     mesh: null,
+    // Air until the caller says otherwise. `openDocument` cannot read the
+    // sidecar itself: `conversation.ts` needs Electron for `userData`, and
+    // this module is reachable from the suites. The handler seeds it.
+    voidBlock: "",
     notes: loaded.notes,
   };
   return current;
@@ -202,6 +227,7 @@ export function newDocument(
     doc: createDocument({ ...size, format, dataVersion }),
     history: createHistory(),
     mesh: null,
+    voidBlock: "",
   };
   return current;
 }
@@ -216,7 +242,27 @@ export function newDocument(
  * open unsaved recovered work and call it clean.
  */
 export function adoptDocument(doc: SchematicDocument, history?: History): DocumentSession {
-  current = { doc, history: history ?? createHistory(), mesh: null };
+  /*
+   * The void block carries over, and that is decided here rather than at
+   * the call sites on purpose.
+   *
+   * Every caller of this function is restoring *another state of the same
+   * file* -- a version, a checkpoint, a crash snapshot. What empty space is
+   * made of has not changed, so resetting it to air would quietly undo the
+   * choice on every Ctrl+Z-shaped gesture that is not actually an undo, and
+   * the next break would start writing air into an underwater build.
+   *
+   * Opening a *different* file goes through `openDocument`, which builds a
+   * session from nothing and never comes through here. That asymmetry is
+   * what makes inheriting safe: there is no path into this function that
+   * means "a different schematic".
+   */
+  current = {
+    doc,
+    history: history ?? createHistory(),
+    mesh: null,
+    voidBlock: current?.voidBlock ?? "",
+  };
   return current;
 }
 
@@ -262,6 +308,7 @@ export function documentState(session: DocumentSession): DocumentState {
     undoLabel: nextUndoLabel(history),
     undoTransactionId: nextUndoId(history),
     redoLabel: nextRedoLabel(history),
+    voidBlock: session.voidBlock,
     revision: doc.revision,
   };
 }
@@ -272,6 +319,33 @@ export function documentState(session: DocumentSession): DocumentState {
 
 function toEntry(block: { namespacedName: string; properties?: Record<string, string> }): PaletteEntry {
   return { namespacedName: block.namespacedName, properties: block.properties ?? {} };
+}
+
+/**
+ * A block that cannot exist in the version this schematic is for.
+ *
+ * Refused where it is typed rather than at save time, which is the whole
+ * point: `buildMcEdit` already refuses these, by throwing
+ * `UnrepresentableBlocksError` over the *whole palette* once the user asks to
+ * save. That is a correct objection arriving hours late, naming blocks placed
+ * long enough ago to have been built around.
+ *
+ * The message names the way out as well as the problem, because there is one
+ * and it is not obvious: the schematic's version can be changed. Without that
+ * sentence this is a dead end that reads as the app refusing to let you build.
+ */
+export class BlockNotInVersionError extends Error {
+  constructor(
+    readonly block: string,
+    readonly versionLabel: string,
+  ) {
+    super(
+      `${block} does not exist in Minecraft ${versionLabel}, which is what this ` +
+        `schematic is for. Pick a block from that version, or change the ` +
+        `schematic's Minecraft version.`,
+    );
+    this.name = "BlockNotInVersionError";
+  }
 }
 
 export class EditTooLargeError extends Error {
@@ -537,7 +611,7 @@ function takeBoxBack(
   doc: SchematicDocument,
   tx: TransactionScope,
   cell: { x: number; y: number; z: number },
-  isEmpty: (namespacedName: string) => boolean,
+  isEmpty: (entry: PaletteEntry) => boolean,
 ): void {
   const faces = {
     x: cell.x === doc.width - 1,
@@ -553,7 +627,7 @@ function takeBoxBack(
    * would read as "not empty", which is the safe direction but the wrong
    * answer. `connect.ts` records the same trap one layer down.
    */
-  const empty = doc.palette.map((entry) => isEmpty(entry.namespacedName));
+  const empty = doc.palette.map((entry) => isEmpty(entry));
   const next = peelEmptyFaces(doc, (index) => empty[index] === true, faces);
   if (next !== null) tx.resize(next);
 }
@@ -580,6 +654,21 @@ export interface EditOptions {
    * never arises. Which is exactly why it is written down.
    */
   voidBlock?: string;
+  /**
+   * If given, the only block names that may be written.
+   *
+   * The legacy name table, for a document in the legacy era. `undefined` means
+   * no restriction, which is every flat document -- this app has no per-block
+   * introduction data for the flat era, so there is nothing honest to check
+   * against there and pretending otherwise would hide blocks that do exist.
+   *
+   * Passed in rather than read here for the module's standing reason: the
+   * table is loaded from `resources/` by a path only main knows, and this file
+   * has to stay reachable from the suites.
+   */
+  placeableNames?: ReadonlySet<string> | null;
+  /** How to name the version in a refusal. Only read when one is raised. */
+  versionLabel?: string;
 }
 
 export function applyEdit(
@@ -589,8 +678,44 @@ export function applyEdit(
 ): number {
   const { doc, history } = session;
   const mayGrow = options.autoGrow !== false;
-  const emptiness = (block: string): boolean =>
-    block === "minecraft:air" || (options.voidBlock !== undefined && options.voidBlock !== "" && block === options.voidBlock);
+  /*
+   * What counts as empty space, matched the way `fillVoid` matches it.
+   *
+   * This compared a bare `namespacedName` against the *raw setting string*,
+   * which are two different vocabularies: the picker can hand back
+   * `minecraft:water[level=0]` and a cell holding it has the name
+   * `minecraft:water`, so they never matched and a break into that void
+   * silently went back to growing the box. `preview.ts` was already
+   * comparing `paletteEntryCacheKey`, so the two halves of one feature
+   * disagreed about which cells were empty -- one drawing them, the other
+   * not counting them.
+   *
+   * Whole entries rather than names, because the key needs the properties.
+   */
+  const voidKey =
+    options.voidBlock === undefined || options.voidBlock === ""
+      ? null
+      : paletteEntryCacheKey(parsePaletteEntry(options.voidBlock));
+  const emptiness = (entry: PaletteEntry): boolean =>
+    entry.namespacedName === "minecraft:air" ||
+    (voidKey !== null && paletteEntryCacheKey(entry) === voidKey);
+
+  /*
+   * Every block *written* by this edit has to exist in the schematic's
+   * version. Names only -- see `legacyBlockNames` for why that is the line and
+   * not a shortcut.
+   *
+   * Air is always allowed and is not in the table under that spelling in every
+   * direction; more to the point, air is what a break writes, and a document
+   * you cannot empty a cell in is not an editor.
+   */
+  const placeable = (entry: PaletteEntry): PaletteEntry => {
+    const allowed = options.placeableNames;
+    if (allowed === undefined || allowed === null) return entry;
+    if (entry.namespacedName === "minecraft:air") return entry;
+    if (allowed.has(entry.namespacedName)) return entry;
+    throw new BlockNotInVersionError(entry.namespacedName, options.versionLabel ?? "this version");
+  };
 
   /*
    * Placing one block grows the document, exactly as filling does.
@@ -607,7 +732,7 @@ export function applyEdit(
    * the same answer a fill dragged under the floor already gives.
    */
   if (request.kind === "setBlock") {
-    const entry = floodedPlacement(doc, request, toEntry(request.block));
+    const entry = placeable(floodedPlacement(doc, request, toEntry(request.block)));
 
     /*
      * Two slabs meeting in one cell are one double slab.
@@ -666,7 +791,7 @@ export function applyEdit(
      * the day something does, the failure would be a document that quietly got
      * larger.
      */
-    const wanted = emptiness(entry.namespacedName) ? null : growthToInclude(doc, cell);
+    const wanted = emptiness(entry) ? null : growthToInclude(doc, cell);
     // Refused rather than clipped: see `OutsideDocumentError`. A break is
     // exempt because it never wanted to grow in the first place, so with
     // auto-grow off it goes on doing exactly what it did before.
@@ -713,7 +838,7 @@ export function applyEdit(
           return here + there;
         }
         const wrote = tx.setBlock(at.minX, at.minY, at.minZ, entry) ? 1 : 0;
-        broke = wrote > 0 && emptiness(entry.namespacedName);
+        broke = wrote > 0 && emptiness(entry);
         return wrote;
       },
       {
@@ -744,7 +869,7 @@ export function applyEdit(
    * through `changed: 0`.
    */
   if (request.kind === "setState") {
-    const entry = toEntry(request.block);
+    const entry = placeable(toEntry(request.block));
     return runTransaction(
       doc,
       history,
@@ -780,7 +905,7 @@ export function applyEdit(
   }
 
   if (request.kind === "fill") {
-    const entry = toEntry(request.block);
+    const entry = placeable(toEntry(request.block));
     return runTransaction(doc, history, `Fill with ${entry.namespacedName}`, (tx) => {
       // One transaction, so growing and filling are one undo step -- and the
       // resize goes in first, because a block delta recorded before it would be
@@ -791,14 +916,92 @@ export function applyEdit(
     });
   }
 
+  // `from` is a pattern over what is already there, so it is deliberately not
+  // guarded: refusing it would make "take out the block some other tool wrote"
+  // impossible, which is exactly when somebody needs it.
   const from = toEntry(request.from);
-  const to = toEntry(request.to);
+  const to = placeable(toEntry(request.to));
   return runTransaction(
     doc,
     history,
     `Replace ${from.namespacedName} with ${to.namespacedName}`,
     (tx) => tx.replace(region, from, to),
   );
+}
+
+/**
+ * Changes what empty space is made of in this document, and optionally
+ * rewrites the cells that already hold the old answer.
+ *
+ * Two things happen here and they are deliberately not the same thing:
+ *
+ * - **The choice itself is a preference, not a mutation.** It changes what
+ *   empty space is *drawn* as and what a future break will *write*; it moves
+ *   no block, so it is not on the undo stack. Ctrl+Z after changing it takes
+ *   back whatever you did before it, which is the honest answer.
+ * - **The rewrite is an edit**, and it is one transaction, so a swap of a
+ *   quarter of a million cells is one Ctrl+Z.
+ *
+ * `from` is built with `toEntry` and not with any defaults-filling helper,
+ * because it is a *pattern*: `tx.replace` interns it and matches on the
+ * palette index, so writing default properties onto it would turn "take out
+ * the water" into "take out the water that happens to be at level 0" -- which
+ * finds a fraction of it and reports a healthy count for those. Same reason
+ * `replace_blocks` parses its `from` and places its `to`.
+ *
+ * The volume goes through `MAX_EDIT_VOLUME` like any other edit. It is not a
+ * formality here: air is most of an ordinary schematic, so this is the one
+ * edit that genuinely does touch every cell, and one delta per changed voxel
+ * is exactly the unbounded allocation that cap exists to stop.
+ */
+export function setSessionVoidBlock(
+  session: DocumentSession,
+  block: string,
+  options: { replaceExisting?: boolean } = {},
+): number {
+  const next = normaliseVoidBlock(block);
+  const previous = session.voidBlock;
+  /*
+   * Choosing what is already chosen is not an edit, and that holds even with
+   * the rewrite asked for: `from` and `to` would be the same entry, so the
+   * replace could only ever change nothing.
+   *
+   * One corner falls out of it and is worth knowing rather than fixing.
+   * Undoing a rewrite puts the blocks back but leaves the *choice* standing --
+   * they are deliberately different things -- so re-picking the same block
+   * will not re-apply it. Redo is the gesture for that, and it is the one the
+   * user already reached for.
+   */
+  if (next === previous) return 0;
+
+  let changed = 0;
+  if (options.replaceExisting === true) {
+    const { doc, history } = session;
+    const region = {
+      minX: 0,
+      minY: 0,
+      minZ: 0,
+      maxX: doc.width - 1,
+      maxY: doc.height - 1,
+      maxZ: doc.length - 1,
+    };
+    const volume = regionVolume(region);
+    if (volume > MAX_EDIT_VOLUME) throw new EditTooLargeError(volume);
+
+    // `""` means air on both sides, which is what makes going back to air the
+    // same operation rather than a special case.
+    const from = parsePaletteEntry(previous === "" ? "minecraft:air" : previous);
+    const to = parsePaletteEntry(next === "" ? "minecraft:air" : next);
+    changed = runTransaction(
+      doc,
+      history,
+      `Replace ${from.namespacedName} with ${to.namespacedName}`,
+      (tx) => tx.replace(region, from, to),
+    );
+  }
+
+  session.voidBlock = next;
+  return changed;
 }
 
 /**

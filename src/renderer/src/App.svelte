@@ -24,6 +24,7 @@
   import AnchorModal from "./lib/AnchorModal.svelte";
   import DimensionsModal from "./lib/DimensionsModal.svelte";
 import VoidBlockModal from "./lib/VoidBlockModal.svelte";
+import { buildLegacyIndex } from "../../shared/legacy_ids.js";
 import NbtModal from "./lib/NbtModal.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
   import SelectionTools from "./lib/SelectionTools.svelte";
@@ -53,7 +54,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   import Hotbar from "./lib/Hotbar.svelte";
   import CreativeInventory from "./lib/CreativeInventory.svelte";
   import { hasTextSelection, isTyping } from "./lib/typing.js";
-  import { versionNameOf } from "../../shared/mc_versions.js";
+  import { documentEra, documentVersionName } from "../../shared/mc_versions.js";
   import { placementState, type PlacementLook } from "../../shared/block_orientation.js";
   import { movedRegion } from "./lib/selection_drag.js";
   import { t, tn, setLocale } from "./lib/i18n.svelte.js";
@@ -425,6 +426,36 @@ import ConvertModal from "./lib/ConvertModal.svelte";
 
   /** The registry, for the block pickers to search — fetched once at startup. */
   let blockRegistry = $state<string[]>([]);
+  /**
+   * The pre-Flattening block table, fetched once.
+   *
+   * Two jobs, both of which need it here: deciding which blocks a legacy
+   * schematic may be offered, and naming the `ID:DATA` a legacy file will
+   * really store. Main reads the file; the rule for inverting it is shared, so
+   * both sides agree on the tie-break when several ids give one name.
+   */
+  let legacyTable = $state<Record<string, string>>({});
+  const legacyIndex = $derived(buildLegacyIndex(legacyTable));
+  /**
+   * Which era the open document is in, derived rather than carried.
+   *
+   * `DocumentState` already has both facts this is a function of, so a third
+   * field beside them would be a second copy of one answer.
+   */
+  const docEra = $derived(
+    docState === null ? null : documentEra(docState.format, docState.dataVersion),
+  );
+  /**
+   * The blocks this schematic can hold, or `null` for no restriction.
+   *
+   * Legacy only -- above 1.13 this app has no per-block introduction data and
+   * cutting the list would mean guessing. `null` while the table is still
+   * loading too: an empty set would empty the inventory, which reads as the
+   * app being broken rather than as a file not having arrived yet.
+   */
+  const placeableBlocks = $derived(
+    docEra === "legacy" && legacyIndex.names.size > 0 ? legacyIndex.names : null,
+  );
 
   /**
    * Where in the day the viewport is, in Minecraft ticks.
@@ -511,6 +542,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
 
   let dimensionsOpen = $state(false);
   let voidOpen = $state(false);
+  let voidError = $state("");
   let dimensionsError = $state("");
   /**
    * Whether main has already refused this resize for losing blocks.
@@ -555,7 +587,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
      */
     const block =
       action === "break"
-        ? parseBlock(settings.editing.voidBlock || "minecraft:air")
+        ? parseBlock(docState?.voidBlock || "minecraft:air")
         : {
             ...held,
             properties: {
@@ -1091,6 +1123,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
         artifacts = await api().listArtifacts();
         defaultOutputDir = await api().getDefaultOutputDir();
         blockRegistry = await api().listBlocks();
+        legacyTable = await api().listLegacyBlocks();
         step("catalogue", "done");
 
         /*
@@ -2579,6 +2612,36 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     }
   }
 
+  /**
+   * Chooses what empty space is made of, and optionally rewrites the cells
+   * that already hold the old answer.
+   *
+   * A document call rather than a settings write, which is the whole of why
+   * the viewport now keeps up: `patchSettings` writes the store and stops, so
+   * the choice landed on disk and the picture did not change until the file
+   * was closed and opened again. This answers with a `DocumentState`, so it
+   * takes the ordinary path every other document change takes.
+   */
+  async function changeVoidBlock(block: string, replaceExisting: boolean): Promise<void> {
+    voidError = "";
+    busy = true;
+    try {
+      const response = await api().setVoidBlock({ block, replaceExisting });
+      if (!response.ok) {
+        // Inside the modal: the app's status banner is behind the scrim, so a
+        // failure reported there is one nobody can see.
+        voidError = response.message;
+        return;
+      }
+      docState = response.state;
+      await refreshDocument();
+    } catch (err) {
+      voidError = err instanceof Error ? err.message : String(err);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function changeWorldEditAnchor(
     next: [number, number, number] | null,
   ): Promise<void> {
@@ -3250,7 +3313,8 @@ import ConvertModal from "./lib/ConvertModal.svelte";
 <CreativeInventory
   open={inventoryOpen}
   blocks={blockRegistry}
-  version={project?.version ?? versionNameOf(docState?.dataVersion ?? null) ?? settings.version}
+  placeable={placeableBlocks}
+  version={project?.version ?? documentVersionName(docState?.format ?? "sponge3", docState?.dataVersion ?? null) ?? settings.version}
   purpose={inventoryFor}
   onclose={() => (inventoryOpen = false)}
   onpick={(block) => {
@@ -3272,8 +3336,18 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     height: docState?.size[1] ?? 16,
     length: docState?.size[2] ?? 16,
     format: project?.format ?? docState?.format ?? "sponge3",
+    /*
+     * `documentVersionName`, not `versionNameOf`.
+     *
+     * A legacy `.schematic` carries no DataVersion, so the bare lookup came
+     * back `null` and this fell through to the *global* setting -- which is a
+     * flat version, preselected against a legacy document. Save As then opened
+     * on 1.20.4 for a 1.12 file, and the container list with it.
+     */
     version:
-      project?.version ?? versionNameOf(docState?.dataVersion ?? null) ?? settings.version,
+      project?.version ??
+      documentVersionName(docState?.format ?? "sponge3", docState?.dataVersion ?? null) ??
+      settings.version,
   }}
   suggestedName={(docState?.fileName ?? "untitled").replace(/\.[^.]*$/, "")}
   onclose={() => (schematicDialog = null)}
@@ -3314,16 +3388,20 @@ import ConvertModal from "./lib/ConvertModal.svelte";
 />
 
 <VoidBlockModal
-  open={voidOpen}
-  block={settings.editing.voidBlock}
+  open={docState !== null && voidOpen}
+  block={docState?.voidBlock ?? ""}
   opacity={settings.editing.voidOpacity}
+  error={voidError}
   {busy}
   blocks={blockRegistry}
-  onblock={(voidBlock) =>
-    void patchSettings({ editing: { ...settings.editing, voidBlock } })}
+  placeable={placeableBlocks}
+  onblock={(block, replaceExisting) => void changeVoidBlock(block, replaceExisting)}
   onopacity={(voidOpacity) =>
     void patchSettings({ editing: { ...settings.editing, voidOpacity } })}
-  onclose={() => (voidOpen = false)}
+  onclose={() => {
+    voidOpen = false;
+    voidError = "";
+  }}
 />
 
 <ConvertModal
@@ -3777,6 +3855,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
           {selection}
           {busy}
           blocks={blockRegistry}
+          placeable={placeableBlocks}
           block={activeBlock}
           onblockchange={holdBlock}
           replaceFrom={replaceBlock}

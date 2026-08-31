@@ -2,6 +2,9 @@
    <h1>Schematic AI Studio</h1>
    <img src="images/logo.png" alt="" width="160" height="160">
    <p><em>An AI-assisted 3D editor for Minecraft schematics. Free, and staying free.</em></p>
+   <a href="https://github.com/gamerover98/Schematic-Ai-Studio/actions/workflows/build.yml">
+      <img src="https://github.com/gamerover98/Schematic-Ai-Studio/actions/workflows/build.yml/badge.svg" alt="Build">
+   </a>
    <img src="https://img.shields.io/badge/Electron-desktop-47848F" alt="Electron">
    <img src="https://img.shields.io/badge/TypeScript-strict-3178C6" alt="TypeScript">
    <img src="https://img.shields.io/badge/MCP-server-6E44FF" alt="MCP server">

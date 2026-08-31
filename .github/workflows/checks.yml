@@ -1,0 +1,67 @@
+# The gate: typecheck plus every test suite, on both platforms the app ships to.
+#
+# Two triggers, deliberately. `pull_request` makes this the PR check;
+# `workflow_call` lets `build.yml` invoke this very job before it packages
+# anything. That is what keeps one definition of "the checks pass" instead of
+# two that drift apart -- the same rule the app itself follows for `TOOL_SPECS`.
+name: Checks
+
+on:
+  pull_request:
+    branches: [master, develop]
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The `checks-` prefix is load-bearing, not decoration. `build.yml` calls this
+# workflow, and a reusable workflow that declares the *same* concurrency group
+# as its caller deadlocks: the caller holds the group and the callee queues
+# behind it forever. Keep these two prefixes different.
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # Both answers, always. A Windows failure must not cancel the Linux run
+      # and hide how much else is broken -- which is the reason
+      # `scripts/check.sh` runs every suite rather than stopping at the first
+      # one that fails, stated in its own header.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the developer's own toolchain. Note that this is the
+          # *build* toolchain only: the shipped app runs Electron's bundled
+          # Node (20.x for Electron 33), whatever is used to build it. If
+          # electron-builder ever misbehaves here, 22 LTS is the fallback and
+          # changes nothing about the product.
+          node-version: 25
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # `scripts/check.sh` rather than the seventeen npm scripts written out
+      # again: that script is already the definition of what the checks are, so
+      # a suite added tomorrow is covered here with no edit to this file. It is
+      # CI-ready as written -- it skips its own install when node_modules
+      # exists, its colours disable themselves when stdout is not a TTY, and it
+      # exits non-zero if any suite failed.
+      #
+      # `shell: bash` is what lets one script serve both runners: the Windows
+      # images ship Git Bash.
+      - name: Typecheck and test
+        shell: bash
+        run: bash scripts/check.sh

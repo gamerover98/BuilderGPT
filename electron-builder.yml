@@ -67,19 +67,42 @@ win:
   target:
     - target: nsis
       arch: [x64]
-  artifactName: SchematicAIStudio-${version}-setup-${arch}.${ext}
+    - target: portable
+      arch: [x64]
+  # No artifactName here, deliberately. Both targets emit a .exe, so one shared
+  # name would send them to the same path in `release/` and the second would
+  # overwrite the first -- silently, because nothing checks that an artifact it
+  # is about to write is already there. Each target names its own file instead.
 
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+  artifactName: SchematicAIStudio-${version}-setup-${arch}.${ext}
+
+# The standalone .exe: unpacks to a temp directory and runs, installing nothing
+# and writing no registry keys. The same app and the same userData -- a
+# different way in, not a second copy.
+#
+# It inherits `win.icon` above, and that matters for the reason that line exists
+# at all: a portable build is NsisTarget too, so an icon cut from `build/icons/`
+# would fail it with the same "invalid icon file size".
+portable:
+  artifactName: SchematicAIStudio-${version}-portable-${arch}.${ext}
 
 linux:
   category: Graphics
   target:
     - target: AppImage
       arch: [x64]
-    - target: deb
-      arch: [x64]
+  # There is deliberately no `deb` and no `rpm`, and the absence is worth
+  # stating because it reads as an oversight: fpm requires a maintainer, which
+  # electron-builder takes from `package.json`'s `author` -- a plain string
+  # with no email here, so `authorEmailIsMissed` is raised and the *whole*
+  # Linux run dies rather than just that one target. An AppImage carries no
+  # maintainer field, which is the only reason it is unaffected.
+  #
+  # Re-enabling is exactly two lines: the target back in this list, and
+  # `maintainer: name <email>` under `linux:`.
   artifactName: SchematicAIStudio-${version}-${arch}.${ext}
 
 mac:

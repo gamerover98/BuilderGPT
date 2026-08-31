@@ -1345,6 +1345,73 @@ Nothing in the app said any of this before. The licence, the origin and the
 "free, and staying free" were in `README.md` alone, which is to say on GitHub
 alone, which is to say nowhere at all for anyone who installed the thing.
 
+**The app is built and released by GitHub Actions, and `develop` never commits
+a version.** `master` ships the number in `package.json` exactly; `develop`
+ships that number plus `-dev.<run_number>`, stamped on the runner by `npm
+version --no-git-tag-version` and never written back. That single decision
+removes the whole category of CI-writes-to-the-repo faults: no bot commit, no
+`[skip ci]` loop, no write token on a protected branch, and no conflict on
+`package.json` when develop is merged.
+
+**A commit message that merely *mentions* the skip directive suppresses the
+run.** GitHub matches `[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]` and
+`[actions skip]` anywhere in the message, the **body included** -- so the very
+commit that introduced these workflows ran nothing at all, because its body
+explained that this design avoids exactly that loop and spelled the token out to
+do it. The symptom is worth recognising, because it looks like something else
+entirely: zero runs *and* zero registered workflows, which is indistinguishable
+from Actions being disabled on the repository, and sends you to the settings
+page. When writing about it in a commit message, spell it without the brackets.
+
+`checks.yml` carries `pull_request` **and** `workflow_call`, so the PR gate and
+`build.yml`'s first job are one definition rather than two that drift. Its
+concurrency group is prefixed `checks-` against the caller's `build-`, and that
+difference is load-bearing: a reusable workflow declaring its caller's own group
+**deadlocks**, the caller holding it while the callee queues behind it forever.
+It runs `scripts/check.sh` rather than the seventeen npm scripts written out
+again, which is what makes a suite added tomorrow covered with no edit to any
+YAML — the script was already suited to it, with colours off a TTY, `npm ci`
+only when `node_modules` is absent, and no early abort.
+
+**`BUILD_NUMBER` is set on develop and deliberately not on master.**
+electron-builder reads it from the environment by itself and folds it into the
+Windows file version as `major.minor.patch.<n>`, substituting `0` for anything
+that is not a plain integer — so without it every dev build presents itself to
+Windows as `1.0.0.0`, indistinguishable from every other one in the exact field
+someone reads to say which build they have. On master `x.y.z.0` is the correct
+answer instead: two rebuilds of one release *should* be identical.
+
+**Nothing publishes except the publish job.** electron-builder publishes on its
+own when it finds a `GH_TOKEN`, so the packaging step deliberately has none in
+its environment; otherwise it races the job that creates the release and leaves
+it half filled.
+
+**A `master` build fails if its tag already exists.** Forgetting the bump is the
+ordinary mistake and its silent form is a second release replacing the first
+under one number. The bump stays manual on purpose: for an app somebody
+downloads, the version is a statement to a person rather than a function of the
+commit log, and `semantic-release` would additionally have to get its computed
+number into `package.json` before electron-builder reads it — meaning a commit
+back into a protected branch, or a repo whose version is permanently a lie and
+whose local builds disagree with CI. The conventional commits already in use
+still pay for themselves through `gh release create --generate-notes`, which
+costs no dependency and writes nothing.
+
+**Two Windows targets emit a `.exe`, so neither may use `win.artifactName`.**
+`nsis` and `portable` would resolve one shared name to one path and the second
+would overwrite the first — with **no error**, which was verified by doing it:
+both targets logged themselves writing `SchematicAIStudio-1.0.0-setup-x64.exe`
+and one file survived, the portable, under the installer's name. A mislabelled
+artifact is worse than a missing one. Each target names its own file.
+
+**There is no `deb` and no `rpm`, and that is not an oversight.** fpm requires a
+maintainer; electron-builder takes it from `package.json`'s `author`, which here
+is a plain string with no email, and raises `authorEmailIsMissed` — failing the
+*whole* Linux run rather than that one target. An AppImage carries no maintainer
+field, which is the only reason it is unaffected. Re-enabling is exactly two
+lines: the target back in the list, and `maintainer: name <email>` under
+`linux:`.
+
 **In flight, Ctrl belongs to the camera, and only main can honour that.** With
 the pointer locked the keyboard is flying: Ctrl is the sprint modifier and WASD
 is the direction. So every Ctrl+letter the app binds is also a way of moving —

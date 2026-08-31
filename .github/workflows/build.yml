@@ -1,0 +1,206 @@
+# Build and release.
+#
+#   master  -> the version in package.json, exactly, as a Release
+#   develop -> that version + `-dev.<run_number>`, as a Prerelease
+#
+# The whole strategy rests on one decision: `develop` never commits a version.
+# The suffix is applied on the runner and never travels back into the repo, so
+# there is no bot commit, no `[skip ci]` loop, no write token on a protected
+# branch, and no merge conflict on package.json between the two branches.
+#
+# NOTE: `github.run_number` is counted per workflow *file*. Renaming this file
+# restarts it at 1 and dev build numbers go backwards. Don't.
+name: Build
+
+on:
+  push:
+    branches: [master, develop]
+  # A manual handle, for re-running a release build without inventing a commit.
+  # Note that on a branch other than master this behaves as develop does: a
+  # -dev.<run_number> prerelease.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  # Rapid pushes to develop supersede one another. A release must never be
+  # cancelled midway through publishing: that leaves a tag and a half-filled
+  # release to clean up by hand.
+  cancel-in-progress: ${{ github.ref_name == 'develop' }}
+
+jobs:
+  # The one place that decides what this build is called. Everything downstream
+  # reads it from here rather than working it out again.
+  version:
+    name: Decide the version
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+      tag: ${{ steps.pick.outputs.tag }}
+      prerelease: ${{ steps.pick.outputs.prerelease }}
+      build_number: ${{ steps.pick.outputs.build_number }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The duplicate-tag guard below reads the tag list. Shallow, there are
+          # no tags to read and the guard silently guards nothing.
+          fetch-depth: 0
+
+      - id: pick
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=$(node -p "require('./package.json').version")
+
+          if [ "$GITHUB_REF_NAME" = "master" ]; then
+            version="$base"
+            prerelease=false
+            # Left empty on purpose. electron-builder reads BUILD_NUMBER from
+            # the environment and folds it into the Windows file version as
+            # `major.minor.patch.<n>`; for a stable release `x.y.z.0` is the
+            # deterministic answer, and two rebuilds of one release *should* be
+            # indistinguishable.
+            build_number=""
+
+            # The forgotten-bump guard. Without it, master building the same
+            # version twice replaces a published release in silence.
+            if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+              echo "::error::Tag v$version already exists. Bump the version in package.json (npm version patch|minor|major) before merging into master -- as it stands this build would replace the release already published under that number."
+              exit 1
+            fi
+          else
+            version="$base-dev.$GITHUB_RUN_NUMBER"
+            prerelease=true
+            # Here it earns its keep: without it every dev build reports itself
+            # to Windows as x.y.z.0, indistinguishable from every other one.
+            build_number="$GITHUB_RUN_NUMBER"
+          fi
+
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+            echo "prerelease=$prerelease"
+            echo "build_number=$build_number"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "### \`$version\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "prerelease: \`$prerelease\` · tag: \`v$version\`" >> "$GITHUB_STEP_SUMMARY"
+
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  package:
+    name: package (${{ matrix.platform }})
+    needs: [version, checks]
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # As in checks.yml: a Windows failure must not throw away the Linux
+      # artifacts. Both outcomes in one run.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+            artifacts: release/*.exe
+          # Pinned rather than ubuntu-latest: electron-builder 25.1.8 predates
+          # `latest` moving to 24.04, and an older glibc also widens the set of
+          # distributions the result runs on.
+          - os: ubuntu-22.04
+            platform: linux
+            artifacts: release/*.AppImage
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 25
+          cache: npm
+
+      # The Electron binary and electron-builder's own toolchain downloads are
+      # by far the heaviest part of a cold run.
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: ${{ runner.os }}-electron-
+
+      - name: Install
+        run: npm ci
+
+      # One code path for both branches: `--allow-same-version` makes this a
+      # no-op on master and applies the suffix on develop. Writing package.json
+      # on the runner is what makes *everything* downstream agree on one number
+      # -- the artifact filename, the Windows metadata, and `app.getVersion()`,
+      # which is what the About box shows the user.
+      - name: Stamp the version
+        shell: bash
+        run: npm version --no-git-tag-version --allow-same-version "${{ needs.version.outputs.version }}"
+
+      # Deliberately no GH_TOKEN / GITHUB_TOKEN in this step's environment.
+      # electron-builder publishes by itself when it finds one, which would race
+      # the publish job below and produce a half-populated release. Publishing
+      # is that job's business alone.
+      - name: Package
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ needs.version.outputs.build_number }}
+        run: npm run package:${{ matrix.platform }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          # Named paths rather than the whole of `release/`, which also holds
+          # the unpacked application directory.
+          path: ${{ matrix.artifacts }}
+          # A build that produced nothing must fail here rather than yield an
+          # empty release that looks published.
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish ${{ needs.version.outputs.tag }}
+    needs: [version, package]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # The `gh` CLI is preinstalled on every runner, so this needs no
+      # third-party action -- one less dependency to pin and to trust.
+      - name: Create the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ls -l dist
+
+          flags=(--generate-notes)
+          if [ "${{ needs.version.outputs.prerelease }}" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+
+          # `--target $GITHUB_SHA` pins the tag to the commit that was actually
+          # built. Without it gh tags the branch head, which may have moved
+          # while this run was going.
+          gh release create "${{ needs.version.outputs.tag }}" dist/* \
+            --title "${{ needs.version.outputs.tag }}" \
+            --target "$GITHUB_SHA" \
+            "${flags[@]}"

@@ -126,8 +126,10 @@ const block = (name: string, properties: Record<string, string> = {}): PaletteEn
 
 import {
   buildLegacyIndex,
+  legacyIdFor,
   legacyIdLabel,
   parseLegacyId,
+  resolveBlockInput,
 } from "../src/shared/legacy_ids.js";
 import { loadLegacyBlockTable } from "../src/main/pipeline/loader_formats.js";
 import { buildReverseLegacyTable } from "../src/main/services/writers.js";
@@ -2251,6 +2253,46 @@ console.log("\n--- the legacy id table, read both ways ---");
   equal("nor does a nibble out of range", parseLegacyId("35:16"), null);
   equal("nor an empty string", parseLegacyId(""), null);
   equal("and it round-trips", legacyIdLabel({ id: 35, meta: 14 }), "35:14");
+
+  /*
+   * Shown and accepted, which is the same table read the two ways somebody
+   * actually uses it. A legacy file stores `35:14`; naming only
+   * `minecraft:red_wool` tells them the app's word for a block instead of the
+   * file's, and refusing `35:14` in the block field refuses the vocabulary
+   * they arrived with.
+   */
+  equal("a block is labelled with what the file will store", legacyIdFor(index, "minecraft:red_wool"), "35:14");
+  equal("...from the base name, states and all", legacyIdFor(index, "minecraft:red_wool[x=1]"), "35:14");
+  equal("a block the era never had is labelled with nothing", legacyIdFor(index, "minecraft:deepslate"), null);
+  equal("no table, no label", legacyIdFor(null, "minecraft:red_wool"), null);
+
+  equal("typing an id finds the block", resolveBlockInput("35:14", index), "minecraft:red_wool");
+  /*
+   * The answer carries its states, because that is what the metadata value
+   * *means*. `53:0` is not oak stairs in general -- it is one particular
+   * corner of them, and resolving to the bare name would silently throw away
+   * the half of the id that is not the id.
+   */
+  check(
+    "...with the state the metadata value stands for",
+    resolveBlockInput("53:0", index).startsWith("minecraft:oak_stairs["),
+    resolveBlockInput("53:0", index),
+  );
+  /*
+   * Anything that is not an id comes back untouched, which is what lets this
+   * sit in front of the ordinary parse with no mode to get out of step.
+   * `minecraft:stone` has a colon in it too.
+   */
+  equal("a block id is left alone", resolveBlockInput("minecraft:stone", index), "minecraft:stone");
+  equal("...and so is one with states", resolveBlockInput("minecraft:oak_stairs[facing=north]", index), "minecraft:oak_stairs[facing=north]");
+  /*
+   * A well-formed id with no row is a typo, not an invitation to guess. `256`
+   * is past the last block the era ever had, and `250:3` -- the obvious pick
+   * for this check -- is black glazed terracotta, which is the reminder that
+   * the numbers go further than anyone remembers.
+   */
+  equal("an id with no row is not guessed at", resolveBlockInput("256:0", index), "256:0");
+  equal("and on a flat document nothing resolves at all", resolveBlockInput("35:14", null), "35:14");
 }
 
 

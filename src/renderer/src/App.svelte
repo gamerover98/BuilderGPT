@@ -24,7 +24,7 @@
   import AnchorModal from "./lib/AnchorModal.svelte";
   import DimensionsModal from "./lib/DimensionsModal.svelte";
 import VoidBlockModal from "./lib/VoidBlockModal.svelte";
-import { buildLegacyIndex } from "../../shared/legacy_ids.js";
+import { buildLegacyIndex, resolveBlockInput } from "../../shared/legacy_ids.js";
 import NbtModal from "./lib/NbtModal.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
   import SelectionTools from "./lib/SelectionTools.svelte";
@@ -456,6 +456,15 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   const placeableBlocks = $derived(
     docEra === "legacy" && legacyIndex.names.size > 0 ? legacyIndex.names : null,
   );
+
+  /**
+   * The legacy table, but only when the open document is one.
+   *
+   * Separate from `legacyIndex`, which is always loaded: labelling a 1.21
+   * schematic with pre-Flattening ids would be naming a number its file will
+   * never contain.
+   */
+  const legacyForDoc = $derived(docEra === "legacy" ? legacyIndex : null);
 
   /**
    * Where in the day the viewport is, in Minecraft ticks.
@@ -2459,7 +2468,19 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   }
 
   function parseBlock(text: string): { namespacedName: string; properties?: Record<string, string> } {
-    const trimmed = text.trim();
+    /*
+     * `35:14` becomes red wool before anything else looks at it.
+     *
+     * It has to happen here rather than in the picker, because this is where
+     * every string becomes a block: the hotbar, the fill field, the replace
+     * field and a paste all arrive through it. And it has to happen *first*,
+     * because the line below treats a colon as a namespace separator and would
+     * otherwise intern a block literally called `35:14`.
+     *
+     * Only on a legacy document. Above 1.13 a file holds no `ID:DATA`, so
+     * resolving one would answer a question the schematic cannot ask.
+     */
+    const trimmed = resolveBlockInput(text, legacyForDoc).trim();
     const name = trimmed.includes(":") ? trimmed : `minecraft:${trimmed}`;
     const bracket = name.indexOf("[");
     if (bracket === -1) {
@@ -3314,6 +3335,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   open={inventoryOpen}
   blocks={blockRegistry}
   placeable={placeableBlocks}
+  legacy={legacyForDoc}
   version={project?.version ?? documentVersionName(docState?.format ?? "sponge3", docState?.dataVersion ?? null) ?? settings.version}
   purpose={inventoryFor}
   onclose={() => (inventoryOpen = false)}
@@ -3395,6 +3417,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   {busy}
   blocks={blockRegistry}
   placeable={placeableBlocks}
+  legacy={legacyForDoc}
   onblock={(block, replaceExisting) => void changeVoidBlock(block, replaceExisting)}
   onopacity={(voidOpacity) =>
     void patchSettings({ editing: { ...settings.editing, voidOpacity } })}
@@ -3856,6 +3879,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
           {busy}
           blocks={blockRegistry}
           placeable={placeableBlocks}
+          legacy={legacyForDoc}
           block={activeBlock}
           onblockchange={holdBlock}
           replaceFrom={replaceBlock}

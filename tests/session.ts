@@ -2780,6 +2780,149 @@ console.log("\n--- choosing what empty space is made of ---");
   equal("...to the empty string", session.voidBlock, "");
 }
 
+// --- a replace names a block, not one of its states -------------------------
+/*
+ * Reported as: whatever you try to replace, it says nothing matched.
+ *
+ * `from` was interned and compared as an exact palette index, so a bare name
+ * matched only an entry carrying no properties at all -- and interning it
+ * *added* that entry, leaving a dead row behind on every miss. The rest of the
+ * codebase already assumed otherwise: it is the stated reason `replace_blocks`
+ * parses its `from` with `toEntry` rather than `toPlacedEntry`.
+ *
+ * On a flat document it reads as an occasional puzzle. On a legacy one it is
+ * total, and that is why it surfaced here: `legacy_blocks.json` gives a state
+ * to 1,449 of its 1,682 rows, so a `.schematic` opens holding
+ * `oak_fence[east=false,...]` and `grass_block[snowy=false]` and nothing a
+ * person can type matches any of it.
+ */
+console.log("\n--- a replace names a block, not one of its states ---");
+{
+  const stateful = (facing: string) => ({
+    namespacedName: "minecraft:oak_stairs",
+    properties: { half: "bottom", shape: "straight", facing },
+  });
+
+  {
+    const session = newDocument({ width: 4, height: 1, length: 4 });
+    setBlock(session.doc, 0, 0, 0, stateful("north"));
+    setBlock(session.doc, 1, 0, 0, stateful("south"));
+    setBlock(session.doc, 2, 0, 0, stateful("east"));
+    const before = session.doc.palette.length;
+
+    equal(
+      "a bare name matches every state of that block",
+      applyEdit(session, {
+        kind: "replace",
+        region: { minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 0, maxZ: 3 },
+        from: { namespacedName: "minecraft:oak_stairs" },
+        to: { namespacedName: "minecraft:stone" },
+      }),
+      3,
+    );
+    equal(
+      "...leaving none of them behind",
+      getBlock(session.doc, 1, 0, 0).namespacedName,
+      "minecraft:stone",
+    );
+    check(
+      "...and inventing no palette entry to do it",
+      session.doc.palette.length <= before + 1,
+      `${before} -> ${session.doc.palette.length}`,
+    );
+  }
+
+  {
+    /*
+     * Spelling the state out still means exactly that state. That is how you
+     * take out one stair orientation and leave the others, and it is the half
+     * that must not be lost in making a bare name mean the block.
+     */
+    const session = newDocument({ width: 4, height: 1, length: 4 });
+    setBlock(session.doc, 0, 0, 0, stateful("north"));
+    setBlock(session.doc, 1, 0, 0, stateful("south"));
+    equal(
+      "a stated from matches only that state",
+      applyEdit(session, {
+        kind: "replace",
+        region: { minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 0, maxZ: 3 },
+        from: stateful("north"),
+        to: { namespacedName: "minecraft:stone" },
+      }),
+      1,
+    );
+    equal(
+      "...and leaves the other one alone",
+      getBlock(session.doc, 1, 0, 0).properties.facing,
+      "south",
+    );
+  }
+
+  {
+    /*
+     * A miss must intern nothing. Interning `from` to compare it added a row
+     * for a block the schematic does not contain, on every failed replace.
+     */
+    const session = newDocument({ width: 2, height: 1, length: 2 });
+    setBlock(session.doc, 0, 0, 0, { namespacedName: "minecraft:stone", properties: {} });
+    const before = session.doc.palette.length;
+    equal(
+      "replacing something that is not there changes nothing",
+      applyEdit(session, {
+        kind: "replace",
+        region: { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 1 },
+        from: { namespacedName: "minecraft:deepslate" },
+        to: { namespacedName: "minecraft:stone" },
+      }),
+      0,
+    );
+    equal("...and adds no palette entry for it", session.doc.palette.length, before);
+  }
+}
+
+{
+  /*
+   * The same thing against a real file, which is where it was found: a legacy
+   * `.schematic` comes back with states on nearly everything, because that is
+   * what a metadata value *means*.
+   */
+  const dir = await mkdtemp(path.join(tmpdir(), "sas-replace-"));
+  try {
+    const built = newDocument({ width: 4, height: 1, length: 4 }, "mcedit", 1343);
+    for (let x = 0; x < 4; x += 1) {
+      setBlock(built.doc, x, 0, 0, {
+        namespacedName: "minecraft:oak_fence",
+        properties: { east: "false", south: "false", north: "false", west: "false" },
+      });
+    }
+    const saved = await saveSession(built, {
+      filePath: path.join(dir, "replace.schematic"),
+      format: "mcedit",
+      legacyBlocksPath: LEGACY_BLOCKS,
+    });
+
+    const session = await openDocument(saved.filePath, { legacyBlocksPath: LEGACY_BLOCKS });
+    check(
+      "a reopened legacy file carries states on its blocks",
+      Object.keys(getBlock(session.doc, 0, 0, 0).properties).length > 0,
+      JSON.stringify(getBlock(session.doc, 0, 0, 0)),
+    );
+    equal(
+      "...and the name a person types still matches them",
+      applyEdit(session, {
+        kind: "replace",
+        region: { minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 0, maxZ: 3 },
+        from: { namespacedName: "minecraft:oak_fence" },
+        to: { namespacedName: "minecraft:cobblestone" },
+      }),
+      4,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    closeDocument();
+  }
+}
+
 // --- a legacy schematic refuses blocks that did not exist yet ---------------
 /*
  * Reported as: on a .schematic you can place 1.13+ blocks. It was exactly that.

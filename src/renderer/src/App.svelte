@@ -24,7 +24,11 @@
   import AnchorModal from "./lib/AnchorModal.svelte";
   import DimensionsModal from "./lib/DimensionsModal.svelte";
 import VoidBlockModal from "./lib/VoidBlockModal.svelte";
-import { buildLegacyIndex, resolveBlockInput } from "../../shared/legacy_ids.js";
+import {
+  buildLegacyIndex,
+  resolveBlockInput,
+  type LegacyIndex,
+} from "../../shared/legacy_ids.js";
 import NbtModal from "./lib/NbtModal.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
   import SelectionTools from "./lib/SelectionTools.svelte";
@@ -427,15 +431,39 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   /** The registry, for the block pickers to search — fetched once at startup. */
   let blockRegistry = $state<string[]>([]);
   /**
-   * The pre-Flattening block table, fetched once.
+   * The pre-Flattening block table, inverted once and then never again.
    *
    * Two jobs, both of which need it here: deciding which blocks a legacy
    * schematic may be offered, and naming the `ID:DATA` a legacy file will
    * really store. Main reads the file; the rule for inverting it is shared, so
    * both sides agree on the tie-break when several ids give one name.
+   *
+   * **The *index* is the state, not the table, and that is load-bearing.**
+   * This began as `$state` holding the raw table with a `$derived` inverting
+   * it, and that shape froze the app. Two things were wrong with it and only
+   * one is obvious:
+   *
+   * - plain `$state` on an object is a *deep* proxy, so a 1,682-key lookup
+   *   table became a signal per entry;
+   * - `buildLegacyIndex` returns fresh `Map`s and a fresh `Set` every time it
+   *   runs, and consumers compare those **by identity** -- `placeable` is a
+   *   prop. So the pickers re-filtered, the keyed `{#each}` rebuilt, and the
+   *   update ran again. Svelte aborts a loop like that, and it takes every
+   *   effect in the window with it.
+   *
+   * The viewport went on drawing throughout, because its render loop is a
+   * `requestAnimationFrame` chain that owes Svelte nothing -- so the app was
+   * *navigable and completely dead*, which is exactly how it was reported.
+   *
+   * Building it at the fetch removes the class rather than making it unlikely:
+   * one assignment, one object, and `.names` is the same `Set` forever. It only
+   * ever bit a legacy document, because everywhere this is read `docEra` is
+   * tested first and `&&` short-circuits.
+   *
+   * `$state.raw` because nothing writes *into* it. It is reference data that is
+   * replaced or not at all, which is the one thing `raw` is for.
    */
-  let legacyTable = $state<Record<string, string>>({});
-  const legacyIndex = $derived(buildLegacyIndex(legacyTable));
+  let legacyIndex = $state.raw<LegacyIndex | null>(null);
   /**
    * Which era the open document is in, derived rather than carried.
    *
@@ -454,7 +482,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
    * app being broken rather than as a file not having arrived yet.
    */
   const placeableBlocks = $derived(
-    docEra === "legacy" && legacyIndex.names.size > 0 ? legacyIndex.names : null,
+    docEra === "legacy" && legacyIndex !== null ? legacyIndex.names : null,
   );
 
   /**
@@ -1132,7 +1160,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
         artifacts = await api().listArtifacts();
         defaultOutputDir = await api().getDefaultOutputDir();
         blockRegistry = await api().listBlocks();
-        legacyTable = await api().listLegacyBlocks();
+        legacyIndex = buildLegacyIndex(await api().listLegacyBlocks());
         step("catalogue", "done");
 
         /*

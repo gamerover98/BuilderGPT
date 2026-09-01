@@ -192,6 +192,7 @@ function refusingScope(name: string): ToolContext["tx"] {
     setBlockEntity: no,
     fill: no,
     replace: no,
+    replaceAny: no,
     resize: no,
     setHeader: no,
     get changed(): number {

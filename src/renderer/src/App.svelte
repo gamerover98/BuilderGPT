@@ -24,6 +24,7 @@
   import AnchorModal from "./lib/AnchorModal.svelte";
   import DimensionsModal from "./lib/DimensionsModal.svelte";
 import VoidBlockModal from "./lib/VoidBlockModal.svelte";
+import VersionModal from "./lib/VersionModal.svelte";
 import {
   buildLegacyIndex,
   resolveBlockInput,
@@ -580,6 +581,17 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   let dimensionsOpen = $state(false);
   let voidOpen = $state(false);
   let voidError = $state("");
+  let mcVersionOpen = $state(false);
+  let mcVersionError = $state("");
+  /**
+   * Whether main has already refused this version change for destroying blocks.
+   *
+   * `dimensionsConfirm`'s shape: the count cannot be known until main has
+   * looked at the palette, so the offer to go ahead can only exist after a
+   * refusal. Cleared whenever the modal closes, so a fresh open never starts
+   * on a button that agrees to something nobody has been told about.
+   */
+  let mcVersionConfirm = $state(false);
   let dimensionsError = $state("");
   /**
    * Whether main has already refused this resize for losing blocks.
@@ -2671,6 +2683,43 @@ import ConvertModal from "./lib/ConvertModal.svelte";
    * was closed and opened again. This answers with a `DocumentState`, so it
    * takes the ordinary path every other document change takes.
    */
+  /**
+   * Changes which Minecraft version the schematic is for.
+   *
+   * The refusal for destroying blocks is recognised by its **kind**, never by
+   * its wording. A renderer matching on the sentence turns a reworded message
+   * into a dead end with nothing failing anywhere, which is why
+   * `needs-confirmation` exists as a `FailureKind` at all.
+   */
+  async function changeMcVersion(version: string, drop: boolean): Promise<void> {
+    mcVersionError = "";
+    busy = true;
+    try {
+      const response = await api().setDocumentVersion({
+        version,
+        dropUnrepresentable: drop,
+      });
+      if (!response.ok) {
+        mcVersionConfirm = response.kind === "needs-confirmation";
+        mcVersionError = response.message;
+        return;
+      }
+      mcVersionConfirm = false;
+      docState = response.state;
+      // The version is a fact the sidebar and the dialogs read, and the era
+      // decides what the inventory offers -- so the local copy has to move too.
+      project = { ...(project ?? {}), version };
+      await refreshDocument();
+      if (nbtOpen) await refreshSchematicNbt();
+      mcVersionOpen = false;
+    } catch (err) {
+      mcVersionError = err instanceof Error ? err.message : String(err);
+    } finally {
+      busy = false;
+    }
+  }
+
+
   async function changeVoidBlock(block: string, replaceExisting: boolean): Promise<void> {
     voidError = "";
     busy = true;
@@ -3437,6 +3486,21 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   onpickmcproot={() => pick("mcp-root")}
 />
 
+<VersionModal
+  open={docState !== null && mcVersionOpen}
+  format={docState?.format ?? "sponge3"}
+  current={documentVersionName(docState?.format ?? "sponge3", docState?.dataVersion ?? null) ?? ""}
+  {busy}
+  error={mcVersionError}
+  needsConfirmation={mcVersionConfirm}
+  onapply={(version, drop) => void changeMcVersion(version, drop)}
+  onclose={() => {
+    mcVersionOpen = false;
+    mcVersionError = "";
+    mcVersionConfirm = false;
+  }}
+/>
+
 <VoidBlockModal
   open={docState !== null && voidOpen}
   block={docState?.voidBlock ?? ""}
@@ -3626,6 +3690,14 @@ import ConvertModal from "./lib/ConvertModal.svelte";
       {t("convert.open")}
     </button>
 
+    <button
+      class="nbt-open"
+      disabled={docState === null}
+      onclick={() => (mcVersionOpen = true)}
+      title={t("mcversion.openHint")}
+    >
+      {t("mcversion.open")}
+    </button>
     <button
       class="nbt-open"
       disabled={docState === null}

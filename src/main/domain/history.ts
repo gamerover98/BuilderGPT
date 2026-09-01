@@ -208,6 +208,15 @@ export interface TransactionScope {
   setBlockEntity(x: number, y: number, z: number, record: BlockEntityRecord | null): void;
   fill(region: Region, entry: PaletteEntry): number;
   replace(region: Region, from: PaletteEntry, to: PaletteEntry): number;
+  /**
+   * `replace` for several patterns at once, in **one** pass over the voxels.
+   *
+   * Calling `replace` in a loop is N passes, and the caller that wants this is
+   * backporting a schematic: fifty blocks the older version never had, over a
+   * document that may be tens of millions of cells. One pass is the difference
+   * between a wait and a hang.
+   */
+  replaceAny(region: Region, from: readonly PaletteEntry[], to: PaletteEntry): number;
   resize(
     size: { width: number; height: number; length: number },
     shift?: readonly [number, number, number],
@@ -382,8 +391,10 @@ class Recorder implements TransactionScope {
    * has just been written is precisely what must not happen.
    */
   replace(region: Region, from: PaletteEntry, to: PaletteEntry): number {
-    const exact = Object.keys(from.properties).length > 0;
-    const key = paletteEntryCacheKey(from);
+    return this.replaceAny(region, [from], to);
+  }
+
+  replaceAny(region: Region, from: readonly PaletteEntry[], to: PaletteEntry): number {
     /*
      * Decided once over the palette, then read per voxel. Comparing names at
      * every cell would be a string compare per block; this is an array read,
@@ -391,14 +402,19 @@ class Recorder implements TransactionScope {
      */
     const wanted = new Uint8Array(this.doc.palette.length);
     let any = false;
-    for (let i = 0; i < this.doc.palette.length; i += 1) {
-      const entry = this.doc.palette[i];
-      const hit = exact
-        ? paletteEntryCacheKey(entry) === key
-        : entry.namespacedName === from.namespacedName;
-      if (hit) {
-        wanted[i] = 1;
-        any = true;
+    for (const pattern of from) {
+      const exact = Object.keys(pattern.properties).length > 0;
+      const key = paletteEntryCacheKey(pattern);
+      for (let i = 0; i < this.doc.palette.length; i += 1) {
+        if (wanted[i] === 1) continue;
+        const entry = this.doc.palette[i];
+        const hit = exact
+          ? paletteEntryCacheKey(entry) === key
+          : entry.namespacedName === pattern.namespacedName;
+        if (hit) {
+          wanted[i] = 1;
+          any = true;
+        }
       }
     }
     // Nothing to match, and deliberately nothing interned: a miss must not

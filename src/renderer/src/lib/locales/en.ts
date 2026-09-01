@@ -247,6 +247,20 @@ export const en = {
   "doc.length": "Length (z)",
   "doc.volume": "{count} blocks",
   "doc.savingSize": "Saving {size} as it stands. Empty space around the build is trimmed on the way out.",
+  "mcversion.open": "Version",
+  "mcversion.openHint": "Change which Minecraft this schematic is for",
+  "mcversion.title": "Minecraft version",
+  "mcversion.container":
+    "This schematic is a {format}, and stays one. Changing the container is Save As or Convert.",
+  "mcversion.unstated": "Not stated in the file",
+  "mcversion.useSaveAs":
+    "Save As or Convert can write it in a container that fits, in one step.",
+  "mcversion.toLegacy":
+    "Before 1.13 blocks were numeric ids, and the set is much smaller. Anything the older version never had will be replaced with air — you will be told how much before it happens, and it can be undone.",
+  "mcversion.flatBackport":
+    "Going to an older 1.13+ version changes the tag and nothing else. This build has no record of which release each block arrived in, so it cannot tell you whether anything here is too new — rather than guess, it carries everything.",
+  "mcversion.apply": "Change version",
+  "mcversion.applyAnyway": "Change it and drop those blocks",
   "doc.version": "Minecraft",
   "doc.format": "Container",
   "doc.legacyEra": "legacy",

@@ -56,6 +56,15 @@ import {
 } from "../src/main/services/writers.js";
 import { dataVersionFor } from "../src/main/services/versions.js";
 import { bitsPerEntry } from "../src/main/pipeline/litematic_bits.js";
+import {
+  blockExistsIn,
+  blocksIn,
+  isVersioned,
+  propertyExistsIn,
+  propertyValueIn,
+  renameFor,
+  versionedBlockCount,
+} from "../src/shared/block_versions.js";
 import { parseMcfunction } from "../src/main/pipeline/mcfunction.js";
 import { convertFile, extensionForKind } from "../src/main/services/convert.js";
 import {
@@ -2293,6 +2302,180 @@ console.log("\n--- the legacy id table, read both ways ---");
    */
   equal("an id with no row is not guessed at", resolveBlockInput("256:0", index), "256:0");
   equal("and on a flat document nothing resolves at all", resolveBlockInput("35:14", null), "35:14");
+}
+
+
+// --- what exists in which Minecraft version ---------------------------------
+/*
+ * The dataset that makes a version change mean something. Before it, only the
+ * pre-Flattening boundary was checked -- so backporting a 1.21 build to 1.13
+ * moved the tag and left up to 501 kinds of block in a file for a game that has
+ * never heard of them, and upgrading past 1.21.9 left every `chain` under a
+ * name that release renamed.
+ */
+console.log("\n--- what exists in which Minecraft version ---");
+{
+  // The DataVersions this section reasons in, from the corroborated table.
+  const V = {
+    v1_13: 1519,
+    v1_14: 1952,
+    v1_15_2: 2230,
+    v1_16: 2566,
+    v1_17: 2724,
+    v1_19: 3105,
+    v1_19_4: 3337,
+    v1_20: 3463,
+    v1_20_2: 3578,
+    v1_20_4: 3700,
+    v1_21_4: 4189,
+    v1_21_8: 4440,
+    v1_21_9: 4554,
+    v26_2: 4903,
+  };
+  for (const [name, dv] of Object.entries(V)) {
+    const info = MC_VERSIONS.find((entry) => entry.dataVersion === dv);
+    check(
+      `the fixture DataVersion ${dv} (${name}) is one this build knows`,
+      info !== undefined,
+    );
+  }
+
+  /*
+   * The trap, stated as the case it would have produced.
+   *
+   * misode/mcmeta's summary lists only blocks that carry properties before
+   * 1.20.5 and every block from 1.20.5 on -- 686 entries then 1060, `stone`
+   * appearing at the boundary. A plain diff of it therefore claims `stone`,
+   * `dirt`, `oak_planks` and some 370 others arrived in 1.20.5, and acting on
+   * that would replace every stone block in a build with empty space on any
+   * backport to 1.19. Nothing else in this repo could ever have seen it.
+   */
+  for (const id of ["minecraft:stone", "minecraft:dirt", "minecraft:oak_planks", "minecraft:cobblestone"]) {
+    check(
+      `${id} did not arrive in 1.20.5`,
+      blockExistsIn(id, V.v1_13) && blockExistsIn(id, V.v1_19) && blockExistsIn(id, V.v26_2),
+    );
+  }
+
+  /*
+   * A rename is not a removal, and this pair is the whole reason the dataset
+   * has a curated half. Read as a removal, a backport across 1.21.9 replaces
+   * every chain in the build with empty space; read as a rename, it writes the
+   * name the older game uses and loses nothing.
+   */
+  check("chain exists from 1.16", !blockExistsIn("minecraft:chain", V.v1_15_2) && blockExistsIn("minecraft:chain", V.v1_16));
+  check("...up to 1.21.8", blockExistsIn("minecraft:chain", V.v1_21_8) && !blockExistsIn("minecraft:chain", V.v1_21_9));
+  check("iron_chain starts exactly where chain stops", !blockExistsIn("minecraft:iron_chain", V.v1_21_8) && blockExistsIn("minecraft:iron_chain", V.v1_21_9));
+  equal(
+    "...and the rename says so, going forward",
+    renameFor("minecraft:chain", V.v1_21_9),
+    "iron_chain",
+  );
+  equal(
+    "...and coming back",
+    renameFor("minecraft:iron_chain", V.v1_21_4),
+    "chain",
+  );
+  equal("a name the version already has is left alone", renameFor("minecraft:chain", V.v1_21_8), null);
+  equal("...in the other direction too", renameFor("minecraft:iron_chain", V.v26_2), null);
+
+  // The other four, each a boundary somebody would otherwise have to remember.
+  equal("sign became oak_sign in 1.14", renameFor("sign", V.v1_14), "oak_sign");
+  equal("...and comes back before it", renameFor("oak_sign", V.v1_13), "sign");
+  equal("grass_path became dirt_path in 1.17", renameFor("grass_path", V.v1_17), "dirt_path");
+  equal("grass became short_grass", renameFor("grass", V.v1_20_4), "short_grass");
+  equal("...and 1.20.2 still calls it grass", renameFor("short_grass", V.v1_20_2), "grass");
+
+  /*
+   * Unknown ids fail open, and the doubt goes one way on purpose: the cost of
+   * an omission is a block that survives a backport, and the cost of a wrong
+   * guess is a block destroyed.
+   */
+  check("a block this table never heard of is allowed", blockExistsIn("mymod:reactor", V.v1_13));
+  check("...and says so when asked directly", !isVersioned("mymod:reactor") && isVersioned("minecraft:stone"));
+  equal("...and is never renamed", renameFor("mymod:reactor", V.v1_21_9), null);
+
+  // The state is ignored: this is a question about the block.
+  check("a state does not change the answer", blockExistsIn("minecraft:chain[axis=y]", V.v1_16));
+
+  /*
+   * The sets the inventory filters by. 1.13 has to be a strict subset of 1.21.4
+   * except for the names that were renamed away -- which is the whole shape of
+   * the flat era, and would not hold if a `since` had been mis-derived.
+   */
+  const early = blocksIn(V.v1_13);
+  const late = blocksIn(V.v1_21_4);
+  check("1.13 offers fewer blocks than 1.21.4", early.size < late.size, `${early.size} vs ${late.size}`);
+  const lost = [...early].filter((name) => !late.has(name)).sort();
+  equal(
+    "...and everything it has that 1.21.4 lacks is a rename",
+    lost.join(", "),
+    "grass, grass_path, sign, wall_sign",
+  );
+  check("deepslate is 1.17 and later", !early.has("deepslate") && late.has("deepslate"));
+  check("the set is memoised, not rebuilt", blocksIn(V.v1_13) === early);
+
+  /*
+   * Properties. A wall's connections stopped being a boolean in 1.16, and it is
+   * the one value change in the whole flat era that touches a real build.
+   */
+  equal(
+    "a tall wall comes back as an ordinary connection",
+    propertyValueIn("minecraft:cobblestone_wall", "north", "tall", V.v1_15_2),
+    "true",
+  );
+  equal(
+    "...and none comes back as false",
+    propertyValueIn("minecraft:cobblestone_wall", "north", "none", V.v1_15_2),
+    "false",
+  );
+  equal(
+    "...and going the other way, true becomes low",
+    propertyValueIn("minecraft:cobblestone_wall", "north", "true", V.v1_16),
+    "low",
+  );
+  /*
+   * The round trip is deliberately NOT the identity, and it must not pretend to
+   * be: `tall` and `low` both come back as `true`, and `true` goes out as `low`.
+   * A wall that was tall is one block shorter afterwards, which is the whole of
+   * what 1.15 can say about it.
+   */
+  equal(
+    "a backported tall wall does not come back tall",
+    propertyValueIn("minecraft:cobblestone_wall", "north", propertyValueIn("minecraft:cobblestone_wall", "north", "tall", V.v1_15_2) ?? "", V.v1_16),
+    "low",
+  );
+  equal(
+    "a value the version already has needs no rewriting",
+    propertyValueIn("minecraft:cobblestone_wall", "up", "true", V.v1_15_2),
+    null,
+  );
+  equal(
+    "...and a block outside the rule is untouched",
+    propertyValueIn("minecraft:oak_fence", "north", "true", V.v1_15_2),
+    null,
+  );
+  equal(
+    "a mob-head note block backports to a harp",
+    propertyValueIn("minecraft:note_block", "instrument", "creeper", V.v1_19),
+    "harp",
+  );
+  equal(
+    "torchflower_crop lost a growth stage going forward, not back",
+    propertyValueIn("minecraft:torchflower_crop", "age", "2", V.v1_20),
+    "1",
+  );
+
+  // Property presence, which is a different question from its values.
+  check("leaves got waterlogged in 1.19", !propertyExistsIn("minecraft:oak_leaves", "waterlogged", V.v1_17) && propertyExistsIn("minecraft:oak_leaves", "waterlogged", V.v1_19));
+  check("a cauldron kept level until 1.17", propertyExistsIn("minecraft:cauldron", "level", V.v1_16) && !propertyExistsIn("minecraft:cauldron", "level", V.v1_17));
+  check("a property with no recorded event is present", propertyExistsIn("minecraft:oak_stairs", "facing", V.v1_13));
+
+  check(
+    "the table holds the whole registry, not a sample",
+    versionedBlockCount() > 1100,
+    String(versionedBlockCount()),
+  );
 }
 
 

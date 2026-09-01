@@ -201,18 +201,59 @@ warning. That is `resizeSession`'s shape and it reuses its `FailureKind` --
 sentence**. A renderer matching on wording turns a rephrased message into a
 silent dead end.
 
-**Only the legacy boundary is checked, and the panel says so.** Going from 1.21
-to 1.16 drops nothing, because this app has no per-block introduction data for
-the flat era. Saying nothing there would read as "checked, nothing to lose",
-which is a promise it cannot keep -- so `mcversion.flatBackport` states the
-limit instead. The impossible versions are shown **disabled** rather than
-filtered out for the same reason: a list that silently stops at 1.13 reads as a
-build that has never heard of 1.12.
+**A version change does three things, and the order decides between renaming
+and demolishing.** Rename first, restate second, drop third:
+
+- **rename** — `chain` becomes `iron_chain` going past 1.21.9 and back again
+  coming under it. Nothing is lost, nothing is counted, nothing is asked;
+- **restate** — a wall's `north=tall` becomes `north=true` before 1.16, which
+  is where a wall connection stopped being a boolean;
+- **drop** what is left, and only that.
+
+Asking existence before renaming is not a worse version of this. `iron_chain`
+is genuinely absent from 1.16, so a backport that checked first would replace
+every one of them with empty space — while the correct answer, `chain`, is a
+name that version has had since it shipped. `tests/session.ts` states it as
+seven named checks, and deleting the rename step fails all seven.
+
+**What replaces a dropped block is the document's empty space, not air.** A
+break already writes it, and an underwater build coming back full of bubbles
+would have lost exactly what `editing.voidBlock` exists to preserve. It falls
+back to air when the empty space block is itself too new for the target —
+`structure_void` being 1.10, that is a real case rather than a defensive one.
+
+**Two tables, and which one answers is decided by the era rather than by
+merging them.** `legacy_blocks.json` enumerates the pre-Flattening set exactly;
+`block_versions.json` is the flat era only and its generator refuses a
+pre-Flattening label outright. Each is authoritative where the other says
+nothing, and asking both would be two answers to one question.
+
+The panel used to declare the limit instead: *«this build has no record of
+which release each block arrived in»*, which was true and is the sentence the
+seventh dataset removed. Saying nothing there would have read as "checked,
+nothing to lose", which is a promise it could not keep — the same reason the
+impossible versions are shown **disabled** rather than filtered out.
+
+**And the count distinguishes the three.** One number for all of them would
+report a rename and a demolition identically, so `EditSuccess.notes` carries
+the sentence. It is `DocumentSession.notes`' rule in a second place and has no
+other user: most edits do one kind of thing, so `changed` is the whole answer,
+and a field filled by everything would be a field nobody reads.
 
 `TransactionScope.replaceAny` exists for this one caller. Calling `replace` per
 offending entry is N passes over the voxels, and a backport can name fifty
 blocks across a document of tens of millions of cells -- one pass is the
 difference between a wait and a hang.
+
+**`TransactionScope.remap` is its sibling and exists for the same arithmetic
+one step further on.** The three steps above as three `replaceAny` calls are
+three passes over the voxels, and this is the one edit that genuinely may touch
+every block in the document. `remap` asks its function **once per palette
+entry** and reads the answer per cell. The palette grows underneath the pass —
+`setBlock` interns a target that is new — so an index past the end of the
+target array reads as `undefined`, which is falsy and is the right answer: a row
+added during the pass is something the pass just wrote, and rewriting it again
+would chase its own tail.
 
 **A `replace`'s `from` is a pattern, and naming no state means the block in any
 state.** That is what the rest of the codebase already assumed: it is the stated
@@ -963,7 +1004,7 @@ what the inventory never offered. That is the same failure the hand-written
 `DEFAULT_STATE` had, one layer down, and it is the argument for generating a set
 rather than curating one.
 
-**Six vendored datasets, six generators, six skills.** The pattern is the
+**Seven vendored datasets, seven generators, seven skills.** The pattern is the
 same each time and it is the one to copy: the answers are looked up, recorded
 with where they came from, and the generator replaces only the rows between two
 markers. Running with nothing new must change no bytes — if it rewrites the file
@@ -977,6 +1018,7 @@ every time, the ordering or the formatting has drifted and *that* is the bug.
 | `block_id_list.txt` | `gen-block-list.mjs` | `mc-block-models` (for what the ids must draw as) |
 | `resources/litematica_versions.json` | `gen-litematica-versions.mjs` | `mc-litematic` |
 | `resources/command_syntax.json` | `gen-command-syntax.mjs` | `mc-commands` |
+| `resources/block_versions.json` | `gen-block-versions.mjs` | `mc-block-versions` |
 
 The skills' trust rules deliberately differ, and the difference is the point.
 `mc-versions` buys trust with **two independent sources that agree**, because a
@@ -1007,6 +1049,43 @@ and a `fill` past `max_block_modifications` places nothing and reports nothing.
 Neither is a property of the file, so no test can ever see it, and those rows
 are corroborated. A Litematica `Version` is the `mc-versions` case outright:
 wrong, and Litematica opens the file and *converts* it.
+
+`mc-block-versions` is the split running through the *middle* of one file
+rather than between two. Its `blocks` and `properties` halves are derived from
+a diff and re-checked mechanically; its `renames` and `propertyValues` halves
+cannot be, and that is not a gap in the tooling — **a diff sees `chain`
+disappear at 1.21.9 and `iron_chain` appear and cannot tell that from a removal
+plus an unrelated addition.** Nothing anywhere can tell you that a 1.16 wall's
+`tall` should come back as `true` rather than `false` either. Those rows are
+corroborated on the wiki's History section and carry their evidence.
+
+**And that dataset is the one where a wrong answer *destroys* rather than
+omits.** The other six fail by being incomplete; this one, believed, replaces
+every affected block in somebody's build with empty space, reports a healthy
+count, and looks entirely deliberate. It came within one design decision of
+doing exactly that: `misode/mcmeta`'s summary — the source `block_states.json`
+already uses — **changed what it lists at 1.20.5**, holding only blocks with
+properties up to 1.20.4 and every block after. 686 entries, then 1060, with
+`stone` appearing at the boundary. A plain diff of it dates `stone`, `dirt`,
+`oak_planks` and some 370 others to 1.20.5, and acting on that turns any
+backport to 1.19 into a demolition. The same mechanism manufactures a false
+rename: `cauldron` vanishes at 1.17 because its `level` moved to
+`water_cauldron`, not because the block went anywhere.
+
+So block presence comes from **`PrismarineJS/minecraft-data`**, which lists
+every block at every version — `stone` present in all 37 it covers, and zero
+monotonicity gaps — and mcmeta only corroborates. `mc-versions`' rule, and its
+*«absence is not disagreement»* clause, arrived at from the data rather than
+from the principle. Property **values** still come from mcmeta alone, because
+minecraft-data types an integer property as a count with no range and its own
+count moves between releases: read naively it has `snow.layers` changing four
+times for a property the game has never touched.
+
+**The whole flat era holds five renames and seven value changes**, which is the
+number worth knowing before the next person fears this dataset. The renames are
+`sign`, `wall_sign`, `grass_path`, `grass` and `chain` — every one of them
+already named elsewhere in this file — and of the value changes only the walls'
+1.16 `true|false` → `none|low|tall` touches a real build.
 
 **Two generators cross-check their DataVersions against `mc_versions.json`**,
 which is the corroborated one, and refuse rather than write their own number.
@@ -1792,7 +1871,7 @@ scripts/gen-block-states.mjs    JSON → the table
 src/shared/block_states.ts      the table, plus the lookups
 ```
 
-`mc_versions.json`'s arrangement for its reason. 1105 blocks come out as 118
+`mc_versions.json`'s arrangement for its reason. 1197 blocks come out as 121
 distinct shapes — every fence in the game has the same five properties — which
 is both a third of the size and the only form a person can read.
 

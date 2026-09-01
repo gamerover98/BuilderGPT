@@ -77,6 +77,12 @@ import { parsePaletteEntry } from "../pipeline/loader_formats.js";
 import { hasProperty } from "../../shared/block_states.js";
 import { normaliseVoidBlock } from "../../shared/settings.js";
 import { mcVersion, refusalFor } from "../../shared/mc_versions.js";
+import {
+  blockExistsIn,
+  propertyExistsIn,
+  propertyValueIn,
+  renameFor,
+} from "../../shared/block_versions.js";
 import { DOCUMENT_SIZE } from "../../shared/settings.js";
 import { buildDocumentPreview, type DocumentPreviewOptions } from "./preview.js";
 import type { ChunkMeshCache } from "../pipeline/chunked_mesh.js";
@@ -344,6 +350,10 @@ function toEntry(block: { namespacedName: string; properties?: Record<string, st
  * reports it. Main must not raise a dialog -- the request may not have come
  * from anybody at a keyboard.
  *
+ * **It counts only what is actually lost.** A block that was *renamed* is not in
+ * here: `chain` becoming `iron_chain` costs nothing, and asking somebody to
+ * confirm it would teach them to confirm the sentence that means the opposite.
+ *
  * `FailureKind` carries `needs-confirmation` already, which is what lets the
  * panel offer to go ahead **without matching on this wording**. A renderer that
  * read the sentence would turn a reworded refusal into a silent dead end.
@@ -353,14 +363,15 @@ export class VersionWouldLoseBlocksError extends Error {
     readonly blocks: readonly string[],
     readonly count: number,
     readonly versionLabel: string,
+    readonly replacement: string,
   ) {
     const shown = blocks.slice(0, 6).join(", ");
     const rest = blocks.length - 6;
     const more = rest > 0 ? ", and " + String(rest) + " more" : "";
     super(
       `${count.toLocaleString()} block(s) of ${blocks.length} type(s) do not exist in ` +
-        `Minecraft ${versionLabel} and would be replaced with air: ${shown}${more}. ` +
-        `This can be undone.`,
+        `Minecraft ${versionLabel} and would be replaced with ${replacement}: ` +
+        `${shown}${more}. This can be undone.`,
     );
     this.name = "VersionWouldLoseBlocksError";
   }
@@ -1070,6 +1081,17 @@ export function setSessionVoidBlock(
   return changed;
 }
 
+/** What a version change did, for the sentence the panel shows afterwards. */
+export interface VersionChangeResult {
+  /** Cells written, of any of the three kinds below. */
+  changed: number;
+  renamed: number;
+  rewritten: number;
+  dropped: number;
+  /** A sentence, or `""` when nothing moved. */
+  notes: string;
+}
+
 /**
  * Changes which Minecraft version this schematic is for, as one undoable step.
  *
@@ -1084,26 +1106,43 @@ export function setSessionVoidBlock(
  * something still called `.schem`. Save As and Convert both exist and both
  * change the pair together; this verb changes one thing.
  *
- * Backporting drops what the older version never had, because carrying it
- * would write a file whose palette names blocks the target game has never
- * heard of -- the classic error that looks like it worked. It is refused first
- * and counted, and only goes through with `dropUnrepresentable`: a warning
- * shown after the blocks are gone is not a warning.
+ * ## Three things happen, in this order, and the order is the whole design
  *
- * **Only the legacy boundary is checked**, and the caller has to say so rather
- * than let silence imply more. Going from 1.21 to 1.16 drops nothing here,
- * because this app has no per-block introduction data for the flat era -- and
- * refusing blocks on a guess is worse than carrying them.
+ * 1. **Rename.** `chain` becomes `iron_chain` going past 1.21.9 and back again
+ *    coming under it. Nothing is lost, nothing is counted, nothing is asked.
+ * 2. **Rewrite the states** the target cannot say -- a wall's `north=tall`
+ *    becomes `north=true` before 1.16, because that release is where a wall
+ *    connection stopped being a boolean.
+ * 3. **Drop what is left**, and only that.
  *
- * One transaction, so Ctrl+Z takes back the version *and* the blocks together.
- * That costs nothing to arrange: `HeaderState` has captured and restored
- * `dataVersion` since it existed.
+ * Doing 3 before 1 is not a worse version of this: it is the demolition this
+ * function exists to prevent. A registry diff sees `chain` disappear at 1.21.9
+ * and `iron_chain` appear and cannot tell that from two unrelated events, so a
+ * backport that checked existence first would find `iron_chain` absent from
+ * 1.16 and replace every one of them with empty space -- while the correct
+ * answer, `chain`, is a name that version has had since it shipped.
+ *
+ * ## What replaces a dropped block
+ *
+ * The document's **empty space** (`session.voidBlock`), not air. A break already
+ * writes it, and an underwater build that came back full of air bubbles would
+ * have lost exactly what that setting exists to preserve. It falls back to air
+ * when the empty space block is itself too new for the target -- which is a real
+ * case, `structure_void` being 1.10.
+ *
+ * A backport is refused first and counted, and only goes through with
+ * `dropUnrepresentable`: a warning shown after the blocks are gone is not a
+ * warning.
+ *
+ * One transaction, so Ctrl+Z takes back the version, the names, the states
+ * *and* the blocks together. That costs nothing to arrange: `HeaderState` has
+ * captured and restored `dataVersion` since it existed.
  */
 export function setDocumentVersion(
   session: DocumentSession,
   version: string,
   options: { dropUnrepresentable?: boolean; placeableNames?: ReadonlySet<string> | null } = {},
-): number {
+): VersionChangeResult {
   const { doc, history } = session;
   const info = mcVersion(version);
   if (info === undefined) throw new UnknownVersionError(version);
@@ -1111,30 +1150,103 @@ export function setDocumentVersion(
   if (refusal !== null) throw new VersionRefusedError(refusal);
 
   /*
-   * What the target cannot hold. Names only, which is the line `buildMcEdit`
-   * already draws: a missing name is fatal, an uncarryable state is written as
-   * the base block and reported as degraded.
+   * `block_versions.json` is the **flat era only** -- its generator refuses a
+   * pre-Flattening label outright -- so a legacy target is not a question it
+   * may be asked. Below 1.13 the authority is `legacy_blocks.json`, which the
+   * caller passes as `placeableNames` and which the MCEdit writer already uses
+   * to decide the same thing. Two tables answering one question is how they
+   * come to disagree.
    */
-  const allowed = options.placeableNames;
-  const doomed: PaletteEntry[] = [];
-  if (allowed !== undefined && allowed !== null) {
-    for (const entry of doc.palette) {
-      if (entry.namespacedName === "minecraft:air") continue;
-      if (!allowed.has(entry.namespacedName)) doomed.push(entry);
+  const target = info.era === "flat" ? info.dataVersion : null;
+  const allowed = options.placeableNames ?? null;
+  /*
+   * Names only, which is the line `buildMcEdit` already draws: a missing name
+   * is fatal, an uncarryable state is written as the base block and reported
+   * as degraded. The legacy table answers when there is one -- it is exact
+   * where this dataset stops -- and `blockExistsIn` answers otherwise.
+   */
+  const exists = (name: string): boolean => {
+    if (allowed !== null) return allowed.has(name);
+    return target === null ? true : blockExistsIn(name, target);
+  };
+
+  /*
+   * The empty space this document is made of, or air when the target is too old
+   * to have it. Resolved once: it is the same answer for every dropped block.
+   */
+  const AIR: PaletteEntry = { namespacedName: "minecraft:air", properties: {} };
+  const chosen =
+    session.voidBlock === "" ? AIR : parsePaletteEntry(session.voidBlock);
+  const fill = exists(chosen.namespacedName) ? chosen : AIR;
+
+  type Kind = "rename" | "rewrite" | "drop";
+  const plan = new Map<string, { to: PaletteEntry; kind: Kind }>();
+  const doomed: string[] = [];
+
+  for (const entry of doc.palette) {
+    if (entry.namespacedName === AIR.namespacedName) continue;
+
+    // 1. the name.
+    const renamed = target === null ? null : renameFor(entry.namespacedName, target);
+    const name = renamed === null ? entry.namespacedName : `minecraft:${renamed}`;
+
+    // 3, asked early because it decides whether 2 is worth doing at all.
+    if (!exists(name)) {
+      plan.set(paletteEntryCacheKey(entry), { to: fill, kind: "drop" });
+      doomed.push(entry.namespacedName);
+      continue;
     }
+
+    // 2. the states, against the name the target will actually use.
+    // Copied only when something actually moves: most entries need nothing,
+    // and a copy per palette row on every version change is pure waste.
+    let states: Record<string, string> | null = null;
+    if (target !== null) {
+      for (const [property, value] of Object.entries(entry.properties)) {
+        if (!propertyExistsIn(name, property, target)) {
+          states ??= { ...entry.properties };
+          delete states[property];
+          continue;
+        }
+        const next = propertyValueIn(name, property, value, target);
+        if (next === null) continue;
+        states ??= { ...entry.properties };
+        states[property] = next;
+      }
+    }
+
+    if (renamed === null && states === null) continue;
+    plan.set(paletteEntryCacheKey(entry), {
+      to: { namespacedName: name, properties: states ?? entry.properties },
+      kind: renamed === null ? "rewrite" : "rename",
+    });
   }
 
-  if (doomed.length > 0 && options.dropUnrepresentable !== true) {
-    // Counted in cells, not in palette entries: "3 types" is not the number
-    // somebody deciding whether to go ahead is weighing.
-    const counts = paletteHistogram(doc);
-    let cells = 0;
-    for (const [block, count] of counts) {
-      const name = block.split("[")[0];
-      if (doomed.some((entry) => entry.namespacedName === name)) cells += count;
-    }
-    const names = [...new Set(doomed.map((entry) => entry.namespacedName))].sort();
-    throw new VersionWouldLoseBlocksError(names, cells, info.label);
+  /*
+   * Counted in cells, not in palette entries: "3 types" is not the number
+   * somebody deciding whether to go ahead is weighing. The histogram is keyed
+   * the same way the plan is, so this is a lookup rather than a second walk.
+   */
+  const counts = paletteHistogram(doc);
+  let renamedCells = 0;
+  let rewrittenCells = 0;
+  let droppedCells = 0;
+  for (const [key, cells] of counts) {
+    const step = plan.get(key);
+    if (step === undefined) continue;
+    if (step.kind === "drop") droppedCells += cells;
+    else if (step.kind === "rename") renamedCells += cells;
+    else rewrittenCells += cells;
+  }
+
+  if (droppedCells > 0 && options.dropUnrepresentable !== true) {
+    const names = [...new Set(doomed)].sort();
+    throw new VersionWouldLoseBlocksError(
+      names,
+      droppedCells,
+      info.label,
+      fill.namespacedName === AIR.namespacedName ? "air" : fill.namespacedName,
+    );
   }
 
   const region = {
@@ -1145,15 +1257,39 @@ export function setDocumentVersion(
     maxY: doc.height - 1,
     maxZ: doc.length - 1,
   };
-  const air: PaletteEntry = { namespacedName: "minecraft:air", properties: {} };
 
-  return runTransaction(doc, history, `Set the Minecraft version to ${info.label}`, (tx) => {
-    // Blocks first, then the header: a run that threw half way must never leave
-    // a document claiming a version its palette contradicts.
-    const changed = doomed.length === 0 ? 0 : tx.replaceAny(region, doomed, air);
-    tx.setHeader({ ...readHeader(doc), dataVersion: info.dataVersion });
-    return changed;
-  });
+  const changed = runTransaction(
+    doc,
+    history,
+    `Set the Minecraft version to ${info.label}`,
+    (tx) => {
+      // Blocks first, then the header: a run that threw half way must never
+      // leave a document claiming a version its palette contradicts.
+      const wrote =
+        plan.size === 0
+          ? 0
+          : tx.remap(region, (entry) => plan.get(paletteEntryCacheKey(entry))?.to ?? null);
+      tx.setHeader({ ...readHeader(doc), dataVersion: info.dataVersion });
+      return wrote;
+    },
+  );
+
+  const parts: string[] = [];
+  if (renamedCells > 0) parts.push(`${renamedCells.toLocaleString()} renamed`);
+  if (rewrittenCells > 0) parts.push(`${rewrittenCells.toLocaleString()} restated`);
+  if (droppedCells > 0) {
+    parts.push(
+      `${droppedCells.toLocaleString()} replaced with ` +
+        (fill.namespacedName === AIR.namespacedName ? "air" : fill.namespacedName),
+    );
+  }
+  return {
+    changed,
+    renamed: renamedCells,
+    rewritten: rewrittenCells,
+    dropped: droppedCells,
+    notes: parts.length === 0 ? "" : `${parts.join(", ")}.`,
+  };
 }
 
 /**

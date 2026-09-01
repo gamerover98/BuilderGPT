@@ -1184,6 +1184,16 @@ export interface EditSuccess {
   /** Voxels actually changed; 0 means the edit matched nothing. */
   changed: number;
   state: DocumentState;
+  /**
+   * A sentence about what the edit did, when the count alone does not say it.
+   *
+   * `DocumentSession.notes`' rule and its only other user: most edits do one
+   * kind of thing, so `changed` is the whole answer. A version change does
+   * three -- renames what was renamed, restates what the target cannot say,
+   * and replaces what it does not have -- and only the third is a loss. One
+   * number for all three would report a demolition and a rename identically.
+   */
+  notes?: string;
 }
 
 /** The schematic's own NBT, as the panel shows it. */

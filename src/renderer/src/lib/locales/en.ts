@@ -258,11 +258,12 @@ export const en = {
   "mcversion.useSaveAs":
     "Save As or Convert can write it in a container that fits, in one step.",
   "mcversion.toLegacy":
-    "Before 1.13 blocks were numeric ids, and the set is much smaller. Anything the older version never had will be replaced with air — you will be told how much before it happens, and it can be undone.",
-  "mcversion.flatBackport":
-    "Going to an older 1.13+ version changes the tag and nothing else. This build has no record of which release each block arrived in, so it cannot tell you whether anything here is too new — rather than guess, it carries everything.",
+    "Before 1.13 blocks were numeric ids, and the set is much smaller. Anything the older version never had is replaced with the empty space block \u2014 you will be told how much before it happens, and it can be undone.",
+  "mcversion.backport":
+    "Blocks the older version never had are replaced with the empty space block, and you will be told how many before it happens. Blocks that were only renamed are simply renamed \u2014 nothing is lost and nothing is asked.",
   "mcversion.apply": "Change version",
   "mcversion.applyAnyway": "Change it and drop those blocks",
+  "status.versionChanged": "Now a Minecraft {version} schematic. {notes}",
   "doc.version": "Minecraft",
   "doc.format": "Container",
   "doc.legacyEra": "legacy",

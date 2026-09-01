@@ -27,6 +27,7 @@ import { loadLegacyBlockTable } from "../src/main/pipeline/loader_formats.js";
 import {
   applyEdit,
   setDocumentVersion,
+  type VersionChangeResult,
   UnknownVersionError,
   VersionRefusedError,
   VersionWouldLoseBlocksError,
@@ -2875,7 +2876,7 @@ console.log("\n--- changing which Minecraft a schematic is for ---");
     // it is. That is the gesture this exists for, and it moves no blocks.
     const session = newDocument({ width: 4, height: 4, length: 4 }, "mcedit", null);
     setBlock(session.doc, 1, 1, 1, { namespacedName: "minecraft:stone", properties: {} });
-    equal("naming a version moves no blocks", setDocumentVersion(session, "JE_1_12_2"), 0);
+    equal("naming a version moves no blocks", setDocumentVersion(session, "JE_1_12_2").changed, 0);
     equal("...and the document carries it", session.doc.dataVersion, 1343);
     equal(
       "...which is what a save would stamp",
@@ -2935,7 +2936,7 @@ console.log("\n--- changing which Minecraft a schematic is for ---");
       setDocumentVersion(session, "JE_1_12_2", {
         placeableNames: names,
         dropUnrepresentable: true,
-      }),
+      }).changed,
       3,
     );
     equal("...in one undoable step", documentState(session).undoDepth, before + 1);
@@ -2985,19 +2986,226 @@ console.log("\n--- changing which Minecraft a schematic is for ---");
 
   {
     /*
-     * Without a block set there is nothing to check against, and the version
-     * changes carrying everything. That is the flat-to-flat case: this app has
-     * no per-block introduction data, and refusing on a guess is worse than
-     * carrying a block that turns out to be too new.
+     * Flat to flat, which used to do nothing at all: `placeableNames` was only
+     * passed for a legacy target, so backporting 1.21.4 to 1.13 moved the tag
+     * and left 501 kinds of block in a file for a game that never had them.
      */
     const session = newDocument({ width: 2, height: 2, length: 2 }, "sponge3", 4189);
     setBlock(session.doc, 0, 0, 0, { namespacedName: "minecraft:deepslate", properties: {} });
-    equal("a flat backport drops nothing", setDocumentVersion(session, "JE_1_16_5"), 0);
-    equal("...and moves the tag", session.doc.dataVersion, 2586);
+    setBlock(session.doc, 1, 0, 0, { namespacedName: "minecraft:stone", properties: {} });
+
+    const refusal = thrown(() => setDocumentVersion(session, "JE_1_16_5"));
+    check(
+      "a flat backport now refuses rather than carrying a block the target lacks",
+      refusal instanceof VersionWouldLoseBlocksError,
+      String(refusal),
+    );
+    check(
+      "...naming it",
+      refusal?.message.includes("minecraft:deepslate") === true,
+      refusal?.message ?? "",
+    );
+    check(
+      "...and not the block 1.16.5 does have",
+      refusal?.message.includes("minecraft:stone") === false,
+      refusal?.message ?? "",
+    );
+
     equal(
-      "...keeping the block it cannot vouch for",
+      "confirmed, the deepslate goes",
+      setDocumentVersion(session, "JE_1_16_5", { dropUnrepresentable: true }).dropped,
+      1,
+    );
+    equal("...and the tag moves", session.doc.dataVersion, 2586);
+    equal(
+      "...while the stone stays",
+      getBlock(session.doc, 1, 0, 0).namespacedName,
+      "minecraft:stone",
+    );
+  }
+
+  {
+    /*
+     * The trap, said as the case it would have produced.
+     *
+     * mcmeta's summary lists only blocks with properties before 1.20.5 and
+     * every block after, so a plain diff of it dates `stone` to 1.20.5. Acted
+     * on, this backport replaces the whole floor with empty space and reports
+     * a healthy count for it.
+     */
+    const session = newDocument({ width: 4, height: 1, length: 4 }, "sponge3", 4189);
+    for (let x = 0; x < 4; x += 1) {
+      for (let z = 0; z < 4; z += 1) {
+        setBlock(session.doc, x, 0, z, { namespacedName: "minecraft:stone", properties: {} });
+      }
+    }
+    equal(
+      "a floor of stone survives a backport to 1.19",
+      setDocumentVersion(session, "JE_1_19").dropped,
+      0,
+    );
+    equal(
+      "...every block of it",
+      getBlock(session.doc, 2, 0, 2).namespacedName,
+      "minecraft:stone",
+    );
+  }
+
+  {
+    /*
+     * A rename is not a removal, and this is the reported case from both ends.
+     *
+     * Read as a removal, going under 1.21.9 replaces every chain in the build
+     * with empty space; read as a rename it writes the name the older game uses
+     * and loses nothing. So it must not be counted, and must not be refused.
+     */
+    const session = newDocument({ width: 2, height: 2, length: 2 }, "sponge3", 4903);
+    setBlock(session.doc, 0, 0, 0, {
+      namespacedName: "minecraft:iron_chain",
+      properties: { axis: "y" },
+    });
+
+    /*
+     * Captured rather than called plainly, so that getting the order wrong
+     * fails **by name** instead of throwing a stack trace out of the suite. It
+     * is the check that separates renaming from demolishing, and it should read
+     * as a check.
+     */
+    let back: VersionChangeResult | undefined;
+    const refused = thrown(() => {
+      back = setDocumentVersion(session, "JE_1_21_4");
+    });
+    equal(
+      "backporting an iron_chain is not refused -- a rename loses nothing",
+      refused === null ? null : refused.message,
+      null,
+    );
+    equal("...so it drops nothing", back?.dropped, 0);
+    equal("...and counts as renamed", back?.renamed, 1);
+    equal(
+      "...writing the name 1.21.4 uses",
       getBlock(session.doc, 0, 0, 0).namespacedName,
-      "minecraft:deepslate",
+      "minecraft:chain",
+    );
+    equal(
+      "...keeping the state it was in",
+      getBlock(session.doc, 0, 0, 0).properties.axis,
+      "y",
+    );
+
+    // And forward again, which is the second half of the report.
+    const forward = setDocumentVersion(session, "JE_26_2");
+    equal("and forward it comes back", forward.renamed, 1);
+    equal(
+      "...as iron_chain",
+      getBlock(session.doc, 0, 0, 0).namespacedName,
+      "minecraft:iron_chain",
+    );
+
+    undoEdit(session);
+    equal(
+      "undo takes the name back",
+      getBlock(session.doc, 0, 0, 0).namespacedName,
+      "minecraft:chain",
+    );
+    equal("...and the version with it, in one step", session.doc.dataVersion, 4189);
+  }
+
+  {
+    /*
+     * A wall's connections stopped being a boolean in 1.16, and it is the one
+     * value change in the flat era that touches a real build. Restated, not
+     * dropped: the wall is still there, one connection shorter.
+     */
+    const session = newDocument({ width: 2, height: 2, length: 2 }, "sponge3", 4189);
+    setBlock(session.doc, 0, 0, 0, {
+      namespacedName: "minecraft:cobblestone_wall",
+      properties: { north: "tall", up: "true" },
+    });
+
+    const result = setDocumentVersion(session, "JE_1_15_2");
+    equal("a wall backported under 1.16 is restated, not dropped", result.dropped, 0);
+    equal("...and counted as restated", result.rewritten, 1);
+    equal(
+      "...with a connection 1.15 can say",
+      getBlock(session.doc, 0, 0, 0).properties.north,
+      "true",
+    );
+    equal(
+      "...leaving the boolean it already had alone",
+      getBlock(session.doc, 0, 0, 0).properties.up,
+      "true",
+    );
+    equal(
+      "...and the block itself untouched",
+      getBlock(session.doc, 0, 0, 0).namespacedName,
+      "minecraft:cobblestone_wall",
+    );
+  }
+
+  {
+    /*
+     * What replaces a dropped block is the document's **empty space**, not air.
+     * A break already writes it, and an underwater build coming back full of
+     * bubbles would have lost exactly what that setting exists to preserve.
+     */
+    const session = newDocument({ width: 2, height: 2, length: 2 }, "sponge3", 4189);
+    setSessionVoidBlock(session, "minecraft:water");
+    setBlock(session.doc, 0, 0, 0, { namespacedName: "minecraft:deepslate", properties: {} });
+
+    const refusal = thrown(() => setDocumentVersion(session, "JE_1_16_5"));
+    check(
+      "the refusal says what the block would become",
+      refusal?.message.includes("minecraft:water") === true,
+      refusal?.message ?? "",
+    );
+    setDocumentVersion(session, "JE_1_16_5", { dropUnrepresentable: true });
+    equal(
+      "...and that is what it becomes",
+      getBlock(session.doc, 0, 0, 0).namespacedName,
+      "minecraft:water",
+    );
+  }
+
+  {
+    /*
+     * ...falling back to air when the empty space block is itself too new for
+     * the target. `structure_void` is 1.10, so this is a real case rather than
+     * a defensive one, and the alternative is writing a block the file cannot
+     * hold in the course of making the file holdable.
+     */
+    const session = newDocument({ width: 2, height: 2, length: 2 }, "sponge3", 4903);
+    setSessionVoidBlock(session, "minecraft:pale_hanging_moss");
+    setBlock(session.doc, 0, 0, 0, { namespacedName: "minecraft:copper_chain", properties: {} });
+    setDocumentVersion(session, "JE_1_16_5", { dropUnrepresentable: true });
+    equal(
+      "an empty space block the target lacks falls back to air",
+      getBlock(session.doc, 0, 0, 0).namespacedName,
+      "minecraft:air",
+    );
+  }
+
+  {
+    /*
+     * Order. Doing existence before renaming is not a worse version of this --
+     * it is the demolition the whole function exists to prevent: `iron_chain`
+     * is genuinely absent from 1.16, and the correct answer is a name that
+     * version has had since it shipped.
+     */
+    const session = newDocument({ width: 2, height: 2, length: 2 }, "sponge3", 4903);
+    setBlock(session.doc, 0, 0, 0, { namespacedName: "minecraft:iron_chain", properties: {} });
+    const result = setDocumentVersion(session, "JE_1_16_5");
+    equal("a rename is resolved before existence is asked", result.dropped, 0);
+    equal(
+      "...so the chain survives a backport to 1.16.5",
+      getBlock(session.doc, 0, 0, 0).namespacedName,
+      "minecraft:chain",
+    );
+    // ...and one version earlier there is no chain at all, under either name.
+    check(
+      "...while 1.15.2, which has neither name, refuses",
+      thrown(() => setDocumentVersion(session, "JE_1_15_2")) instanceof
+        VersionWouldLoseBlocksError,
     );
   }
 }

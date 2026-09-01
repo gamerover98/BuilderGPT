@@ -2569,14 +2569,43 @@ with no answer, and it failed in silence at both ends.
 lands at the pick -- that is what makes the viewport show it -- so by the time
 the button is pressed `session.voidBlock` is the **new** block and main working
 it out for itself would convert water into water. The panel is the only thing
-still holding the old value, so the panel names it. It is a *belief*, seeded
-when the modal opens and updated only when a rewrite succeeds; wrong, it costs
-a conversion that reports zero, which is why it is allowed to be one.
+still holding the old value, so the panel names it.
 
-The corner that removes was a real report waiting to happen: undoing a rewrite
-puts the blocks back and leaves the *choice* standing, deliberately -- and
-while the two were fused, nothing could re-apply it. Now pressing again is
-exactly that gesture.
+**And it is not enough on its own, which took a second report to find.** The
+setting and the cells can disagree, and from the setting the two states are
+indistinguishable: a schematic whose empty space is *set* to barrier with its
+cells still air -- reopened from its sidecar, or one Ctrl+Z after a conversion
+-- looks exactly like one where the conversion already happened. Both say
+barrier; only one has anything to do. Deciding from the setting disabled the
+button in **both**, so the one gesture that would have fixed it was the one
+with no answer. Reported as *«se l'aria di una schematic è già tutta barrier e
+si seleziona barrier come empty space block, questo non ha alcun effetto»*,
+with a workaround of picking a second block and coming back.
+
+Two changes, and the pair is the fix rather than either alone:
+
+- **air is always a source.** `voidSources` in `shared/settings.ts` puts it in
+  unconditionally, because that is what empty means in a schematic whatever the
+  setting says. `replaceFrom` is *added* to it rather than standing in for it —
+  a conversion leaves its own block behind, so swapping barrier for
+  structure_void has to find the barrier and air alone would not. The target is
+  never a source: converting a block into itself can only change nothing.
+- **whether there is anything to convert is observed, not inferred.** The panel
+  reads `DocumentState.palette`, which main rebuilds on every state push, and
+  asks whether the document actually holds any of the sources. That is the only
+  thing that can separate the two states above, because one of them has air in
+  it and the other does not.
+
+`voidSources` is in `shared/` for `normaliseVoidBlock`'s reason and with a
+sharper edge: main converts with it and the panel decides the button from it,
+so two copies is how the button comes to be live over an edit that changes
+nothing, or dead over one that would work. Deleting the air term fails seven
+named checks across `tests/ui.ts` and `tests/session.ts`.
+
+One consequence follows and is deliberate: **a press converts even when the
+block picked is the one already chosen.** Choosing is not an edit and still
+pushes nothing; pressing is a request, and it is answered by looking rather
+than by consulting a flag.
 
 **One culling pass, two layers.** `BakedFace.voidFill` marks the layer and
 `chunked_mesh.ts` partitions before calling `buildMesh` twice. Meshing the two

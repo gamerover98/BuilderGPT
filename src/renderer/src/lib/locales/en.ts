@@ -174,9 +174,9 @@ export const en = {
   "void.opacity": "Opacity \u2014 {percent}%",
   "void.replaceApply": "Replace what is already there",
   "void.replaceWhat":
-    "Every cell holding {from} becomes {to} — one step, so Ctrl+Z takes it all back. Choosing a block changes what is drawn and what a break writes; this changes the schematic itself.",
+    "Every cell holding {from} becomes {to} \u2014 one step, so Ctrl+Z takes it all back. Choosing a block changes what is drawn and what a break writes; this changes the schematic itself.",
   "void.replaceNone":
-    "Nothing to convert: the empty cells already hold {block}. Choose something else and this becomes available.",
+    "Nothing to convert: no cell in this schematic holds {from}. Choose a different block, or place some first.",
   "void.pickNote":
     "Clicks pass through this block wherever it appears, including where you placed it by hand. That is what lets you reach the build inside it.",
   "dimensions.openHint": "How big the schematic is, and whether editing may change it",

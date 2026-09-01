@@ -561,6 +561,38 @@ export function normaliseVoidBlock(raw: unknown): string {
 }
 
 /**
+ * The blocks a change of empty space converts **from**, as ids.
+ *
+ * One function because there are two callers and they must not disagree:
+ * `setSessionVoidBlock` does the converting, and the panel decides from the
+ * same answer whether there is anything to convert. Two copies of this rule is
+ * how the button comes to be live over an edit that changes nothing, or dead
+ * over one that would work.
+ *
+ * **Air is always a source**, and that is the whole of a bug worth keeping
+ * written down. Taking the previous choice alone cannot separate two states
+ * that look identical from the setting: a schematic whose empty space is *set*
+ * to barrier with its cells still air -- reopened from its sidecar, or one
+ * Ctrl+Z after a conversion -- against one where the conversion already
+ * happened. Both say barrier, and only one has anything to do. Reading the
+ * setting refused both, so the one gesture that would have fixed it was the
+ * one with no answer.
+ *
+ * The previous choice is **added** to air rather than standing in for it,
+ * because a conversion leaves its own block behind: swapping barrier for
+ * structure_void has to find the barrier, and air alone would not.
+ *
+ * The target is never a source. Converting a block into itself can only
+ * change nothing, and offering it would put an empty step on the undo stack.
+ */
+export function voidSources(previous: string, next: string): string[] {
+  const id = (value: string): string => (value === "" ? "minecraft:air" : value);
+  const target = id(normaliseVoidBlock(next));
+  return [...new Set(["minecraft:air", id(normaliseVoidBlock(previous))])].filter(
+    (source) => source !== target,
+  );
+}
+/**
  * What a schematic may be resized to by hand, per axis.
  *
  * The ceiling is per *axis* and is not the volume guard: 4096 cubed is far

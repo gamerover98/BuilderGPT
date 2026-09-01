@@ -2405,14 +2405,22 @@ console.log("\n--- what exists in which Minecraft version ---");
    */
   const early = blocksIn(V.v1_13);
   const late = blocksIn(V.v1_21_4);
+  /*
+   * Namespaced, and this is the check rather than a detail. Everything that
+   * consumes this set -- block_id_list.txt, the inventory, the hotbar,
+   * LegacyIndex.names -- deals in `minecraft:oak_fence`, so a set of bare
+   * names would intersect none of them and the inventory would come back empty
+   * for every flat document.
+   */
+  check("the set is spelled the way the rest of the app spells a block", late.has("minecraft:oak_fence") && !late.has("oak_fence"));
   check("1.13 offers fewer blocks than 1.21.4", early.size < late.size, `${early.size} vs ${late.size}`);
-  const lost = [...early].filter((name) => !late.has(name)).sort();
+  const lost = [...early].filter((name) => !late.has(name)).sort().map((name) => name.replace("minecraft:", ""));
   equal(
     "...and everything it has that 1.21.4 lacks is a rename",
     lost.join(", "),
     "grass, grass_path, sign, wall_sign",
   );
-  check("deepslate is 1.17 and later", !early.has("deepslate") && late.has("deepslate"));
+  check("deepslate is 1.17 and later", !early.has("minecraft:deepslate") && late.has("minecraft:deepslate"));
   check("the set is memoised, not rebuilt", blocksIn(V.v1_13) === early);
 
   /*

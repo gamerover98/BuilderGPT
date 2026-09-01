@@ -1424,12 +1424,19 @@ export function blockExistsIn(id: string, dataVersion: number): boolean {
 const blockSets = new Map<number, ReadonlySet<string>>();
 
 /**
- * Every block this table says exists in a version, without the namespace.
+ * Every block this table says exists in a version, **namespaced**.
+ *
+ * The table's own keys are bare, because that is how both sources spell them;
+ * everything that consumes this set is not. `block_id_list.txt`, the creative
+ * inventory, the hotbar and `LegacyIndex.names` all deal in
+ * `minecraft:oak_fence`, so a set of bare names would intersect none of them
+ * and the inventory would come back **empty** for every flat document -- which
+ * reads as the app being broken rather than as a set being spelled two ways.
  *
  * Memoised because the inventory asks per keystroke and the answer moves only
- * when the document's version does. The set is the *table's* view, so a block
- * outside it is missing from this set and still allowed by `blockExistsIn` --
- * the callers that filter a list want the narrow answer, and the caller that
+ * when the document's version does. It is the *table's* view, so a block
+ * outside it is missing from here and still allowed by `blockExistsIn`: the
+ * callers that filter a list want the narrow answer, and the caller that
  * guards a placement wants the generous one.
  */
 export function blocksIn(dataVersion: number): ReadonlySet<string> {
@@ -1438,7 +1445,9 @@ export function blocksIn(dataVersion: number): ReadonlySet<string> {
   const set = new Set<string>();
   for (const name of Object.keys(BLOCK_RANGE)) {
     const [since, until] = BLOCK_RANGE[name];
-    if (dataVersion >= since && (until === null || dataVersion <= until)) set.add(name);
+    if (dataVersion >= since && (until === null || dataVersion <= until)) {
+      set.add(`minecraft:${name}`);
+    }
   }
   blockSets.set(dataVersion, set);
   return set;
@@ -1517,6 +1526,20 @@ export function propertyValueIn(
   return null;
 }
 
+/**
+ * The DataVersions a block exists between, or `null` if this build has never
+ * heard of it.
+ *
+ * Raw numbers rather than labels, because this module resolves no labels -- the
+ * generator did that once, against the corroborated table, and a second
+ * translation here would be a second place for the two to disagree. A caller
+ * showing this to a person turns them back with `versionNameOf`.
+ */
+export function versionRangeOf(id: string): { since: number; until: number | null } | null {
+  const range = BLOCK_RANGE[bareName(id)];
+  if (range === undefined) return null;
+  return { since: range[0], until: range[1] };
+}
 /** How many blocks the table holds. For the suites, and for a sanity print. */
 export function versionedBlockCount(): number {
   return Object.keys(BLOCK_RANGE).length;

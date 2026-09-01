@@ -60,6 +60,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   import CreativeInventory from "./lib/CreativeInventory.svelte";
   import { hasTextSelection, isTyping } from "./lib/typing.js";
   import { documentEra, documentVersionName, mcVersion } from "../../shared/mc_versions.js";
+  import { blocksIn } from "../../shared/block_versions.js";
   import { placementState, type PlacementLook } from "../../shared/block_orientation.js";
   import { movedRegion } from "./lib/selection_drag.js";
   import { t, tn, setLocale } from "./lib/i18n.svelte.js";
@@ -477,14 +478,24 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   /**
    * The blocks this schematic can hold, or `null` for no restriction.
    *
-   * Legacy only -- above 1.13 this app has no per-block introduction data and
-   * cutting the list would mean guessing. `null` while the table is still
-   * loading too: an empty set would empty the inventory, which reads as the
-   * app being broken rather than as a file not having arrived yet.
+   * Two tables, and which one answers is decided by the era rather than
+   * merged: `legacy_blocks.json` enumerates the pre-Flattening set exactly and
+   * `block_versions.json` is the flat era only, so each is authoritative
+   * where the other says nothing. Asking both would be two answers to one
+   * question.
+   *
+   * `null` means no restriction, and it is the answer in three cases that are
+   * genuinely different and all end the same way: nothing is open, the legacy
+   * table has not arrived yet -- an empty set would empty the inventory, which
+   * reads as the app being broken rather than as a file being late -- and a
+   * document that names no version at all, which is not a question either
+   * table can be asked.
    */
-  const placeableBlocks = $derived(
-    docEra === "legacy" && legacyIndex !== null ? legacyIndex.names : null,
-  );
+  const placeableBlocks = $derived.by(() => {
+    if (docState === null) return null;
+    if (docEra === "legacy") return legacyIndex === null ? null : legacyIndex.names;
+    return docState.dataVersion === null ? null : blocksIn(docState.dataVersion);
+  });
 
   /**
    * The legacy table, but only when the open document is one.

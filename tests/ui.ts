@@ -25,7 +25,7 @@ import {
   isWithinBounds,
   placePopover,
 } from "../src/renderer/src/lib/floating.js";
-import { PANEL_SIZE } from "../src/shared/settings.js";
+import { PANEL_SIZE, voidSources } from "../src/shared/settings.js";
 import { facingNormal, hoverSource, outlineCentre } from "../src/renderer/src/lib/block_hover.js";
 import {
   blockLabel,
@@ -2434,6 +2434,69 @@ console.log("\n--- the inspector's block-state rows ---");
     /onchangeproperty\(row\.name, ""\)/.test(panel),
   );
 }
+
+// --- what a change of empty space converts from -----------------------------
+/*
+ * One function, two callers: `setSessionVoidBlock` converts with it and the
+ * panel decides from it whether the button is live. Two copies of this rule is
+ * how the button comes to be dead over an edit that would work -- which is
+ * exactly what was reported.
+ */
+console.log("\n--- what a change of empty space converts from ---");
+{
+  /*
+   * Air is always a source, whatever the setting says. This is the reported
+   * case: a schematic whose empty space is *set* to barrier with its cells
+   * still air -- reopened from its sidecar, or one Ctrl+Z after a conversion
+   * -- looks identical, from the setting, to one already converted. Deciding
+   * from the setting refused both.
+   */
+  equal(
+    "picking the block that is already chosen still offers to convert the air",
+    voidSources("minecraft:barrier", "minecraft:barrier"),
+    ["minecraft:air"],
+  );
+  equal(
+    "...and so does picking one for the first time",
+    voidSources("", "minecraft:barrier"),
+    ["minecraft:air"],
+  );
+
+  /*
+   * The previous choice is *added* to air rather than standing in for it: a
+   * conversion leaves its own block behind, so swapping barrier for
+   * structure_void has to find the barrier, and air alone would not.
+   */
+  equal(
+    "swapping one for another looks for both",
+    voidSources("minecraft:barrier", "minecraft:structure_void"),
+    ["minecraft:air", "minecraft:barrier"],
+  );
+
+  /*
+   * The target is never a source. Converting a block into itself can only
+   * change nothing, and offering it would put an empty step on the undo stack.
+   */
+  equal(
+    "going back to air has nothing to look for",
+    voidSources("", ""),
+    [],
+  );
+  equal(
+    "...and neither does undoing a swap in place",
+    voidSources("minecraft:air", "minecraft:air"),
+    [],
+  );
+
+  // Every spelling of air is one answer, which is what `normaliseVoidBlock` is
+  // for -- so it cannot appear twice in the list, nor survive as the target.
+  equal(
+    "air spelled out is still air on both sides",
+    voidSources("minecraft:air", "minecraft:barrier"),
+    ["minecraft:air"],
+  );
+}
+
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

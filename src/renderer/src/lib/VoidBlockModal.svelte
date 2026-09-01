@@ -26,7 +26,7 @@
    * remembered per path, beside the version and the container.
    */
   import type { LegacyIndex } from "../../../shared/legacy_ids.js";
-  import { VOID_OPACITY } from "../../../shared/settings.js";
+  import { VOID_OPACITY, voidSources } from "../../../shared/settings.js";
   import BlockPicker from "./BlockPicker.svelte";
   import { t } from "./i18n.svelte.js";
 
@@ -45,14 +45,29 @@
     /** A failure from main, shown here: the app banner is behind the scrim. */
     error: string;
     /**
-     * What the empty cells are believed to hold right now.
+     * What empty space was made of before the current pick.
      *
      * Owned by the parent, for `VersionModal`'s `needsConfirmation` reason:
-     * only the parent sees whether a conversion actually landed. It starts as
-     * the document's own void block -- nothing to convert -- and becomes the
-     * new one each time a rewrite succeeds.
+     * only the parent sees whether a conversion actually landed. Picking a
+     * block takes effect at once, so by the time the button is pressed the
+     * document's own value is the *new* one and this is the only thing still
+     * holding the old one.
+     *
+     * It says what to convert **from**, and deliberately nothing about whether
+     * there is anything to convert -- see `present`.
      */
     converted: string;
+    /**
+     * Every block the document actually contains.
+     *
+     * This decides whether the button is live, and a *belief* could not: a
+     * schematic whose empty space is set to barrier with its cells still air
+     * looks identical, from the setting, to one where the conversion already
+     * happened. Both say barrier; only one has anything to do. Deciding from
+     * the setting disabled the button in both, so the one gesture that would
+     * have fixed it was the one with no answer.
+     */
+    present: ReadonlySet<string>;
     /** Choose what empty space is. Takes effect at once; moves no block. */
     onblock: (block: string) => void;
     /**
@@ -79,6 +94,7 @@
     legacy = null,
     error,
     converted,
+    present,
     onblock,
     onreplace,
     onopacity,
@@ -122,11 +138,18 @@
     id === "" ? t("void.air") : id.replace("minecraft:", "");
 
   /*
-   * Nothing to convert when the cells already hold the choice. That is the
-   * state the panel opens in, and the state it returns to after a rewrite --
-   * so the button is dead exactly when pressing it could only report zero.
+   * What a press converts *from*, from the same function main converts with.
+   * Two copies of that rule is how the button comes to be live over an edit
+   * that changes nothing, or dead over one that would work.
    */
-  const nothingToDo = $derived(converted === block);
+  const sources = $derived(voidSources(converted, block));
+
+  /*
+   * Dead only when the document holds none of them -- observed, not inferred.
+   * The setting cannot tell the two identical-looking states apart; the
+   * palette can, because one of them has air in it and the other does not.
+   */
+  const nothingToDo = $derived(!sources.some((id) => present.has(id)));
 
   function onKeydown(event: KeyboardEvent): void {
     if (event.key === "Escape") {
@@ -233,8 +256,11 @@
       </div>
       <p class="note">
         {nothingToDo
-          ? t("void.replaceNone", { block: readable(block) })
-          : t("void.replaceWhat", { from: readable(converted), to: readable(block) })}
+          ? t("void.replaceNone", { from: sources.map(readable).join(", ") })
+          : t("void.replaceWhat", {
+              from: sources.map(readable).join(", "),
+              to: readable(block),
+            })}
       </p>
 
       {#if error}

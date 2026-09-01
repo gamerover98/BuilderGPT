@@ -2769,16 +2769,24 @@ console.log("\n--- choosing what empty space is made of ---");
 }
 
 {
-  // Choosing what is already chosen is not an edit, whatever the checkbox says.
+  /*
+   * Choosing what is already chosen is not an edit -- but **asking for the
+   * rewrite still is**, and that asymmetry is the point rather than an
+   * oversight. The two are separate acts now, so a press means convert
+   * whatever the setting happens to say already.
+   */
   const session = newDocument({ width: 4, height: 4, length: 4 });
   setSessionVoidBlock(session, "minecraft:water");
   const before = documentState(session).undoDepth;
-  equal(
-    "re-choosing the same block does nothing",
-    setSessionVoidBlock(session, "minecraft:water", { replaceExisting: true }),
-    0,
-  );
+  equal("re-choosing the same block moves nothing on its own", setSessionVoidBlock(session, "minecraft:water"), 0);
   equal("...and leaves no undo step", documentState(session).undoDepth, before);
+  equal(
+    "...while pressing the button still converts the air",
+    setSessionVoidBlock(session, "minecraft:water", { replaceExisting: true }),
+    64,
+  );
+  equal("...as one step", documentState(session).undoDepth, before + 1);
+  undoEdit(session);
   // Every spelling of air is the same answer, so this is not a change either.
   setSessionVoidBlock(session, "");
   equal("air normalises", setSessionVoidBlock(session, "minecraft:air"), 0);
@@ -2851,6 +2859,70 @@ console.log("\n--- choosing what empty space is made of ---");
     64,
   );
   equal("...which was air", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:water");
+}
+
+{
+  /*
+   * The choice and the cells can disagree, and the panel cannot tell from the
+   * choice alone which of two identical-looking states it is in.
+   *
+   * A document whose empty space is *set* to barrier but whose cells still hold
+   * air -- reopened from the sidecar, or one Ctrl+Z after a conversion -- looks
+   * exactly like one where the conversion already happened. Deciding from the
+   * setting disabled the button in both, so the one gesture that would have
+   * fixed it was the one with no answer.
+   *
+   * The fix is that **air is always a source**. It is what empty means in a
+   * schematic, whatever the setting says.
+   */
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  setBlock(session.doc, 1, 1, 1, { namespacedName: "minecraft:stone", properties: {} });
+  setSessionVoidBlock(session, "minecraft:barrier");
+
+  equal(
+    "the cells can be converted even when the setting already names the block",
+    setSessionVoidBlock(session, "minecraft:barrier", {
+      replaceExisting: true,
+      replaceFrom: "minecraft:barrier",
+    }),
+    63,
+  );
+  equal(
+    "...which is what the air becomes",
+    getBlock(session.doc, 0, 0, 0).namespacedName,
+    "minecraft:barrier",
+  );
+
+  /*
+   * And doing it again converts nothing, because there is no air left -- not
+   * because a flag says so. The two cases are only distinguishable by looking.
+   */
+  equal(
+    "...and a second press finds nothing to do",
+    setSessionVoidBlock(session, "minecraft:barrier", {
+      replaceExisting: true,
+      replaceFrom: "minecraft:barrier",
+    }),
+    0,
+  );
+
+  /*
+   * Swapping one for another still converts what the last one left behind, so
+   * air is an *addition* to the source set rather than a replacement for it.
+   */
+  equal(
+    "swapping to another block converts what the previous one left",
+    setSessionVoidBlock(session, "minecraft:structure_void", {
+      replaceExisting: true,
+      replaceFrom: "minecraft:barrier",
+    }),
+    63,
+  );
+  equal(
+    "...leaving the build alone",
+    getBlock(session.doc, 1, 1, 1).namespacedName,
+    "minecraft:stone",
+  );
 }
 
 // --- changing which Minecraft a schematic is for ----------------------------

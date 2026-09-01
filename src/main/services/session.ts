@@ -75,7 +75,7 @@ import type { PaletteEntry } from "../pipeline/types.js";
 import { paletteEntryCacheKey } from "../pipeline/types.js";
 import { parsePaletteEntry } from "../pipeline/loader_formats.js";
 import { hasProperty } from "../../shared/block_states.js";
-import { normaliseVoidBlock } from "../../shared/settings.js";
+import { normaliseVoidBlock, voidSources } from "../../shared/settings.js";
 import { mcVersion, refusalFor } from "../../shared/mc_versions.js";
 import {
   blockExistsIn,
@@ -1014,6 +1014,10 @@ export function applyEdit(
  * would convert a block into itself. The caller names the old one because the
  * caller is the only one still holding it.
  *
+ * It is not enough on its own, and `sources` below says why: the setting and
+ * the cells can disagree, and two documents that look identical from the
+ * setting can differ entirely in what they contain.
+ *
  * `from` is built with `toEntry` and not with any defaults-filling helper,
  * because it is a *pattern*: `tx.replace` interns it and matches on the
  * palette index, so writing default properties onto it would turn "take out
@@ -1033,12 +1037,22 @@ export function setSessionVoidBlock(
 ): number {
   const next = normaliseVoidBlock(block);
   /*
-   * What the empty cells are made of *now*, which the caller may know better
-   * than the session does. Defaulted to the session's own value so a caller
-   * that fuses the two acts -- as everything did until the button existed --
-   * keeps behaving exactly as it did.
+   * What the empty cells could be holding, and **air is always one of them**.
+   *
+   * That is the whole of a bug worth keeping written down. `replaceFrom` alone
+   * cannot separate two states that look identical from the setting: a
+   * document whose empty space is *set* to barrier with its cells still air --
+   * reopened from the sidecar, or one Ctrl+Z after a conversion -- against one
+   * where the conversion already happened. Both say barrier, and only one has
+   * anything to do. Reading the setting refused both, so the one gesture that
+   * would have fixed it was the one with no answer.
+   *
+   * Air is what empty means in a schematic whatever the setting says, so it
+   * goes in unconditionally; `replaceFrom` is *added* to it rather than
+   * standing in for it, because a previous choice leaves its own block behind
+   * and swapping barrier for structure_void has to find the barrier.
    */
-  const from = normaliseVoidBlock(options.replaceFrom ?? session.voidBlock);
+  const sources = voidSources(options.replaceFrom ?? session.voidBlock, next);
   /*
    * Converting a block into itself can only ever change nothing, so it is not
    * an edit and does not reach the transaction -- which is what keeps a second
@@ -1052,7 +1066,7 @@ export function setSessionVoidBlock(
    * on a press of its own, pressing again is exactly the gesture for that.
    */
   let changed = 0;
-  if (options.replaceExisting === true && from !== next) {
+  if (options.replaceExisting === true && sources.length > 0) {
     const { doc, history } = session;
     const region = {
       minX: 0,
@@ -1067,13 +1081,15 @@ export function setSessionVoidBlock(
 
     // `""` means air on both sides, which is what makes going back to air the
     // same operation rather than a special case.
-    const wanted = parsePaletteEntry(from === "" ? "minecraft:air" : from);
+    const wanted = sources.map((id) => parsePaletteEntry(id));
     const to = parsePaletteEntry(next === "" ? "minecraft:air" : next);
     changed = runTransaction(
       doc,
       history,
-      `Replace ${wanted.namespacedName} with ${to.namespacedName}`,
-      (tx) => tx.replace(region, wanted, to),
+      `Replace ${wanted.map((entry) => entry.namespacedName).join(" and ")} with ${to.namespacedName}`,
+      // One pass whatever the number of sources, which is what `replaceAny`
+      // is for: this edit already touches most of the document.
+      (tx) => tx.replaceAny(region, wanted, to),
     );
   }
 

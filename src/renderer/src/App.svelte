@@ -606,6 +606,21 @@ import ConvertModal from "./lib/ConvertModal.svelte";
    * reports zero and says so -- which is why it is allowed to be a belief.
    */
   let voidFilledWith = $state("");
+  /**
+   * Every block the open document contains, without its state.
+   *
+   * `DocumentState.palette` is the whole histogram and main rebuilds it on
+   * every state push, so this is exact rather than a belief -- which is the
+   * whole reason the empty-space button reads it. A schematic whose empty
+   * space is *set* to barrier with its cells still air is indistinguishable,
+   * from the setting, from one where the conversion already happened; it is
+   * only distinguishable by looking.
+   */
+  const documentBlocks = $derived(
+    new Set(
+      (docState?.palette ?? []).map((entry) => entry.block.split("[")[0]),
+    ),
+  );
   let mcVersionOpen = $state(false);
   let mcVersionError = $state("");
   /**
@@ -3585,6 +3600,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   placeable={placeableBlocks}
   legacy={legacyForDoc}
   converted={voidFilledWith}
+  present={documentBlocks}
   onblock={(block) => void changeVoidBlock(block)}
   onreplace={(from, to) => void replaceVoidBlock(from, to)}
   onopacity={(voidOpacity) =>

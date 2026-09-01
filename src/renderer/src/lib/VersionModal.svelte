@@ -73,13 +73,15 @@
   const changed = $derived(version !== "" && version !== current);
 
   /**
-   * What this build can and cannot promise about losing blocks.
+   * Whether this is a backport, which is the only direction that can lose
+   * anything.
    *
-   * Going *back* across the Flattening is exactly checkable: the legacy table
-   * enumerates every block that existed. Going back within the flat era is not
-   * — there is no per-block introduction data — so the panel says so instead of
-   * implying a check it does not make. A silent "no problems found" that had
-   * looked at nothing is the failure worth avoiding here.
+   * This used to carry a disclaimer instead: going back within the flat era
+   * changed the tag and nothing else, because there was no per-block record of
+   * which release each block arrived in, and the panel said so rather than
+   * imply a check it did not make. `block_versions.json` is that record, so
+   * the sentence is now about what will happen rather than about what cannot
+   * be known.
    */
   const target = $derived(version === "" ? undefined : mcVersion(version));
   const backport = $derived(
@@ -144,7 +146,7 @@
         <p class="hint warn">{refused}</p>
         <p class="hint">{t("mcversion.useSaveAs")}</p>
       {:else if backport}
-        <p class="hint">{t("mcversion.flatBackport")}</p>
+        <p class="hint">{t("mcversion.backport")}</p>
       {:else if target?.era === "legacy"}
         <p class="hint">{t("mcversion.toLegacy")}</p>
       {/if}

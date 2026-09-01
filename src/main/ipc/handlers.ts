@@ -1106,7 +1106,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
          * and always find nothing.
          */
         const legacy = eraOf(request.version) === "legacy";
-        const changed = setDocumentVersion(session, request.version, {
+        const result = setDocumentVersion(session, request.version, {
           dropUnrepresentable: request.dropUnrepresentable === true,
           placeableNames: legacy
             ? legacyBlockNames(await loadLegacyBlockTable(legacyBlocksPath()))
@@ -1117,7 +1117,12 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         if (session.doc.filePath !== null) {
           await rememberProject(session.doc.filePath, { version: request.version });
         }
-        return { ok: true, changed, state: shellState(session) };
+        return {
+          ok: true,
+          changed: result.changed,
+          state: shellState(session),
+          notes: result.notes,
+        };
       } catch (err) {
         return failure(err);
       }

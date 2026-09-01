@@ -59,7 +59,7 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   import Hotbar from "./lib/Hotbar.svelte";
   import CreativeInventory from "./lib/CreativeInventory.svelte";
   import { hasTextSelection, isTyping } from "./lib/typing.js";
-  import { documentEra, documentVersionName } from "../../shared/mc_versions.js";
+  import { documentEra, documentVersionName, mcVersion } from "../../shared/mc_versions.js";
   import { placementState, type PlacementLook } from "../../shared/block_orientation.js";
   import { movedRegion } from "./lib/selection_drag.js";
   import { t, tn, setLocale } from "./lib/i18n.svelte.js";
@@ -2719,6 +2719,21 @@ import ConvertModal from "./lib/ConvertModal.svelte";
         return;
       }
       mcVersionConfirm = false;
+      /*
+       * A version change does three things and only one of them is a loss, so
+       * `changed` alone would report a rename and a demolition identically.
+       * Main sends the sentence; the banner is where it goes, because the modal
+       * closes on success and there would be nowhere else to read it.
+       */
+      if (response.notes) {
+        status = {
+          tone: "ok",
+          text: t("status.versionChanged", {
+            version: mcVersion(version)?.label ?? version,
+            notes: response.notes,
+          }),
+        };
+      }
       docState = response.state;
       // The version is a fact the sidebar and the dialogs read, and the era
       // decides what the inventory offers -- so the local copy has to move too.

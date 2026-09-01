@@ -217,6 +217,18 @@ export interface TransactionScope {
    * between a wait and a hang.
    */
   replaceAny(region: Region, from: readonly PaletteEntry[], to: PaletteEntry): number;
+  /**
+   * Rewrites every cell whose palette entry the function gives an answer for.
+   *
+   * One pass, and the function is asked **once per palette entry** rather than
+   * once per cell -- which is what makes it affordable on the operation that
+   * needs it. A version change is the one edit that genuinely may touch every
+   * block in the document, and it has three things to do at once: rename what
+   * was renamed, rewrite the property values the target cannot say, and drop
+   * what it does not have. Expressed as three `replaceAny` calls those are
+   * three passes over the voxels; expressed as one function they are one.
+   */
+  remap(region: Region, rewrite: (entry: PaletteEntry) => PaletteEntry | null): number;
   resize(
     size: { width: number; height: number; length: number },
     shift?: readonly [number, number, number],
@@ -392,6 +404,37 @@ class Recorder implements TransactionScope {
    */
   replace(region: Region, from: PaletteEntry, to: PaletteEntry): number {
     return this.replaceAny(region, [from], to);
+  }
+
+  remap(region: Region, rewrite: (entry: PaletteEntry) => PaletteEntry | null): number {
+    /*
+     * Decided once over the palette, read per voxel -- `replaceAny`'s trade,
+     * and here it is the difference between one string comparison per block
+     * and one array read.
+     */
+    const targets: (PaletteEntry | null)[] = this.doc.palette.map((entry) => rewrite(entry));
+    if (!targets.some((entry) => entry !== null)) return 0;
+
+    let count = 0;
+    for (let x = region.minX; x <= region.maxX; x += 1) {
+      for (let y = region.minY; y <= region.maxY; y += 1) {
+        for (let z = region.minZ; z <= region.maxZ; z += 1) {
+          const index = x * this.doc.height * this.doc.length + y * this.doc.length + z;
+          /*
+           * The palette grows underneath this pass -- `setBlock` interns a
+           * target that is new -- so an index past the end of `targets` reads
+           * as `undefined`, which is falsy and is the right answer: a row added
+           * during the pass is something this pass just wrote, and rewriting it
+           * again would chase its own tail.
+           */
+          const to = targets[this.doc.voxels[index]];
+          if (to !== null && to !== undefined && this.setBlock(x, y, z, to)) {
+            count += 1;
+          }
+        }
+      }
+    }
+    return count;
   }
 
   replaceAny(region: Region, from: readonly PaletteEntry[], to: PaletteEntry): number {

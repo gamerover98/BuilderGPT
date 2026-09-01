@@ -1028,6 +1028,18 @@ export interface VoidBlockRequest {
    * but it is still an edit somebody has to ask for.
    */
   replaceExisting?: boolean;
+  /**
+   * What the empty cells hold *now*, when it is not what the session says.
+   *
+   * The choice lands the moment it is picked -- that is what makes the
+   * viewport show it -- so by the time the rewrite is asked for, the session's
+   * own value is the **new** block and would convert it into itself. The
+   * panel is the only thing still holding the old one, so it names it.
+   *
+   * Absent, the session's value is used, which is what a caller doing both at
+   * once means.
+   */
+  replaceFrom?: string;
 }
 
 export interface ResizeRequest {

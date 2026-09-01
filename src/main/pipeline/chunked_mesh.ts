@@ -28,9 +28,19 @@
  *
  * ## What invalidates everything
  *
- * The dimensions changing (a resize renumbers every index) and the atlas
- * changing (cached UVs address the old layout). The palette growing does not:
- * it is append-only, so an index cached earlier still means the same block.
+ * The dimensions changing (a resize renumbers every index), the atlas
+ * changing (cached UVs address the old layout), and the void block changing
+ * (`fillVoid` rewrites the palette under the same indices). The palette
+ * *growing* does not: it is append-only, so an index cached earlier still
+ * means the same block.
+ *
+ * That third one is the odd member and is worth reading twice, because it is
+ * the only invalidator that is not a fact about the document. `fillVoid` hands
+ * this function a structure whose palette has been rewritten -- index 0 is
+ * water rather than air -- over the document's own voxels, which have not
+ * moved. Every empty cell in the schematic changes appearance while all three
+ * grids compare equal, so the cache carried every chunk forward and the answer
+ * shipped was a correct one to the wrong question. See `voidDigest`.
  */
 
 import type { MeshBuffers, StructureData } from "./types.js";
@@ -39,6 +49,7 @@ import type { Shading } from "./mesher.js";
 import { buildMesh, culledFaces } from "./mesher.js";
 import { signDigest, type SignText } from "./sign_text.js";
 import type { ModelBaker } from "./model_baker.js";
+import { paletteEntryCacheKey } from "./types.js";
 import type { UVRect } from "./types.js";
 
 export const CHUNK_SIZE = 16;
@@ -92,6 +103,16 @@ export interface ChunkMeshCache {
    * with one per cell.
    */
   signs: Map<number, string>;
+  /**
+   * What the void block was, as `voidDigest` renders it.
+   *
+   * The three grids above are the document; this is not. It is the one input
+   * to a chunk's appearance that arrives beside the structure rather than in
+   * it, and the reason it needs recording is that `fillVoid` expresses itself
+   * as a *palette* rewrite -- which the voxel diff, being about indices, is
+   * blind to by construction.
+   */
+  voidKey: string;
   /** Chunk key -> that chunk's geometry, in both layers. */
   chunks: Map<number, ChunkLayers>;
 }
@@ -250,6 +271,34 @@ function markDirty(
   }
 }
 
+/**
+ * What the void block is doing to this structure, as one comparable string.
+ *
+ * Derived from the two arguments the mesher already receives rather than
+ * taken as a third, so it cannot drift from what was actually drawn: it names
+ * every palette index `fillVoid` marked **and what that index now holds**.
+ * Both halves are load-bearing and neither is enough on its own.
+ *
+ * The indices alone would miss a swap -- water and lava are both written over
+ * index 0, so the set is `{0}` either way and two entirely different documents
+ * would compare equal. The entries alone would miss a cell that a *break* had
+ * filled with the void block for real, which is void by the same rule and gets
+ * an index of its own.
+ *
+ * It is a handful of entries at most, so this costs nothing beside the grids
+ * next to it.
+ */
+function voidDigest(struct: StructureData, voidIndices: ReadonlySet<number> | null): string {
+  if (voidIndices === null || voidIndices.size === 0) return "";
+  return [...voidIndices]
+    .sort((a, b) => a - b)
+    .map((index) => {
+      const entry = struct.palette[index];
+      return entry === undefined ? String(index) : index + "=" + paletteEntryCacheKey(entry);
+    })
+    .join(",");
+}
+
 export function createChunkMeshCache(): ChunkMeshCache {
   return {
     width: -1,
@@ -259,6 +308,7 @@ export function createChunkMeshCache(): ChunkMeshCache {
     voxels: new Int32Array(0),
     light: new Uint8Array(0),
     signs: new Map(),
+    voidKey: "",
     chunks: new Map(),
   };
 }
@@ -303,11 +353,13 @@ export async function buildChunkedMesh(
   const [nx, ny, nz] = chunkCounts(width, height, length);
 
   const light = packLight(shading?.light ?? null, struct.voxels.length);
+  const voidKey = voidDigest(struct, voidIndices);
   const reusable =
     cache.width === width &&
     cache.height === height &&
     cache.length === length &&
     cache.atlasVersion === atlasVersion &&
+    cache.voidKey === voidKey &&
     cache.voxels.length === struct.voxels.length &&
     cache.light.length === light.length;
 
@@ -442,6 +494,7 @@ export async function buildChunkedMesh(
       voxels: Int32Array.from(struct.voxels),
       light,
       signs: written,
+      voidKey,
       chunks,
     },
     rebuilt: dirty.size,

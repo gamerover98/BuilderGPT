@@ -2784,6 +2784,74 @@ console.log("\n--- choosing what empty space is made of ---");
   equal("...to the empty string", session.voidBlock, "");
 }
 
+{
+  /*
+   * The button's case, which is the one the checkbox could not reach.
+   *
+   * Choosing takes effect at the pick -- that is what makes the viewport show
+   * it -- so by the time somebody presses Replace, the session already says
+   * water. Left to work it out for itself, main would convert water into water
+   * and report nothing changed, which is exactly what the panel did before the
+   * two acts were split. `replaceFrom` is the caller saying what the cells
+   * actually hold, because the caller is the only thing still holding it.
+   */
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  setBlock(session.doc, 1, 1, 1, { namespacedName: "minecraft:stone", properties: {} });
+
+  setSessionVoidBlock(session, "minecraft:water");
+  equal("choosing alone leaves the air where it was", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:air");
+
+  const before = documentState(session).undoDepth;
+  equal(
+    "the rewrite names what it converts from",
+    setSessionVoidBlock(session, "minecraft:water", { replaceExisting: true, replaceFrom: "" }),
+    63,
+  );
+  equal("...in one undoable step", documentState(session).undoDepth, before + 1);
+  equal("...and the air is water", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:water");
+  equal("...while the choice is where it already was", session.voidBlock, "minecraft:water");
+
+  /*
+   * Pressing again converts water into water, which cannot change anything --
+   * so it is not an edit and leaves no empty step behind.
+   */
+  equal(
+    "converting a block into itself does nothing",
+    setSessionVoidBlock(session, "minecraft:water", { replaceExisting: true, replaceFrom: "minecraft:water" }),
+    0,
+  );
+  equal("...and pushes no step", documentState(session).undoDepth, before + 1);
+
+  /*
+   * And undoing it is now re-appliable, which it was not while the two acts
+   * were fused: the choice survives the undo by design, so re-picking the
+   * block was refused as choosing what was already chosen. With the rewrite on
+   * a press of its own, pressing again is the gesture.
+   */
+  undoEdit(session);
+  equal("undo puts the air back", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:air");
+  equal(
+    "...and the rewrite can simply be asked for again",
+    setSessionVoidBlock(session, "minecraft:water", { replaceExisting: true, replaceFrom: "" }),
+    63,
+  );
+}
+
+{
+  /*
+   * Absent, `replaceFrom` is the session's own value -- so a caller that does
+   * both at once behaves exactly as it always did. That is what keeps the
+   * checks above this one true of the same function.
+   */
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  equal(
+    "with nothing named, the session says what to convert",
+    setSessionVoidBlock(session, "minecraft:water", { replaceExisting: true }),
+    64,
+  );
+  equal("...which was air", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:water");
+}
+
 // --- changing which Minecraft a schematic is for ----------------------------
 /*
  * There was no way to do this. A version could be chosen at New and stamped at

@@ -1073,6 +1073,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
         const session = requireSession();
         const changed = setSessionVoidBlock(session, request.block, {
           replaceExisting: request.replaceExisting === true,
+          replaceFrom: request.replaceFrom,
         });
         /*
          * Written through immediately, not left until the next save.

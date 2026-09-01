@@ -48,6 +48,7 @@ import {
   nextUndoId,
   nextUndoLabel,
   redo,
+  readHeader,
   runTransaction,
   undo,
   type History,
@@ -75,6 +76,7 @@ import { paletteEntryCacheKey } from "../pipeline/types.js";
 import { parsePaletteEntry } from "../pipeline/loader_formats.js";
 import { hasProperty } from "../../shared/block_states.js";
 import { normaliseVoidBlock } from "../../shared/settings.js";
+import { mcVersion, refusalFor } from "../../shared/mc_versions.js";
 import { DOCUMENT_SIZE } from "../../shared/settings.js";
 import { buildDocumentPreview, type DocumentPreviewOptions } from "./preview.js";
 import type { ChunkMeshCache } from "../pipeline/chunked_mesh.js";
@@ -334,6 +336,52 @@ function toEntry(block: { namespacedName: string; properties?: Record<string, st
  * and it is not obvious: the schematic's version can be changed. Without that
  * sentence this is a dead end that reads as the app refusing to let you build.
  */
+/**
+ * A version change that would destroy blocks, refused until it is confirmed.
+ *
+ * `resizeSession`'s shape and for its reason: the count is the thing the user
+ * needs, it can only be known by looking, so the first attempt is the one that
+ * reports it. Main must not raise a dialog -- the request may not have come
+ * from anybody at a keyboard.
+ *
+ * `FailureKind` carries `needs-confirmation` already, which is what lets the
+ * panel offer to go ahead **without matching on this wording**. A renderer that
+ * read the sentence would turn a reworded refusal into a silent dead end.
+ */
+export class VersionWouldLoseBlocksError extends Error {
+  constructor(
+    readonly blocks: readonly string[],
+    readonly count: number,
+    readonly versionLabel: string,
+  ) {
+    const shown = blocks.slice(0, 6).join(", ");
+    const rest = blocks.length - 6;
+    const more = rest > 0 ? ", and " + String(rest) + " more" : "";
+    super(
+      `${count.toLocaleString()} block(s) of ${blocks.length} type(s) do not exist in ` +
+        `Minecraft ${versionLabel} and would be replaced with air: ${shown}${more}. ` +
+        `This can be undone.`,
+    );
+    this.name = "VersionWouldLoseBlocksError";
+  }
+}
+
+/** A version string this build has never heard of. */
+export class UnknownVersionError extends Error {
+  constructor(version: string) {
+    super(`${version} is not a Minecraft version this build knows.`);
+    this.name = "UnknownVersionError";
+  }
+}
+
+/** A version the open container cannot carry; the message is `refusalFor`'s. */
+export class VersionRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "VersionRefusedError";
+  }
+}
+
 export class BlockNotInVersionError extends Error {
   constructor(
     readonly block: string,
@@ -1002,6 +1050,92 @@ export function setSessionVoidBlock(
 
   session.voidBlock = next;
   return changed;
+}
+
+/**
+ * Changes which Minecraft version this schematic is for, as one undoable step.
+ *
+ * There was no way to do this at all. A version could be chosen when a document
+ * was created and stamped when it was saved, and nothing in between -- so
+ * saying "this is a 1.12 schematic" about a file that arrived without a tag
+ * meant a Save As, and so did changing 1.21 to 1.16.
+ *
+ * **The container is not changed here, and a version it cannot carry is
+ * refused.** `doc.format` is what a plain Save writes back, so flipping it
+ * under an open file would leave the next Ctrl+S writing MCEdit bytes into
+ * something still called `.schem`. Save As and Convert both exist and both
+ * change the pair together; this verb changes one thing.
+ *
+ * Backporting drops what the older version never had, because carrying it
+ * would write a file whose palette names blocks the target game has never
+ * heard of -- the classic error that looks like it worked. It is refused first
+ * and counted, and only goes through with `dropUnrepresentable`: a warning
+ * shown after the blocks are gone is not a warning.
+ *
+ * **Only the legacy boundary is checked**, and the caller has to say so rather
+ * than let silence imply more. Going from 1.21 to 1.16 drops nothing here,
+ * because this app has no per-block introduction data for the flat era -- and
+ * refusing blocks on a guess is worse than carrying them.
+ *
+ * One transaction, so Ctrl+Z takes back the version *and* the blocks together.
+ * That costs nothing to arrange: `HeaderState` has captured and restored
+ * `dataVersion` since it existed.
+ */
+export function setDocumentVersion(
+  session: DocumentSession,
+  version: string,
+  options: { dropUnrepresentable?: boolean; placeableNames?: ReadonlySet<string> | null } = {},
+): number {
+  const { doc, history } = session;
+  const info = mcVersion(version);
+  if (info === undefined) throw new UnknownVersionError(version);
+  const refusal = refusalFor(doc.format, version);
+  if (refusal !== null) throw new VersionRefusedError(refusal);
+
+  /*
+   * What the target cannot hold. Names only, which is the line `buildMcEdit`
+   * already draws: a missing name is fatal, an uncarryable state is written as
+   * the base block and reported as degraded.
+   */
+  const allowed = options.placeableNames;
+  const doomed: PaletteEntry[] = [];
+  if (allowed !== undefined && allowed !== null) {
+    for (const entry of doc.palette) {
+      if (entry.namespacedName === "minecraft:air") continue;
+      if (!allowed.has(entry.namespacedName)) doomed.push(entry);
+    }
+  }
+
+  if (doomed.length > 0 && options.dropUnrepresentable !== true) {
+    // Counted in cells, not in palette entries: "3 types" is not the number
+    // somebody deciding whether to go ahead is weighing.
+    const counts = paletteHistogram(doc);
+    let cells = 0;
+    for (const [block, count] of counts) {
+      const name = block.split("[")[0];
+      if (doomed.some((entry) => entry.namespacedName === name)) cells += count;
+    }
+    const names = [...new Set(doomed.map((entry) => entry.namespacedName))].sort();
+    throw new VersionWouldLoseBlocksError(names, cells, info.label);
+  }
+
+  const region = {
+    minX: 0,
+    minY: 0,
+    minZ: 0,
+    maxX: doc.width - 1,
+    maxY: doc.height - 1,
+    maxZ: doc.length - 1,
+  };
+  const air: PaletteEntry = { namespacedName: "minecraft:air", properties: {} };
+
+  return runTransaction(doc, history, `Set the Minecraft version to ${info.label}`, (tx) => {
+    // Blocks first, then the header: a run that threw half way must never leave
+    // a document claiming a version its palette contradicts.
+    const changed = doomed.length === 0 ? 0 : tx.replaceAny(region, doomed, air);
+    tx.setHeader({ ...readHeader(doc), dataVersion: info.dataVersion });
+    return changed;
+  });
 }
 
 /**

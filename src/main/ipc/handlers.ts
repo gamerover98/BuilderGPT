@@ -21,6 +21,7 @@ import {
   type DocumentStateResponse,
   type EditRequest,
   type ResizeRequest,
+  type VersionRequest,
   type VoidBlockRequest,
   type EditResponse,
   type ConvertRequest,
@@ -73,6 +74,7 @@ import { SCHEMATIC_FORMAT_LABEL, schematicExtension } from "../../shared/schemat
 import {
   dataVersionOf,
   documentEra,
+  eraOf,
   documentVersionName,
   mcVersion,
   refusalFor,
@@ -90,7 +92,11 @@ import {
   adoptDocument,
   applyEdit,
   BlockNotInVersionError,
+  UnknownVersionError,
+  VersionRefusedError,
+  VersionWouldLoseBlocksError,
   type EditOptions,
+  setDocumentVersion,
   setSessionVoidBlock,
   OutsideDocumentError,
   ResizeWouldLoseBlocksError,
@@ -881,6 +887,14 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       // Wrapping it would bury the only sentence that helps.
       return { ok: false, kind: "invalid-input", message: err.message };
     }
+    if (err instanceof VersionWouldLoseBlocksError) {
+      // Its own kind, so the panel can offer to go ahead without reading the
+      // sentence. The message already names the count and the blocks.
+      return { ok: false, kind: "needs-confirmation", message: err.message };
+    }
+    if (err instanceof VersionRefusedError || err instanceof UnknownVersionError) {
+      return { ok: false, kind: "invalid-input", message: err.message };
+    }
     if (err instanceof UnrepresentableBlocksError) {
       // Its message already names the blocks and suggests .schem; wrapping it
       // would only bury the one thing the user needs to read.
@@ -1078,6 +1092,37 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       }
     },
   );
+
+  ipcMain.handle(
+    IPC.docSetVersion,
+    async (_event, request: VersionRequest): Promise<EditResponse> => {
+      try {
+        const session = requireSession();
+        /*
+         * The *target* version's block set, not the document's. That is the
+         * whole question being asked: what would this schematic lose if it
+         * became 1.12? Passing the current one would check it against itself
+         * and always find nothing.
+         */
+        const legacy = eraOf(request.version) === "legacy";
+        const changed = setDocumentVersion(session, request.version, {
+          dropUnrepresentable: request.dropUnrepresentable === true,
+          placeableNames: legacy
+            ? legacyBlockNames(await loadLegacyBlockTable(legacyBlocksPath()))
+            : null,
+        });
+        // The sidecar has to agree, or reopening the file preselects the
+        // version it used to be.
+        if (session.doc.filePath !== null) {
+          await rememberProject(session.doc.filePath, { version: request.version });
+        }
+        return { ok: true, changed, state: shellState(session) };
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
+
 
   ipcMain.handle(
     IPC.docResize,

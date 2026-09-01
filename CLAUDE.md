@@ -180,6 +180,40 @@ Nothing sends a break from outside the box today, because a break comes from a
 pick and the block therefore exists; the guard exists so that stays true, and
 `tests/session.ts` fails without it.
 
+**A schematic's Minecraft version can be changed in place, and the container
+deliberately cannot.** `setDocumentVersion` moves `doc.dataVersion` and stops
+there. `doc.format` is what a plain Save writes back, so flipping it under an
+open file would leave the next Ctrl+S writing MCEdit bytes into something still
+called `.schem`; a version the open container cannot carry is refused with
+`refusalFor`'s own sentence and the panel points at Save As and Convert, which
+change the pair together.
+
+It is **one transaction**, so Ctrl+Z takes back the version *and* the blocks a
+backport dropped, together. That costs nothing to arrange -- `HeaderState` has
+captured and restored `dataVersion` since it existed -- and getting it wrong
+would leave the one edit nobody could undo being the one that changed what game
+the file is for.
+
+A backport is **refused first and counted**, and only goes through with
+`dropUnrepresentable`: a warning shown after the blocks are gone is not a
+warning. That is `resizeSession`'s shape and it reuses its `FailureKind` --
+`needs-confirmation`, so the panel offers the second press **without reading the
+sentence**. A renderer matching on wording turns a rephrased message into a
+silent dead end.
+
+**Only the legacy boundary is checked, and the panel says so.** Going from 1.21
+to 1.16 drops nothing, because this app has no per-block introduction data for
+the flat era. Saying nothing there would read as "checked, nothing to lose",
+which is a promise it cannot keep -- so `mcversion.flatBackport` states the
+limit instead. The impossible versions are shown **disabled** rather than
+filtered out for the same reason: a list that silently stops at 1.13 reads as a
+build that has never heard of 1.12.
+
+`TransactionScope.replaceAny` exists for this one caller. Calling `replace` per
+offending entry is N passes over the voxels, and a backport can name fifty
+blocks across a document of tens of millions of cells -- one pass is the
+difference between a wait and a hang.
+
 **A `replace`'s `from` is a pattern, and naming no state means the block in any
 state.** That is what the rest of the codebase already assumed: it is the stated
 reason `replace_blocks` parses its `from` with `toEntry` rather than

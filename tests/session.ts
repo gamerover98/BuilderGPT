@@ -26,6 +26,10 @@ import { legacyBlockNames } from "../src/main/services/writers.js";
 import { loadLegacyBlockTable } from "../src/main/pipeline/loader_formats.js";
 import {
   applyEdit,
+  setDocumentVersion,
+  UnknownVersionError,
+  VersionRefusedError,
+  VersionWouldLoseBlocksError,
   BlockNotInVersionError,
   setSessionVoidBlock,
   OutsideDocumentError,
@@ -2778,6 +2782,156 @@ console.log("\n--- choosing what empty space is made of ---");
   setSessionVoidBlock(session, "");
   equal("air normalises", setSessionVoidBlock(session, "minecraft:air"), 0);
   equal("...to the empty string", session.voidBlock, "");
+}
+
+// --- changing which Minecraft a schematic is for ----------------------------
+/*
+ * There was no way to do this. A version could be chosen at New and stamped at
+ * Save As, and nothing in between -- so saying "this is a 1.12 schematic" about
+ * a file that arrived carrying no tag meant a Save As, and so did 1.21 to 1.16.
+ */
+console.log("\n--- changing which Minecraft a schematic is for ---");
+{
+  const names = legacyBlockNames(await loadLegacyBlockTable(LEGACY_BLOCKS));
+  const thrown = (run: () => void): Error | null => {
+    try {
+      run();
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err : new Error(String(err));
+    }
+  };
+
+  {
+    // The ordinary case: a legacy file that names no version is told which one
+    // it is. That is the gesture this exists for, and it moves no blocks.
+    const session = newDocument({ width: 4, height: 4, length: 4 }, "mcedit", null);
+    setBlock(session.doc, 1, 1, 1, { namespacedName: "minecraft:stone", properties: {} });
+    equal("naming a version moves no blocks", setDocumentVersion(session, "JE_1_12_2"), 0);
+    equal("...and the document carries it", session.doc.dataVersion, 1343);
+    equal(
+      "...which is what a save would stamp",
+      documentState(session).dataVersion,
+      1343,
+    );
+
+    undoEdit(session);
+    equal("...and it comes back off on Ctrl+Z", session.doc.dataVersion, null);
+  }
+
+  {
+    /*
+     * A backport is refused first and counted, never done and reported. A
+     * warning shown after the blocks are gone is not a warning.
+     */
+    const session = newDocument({ width: 4, height: 4, length: 4 }, "mcedit", 3700);
+    for (let x = 0; x < 3; x += 1) {
+      setBlock(session.doc, x, 0, 0, { namespacedName: "minecraft:deepslate", properties: {} });
+    }
+    setBlock(session.doc, 0, 1, 0, { namespacedName: "minecraft:stone", properties: {} });
+
+    const refusal = thrown(() =>
+      setDocumentVersion(session, "JE_1_12_2", { placeableNames: names }),
+    );
+    check(
+      "backporting is refused rather than done",
+      refusal instanceof VersionWouldLoseBlocksError,
+      String(refusal),
+    );
+    check(
+      "...counting the cells, not the block types",
+      refusal?.message.includes("3 block(s)") === true,
+      refusal?.message ?? "",
+    );
+    check(
+      "...and naming what would go",
+      refusal?.message.includes("minecraft:deepslate") === true,
+      refusal?.message ?? "",
+    );
+    equal("nothing was changed by the refusal", session.doc.dataVersion, 3700);
+    equal(
+      "...and nothing was destroyed",
+      getBlock(session.doc, 0, 0, 0).namespacedName,
+      "minecraft:deepslate",
+    );
+
+    /*
+     * Confirmed, it goes through as **one** transaction: the version and the
+     * blocks move together, so one Ctrl+Z takes both back. That is free --
+     * `HeaderState` has captured `dataVersion` since it existed -- and it is
+     * the whole reason this is a transaction rather than two writes.
+     */
+    const before = documentState(session).undoDepth;
+    equal(
+      "confirmed, it drops them",
+      setDocumentVersion(session, "JE_1_12_2", {
+        placeableNames: names,
+        dropUnrepresentable: true,
+      }),
+      3,
+    );
+    equal("...in one undoable step", documentState(session).undoDepth, before + 1);
+    equal("...leaving air", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:air");
+    equal("...and the version changed", session.doc.dataVersion, 1343);
+    equal(
+      "...while a block the version has is untouched",
+      getBlock(session.doc, 0, 1, 0).namespacedName,
+      "minecraft:stone",
+    );
+
+    undoEdit(session);
+    equal(
+      "undo brings the blocks back",
+      getBlock(session.doc, 0, 0, 0).namespacedName,
+      "minecraft:deepslate",
+    );
+    equal("...and the version with them, in the same step", session.doc.dataVersion, 3700);
+  }
+
+  {
+    /*
+     * The container is not changed here, so a version it cannot carry is
+     * refused with `refusalFor`'s own sentence. Sponge has no way to name a
+     * pre-Flattening block, and flipping `doc.format` under an open file would
+     * leave the next plain Save writing MCEdit bytes under a `.schem` name.
+     */
+    const session = newDocument({ width: 2, height: 2, length: 2 }, "sponge3", 3700);
+    const refusal = thrown(() => setDocumentVersion(session, "JE_1_12_2"));
+    check(
+      "a container that cannot carry the version refuses it",
+      refusal instanceof VersionRefusedError,
+      String(refusal),
+    );
+    check(
+      "...with the reason, not just a no",
+      refusal?.message.includes("1.13") === true,
+      refusal?.message ?? "",
+    );
+    equal("...and changes nothing", session.doc.dataVersion, 3700);
+
+    check(
+      "a version this build never heard of is refused too",
+      thrown(() => setDocumentVersion(session, "JE_9_9_9")) instanceof UnknownVersionError,
+    );
+  }
+
+  {
+    /*
+     * Without a block set there is nothing to check against, and the version
+     * changes carrying everything. That is the flat-to-flat case: this app has
+     * no per-block introduction data, and refusing on a guess is worse than
+     * carrying a block that turns out to be too new.
+     */
+    const session = newDocument({ width: 2, height: 2, length: 2 }, "sponge3", 4189);
+    setBlock(session.doc, 0, 0, 0, { namespacedName: "minecraft:deepslate", properties: {} });
+    equal("a flat backport drops nothing", setDocumentVersion(session, "JE_1_16_5"), 0);
+    equal("...and moves the tag", session.doc.dataVersion, 2586);
+    equal(
+      "...keeping the block it cannot vouch for",
+      getBlock(session.doc, 0, 0, 0).namespacedName,
+      "minecraft:deepslate",
+    );
+  }
 }
 
 // --- a replace names a block, not one of its states -------------------------

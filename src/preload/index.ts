@@ -29,6 +29,7 @@ import {
   type DocumentStateResponse,
   type EditRequest,
   type ResizeRequest,
+  type VersionRequest,
   type VoidBlockRequest,
   type EditResponse,
   type GenerateRequest,
@@ -121,6 +122,8 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docResize, request) as Promise<EditResponse>,
   setVoidBlock: (request: VoidBlockRequest) =>
     ipcRenderer.invoke(IPC.docSetVoidBlock, request) as Promise<EditResponse>,
+  setDocumentVersion: (request: VersionRequest) =>
+    ipcRenderer.invoke(IPC.docSetVersion, request) as Promise<EditResponse>,
   convertFile: (request: ConvertRequest) =>
     ipcRenderer.invoke(IPC.convertFile, request) as Promise<ConvertResponse>,
   undo: () => ipcRenderer.invoke(IPC.docUndo) as Promise<EditResponse>,

@@ -145,6 +145,20 @@ export const IPC = {
    */
   docSetVoidBlock: "bgpt:doc:void:set",
   /**
+   * Change which Minecraft version the open schematic is for.
+   *
+   * Its own verb rather than a shape of `SaveRequest`, because until now that
+   * was the only way to do it: a version could be chosen at New and stamped at
+   * Save, and nothing in between. Saying "this is a 1.12 schematic" about a
+   * file that arrived with no tag meant a Save As, and so did going from 1.21
+   * to 1.16.
+   *
+   * It changes the version and **not** the container. `format` is what a plain
+   * Save writes back, so changing it under an open file would leave the next
+   * Ctrl+S writing MCEdit bytes into something still called `.schem`.
+   */
+  docSetVersion: "bgpt:doc:version:set",
+  /**
    * One file into another, without opening either.
    *
    * A verb of its own rather than a mode of `docSaveAs`, because it does not
@@ -985,6 +999,24 @@ export type EditRequest =
 /**
  * What empty space should be made of, and whether to rewrite what already is.
  */
+/**
+ * A new Minecraft version for the open schematic.
+ */
+export interface VersionRequest {
+  /** A name from `MC_VERSIONS`, e.g. `JE_1_12_2`. */
+  version: string;
+  /**
+   * Go ahead even though blocks will be replaced with air.
+   *
+   * Backporting cannot carry what the older version never had. Main refuses
+   * the first attempt and reports the count; this is the second. The refusal
+   * arrives as `needs-confirmation`, so the panel never has to read the
+   * sentence to know it may offer this.
+   */
+  dropUnrepresentable?: boolean;
+}
+
+
 export interface VoidBlockRequest {
   /** The block id, with states if it has any. `""` means air. */
   block: string;
@@ -1687,6 +1719,8 @@ export interface BgptApi {
   resizeDocument(request: ResizeRequest): Promise<EditResponse>;
   /** Choose what empty space is made of in the open schematic. */
   setVoidBlock(request: VoidBlockRequest): Promise<EditResponse>;
+  /** Change which Minecraft version the open schematic is for. */
+  setDocumentVersion(request: VersionRequest): Promise<EditResponse>;
   /** One file into another. Never overwrites; touches no open document. */
   convertFile(request: ConvertRequest): Promise<ConvertResponse>;
   undo(): Promise<EditResponse>;

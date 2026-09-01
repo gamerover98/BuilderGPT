@@ -94,6 +94,7 @@ import { schematicExtension } from "../../shared/schematic.js";
 import type { FileKind } from "../../shared/ipc.js";
 import ConvertModal from "./lib/ConvertModal.svelte";
   import {
+    blocksInDocument,
     DEFAULT_SETTINGS,
     DEFAULT_PREVIEW_SETTINGS,
   DEFAULT_UI_SETTINGS,
@@ -607,7 +608,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
    */
   let voidFilledWith = $state("");
   /**
-   * Every block the open document contains, without its state.
+   * Every block the open document contains, air included.
    *
    * `DocumentState.palette` is the whole histogram and main rebuilds it on
    * every state push, so this is exact rather than a belief -- which is the
@@ -617,9 +618,9 @@ import ConvertModal from "./lib/ConvertModal.svelte";
    * only distinguishable by looking.
    */
   const documentBlocks = $derived(
-    new Set(
-      (docState?.palette ?? []).map((entry) => entry.block.split("[")[0]),
-    ),
+    docState === null
+      ? new Set<string>()
+      : blocksInDocument(docState.palette, docState.size, docState.blockCount),
   );
   let mcVersionOpen = $state(false);
   let mcVersionError = $state("");

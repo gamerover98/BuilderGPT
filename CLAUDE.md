@@ -2591,10 +2591,21 @@ Two changes, and the pair is the fix rather than either alone:
   structure_void has to find the barrier and air alone would not. The target is
   never a source: converting a block into itself can only change nothing.
 - **whether there is anything to convert is observed, not inferred.** The panel
-  reads `DocumentState.palette`, which main rebuilds on every state push, and
   asks whether the document actually holds any of the sources. That is the only
   thing that can separate the two states above, because one of them has air in
   it and the other does not.
+
+The second of those has a half that is easy to leave out and makes the first
+one inert: **`DocumentState.palette` deliberately does not contain air.** It is
+the materials list and a schematic is mostly air, so asking it alone answers
+"no air here" about every document ever opened — and the button, correctly
+computing air as its source, would have gone on being dead for the identical
+reason under a different name.
+
+`blocksInDocument` recovers it rather than transporting it: `countBlocks`
+counts every voxel whose palette index is not zero and index 0 is always air,
+so the document holds air exactly when `blockCount` is short of the volume.
+Two numbers `DocumentState` already carries, and exact.
 
 `voidSources` is in `shared/` for `normaliseVoidBlock`'s reason and with a
 sharper edge: main converts with it and the panel decides the button from it,

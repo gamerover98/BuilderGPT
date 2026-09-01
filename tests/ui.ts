@@ -25,7 +25,7 @@ import {
   isWithinBounds,
   placePopover,
 } from "../src/renderer/src/lib/floating.js";
-import { PANEL_SIZE, voidSources } from "../src/shared/settings.js";
+import { blocksInDocument, PANEL_SIZE, voidSources } from "../src/shared/settings.js";
 import { facingNormal, hoverSource, outlineCentre } from "../src/renderer/src/lib/block_hover.js";
 import {
   blockLabel,
@@ -95,7 +95,7 @@ import {
   showsIndicator,
 } from "../src/renderer/src/lib/mcp_status.js";
 import { bridgeCommand, connectCommand } from "../src/shared/mcp.js";
-import type { McpStatus } from "../src/shared/ipc.js";
+import type { PaletteCount, McpStatus } from "../src/shared/ipc.js";
 import { normalizeTicks, skyAt, skyDistance } from "../src/renderer/src/lib/sky.js";
 import { fitShadow } from "../src/renderer/src/lib/shadow_fit.js";
 import { anchorKey, mirrorAnchor } from "../src/renderer/src/lib/anchor_draft.js";
@@ -2495,6 +2495,62 @@ console.log("\n--- what a change of empty space converts from ---");
     voidSources("minecraft:air", "minecraft:barrier"),
     ["minecraft:air"],
   );
+
+  /*
+   * And the set those sources are looked up in has to contain air, which is
+   * the half that made the first fix inert. `DocumentState.palette` leaves air
+   * out on purpose -- it is the materials list, and a schematic is mostly air
+   * -- so asking it alone always answered no, whatever the document held.
+   *
+   * It is recovered from two numbers rather than transported: `countBlocks`
+   * counts every voxel whose palette index is not zero and index 0 is always
+   * air, so the document holds air exactly when `blockCount` is short of the
+   * volume.
+   */
+  {
+    // Typed as the real payload rather than trimmed to what the function reads:
+    // `PaletteCount` is what `DocumentState` carries, and a fixture narrower
+    // than the caller is a fixture that cannot catch the caller.
+    const palette: PaletteCount[] = [{ block: "minecraft:stone", count: 1 }];
+    equal(
+      "a document with room left in it holds air",
+      [...blocksInDocument(palette, [4, 4, 4], 1)].sort(),
+      ["minecraft:air", "minecraft:stone"],
+    );
+    equal(
+      "...and one packed to the walls does not",
+      [...blocksInDocument(palette, [4, 4, 4], 64)].sort(),
+      ["minecraft:stone"],
+    );
+    const stairs: PaletteCount[] = [
+      { block: "minecraft:oak_stairs[facing=north]", count: 1 },
+      { block: "minecraft:oak_stairs[facing=east]", count: 1 },
+    ];
+    equal(
+      "...and a block state is not a second block",
+      [...blocksInDocument(stairs, [4, 4, 4], 64)],
+      ["minecraft:oak_stairs"],
+    );
+
+    /*
+     * The two together, on the reported case: empty space *set* to barrier
+     * with the cells still air. The sources say air, the document has air, so
+     * the button is live -- where reading the setting called this identical to
+     * the already-converted document and refused both.
+     */
+    const sources = voidSources("minecraft:barrier", "minecraft:barrier");
+    const stillAir = blocksInDocument(palette, [4, 4, 4], 1);
+    const filled: PaletteCount[] = [...palette, { block: "minecraft:barrier", count: 63 }];
+    const converted = blocksInDocument(filled, [4, 4, 4], 64);
+    check(
+      "the setting already naming the block does not disable the button",
+      sources.some((id) => stillAir.has(id)),
+    );
+    check(
+      "...while the same setting over a converted document does",
+      !sources.some((id) => converted.has(id)),
+    );
+  }
 }
 
 

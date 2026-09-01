@@ -593,6 +593,29 @@ export function voidSources(previous: string, next: string): string[] {
   );
 }
 /**
+ * Every block a document contains, **air included**, without block states.
+ *
+ * `DocumentState.palette` deliberately leaves air out -- it is the materials
+ * list, and a schematic is mostly air -- so a caller asking "does this document
+ * hold any air" from it alone always gets no, whatever the document. That is
+ * the second half of the empty-space button's bug: the sources were right and
+ * the set they were looked up in could never contain the commonest one.
+ *
+ * Air is recovered rather than transported: `countBlocks` counts every voxel
+ * whose palette index is not zero, and index 0 is always air, so the document
+ * holds air exactly when `blockCount` is short of the volume. Exact, and out of
+ * two numbers `DocumentState` already carries.
+ */
+export function blocksInDocument(
+  palette: readonly { block: string }[],
+  size: readonly [number, number, number],
+  blockCount: number,
+): Set<string> {
+  const held = new Set(palette.map((entry) => entry.block.split("[")[0]));
+  if (blockCount < size[0] * size[1] * size[2]) held.add("minecraft:air");
+  return held;
+}
+/**
  * What a schematic may be resized to by hand, per axis.
  *
  * The ceiling is per *axis* and is not the volume guard: 4096 cubed is far

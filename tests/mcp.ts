@@ -1317,12 +1317,54 @@ console.log("\n--- the model is told which Minecraft it is working in ---");
         { blocks: ["minecraft:red_wool", "minecraft:deepslate"] },
         options(sink),
       )
-    ).result as { blocks: { block: string; legacyId: string | null }[] };
+    ).result as {
+      blocks: {
+        block: string;
+        legacyId: string | null;
+        since?: string | null;
+        until?: string | null;
+      }[];
+    };
     equal("a pre-Flattening block names its id:data", answer.blocks[0].legacyId, "35:14");
     equal(
       "...and one added later names none, which is the answer",
       answer.blocks[1].legacyId,
       null,
+    );
+
+    /*
+     * And the flat era's half of the same question, which is what stops a
+     * model reaching for a block the open schematic's version predates. A
+     * label rather than a DataVersion: 2724 is not something a model can
+     * reason about and "1.17" is.
+     */
+    equal("...and says when it arrived", answer.blocks[1].since, "1.17");
+    equal(
+      "a block that never went away has no end",
+      answer.blocks[1].until,
+      undefined,
+    );
+
+    /*
+     * A block whose name was retired reports it, and that is deliberately not
+     * the same message as a removal. Told only that `chain` ends at 1.21.8, a
+     * model would conclude the block was deleted and stop offering it -- when
+     * what it needs is that a newer version calls it something else.
+     */
+    const renamed = (
+      await callTool(
+        "describe_block",
+        { blocks: ["minecraft:chain", "minecraft:iron_chain"] },
+        options(sink),
+      )
+    ).result as { blocks: { since?: string | null; until?: string | null }[] };
+    equal("the old name runs from 1.16", renamed.blocks[0].since, "1.16");
+    equal("...to 1.21.8", renamed.blocks[0].until, "1.21.8");
+    equal("...and the new one starts exactly there", renamed.blocks[1].since, "1.21.9");
+    equal(
+      "...and has no end",
+      renamed.blocks[1].until,
+      undefined,
     );
   }
 }

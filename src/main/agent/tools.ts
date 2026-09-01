@@ -83,7 +83,9 @@ import {
   documentEra,
   documentVersionName,
   mcVersion,
+  versionNameOf,
 } from "../../shared/mc_versions.js";
+import { versionRangeOf } from "../../shared/block_versions.js";
 import { paletteEntryCacheKey, type PaletteEntry } from "../pipeline/types.js";
 import { MAX_DOCUMENT_VOLUME, MAX_EDIT_VOLUME } from "../services/session.js";
 import { orderRegion } from "../domain/grow.js";
@@ -206,6 +208,27 @@ function toEntry(block: string): PaletteEntry {
  * per block in a batch. `loadLegacyBlockTable` already hands back the same
  * object every time, which is what makes identity a sound key here.
  */
+/**
+ * When a block arrived and, if it has gone, when -- as version labels.
+ *
+ * A label because "1.16" is something a model can reason about and 2566 is not,
+ * the same reason `versionLabel` exists next door. `until` is almost always a
+ * **rename** rather than a removal, so the answer says which: told only that
+ * `chain` ends at 1.21.8, a model would conclude the block was deleted and
+ * stop offering it, when what it needs is the name to use instead.
+ */
+function versionSpan(name: string): { since: string | null; until: string | null } | null {
+  const range = versionRangeOf(name);
+  if (range === null) return null;
+  const label = (dataVersion: number): string | null => {
+    const found = versionNameOf(dataVersion);
+    return found === null ? null : (mcVersion(found)?.label ?? null);
+  };
+  return {
+    since: label(range.since),
+    until: range.until === null ? null : label(range.until),
+  };
+}
 /** `"35:14"`, or `null` for a block the pre-Flattening game never had. */
 function legacyIdOf(index: LegacyIndex | null, name: string): string | null {
   if (index === null) return null;
@@ -720,6 +743,20 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
            * the game and is what the question is really after.
            */
           legacyId: legacyIdOf(legacy, name),
+          /*
+           * The flat era's half of the same question, and the one that stops a
+           * model reaching for a block the open schematic's version predates.
+           * Absent for a block this build has no record of, which is a real
+           * answer and not the same as "it never existed".
+           */
+          ...(() => {
+            const span = versionSpan(name);
+            if (span === null) return {};
+            return {
+              since: span.since,
+              ...(span.until === null ? {} : { until: span.until }),
+            };
+          })(),
           placedAs: paletteEntryCacheKey(placed),
           properties,
           note: !context.allowedBlocks.has(name)

@@ -37,7 +37,8 @@ import {
   loadPrompts,
   resourcesDir,
 } from "./resources.js";
-import { eraOf } from "../../shared/mc_versions.js";
+import { eraOf, mcVersion } from "../../shared/mc_versions.js";
+import { blocksIn } from "../../shared/block_versions.js";
 import { legacyBlockNames } from "./writers.js";
 import { loadLegacyBlockTable } from "../pipeline/loader_formats.js";
 import { SpongeSchematicWriter, SpongeSchematicWriterFactory } from "./schematic.js";
@@ -50,14 +51,27 @@ import { VERSION_TABLE } from "./versions.js";
  * same table the writer decides the save on, so the list a model is given and
  * the set it will be judged against cannot drift.
  *
- * Falls back to the whole list if the table cannot be read. A generation that
- * offers too much is recoverable; one that offers nothing is not.
+ * Falls back to the whole list if the set cannot be worked out. A generation
+ * that offers too much is recoverable; one that offers nothing is not.
  */
 async function blockListFor(version: string): Promise<string> {
   const whole = await loadBlockIdListText();
-  if (eraOf(version) !== "legacy") return whole;
   try {
-    const names = legacyBlockNames(await loadLegacyBlockTable(legacyBlocksPath()));
+    /*
+     * Two tables, each authoritative where the other says nothing:
+     * `legacy_blocks.json` enumerates the pre-Flattening set exactly, and
+     * `block_versions.json` is the flat era only. Which one answers is decided
+     * by the era rather than by merging them.
+     */
+    let names: ReadonlySet<string>;
+    if (eraOf(version) === "legacy") {
+      names = legacyBlockNames(await loadLegacyBlockTable(legacyBlocksPath()));
+    } else {
+      const dataVersion = mcVersion(version)?.dataVersion ?? null;
+      // A version with no tag is not a question the flat table can be asked.
+      if (dataVersion === null) return whole;
+      names = blocksIn(dataVersion);
+    }
     return whole
       .split(/\r?\n/)
       .filter((line) => {

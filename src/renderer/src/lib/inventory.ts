@@ -75,24 +75,26 @@ export function gridWindow(params: {
  * actually hold.
  *
  * `placeable` is the set of block names the document's Minecraft version can
- * name, or `null` for no restriction. Only the **legacy era** supplies one
- * today, and the asymmetry is the honest part rather than an oversight:
+ * name, or `null` for no restriction. Both eras supply one now, from two
+ * tables, and which one answers is decided by the era rather than by merging
+ * them -- each is authoritative exactly where the other says nothing:
  *
  * - Before 1.13 a block is a numeric `ID:DATA` pair, and
  *   `resources/legacy_blocks.json` enumerates every one of them. That is not a
  *   guess -- it is the same table `buildMcEdit` decides the save on, so what
  *   the inventory hides is exactly what the writer would refuse.
- * - Above 1.13 this app has no per-block introduction data, so a filter would
- *   mean inventing when each block was added. **Showing a block that does not
- *   exist yet is recoverable -- hiding one that does is the mistake nobody can
- *   work around**, so nothing is cut there and the caller shows the target
- *   version beside the grid instead.
+ * - From 1.13 on, `resources/block_versions.json` records when each block
+ *   arrived, so a 1.21.4 schematic stops offering the ninety-odd blocks 26.2
+ *   added after it.
  *
- * This comment used to argue against filtering by version at all, on the
- * second bullet's reasoning alone. It was right about the flat era and wrong
- * to generalise: the legacy boundary is exactly known, and leaving it unfiltered
- * let a 1.12 schematic offer deepslate -- placeable, drawable, and fatal at
- * save time, a long way from the click.
+ * The comment here used to argue against filtering by version at all, and the
+ * argument was worth keeping even though the conclusion has gone: **showing a
+ * block that does not exist yet is recoverable, and hiding one that does is
+ * the mistake nobody can work around.** That is still why `blocksIn` is a
+ * narrow answer used to *filter a list* while `blockExistsIn` is a generous
+ * one used to *guard a placement*, and why a block outside the table is
+ * allowed everywhere. What changed is only that there is now a record to read
+ * rather than a date to invent.
  *
  * Air is always excluded, whatever the era: there is nothing to pick up.
  */

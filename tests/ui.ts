@@ -33,6 +33,7 @@ import {
   inventoryBlocks,
   OVERSCAN_ROWS,
 } from "../src/renderer/src/lib/inventory.js";
+import { blocksIn } from "../src/shared/block_versions.js";
 import {
   emptyTimeline,
   recordDocumentEdit,
@@ -2073,6 +2074,31 @@ console.log("\n--- creative inventory ---");
     inventoryBlocks(["minecraft:air", "minecraft:stone"], "", legacy),
     ["minecraft:stone"],
   );
+
+  /*
+   * And the flat era supplies one now too, from `block_versions.json`. The
+   * spelling is the part worth checking rather than the cut: this set is
+   * intersected with `block_id_list.txt`, which is namespaced, so a set of bare
+   * names would match nothing and empty the inventory for every flat document
+   * -- an outage that reads as the app being broken.
+   */
+  {
+    const at1_21_4 = blocksIn(4189);
+    equal(
+      "a 1.21.4 schematic is not offered a block 1.21.9 added",
+      inventoryBlocks(
+        ["minecraft:stone", "minecraft:copper_chain"],
+        "",
+        at1_21_4,
+      ),
+      ["minecraft:stone"],
+    );
+    equal(
+      "...and 26.2 is offered both",
+      inventoryBlocks(["minecraft:stone", "minecraft:copper_chain"], "", blocksIn(4903)),
+      ["minecraft:stone", "minecraft:copper_chain"],
+    );
+  }
 
 
   equal("a label loses its namespace and its underscores", blockLabel("minecraft:oak_planks"), "oak planks");

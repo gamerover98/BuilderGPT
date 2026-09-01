@@ -581,6 +581,20 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   let dimensionsOpen = $state(false);
   let voidOpen = $state(false);
   let voidError = $state("");
+  /**
+   * What the empty cells are believed to hold, which is not the same question
+   * as what empty space is *chosen* to be.
+   *
+   * The choice lands the moment it is picked -- that is what makes the
+   * viewport show it -- so `docState.voidBlock` is the new block from then on
+   * and could never say what a rewrite should convert *from*. This is the only
+   * thing still holding the old one.
+   *
+   * A belief, and it can go stale: converting the cells some other way, from
+   * the selection tools, does not reach it. Wrong, it costs a rewrite that
+   * reports zero and says so -- which is why it is allowed to be a belief.
+   */
+  let voidFilledWith = $state("");
   let mcVersionOpen = $state(false);
   let mcVersionError = $state("");
   /**
@@ -2720,11 +2734,11 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   }
 
 
-  async function changeVoidBlock(block: string, replaceExisting: boolean): Promise<void> {
+  async function changeVoidBlock(block: string): Promise<void> {
     voidError = "";
     busy = true;
     try {
-      const response = await api().setVoidBlock({ block, replaceExisting });
+      const response = await api().setVoidBlock({ block });
       if (!response.ok) {
         // Inside the modal: the app's status banner is behind the scrim, so a
         // failure reported there is one nobody can see.
@@ -2739,6 +2753,40 @@ import ConvertModal from "./lib/ConvertModal.svelte";
       busy = false;
     }
   }
+
+  /**
+   * Converts the cells that hold `from` so they hold `to`, as one undoable step.
+   *
+   * `from` is named rather than left to main, because main's own value is the
+   * block that was just chosen: the choice takes effect at the pick, so by the
+   * time this runs the session already says water and would convert water into
+   * water. See `voidFilledWith`.
+   */
+  async function replaceVoidBlock(from: string, to: string): Promise<void> {
+    voidError = "";
+    busy = true;
+    try {
+      const response = await api().setVoidBlock({
+        block: to,
+        replaceExisting: true,
+        replaceFrom: from,
+      });
+      if (!response.ok) {
+        voidError = response.message;
+        return;
+      }
+      // Only on success: a failed rewrite leaves the cells as they were, and
+      // a belief updated anyway would disable the button that could retry it.
+      voidFilledWith = to;
+      docState = response.state;
+      await refreshDocument();
+    } catch (err) {
+      voidError = err instanceof Error ? err.message : String(err);
+    } finally {
+      busy = false;
+    }
+  }
+
 
   async function changeWorldEditAnchor(
     next: [number, number, number] | null,
@@ -3510,7 +3558,9 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   blocks={blockRegistry}
   placeable={placeableBlocks}
   legacy={legacyForDoc}
-  onblock={(block, replaceExisting) => void changeVoidBlock(block, replaceExisting)}
+  converted={voidFilledWith}
+  onblock={(block) => void changeVoidBlock(block)}
+  onreplace={(from, to) => void replaceVoidBlock(from, to)}
   onopacity={(voidOpacity) =>
     void patchSettings({ editing: { ...settings.editing, voidOpacity } })}
   onclose={() => {
@@ -3710,7 +3760,12 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     <button
       class="nbt-open"
       disabled={docState === null}
-      onclick={() => (voidOpen = true)}
+      onclick={() => {
+        // Seeded on open, not derived: with nothing converted yet, what the
+        // empty cells hold *is* the current choice.
+        voidFilledWith = docState?.voidBlock ?? "";
+        voidOpen = true;
+      }}
       title={t("void.openHint")}
     >
       {t("void.open")}

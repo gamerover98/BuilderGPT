@@ -990,6 +990,19 @@ export function applyEdit(
  * - **The rewrite is an edit**, and it is one transaction, so a swap of a
  *   quarter of a million cells is one Ctrl+Z.
  *
+ * They are asked for separately, and that is the second thing this got wrong.
+ * The rewrite used to ride along with the choice, read from a checkbox at the
+ * moment the block changed -- so ticking the box *after* picking water did
+ * nothing at all, and re-picking water to make it fire hit a short-circuit that
+ * said you had chosen what was already chosen. The one gesture anybody would
+ * try was the one with no answer.
+ *
+ * So `replaceFrom` is explicit rather than read from the session. By the time
+ * somebody presses the button the choice has already landed -- that is what
+ * makes the viewport show it -- so `session.voidBlock` is the *new* value and
+ * would convert a block into itself. The caller names the old one because the
+ * caller is the only one still holding it.
+ *
  * `from` is built with `toEntry` and not with any defaults-filling helper,
  * because it is a *pattern*: `tx.replace` interns it and matches on the
  * palette index, so writing default properties onto it would turn "take out
@@ -1005,25 +1018,30 @@ export function applyEdit(
 export function setSessionVoidBlock(
   session: DocumentSession,
   block: string,
-  options: { replaceExisting?: boolean } = {},
+  options: { replaceExisting?: boolean; replaceFrom?: string } = {},
 ): number {
   const next = normaliseVoidBlock(block);
-  const previous = session.voidBlock;
   /*
-   * Choosing what is already chosen is not an edit, and that holds even with
-   * the rewrite asked for: `from` and `to` would be the same entry, so the
-   * replace could only ever change nothing.
-   *
-   * One corner falls out of it and is worth knowing rather than fixing.
-   * Undoing a rewrite puts the blocks back but leaves the *choice* standing --
-   * they are deliberately different things -- so re-picking the same block
-   * will not re-apply it. Redo is the gesture for that, and it is the one the
-   * user already reached for.
+   * What the empty cells are made of *now*, which the caller may know better
+   * than the session does. Defaulted to the session's own value so a caller
+   * that fuses the two acts -- as everything did until the button existed --
+   * keeps behaving exactly as it did.
    */
-  if (next === previous) return 0;
-
+  const from = normaliseVoidBlock(options.replaceFrom ?? session.voidBlock);
+  /*
+   * Converting a block into itself can only ever change nothing, so it is not
+   * an edit and does not reach the transaction -- which is what keeps a second
+   * press of the button, or a re-pick of the block already chosen, from
+   * putting an empty step on the undo stack.
+   *
+   * The corner this removes is worth naming, because it read as a bug and was
+   * one: undoing a rewrite puts the blocks back and leaves the *choice*
+   * standing -- they are deliberately different things -- and while the two
+   * were fused, re-picking the block could not re-apply it. With the rewrite
+   * on a press of its own, pressing again is exactly the gesture for that.
+   */
   let changed = 0;
-  if (options.replaceExisting === true) {
+  if (options.replaceExisting === true && from !== next) {
     const { doc, history } = session;
     const region = {
       minX: 0,
@@ -1038,13 +1056,13 @@ export function setSessionVoidBlock(
 
     // `""` means air on both sides, which is what makes going back to air the
     // same operation rather than a special case.
-    const from = parsePaletteEntry(previous === "" ? "minecraft:air" : previous);
+    const wanted = parsePaletteEntry(from === "" ? "minecraft:air" : from);
     const to = parsePaletteEntry(next === "" ? "minecraft:air" : next);
     changed = runTransaction(
       doc,
       history,
-      `Replace ${from.namespacedName} with ${to.namespacedName}`,
-      (tx) => tx.replace(region, from, to),
+      `Replace ${wanted.namespacedName} with ${to.namespacedName}`,
+      (tx) => tx.replace(region, wanted, to),
     );
   }
 

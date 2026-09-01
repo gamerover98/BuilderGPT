@@ -2455,6 +2455,50 @@ hand-placed water is unpickable too.** That is the request rather than a side
 effect; if water is what empty space is made of, a click passes through it the
 way it passes through air.
 
+**And the chunk cache diffs it, which is the fourth time that rule has earned
+itself.** The palette swap is invisible to every grid `chunked_mesh.ts`
+compares: the voxels do not move, no light changes, no sign is retyped, and
+index 0 quietly stops meaning air. So choosing water re-meshed **nothing**.
+
+The shape of the failure is the part worth recognising, because every layer
+reported success. `documentMesh`'s own key contains the void block, so the mesh
+*was* rebuilt -- over a chunk cache that found every chunk clean and carried
+them all forward by reference. `shipMesh` then tested object identity on the
+positions arrays, correctly found them identical, and sent a delta saying
+nothing had changed. The viewport was told the truth about a lie.
+
+On screen that is a setting that does nothing at all -- until some unrelated
+edit dirties one chunk, and the new void appears in that chunk alone. Reported
+exactly that way: *"the opacity only changes on one face if you add a block"*.
+
+`voidDigest` is the answer and it is **derived from the two arguments the
+mesher already receives** rather than taken as a third, so it cannot drift from
+what was drawn: every index `fillVoid` marked, *and what that index now holds*.
+Both halves are load-bearing. The indices alone miss a swap -- water and lava
+are both written over index 0, so `{0}` either way -- and the entries alone
+miss a cell a **break** filled with the void block for real, which is void by
+the same rule and has an index of its own.
+
+**Choosing and converting are two acts, so they are two controls.** The rewrite
+was a checkbox carried along with the choice, read at the moment the block
+changed. Ticking it *after* picking water therefore did nothing, and re-picking
+water to make it fire hit `setSessionVoidBlock`'s own short-circuit -- you had
+chosen what was already chosen. The one gesture anybody would try was the one
+with no answer, and it failed in silence at both ends.
+
+`replaceFrom` is what the split costs, and it has to be explicit. The choice
+lands at the pick -- that is what makes the viewport show it -- so by the time
+the button is pressed `session.voidBlock` is the **new** block and main working
+it out for itself would convert water into water. The panel is the only thing
+still holding the old value, so the panel names it. It is a *belief*, seeded
+when the modal opens and updated only when a rewrite succeeds; wrong, it costs
+a conversion that reports zero, which is why it is allowed to be one.
+
+The corner that removes was a real report waiting to happen: undoing a rewrite
+puts the blocks back and leaves the *choice* standing, deliberately -- and
+while the two were fused, nothing could re-apply it. Now pressing again is
+exactly that gesture.
+
 **One culling pass, two layers.** `BakedFace.voidFill` marks the layer and
 `chunked_mesh.ts` partitions before calling `buildMesh` twice. Meshing the two
 *separately* is the obvious arrangement and is wrong: the water's face at a wall

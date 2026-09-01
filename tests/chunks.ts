@@ -504,6 +504,112 @@ console.log("\n--- the two layers ---");
   );
 }
 
+// --- changing the void block re-meshes ---------------------------------------
+//
+// The fourth thing that changes what a chunk draws without moving a voxel, after
+// light and sign text -- and the one the cache could not see at all. `fillVoid`
+// rewrites the **palette**: index 0 stops being air and starts being water, so
+// every empty cell in the document changes while the grid this cache diffs stays
+// byte for byte identical.
+//
+// Unobserved, the answer came back in the worst shape available. `documentMesh`'s
+// own key contains the void block, so the mesh *was* rebuilt -- and every chunk
+// was carried forward unchanged, and `shipMesh`, which tests object identity on
+// the positions array, then truthfully reported that nothing had changed. The
+// viewport was told the truth about a lie. On screen it read as the choice having
+// no effect whatever until some unrelated edit dirtied a chunk, and then as the
+// new void appearing in that one chunk alone.
+console.log("\n--- changing the void block re-meshes ---");
+{
+  const doc = createDocument({ width: 20, height: 20, length: 20 });
+  setBlock(doc, 2, 2, 2, STONE);
+  const real = toStructureData(doc);
+  const filled = fillVoid(real, "minecraft:water");
+  await culledFaces(filled.structure, baker, undefined, null, undefined, filled.voidIndices);
+  const atlas = buildAtlas(baker.textures);
+
+  // A cache warmed with no void block, which is what an open document has.
+  const dry = await buildChunkedMesh(real, baker, atlas.uvRects, 1, createChunkMeshCache());
+  equal("the cache starts with no void layer", dry.voidPieces.length, 0);
+
+  const wet = await buildChunkedMesh(
+    filled.structure,
+    baker,
+    atlas.uvRects,
+    1,
+    dry.cache,
+    null,
+    null,
+    filled.voidIndices,
+  );
+  check("choosing one against a warm cache builds the layer", wet.voidPieces.length > 0);
+  equal("...by re-meshing every chunk, since every empty cell changed", wet.rebuilt, wet.total);
+
+  /*
+   * The property this whole file exists to state, applied to the void: what an
+   * incremental pass produces has to equal what a cold one would, or the picture
+   * depends on how you arrived at it.
+   */
+  const cold = await buildChunkedMesh(
+    filled.structure,
+    baker,
+    atlas.uvRects,
+    1,
+    createChunkMeshCache(),
+    null,
+    null,
+    filled.voidIndices,
+  );
+  equal(
+    "...and it is what a cold cache would have built",
+    fingerprint(concat(wet.voidPieces)),
+    fingerprint(concat(cold.voidPieces)),
+  );
+
+  // And back. Going to air has to take the layer down, or the water stays on
+  // screen over a document that no longer has any.
+  const dried = await buildChunkedMesh(real, baker, atlas.uvRects, 1, wet.cache);
+  equal("going back to air takes it down again", dried.voidPieces.length, 0);
+  equal(
+    "...leaving the structure exactly as it was",
+    fingerprint(concat(dried.pieces)),
+    fingerprint(concat(dry.pieces)),
+  );
+
+  /*
+   * Swapping one void block for another is the case a set of palette *indices*
+   * cannot see: water and lava mark the very same index, so anything keyed on
+   * `voidIndices` alone would call these two documents identical.
+   */
+  const lava = fillVoid(real, "minecraft:lava");
+  await culledFaces(lava.structure, baker, undefined, null, undefined, lava.voidIndices);
+  const both = buildAtlas(baker.textures);
+  const wetAgain = await buildChunkedMesh(
+    filled.structure,
+    baker,
+    both.uvRects,
+    2,
+    createChunkMeshCache(),
+    null,
+    null,
+    filled.voidIndices,
+  );
+  const burning = await buildChunkedMesh(
+    lava.structure,
+    baker,
+    both.uvRects,
+    2,
+    wetAgain.cache,
+    null,
+    null,
+    lava.voidIndices,
+  );
+  check(
+    "swapping one void block for another re-meshes too",
+    fingerprint(concat(burning.voidPieces)) !== fingerprint(concat(wetAgain.voidPieces)),
+  );
+}
+
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exitCode = failures === 0 ? 0 : 1;

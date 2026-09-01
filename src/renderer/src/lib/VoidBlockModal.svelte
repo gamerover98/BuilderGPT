@@ -45,13 +45,26 @@
     /** A failure from main, shown here: the app banner is behind the scrim. */
     error: string;
     /**
-     * `replaceExisting` rewrites the cells already holding the old answer.
+     * What the empty cells are believed to hold right now.
      *
-     * Carried with the block rather than as a verb of its own, because the
-     * two questions are asked at the same moment: choosing water is when
-     * somebody wants to know whether the air already there becomes water.
+     * Owned by the parent, for `VersionModal`'s `needsConfirmation` reason:
+     * only the parent sees whether a conversion actually landed. It starts as
+     * the document's own void block -- nothing to convert -- and becomes the
+     * new one each time a rewrite succeeds.
      */
-    onblock: (block: string, replaceExisting: boolean) => void;
+    converted: string;
+    /** Choose what empty space is. Takes effect at once; moves no block. */
+    onblock: (block: string) => void;
+    /**
+     * Rewrite the cells that hold `from` so they hold `to`. One transaction.
+     *
+     * A press of its own rather than a checkbox carried along with the choice.
+     * The checkbox was read at the moment the block changed, so ticking it
+     * after picking water did nothing, and re-picking water to make it fire
+     * was refused as choosing what was already chosen -- the one gesture
+     * anybody would try was the one with no answer.
+     */
+    onreplace: (from: string, to: string) => void;
     onopacity: (opacity: number) => void;
     onclose: () => void;
   }
@@ -65,20 +78,12 @@
     placeable = null,
     legacy = null,
     error,
+    converted,
     onblock,
+    onreplace,
     onopacity,
     onclose,
   }: Props = $props();
-
-  /**
-   * Whether choosing also rewrites what is already there.
-   *
-   * Off by default and reset every time the panel opens, because it is a
-   * destructive-shaped answer to a question that is usually about drawing.
-   * Sticky, it would eventually rewrite a document somebody was only
-   * looking at.
-   */
-  let replaceExisting = $state(false);
 
   let dialog = $state<HTMLDivElement | undefined>(undefined);
 
@@ -112,6 +117,17 @@
     ),
   );
 
+  /** A block id as a person reads it; `""` is air, which has no id to show. */
+  const readable = (id: string): string =>
+    id === "" ? t("void.air") : id.replace("minecraft:", "");
+
+  /*
+   * Nothing to convert when the cells already hold the choice. That is the
+   * state the panel opens in, and the state it returns to after a rewrite --
+   * so the button is dead exactly when pressing it could only report zero.
+   */
+  const nothingToDo = $derived(converted === block);
+
   function onKeydown(event: KeyboardEvent): void {
     if (event.key === "Escape") {
       event.stopPropagation();
@@ -121,7 +137,6 @@
 
   $effect(() => {
     if (!open) return;
-    replaceExisting = false;
     // Over the viewport, where the canvas may hold the pointer: a panel on
     // top of a camera still turning underneath is the documented failure.
     document.exitPointerLock();
@@ -157,7 +172,7 @@
           <button
             class:active={block === candidate}
             disabled={busy}
-            onclick={() => onblock(candidate, replaceExisting)}
+            onclick={() => onblock(candidate)}
           >
             {candidate === "" ? t("void.air") : candidate.replace("minecraft:", "")}
           </button>
@@ -172,7 +187,7 @@
           {blocks}
           {placeable}
           {legacy}
-          onchange={(next) => onblock(next, replaceExisting)}
+          onchange={(next) => onblock(next)}
         />
       </label>
 
@@ -195,20 +210,32 @@
       </label>
 
       <!--
-        Ticked, choosing also rewrites the cells that hold the *previous*
-        answer -- the air a schematic has always been full of, or whatever was
-        chosen before. One transaction, so it is one Ctrl+Z.
+        The rewrite, on a press of its own.
 
-        It is a checkbox beside the picker rather than a button of its own
-        because it is not a separate act: nobody wants to convert a build to
-        water without also making water what a break writes, and offering the
-        two apart would let the file and the tool disagree.
+        It converts the cells that hold the *previous* answer -- the air a
+        schematic has always been full of, or whatever was chosen before. One
+        transaction, so it is one Ctrl+Z.
+
+        It was a checkbox carried along with the choice, and that could not
+        work: it was read at the moment the block changed, so ticking it after
+        picking water did nothing, and re-picking water to make it fire was
+        refused as choosing what was already chosen. Two acts that happen at
+        different moments need two controls.
       -->
-      <label class="field check">
-        <input type="checkbox" bind:checked={replaceExisting} disabled={busy} />
-        <span>{t("void.replace")}</span>
-      </label>
-      <p class="note">{t("void.replaceHint")}</p>
+      <div class="field rewrite">
+        <button
+          class="primary"
+          disabled={busy || nothingToDo}
+          onclick={() => onreplace(converted, block)}
+        >
+          {t("void.replaceApply")}
+        </button>
+      </div>
+      <p class="note">
+        {nothingToDo
+          ? t("void.replaceNone", { block: readable(block) })
+          : t("void.replaceWhat", { from: readable(converted), to: readable(block) })}
+      </p>
 
       {#if error}
         <p class="error">{error}</p>
@@ -311,19 +338,18 @@
     opacity: 0.5;
   }
 
-  /* A checkbox reads left-to-right, unlike the label-above fields above it. */
-  .field.check {
-    flex-direction: row;
-    align-items: center;
-    gap: 8px;
+  /* The one control here that changes the document, so it is the one that
+     looks like it. `button.primary` is the app's own accent -- stated in
+     `app.css` and shared with every other modal's confirming button -- so
+     only the width is this panel's business. */
+  .field.rewrite {
+    margin-bottom: 6px;
   }
 
-  .field.check input {
-    margin: 0;
-  }
-
-  .field.check > span {
-    color: var(--text);
+  .field.rewrite button {
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 12px;
   }
 
   .error {

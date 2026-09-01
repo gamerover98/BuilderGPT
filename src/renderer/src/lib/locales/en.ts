@@ -172,9 +172,11 @@ export const en = {
   "void.air": "Air",
   "void.block": "Block",
   "void.opacity": "Opacity \u2014 {percent}%",
-  "void.replace": "Also replace the blocks already there",
-  "void.replaceHint":
-    "Rewrites every cell holding the previous answer -- the air the schematic was full of, or whatever was chosen before. One step, so Ctrl+Z takes it all back.",
+  "void.replaceApply": "Replace what is already there",
+  "void.replaceWhat":
+    "Every cell holding {from} becomes {to} — one step, so Ctrl+Z takes it all back. Choosing a block changes what is drawn and what a break writes; this changes the schematic itself.",
+  "void.replaceNone":
+    "Nothing to convert: the empty cells already hold {block}. Choose something else and this becomes available.",
   "void.pickNote":
     "Clicks pass through this block wherever it appears, including where you placed it by hand. That is what lets you reach the build inside it.",
   "dimensions.openHint": "How big the schematic is, and whether editing may change it",

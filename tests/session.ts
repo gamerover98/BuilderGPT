@@ -2901,6 +2901,37 @@ console.log("\n--- choosing what empty space is made of ---");
 
 {
   /*
+   * ...and the direction the two comments above never covered: a **bare**
+   * void block is that block in any state.
+   *
+   * Both halves used to compare full state strings, so `minecraft:barrier`
+   * chosen over a schematic full of `barrier[waterlogged=false]` matched
+   * nothing -- reported as the cells staying opaque and clickable, and here
+   * as a break that grows the box instead of emptying a cell. Every preset in
+   * the modal is a bare id and every block out of a file carries its state, so
+   * this is the ordinary case rather than an edge one.
+   *
+   * `matchesBlockPattern` is `replaceAny`'s rule, which is why the reported
+   * workaround went through *Replace*: that verb already knew.
+   */
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  const changed = applyEdit(
+    session,
+    {
+      kind: "setBlock",
+      x: 9,
+      y: 0,
+      z: 0,
+      block: { namespacedName: "minecraft:barrier", properties: { waterlogged: "false" } },
+    },
+    { voidBlock: "minecraft:barrier" },
+  );
+  equal("a bare void block matches a cell carrying a state", changed, 0);
+  equal("...so breaking into it does not grow either", session.doc.width, 4);
+}
+
+{
+  /*
    * The choice on its own moves no block, so it leaves nothing to undo.
    *
    * It changes what empty space is *drawn* as and what a future break will

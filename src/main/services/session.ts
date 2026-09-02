@@ -72,7 +72,7 @@ import {
 export { NotSquareError, type RegionTransform };
 import { loadStructure } from "../pipeline/loader.js";
 import type { PaletteEntry } from "../pipeline/types.js";
-import { paletteEntryCacheKey } from "../pipeline/types.js";
+import { matchesBlockPattern, paletteEntryCacheKey } from "../pipeline/types.js";
 import { parsePaletteEntry } from "../pipeline/loader_formats.js";
 import { hasProperty, isOpenable } from "../../shared/block_states.js";
 import { FACE_VECTOR } from "../../shared/block_orientation.js";
@@ -829,13 +829,21 @@ export function applyEdit(
    *
    * Whole entries rather than names, because the key needs the properties.
    */
-  const voidKey =
+  const voidPattern =
     options.voidBlock === undefined || options.voidBlock === ""
       ? null
-      : paletteEntryCacheKey(parsePaletteEntry(options.voidBlock));
+      : parsePaletteEntry(options.voidBlock);
+  /*
+   * ...and a **pattern**, not an exact state. `fillVoid` draws the void by the
+   * same rule, and the two have to agree cell for cell or a break into a cell
+   * that is drawn as empty space would not count as emptying it -- so the box
+   * would not peel back. They disagreed: both compared full state strings, and
+   * a barrier from a file carries `[waterlogged=false]` while the setting says
+   * `minecraft:barrier`.
+   */
   const emptiness = (entry: PaletteEntry): boolean =>
     entry.namespacedName === "minecraft:air" ||
-    (voidKey !== null && paletteEntryCacheKey(entry) === voidKey);
+    (voidPattern !== null && matchesBlockPattern(entry, voidPattern));
 
   /*
    * Every block *written* by this edit has to exist in the schematic's

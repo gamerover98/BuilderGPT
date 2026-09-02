@@ -32,6 +32,7 @@ import { fillVoid } from "../src/main/services/preview.js";
 import { readSignText, type SignText } from "../src/main/pipeline/sign_text.js";
 import { ModelBaker } from "../src/main/pipeline/model_baker.js";
 import type { MeshBuffers, PaletteEntry } from "../src/main/pipeline/types.js";
+import { paletteEntryCacheKey } from "../src/main/pipeline/types.js";
 
 let failures = 0;
 
@@ -364,6 +365,57 @@ console.log("\n--- the void block ---");
   setBlock(withWater, 1, 1, 1, block("minecraft:water"));
   const both = fillVoid(toStructureData(withWater), "minecraft:water");
   equal("a placed void block is void as well", both.voidIndices.size, 2);
+
+  /*
+   * ...and the check above passes for a reason that is not good enough,
+   * which is why the ones below exist.
+   *
+   * It compares a stateless entry against a stateless string, so it holds
+   * however narrow the comparison inside `fillVoid` is -- and for a long time
+   * that comparison was full-state equality. Every document the suites build
+   * for themselves has stateless blocks in it, so nothing anywhere saw the
+   * gap: a barrier out of a file carries `[waterlogged=false]`, water carries
+   * `[level=0]`, and the modal's presets are bare ids.
+   *
+   * Reported as choosing barrier over a schematic already full of barrier and
+   * nothing happening -- the cells stayed opaque and clickable. The rule is
+   * `matchesBlockPattern`, which `replaceAny` had all along and this did not.
+   */
+  const stated = createDocument({ width: 4, height: 4, length: 4 });
+  setBlock(stated, 1, 1, 1, block("minecraft:barrier", { waterlogged: "false" }));
+  const bare = fillVoid(toStructureData(stated), "minecraft:barrier");
+  equal(
+    "a bare void block finds the block in any state",
+    bare.voidIndices.size,
+    2,
+  );
+
+  /*
+   * And naming a state still means that state, which is how somebody targets
+   * one water level and leaves the others. The looser rule must not become no
+   * rule at all.
+   */
+  const levels = createDocument({ width: 4, height: 4, length: 4 });
+  setBlock(levels, 1, 1, 1, block("minecraft:water", { level: "0" }));
+  setBlock(levels, 2, 1, 1, block("minecraft:water", { level: "8" }));
+  const exact = fillVoid(toStructureData(levels), "minecraft:water[level=0]");
+  equal(
+    "a stated void block finds only that state",
+    exact.voidIndices.size,
+    2,
+  );
+  /*
+   * Stated as *which* entry rather than only as a count, because two entries
+   * out of three is the right number whichever of the two waters it picked.
+   */
+  const drawn = [...exact.voidIndices].map((index) =>
+    paletteEntryCacheKey(exact.structure.palette[index]),
+  );
+  check(
+    "...which is the one it names",
+    drawn.includes("minecraft:water[level=0]") && !drawn.includes("minecraft:water[level=8]"),
+    drawn.join(" "),
+  );
 }
 
 console.log("\n--- the two layers ---");

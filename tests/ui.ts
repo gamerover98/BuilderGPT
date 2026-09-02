@@ -2523,14 +2523,37 @@ console.log("\n--- what a change of empty space converts from ---");
       [...blocksInDocument(palette, [4, 4, 4], 64)].sort(),
       ["minecraft:stone"],
     );
+    /*
+     * Both spellings, and this check used to say the opposite.
+     *
+     * A source may be bare or stated -- every preset is bare, and anything
+     * somebody types may not be -- while a palette entry is always a full
+     * state string. Keeping only the bare name made a *stated* source
+     * unmatchable, so the button died over an edit that would have worked;
+     * keeping only the full key would make every preset unmatchable.
+     *
+     * Holding both is `matchesBlockPattern`'s rule as a set: bare finds the
+     * block in any state, stated finds only that state.
+     */
     const stairs: PaletteCount[] = [
       { block: "minecraft:oak_stairs[facing=north]", count: 1 },
       { block: "minecraft:oak_stairs[facing=east]", count: 1 },
     ];
-    equal(
-      "...and a block state is not a second block",
-      [...blocksInDocument(stairs, [4, 4, 4], 64)],
-      ["minecraft:oak_stairs"],
+    const held = blocksInDocument(stairs, [4, 4, 4], 64);
+    check(
+      "a bare source finds the block whatever state it is in",
+      held.has("minecraft:oak_stairs"),
+      [...held].join(" "),
+    );
+    check(
+      "...and a stated one finds that state",
+      held.has("minecraft:oak_stairs[facing=east]"),
+      [...held].join(" "),
+    );
+    check(
+      "...and not a state the document does not have",
+      !held.has("minecraft:oak_stairs[facing=south]"),
+      [...held].join(" "),
     );
 
     /*

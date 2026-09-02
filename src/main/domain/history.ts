@@ -36,6 +36,7 @@
 
 import {
   paletteEntryCacheKey,
+  matchesBlockPattern,
   type BlockEntityRecord,
   type EntityRecord,
   type NbtCompound,
@@ -446,15 +447,15 @@ class Recorder implements TransactionScope {
     const wanted = new Uint8Array(this.doc.palette.length);
     let any = false;
     for (const pattern of from) {
-      const exact = Object.keys(pattern.properties).length > 0;
-      const key = paletteEntryCacheKey(pattern);
       for (let i = 0; i < this.doc.palette.length; i += 1) {
         if (wanted[i] === 1) continue;
-        const entry = this.doc.palette[i];
-        const hit = exact
-          ? paletteEntryCacheKey(entry) === key
-          : entry.namespacedName === pattern.namespacedName;
-        if (hit) {
+        /*
+         * `matchesBlockPattern` rather than the two-branch comparison this
+         * used to spell out for itself. The rule is unchanged; what changed
+         * is that it is now written in one place, because two other callers
+         * were asking the same question and answering it differently.
+         */
+        if (matchesBlockPattern(this.doc.palette[i], pattern)) {
           wanted[i] = 1;
           any = true;
         }

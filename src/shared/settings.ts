@@ -604,7 +604,7 @@ export function voidSources(previous: string, next: string): string[] {
   );
 }
 /**
- * Every block a document contains, **air included**, without block states.
+ * Every block a document contains, **air included**, under both spellings.
  *
  * `DocumentState.palette` deliberately leaves air out -- it is the materials
  * list, and a schematic is mostly air -- so a caller asking "does this document
@@ -616,13 +616,31 @@ export function voidSources(previous: string, next: string): string[] {
  * whose palette index is not zero, and index 0 is always air, so the document
  * holds air exactly when `blockCount` is short of the volume. Exact, and out of
  * two numbers `DocumentState` already carries.
+ *
+ * ## Both spellings, because `voidSources` speaks the other one
+ *
+ * A palette entry is a full state string -- `minecraft:water[level=0]` -- while
+ * a source may be either: the modal's presets are bare and a block somebody
+ * typed may not be. Keeping only the bare name made a stated source
+ * unmatchable, so the Replace button went dead over an edit that would have
+ * worked; keeping only the full key made a bare source unmatchable, which is
+ * every preset.
+ *
+ * Holding both is exactly `matchesBlockPattern`'s rule expressed as a set: a
+ * bare source finds the block whatever state it is in, and a stated one finds
+ * only that state. The two answers cannot drift apart, because a caller with a
+ * source in hand does one `has`.
  */
 export function blocksInDocument(
   palette: readonly { block: string }[],
   size: readonly [number, number, number],
   blockCount: number,
 ): Set<string> {
-  const held = new Set(palette.map((entry) => entry.block.split("[")[0]));
+  const held = new Set<string>();
+  for (const entry of palette) {
+    held.add(entry.block);
+    held.add(entry.block.split("[")[0]);
+  }
   if (blockCount < size[0] * size[1] * size[2]) held.add("minecraft:air");
   return held;
 }

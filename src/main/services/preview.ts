@@ -42,6 +42,7 @@ import { ModelBaker, type TextureAnimation } from "../pipeline/model_baker.js";
 import { normalizePalette } from "../pipeline/translate.js";
 import {
   paletteEntryCacheKey,
+  matchesBlockPattern,
   paletteEntryIsAir,
   type MeshBuffers,
   type PaletteEntry,
@@ -647,6 +648,22 @@ function hideMarkers(structure: StructureData): StructureData {
  * water as the void block, water placed by hand is unpickable too. That is
  * the request rather than a side effect -- if water is what empty space is
  * made of, a click has to pass through it the way it passes through air.
+ *
+ * ## The second population needs `matchesBlockPattern`, and used to have
+ * ## exact-key equality
+ *
+ * The rule above was written and the comparison was `paletteEntryCacheKey`
+ * equality, states and all -- so a cell only joined the void if its full
+ * state string was byte-identical to the one the setting parses to. A cell
+ * a *break* wrote always is, because it is written from that same string.
+ * A cell that came out of a file, or out of this app's own placement, very
+ * often is not: the modal's presets are bare ids and a barrier carries
+ * `[waterlogged=false]`, water carries `[level=0]`.
+ *
+ * So choosing `minecraft:barrier` over a schematic already full of barrier
+ * left every one of them opaque and clickable. Reported that way, with a
+ * workaround that went through *Replace* -- which is `replaceAny`, which
+ * has known the pattern rule all along. One place decides it now.
  */
 export function fillVoid(
   structure: StructureData,
@@ -657,14 +674,13 @@ export function fillVoid(
   const entry = parsePaletteEntry(wanted);
   if (paletteEntryIsAir(entry)) return { structure, voidIndices: new Set() };
 
-  const key = paletteEntryCacheKey(entry);
   const voidIndices = new Set<number>();
   const palette = structure.palette.map((existing, index) => {
     if (paletteEntryIsAir(existing)) {
       voidIndices.add(index);
       return entry;
     }
-    if (paletteEntryCacheKey(existing) === key) voidIndices.add(index);
+    if (matchesBlockPattern(existing, entry)) voidIndices.add(index);
     return existing;
   });
   // The voxels are shared with the document on purpose; only the palette

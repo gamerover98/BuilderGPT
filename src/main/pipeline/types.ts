@@ -72,6 +72,35 @@ export function paletteEntryCacheKey(entry: PaletteEntry): string {
 }
 
 /**
+ * Whether a cell's entry is the block a **pattern** names.
+ *
+ * The rule, which this codebase has already written down once for `replace`:
+ * **naming no state means the block in any state**, and spelling a state out
+ * means exactly that state. `oak_stairs` is every staircase; 
+ * `oak_stairs[facing=north]` is one orientation.
+ *
+ * It is here, beside the cache key, because three places ask it and they were
+ * not agreeing. `replaceAny` had the rule written into it; `fillVoid` and
+ * `applyEdit`'s `emptiness` compared `paletteEntryCacheKey` exactly -- so
+ * choosing `minecraft:barrier` as the empty-space block left every barrier
+ * already in the schematic solid and clickable, because a barrier that came
+ * out of a file (or out of this app's own placement, which writes the default
+ * state) is `minecraft:barrier[waterlogged=false]` and the modal's preset is
+ * bare. Reported exactly that way, with a workaround that went through
+ * *Replace* -- which is `replaceAny`, which already knew.
+ *
+ * One place decides now. Two places deciding is how they came to disagree,
+ * and the disagreement was invisible: both answers are plausible, and the
+ * feature looked correct on every document whose blocks happened to carry no
+ * state -- which is every document the suites build for themselves.
+ */
+export function matchesBlockPattern(entry: PaletteEntry, pattern: PaletteEntry): boolean {
+  if (entry.namespacedName !== pattern.namespacedName) return false;
+  if (Object.keys(pattern.properties).length === 0) return true;
+  return paletteEntryCacheKey(entry) === paletteEntryCacheKey(pattern);
+}
+
+/**
  * Ported from `PaletteEntry.is_air` (`types.py:42-45`), widened on purpose.
  *
  * The source matched `:air` only, which is `minecraft:air` and nothing else --

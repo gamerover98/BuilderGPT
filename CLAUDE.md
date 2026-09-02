@@ -2736,6 +2736,37 @@ every empty cell becomes water without a voxel being touched. Index 0 is always
 air, which is what makes it a one-entry edit; the voxels are shared with the
 document and only the palette array is rebuilt.
 
+**A bare name is a pattern here too, and one of three places knew it.** The
+rule this file already states for `replace` — *naming no state means the block
+in any state* — is the same question `fillVoid` asks when it decides what to
+draw as empty space, and `applyEdit`'s `emptiness` asks when it decides whether
+a break emptied a cell. Both compared `paletteEntryCacheKey` **exactly**.
+
+Every preset in the modal is a bare id; every barrier out of a file, or out of
+this app's own placement, is `minecraft:barrier[waterlogged=false]`, and water
+is `[level=0]`. So choosing barrier over a schematic already full of barrier
+left every one of them opaque and clickable — and the reported workaround went
+through **Replace**, which is `replaceAny`, which has known the rule all along.
+
+`matchesBlockPattern` in `pipeline/types.ts` is the one answer now, beside the
+cache key it is built from, and `replaceAny` calls it rather than keeping its
+own copy. Two things fall out:
+
+- **It looked intermittent, and the cause is an unrelated checkbox.**
+  `hideMarkers` runs only when markers are *hidden*, and it turns barrier,
+  structure_void and light into air — which `fillVoid` then sweeps up from the
+  air branch. With markers hidden the barrier case already worked.
+- `blocksInDocument` kept only bare names while `voidSources` keeps states, so
+  a stated previous void block was unmatchable and the Replace button died over
+  an edit that would have worked. It holds **both** spellings now, which is
+  `matchesBlockPattern`'s rule expressed as a set.
+
+The check that was supposed to cover this — *«a placed void block is void as
+well»* — passes for a reason that is not good enough: it compares a stateless
+entry against a stateless string, and would pass however narrow the comparison
+was. Every document the suites build for themselves is stateless, which is
+exactly why nothing saw it.
+
 **The bucket is chosen by palette entry, not by "was this cell air".** Two
 populations end up holding the block — the cells drawn over air and the cells
 a break actually wrote it into — and one rule covers both. The consequence is
@@ -3153,6 +3184,28 @@ knowing:
   reason and never reported — which is the argument for the check over the fix.
   `some` rather than `every`, because a chest's hidden faces and a plane's back
   are legitimately blank.
+- **The candle's flame is this file's one deliberate invention, and it is
+  labelled.** No vanilla model has one: `candle_one_candle_lit.json` is the
+  same `template_candle` with `all: block/candle_lit`, and the two textures
+  differ by **eighty pixels** — the wax at the top going from cream to white.
+  In the game the flame is a *particle*, and this app draws none, so a lit
+  candle was faithful to every model and still looked unlit. Reported that way.
+
+  So it is two quads of `particle/flame`, the sprite the game's own particle
+  uses, above the transcribed wick rather than in place of it. The precedent is
+  redstone and the skulls — but there a cube was the *harmful* answer, and here
+  the block was merely incomplete, which is a weaker argument and is why it is
+  written down rather than assumed. **Its size is ours**: two units wide, three
+  tall, because no source states one.
+
+  Two things travel with it. `normalizeTextureKey` rewrites anything not under
+  `block/`, `item/` or `entity/` into `block/`, so `particle/flame` became
+  `block/particle/flame`, resolved nothing, and fell back to the block's own
+  texture — **a flame made of candle wax, silently**. And a lit candle emitted
+  no light at all, being in none of `lighting.ts`' three tables, so the flame
+  would have been a dark smudge in a sealed room; it is the game's `3 per
+  candle` now, which is the second block after `minecraft:light` whose level
+  lives in its state and the only one where that state is a *count*.
 - **A property may choose the texture, and a candidate list cannot.**
   `SPECIAL_FACE_RULES` is keyed on the block, so the campfire's row put
   `campfire_log_lit` first *because the default state is lit* — and a cold

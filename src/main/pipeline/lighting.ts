@@ -161,9 +161,44 @@ function lightBlockLevel(entry: PaletteEntry): number {
   return Math.max(0, Math.min(MAX_LIGHT, level));
 }
 
+/**
+ * A lit candle, whose level is `3 per candle` -- 3, 6, 9, 12.
+ *
+ * The second block after `minecraft:light` whose number is in its *state*
+ * rather than in its name, and the only one where the state is a count. It
+ * was in no table at all, so a lit candle emitted nothing: the room stayed
+ * dark and the flame this app draws for it would have been a dark smudge.
+ *
+ * A candle cake is one candle and carries no `candles`, which falls out of
+ * the default rather than needing a row of its own.
+ */
+/**
+ * The seventeen candles and the seventeen cakes with one on top.
+ *
+ * Written as a predicate rather than as thirty-four rows in `EMISSION`,
+ * because the level is not a constant: it is `3 per candle`, and `EMISSION`
+ * maps a name to a number.
+ */
+function isCandle(name: string): boolean {
+  return (
+    name === "candle" ||
+    name === "candle_cake" ||
+    name.endsWith("_candle") ||
+    name.endsWith("_candle_cake")
+  );
+}
+
+function candleLevel(entry: PaletteEntry): number {
+  if (entry.properties.lit !== "true") return 0;
+  const candles = Number.parseInt(entry.properties.candles ?? "1", 10);
+  const held = Number.isFinite(candles) ? Math.max(1, Math.min(4, candles)) : 1;
+  return held * 3;
+}
+
 export function blockEmission(entry: PaletteEntry): number {
   const name = entry.namespacedName.split(":").pop() ?? entry.namespacedName;
   if (name === "light") return lightBlockLevel(entry);
+  if (isCandle(name)) return candleLevel(entry);
 
   const level = EMISSION[name];
   if (level === undefined) return 0;

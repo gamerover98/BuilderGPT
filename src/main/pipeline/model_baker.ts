@@ -1894,7 +1894,17 @@ export class ModelBaker {
       !texturePath.startsWith("block/") &&
       !texturePath.startsWith("item/") &&
       // Block entities (beds, chests, signs) live outside `block/`.
-      !texturePath.startsWith("entity/")
+      !texturePath.startsWith("entity/") &&
+      /*
+       * ...and so does a particle. `particle/flame` is the candle's, which
+       * vanilla draws as a particle rather than as geometry -- so this app
+       * approximates it and has to be able to name the sprite.
+       *
+       * Without this the path would be rewritten to `block/particle/flame`,
+       * resolve nothing, and `resolveBoxTexture` would fall back to the
+       * block's own texture: a flame made of candle wax, silently.
+       */
+      !texturePath.startsWith("particle/")
     ) {
       texturePath = `block/${texturePath}`;
     }

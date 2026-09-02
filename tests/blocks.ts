@@ -478,6 +478,44 @@ console.log("\n--- the light block ---");
   equal("...and a full one by default", blockEmission(block("light")), MAX_LIGHT);
 }
 
+/*
+ * A lit candle, which is the second block whose level is in its state.
+ *
+ * It was in no table at all -- not `EMISSION`, not either of the two `lit`
+ * sets -- so a lit candle emitted nothing. That is a lacuna on its own, and it
+ * is also what would have made the flame this app draws for a lit candle a dark
+ * smudge in a sealed room, for the reason a campfire's fire is visible.
+ *
+ * `3 per candle` is the game's, and it is a *count* rather than a level, which
+ * is why this is a predicate and a function instead of thirty-four rows.
+ */
+console.log("\n--- a lit candle lights the room ---");
+{
+  for (const [candles, level] of [
+    ["1", 3],
+    ["2", 6],
+    ["3", 9],
+    ["4", 12],
+  ] as const) {
+    equal(
+      `${candles} lit candles emit ${level}`,
+      blockEmission(block("candle", { candles, lit: "true" })),
+      level,
+    );
+  }
+  equal("an unlit candle emits nothing", blockEmission(block("candle", { candles: "4", lit: "false" })), 0);
+  /*
+   * A candle with no `candles` is one candle -- the registry's own default --
+   * and a candle cake carries no such property at all, so it falls out of the
+   * same line rather than needing a row of its own.
+   */
+  equal("a candle with no count is one", blockEmission(block("candle", { lit: "true" })), 3);
+  equal("a lit candle cake is one too", blockEmission(block("white_candle_cake", { lit: "true" })), 3);
+  equal("...and an unlit one is dark", blockEmission(block("candle_cake", { lit: "false" })), 0);
+  // The dyed ones are the same block by another name, and there are sixteen.
+  equal("a dyed candle lights the same", blockEmission(block("red_candle", { candles: "2", lit: "true" })), 6);
+}
+
 // --- markers ----------------------------------------------------------------
 //
 // barrier and structure_void are invisible to a *player* and are exactly what
@@ -4110,13 +4148,63 @@ if (pack === null) {
   );
 
   /*
-   * `lit` changes the **texture** and not one coordinate -- which is what
-   * vanilla does, and why one shape covers both. A candle that grew a flame by
-   * growing geometry would pass every check above and be wrong.
+   * `lit` swaps the texture and moves **nothing that vanilla states** -- the
+   * body and the wick are identical either way, which is all the real model
+   * does. This check used to say the geometry was identical *full stop*, and
+   * that was true of the model and wrong about the block: no vanilla model
+   * has a candle flame, because in the game it is a particle. A lit candle
+   * was faithful and still looked unlit, which is how it was reported.
+   *
+   * So the flame is an approximation, and the checks below are what keep it
+   * an *addition*: the transcribed part must not move to make room for it.
    */
-  equal("lighting a candle moves nothing", parts("candle", { lit: "true" }).map((b) => b.box), parts("candle", { lit: "false" }).map((b) => b.box));
+  /*
+   * Compared by *which boxes are not the flame* rather than by a prefix of the
+   * list: the flame is pushed beside the wick it sits on, so a lit candle
+   * interleaves the two and an order-based check would only be testing the
+   * order they happen to be pushed in.
+   */
+  const notFlame = (props: Record<string, string>) =>
+    parts("candle", props)
+      .filter((box) => box.texture !== "particle/flame")
+      .map((box) => box.box);
+  equal(
+    "lighting a candle moves nothing vanilla states",
+    notFlame({ lit: "true" }),
+    notFlame({ lit: "false" }),
+  );
   check("...and does change what it wears", (await keysOf("candle", { lit: "true" })).has("minecraft:block/candle_lit"));
   check("...which an unlit one does not", !(await keysOf("candle", { lit: "false" })).has("minecraft:block/candle_lit"));
+
+  /*
+   * The flame itself: two more quads per candle, wearing the sprite the
+   * game's own particle is drawn from. An unlit candle has neither.
+   */
+  for (const n of [1, 2, 3, 4]) {
+    equal(
+      `a lit group of ${n} adds ${2 * n} quads`,
+      parts("candle", { candles: String(n), lit: "true" }).length -
+        parts("candle", { candles: String(n), lit: "false" }).length,
+      2 * n,
+    );
+  }
+  /*
+   * ...and it really resolves. `normalizeTextureKey` rewrites anything not
+   * under `block/`, `item/` or `entity/` into `block/`, so before this the
+   * path became `block/particle/flame`, resolved nothing, and
+   * `resolveBoxTexture` fell back to the candle: a flame made of wax,
+   * silently. That fallback is exactly what a texture check cannot see from
+   * the geometry, so it is asserted by name.
+   */
+  check(
+    "a lit candle wears the flame sprite",
+    (await keysOf("candle", { lit: "true" })).has("minecraft:particle/flame"),
+    [...(await keysOf("candle", { lit: "true" }))].join(" "),
+  );
+  check(
+    "...and an unlit one does not",
+    !(await keysOf("candle", { lit: "false" })).has("minecraft:particle/flame"),
+  );
 
   /*
    * The candle cake's candle wears a **candle**. `model_baker.ts` aliases the

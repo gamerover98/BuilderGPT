@@ -888,16 +888,51 @@ const CANDLE_GROUPS: readonly (readonly CandleStick[])[] = [
  * candles it is exactly the stick's centre; that regularity is stated here
  * rather than transcribed eight times.
  *
- * `lit` swaps the **texture**, not the geometry -- `candle_lit.png` carries the
- * flame where `candle.png` carries the wick, in the same window. That is what
- * vanilla does, and it is why one shape covers both. `resolveBoxTexture` falls
- * back to the block's own texture for a pack shipping no `_lit`, so a candle
- * is never worse off than it was.
+ * `lit` swaps the **texture**, not the geometry, and that really is all
+ * vanilla does: `candle_one_candle_lit.json` is this same template with
+ * `all: block/candle_lit`, and the two textures differ by eighty pixels --
+ * the wax at the top going from cream to white. Decoded from the bundled
+ * pack, not assumed. `resolveBoxTexture` falls back to the block's own
+ * texture for a pack shipping no `_lit`, so a candle is never worse off
+ * than it was.
+ *
+ * ## The flame is an approximation, and is the only one in this file
+ *
+ * **No vanilla model has a candle flame.** In the game it is a particle,
+ * spawned by the block, and this app draws no particles -- so a lit candle
+ * was faithful to every model and still looked unlit, which is how it was
+ * reported.
+ *
+ * So this crosses the line the header draws, deliberately and once: two
+ * quads of `particle/flame`, the sprite the game's own particle uses. The
+ * precedent is redstone and the skulls, where a cube was the *harmful*
+ * answer; here nothing was harmful and the block was merely incomplete,
+ * which is a weaker argument and worth saying out loud.
+ *
+ * **Its size is ours**, because no source states one: two units wide, which
+ * is the candle's own width, and three tall, sitting directly on the wick.
+ * The tallest candle in any group stands at 6, so the flame reaches 10 and
+ * stays inside the cell in all four arrangements.
+ *
+ * It is lit from the inside by `lighting.ts`, which gives a lit candle the
+ * game's own `3 per candle`. Without that the flame would be drawn at
+ * whatever the room's light is, which in a sealed room is a dark smudge --
+ * the same reason a campfire's fire is visible.
  */
+/** The sprite the game's own candle particle is drawn from. */
+const FLAME_TEXTURE = "particle/flame";
+
+/** The whole tile: a particle sprite fills its own texture. */
+const FLAME_UV: Readonly<Record<string, UvWindow>> = {
+  north: [0, 0, 16, 16],
+  south: [0, 0, 16, 16],
+};
+
 function candleShape(entry: PaletteEntry): BlockShape {
   const wanted = Math.trunc(Number(entry.properties.candles));
   const count = Number.isFinite(wanted) ? Math.min(4, Math.max(1, wanted)) : 1;
-  const texture = entry.properties.lit === "true" ? `${baseName(entry)}_lit` : undefined;
+  const lit = entry.properties.lit === "true";
+  const texture = lit ? `${baseName(entry)}_lit` : undefined;
   const parts: ShapeBox[] = [];
   for (const [x, z, height] of CANDLE_GROUPS[count - 1]) {
     const side: UvWindow = [0, 8, 2, 8 + height];
@@ -921,6 +956,15 @@ function candleShape(entry: PaletteEntry): BlockShape {
         rotation: { origin: [cx, height, cz], axis: "y", angle },
         texture,
         uv: { north: [0, 5, 1, 6], south: [0, 5, 1, 6] },
+      });
+      // The approximated flame, above the transcribed wick rather than in
+      // place of it: the wick is vanilla's and stays exactly where it is.
+      if (!lit) continue;
+      parts.push({
+        box: [cx - 1, height + 1, cz, cx + 1, height + 4, cz],
+        rotation: { origin: [cx, height + 1, cz], axis: "y", angle },
+        texture: FLAME_TEXTURE,
+        uv: FLAME_UV,
       });
     }
   }

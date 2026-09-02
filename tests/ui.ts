@@ -2554,5 +2554,76 @@ console.log("\n--- what a change of empty space converts from ---");
 }
 
 
+// --- the picker draws a bounded number of rows ------------------------------
+/*
+ * The freeze was made of DOM nodes. `rank` used to fall back to matching the
+ * namespaced id, so nine of the commonest letters in English each returned all
+ * 1197 blocks -- one row apiece, built and thrown away per keystroke, inside a
+ * floating panel a few rows tall.
+ *
+ * The search fix takes the worst case from 1197 to 974, which is still too
+ * many, so the picker draws a window of them. That is deliberately NOT the cap
+ * its header forbids: nothing is hidden silently, because the line above the
+ * list says both numbers.
+ *
+ * Checked as source, the way the flight gate and the framing calls are: the
+ * markup is a browser fact this harness has no browser for, and what can be
+ * stated here is that the rows come from the bounded list and the count line
+ * from the unbounded one.
+ */
+console.log("\n--- the picker draws a bounded number of rows ---");
+{
+  const picker = readFileSync("src/renderer/src/lib/BlockPicker.svelte", "utf-8");
+
+  check(
+    "there is a limit, and it is a named constant",
+    /const ROW_LIMIT = \d+;/.test(picker),
+  );
+  check(
+    "the rows are drawn from the bounded list",
+    /\{#each shown as block/.test(picker),
+  );
+  /*
+   * And the count is not. This is the half that keeps the limit honest: report
+   * `shown.length` as the total and the limit silently becomes the cap the
+   * file's own header argues against.
+   */
+  check(
+    "...while the count line reports the real number of matches",
+    /blocks\.capped[^]{0,80}matches\.length/.test(picker),
+  );
+  check(
+    "...and the keyboard cannot walk past what is drawn",
+    !/matches\.length - 1/.test(picker) && /shown\.length - 1/.test(picker),
+  );
+
+  /*
+   * No hover writing the highlighted row. The effect beside it writes
+   * `list.scrollTop`; scrolling moves a different row under a *stationary*
+   * pointer, the browser fires `mouseenter` for it, and that writes the
+   * highlight again. The CSS `:hover` already draws the row under the pointer,
+   * so the handler bought one nicety and cost a feedback path.
+   */
+  check(
+    "hovering a row does not write state",
+    // The attribute, not the word: the reason it is gone is written down two
+    // lines above where it used to be, and a check on the word finds that.
+    !/onmouseenter=/.test(picker),
+  );
+
+  /*
+   * And the registry it filters is `$state.raw`. Plain `$state` on an array is
+   * a deep proxy -- a signal per entry, 1197 of them, read inside a `$derived`
+   * on every keystroke. It is the fault `legacyIndex` was already fixed for,
+   * on the line below the one that still had it.
+   */
+  const app = readFileSync("src/renderer/src/App.svelte", "utf-8");
+  check(
+    "the block registry is raw state, not a deep proxy",
+    /let blockRegistry = \$state\.raw</.test(app),
+  );
+}
+
+
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

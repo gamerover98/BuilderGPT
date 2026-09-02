@@ -15,6 +15,22 @@
  * the answer. "oak" has 41 matches and `dark_oak_*` sorts ahead of every
  * `oak_*`; "stone" has 76 and `minecraft:stone` itself lands after
  * `blackstone`, `blue_ice`-adjacent names and the rest of the Bs.
+ *
+ * **Nothing is matched against the namespace, and that used to be the last
+ * line of this function.** Every block here is `minecraft:something`, so
+ * falling back to the namespaced id meant every letter of `minecraft:` matched
+ * the entire registry: `m`, `i`, `n`, `e`, `c`, `r`, `a`, `f`, `t` and every
+ * substring of them. Measured on the shipped list -- 1197 ids, and `a`, `m`,
+ * `e`, `c`, `r` and `t` each returned all 1197. `mi` returned 1197 to show the
+ * **one** block whose name contains it.
+ *
+ * That is a bad search on its own, and it was also the load behind a total
+ * freeze: the picker mounts one row per match, so nine of the commonest
+ * letters in English each mounted some five thousand DOM nodes, per keystroke,
+ * inside a floating panel a few rows tall.
+ *
+ * A query *is* allowed to carry the namespace -- pasting `minecraft:sto` has
+ * to work -- so it is stripped from the query rather than matched in the id.
  */
 function rank(block: string, query: string): number {
   const id = block.toLowerCase();
@@ -23,8 +39,7 @@ function rank(block: string, query: string): number {
   // bare name is what "starts with" has to mean to be worth anything.
   const name = id.slice(id.indexOf(":") + 1);
   if (name.startsWith(query)) return 1;
-  if (name.includes(query)) return 2;
-  return id.includes(query) ? 3 : -1;
+  return name.includes(query) ? 2 : -1;
 }
 
 /**
@@ -35,7 +50,14 @@ function rank(block: string, query: string): number {
  * than the plain text field it replaced.
  */
 export function searchBlocks(blocks: readonly string[], query: string): string[] {
-  const needle = query.trim().toLowerCase();
+  const typed = query.trim().toLowerCase();
+  /*
+   * A pasted `minecraft:sto` is somebody naming the namespace on purpose, and
+   * the only thing it can usefully mean is the name after it. Stripped here
+   * rather than matched in `rank`, so there is one place that decides and the
+   * namespace can never come back as a way of matching everything.
+   */
+  const needle = typed.startsWith("minecraft:") ? typed.slice("minecraft:".length) : typed;
   if (needle === "") return [...blocks];
 
   return blocks

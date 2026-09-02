@@ -85,6 +85,7 @@ import {
   coerceUi,
 } from "../src/main/services/settings_coerce.js";
 import { discardPrompt } from "../src/main/services/discard_prompt.js";
+import { failurePrompt } from "../src/main/services/failure_prompt.js";
 import {
   buildBlockIcons,
   forgetBlockIcons,
@@ -1993,6 +1994,79 @@ console.log("\n--- recovering is opening ---");
   }
 }
 
+// --- what the window says on its way down -----------------------------------
+/*
+ * The failure this wording is for is silent and total: a reactive loop that
+ * Svelte or the browser aborts takes every effect in the window with it, while
+ * the viewport goes on drawing and main goes on answering. Navigable and
+ * completely dead, with a clean console -- reported that way twice before
+ * anything was listening for it.
+ */
+console.log("\n--- what the window says on its way down ---");
+{
+  const plain = failurePrompt("");
+  check(
+    "the reload is the confirming button",
+    plain.confirmIndex === 0 && plain.cancelIndex === 1,
+  );
+  /*
+   * Escape and the window's close button both land on `cancelId`, so the half
+   * that reloads must never be the one they reach. `discard_prompt`'s rule, and
+   * here it matters more: this dialog is raised *by* an error, so it can appear
+   * while somebody is in the middle of something else.
+   *
+   * That the two differ is not checked, because the literal types `0` and `1`
+   * already make it unsayable -- tsc rejects the comparison outright. What is
+   * checked is that they are two distinct buttons with words on them, which no
+   * type states.
+   */
+  check(
+    "there are two buttons and they say different things",
+    plain.buttons.length === 2 &&
+      plain.buttons[0].trim() !== "" &&
+      plain.buttons[0] !== plain.buttons[1],
+    plain.buttons.join(" | "),
+  );
+  check(
+    "it says what a reload costs",
+    plain.detail.includes("undo history"),
+    plain.detail,
+  );
+  /*
+   * And what it does not cost. Autosave lives in main, on a 20-second timer,
+   * and main is the half still working -- so the snapshot is current however
+   * long the window has been dead. A dialog that only warned would leave
+   * somebody weighing a reload against an unknown.
+   */
+  check(
+    "...and what it does not",
+    plain.detail.includes("20 seconds"),
+    plain.detail,
+  );
+
+  const said = failurePrompt("effect_update_depth_exceeded");
+  check(
+    "what the renderer managed to say is carried through",
+    said.detail.includes("effect_update_depth_exceeded"),
+    said.detail,
+  );
+
+  /*
+   * The count, and only when there is one. The renderer reports once, so a
+   * number here means something genuinely kept failing underneath -- worth
+   * knowing before choosing, and misleading shown as a zero.
+   */
+  check("no count when nothing followed", !plain.detail.includes("further"), plain.detail);
+  check(
+    "...and one when something did",
+    failurePrompt("x", 3).detail.includes("3 further errors"),
+  );
+  check(
+    "...counted in the singular when it is one",
+    failurePrompt("x", 1).detail.includes("1 further error since"),
+  );
+}
+
 // --- every declared channel is actually served ------------------------------
 //
 // `shared/ipc.ts` is a list of verbs and `handlers.ts` is where they are
@@ -2030,9 +2104,14 @@ console.log("\n--- ipc channels ---");
   walk(mainDir);
   const handlers = sources.join("\n");
 
-  // Two ways a channel is legitimately served: answered as a request, or sent
-  // as an event. A mention in a comment or a name in a type does not count,
-  // which is the whole point of matching the call and not the identifier.
+  // Three ways a channel is legitimately served: answered as a request, sent
+  // as an event, or *listened for* as one. A mention in a comment or a name in
+  // a type does not count, which is the whole point of matching the call and
+  // not the identifier.
+  // `ipcMain.on` is the third and arrived with `rendererFailed`, which is sent
+  // by a window that may be moments from being unable to run anything -- so it
+  // has to be an event with nothing to reply to, and a walk that knew only the
+  // other two called a served channel unserved.
   // The whitespace is loose because a handler with a long signature is split
   // across lines by the formatter, and a check that only recognised the
   // one-line form would report perfectly good channels as unserved.
@@ -2040,7 +2119,7 @@ console.log("\n--- ipc channels ---");
   // no payload is `send(IPC.menuNew)` through a local helper, and the older
   // pattern would have missed every one of them.
   const served = (name: string): boolean =>
-    new RegExp(`(?:ipcMain\\.handle|\\bsend)\\(\\s*IPC\\.${name}\\s*[,)]`).test(handlers);
+    new RegExp(`(?:ipcMain\\.(?:handle|on)|\\bsend)\\(\\s*IPC\\.${name}\\s*[,)]`).test(handlers);
 
   const unserved = Object.keys(IPC).filter((name) => !served(name));
   equal("every channel in IPC is handled or sent by main", unserved.join(", "), "");

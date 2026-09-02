@@ -431,8 +431,27 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     }
   }
 
-  /** The registry, for the block pickers to search — fetched once at startup. */
-  let blockRegistry = $state<string[]>([]);
+  /**
+   * The registry, for the block pickers to search — fetched once at startup.
+   *
+   * **`$state.raw`, for the reason spelled out on `legacyIndex` below**, which
+   * is the line this one was missed beside. Plain `$state` on an array is a
+   * deep proxy, so reading it inside a `$derived` registers a signal *per
+   * entry* -- 1197 of them -- and every keystroke in a block field re-ran the
+   * filter, rebuilt a keyed `{#each}` of up to that many rows, and ran the
+   * update again.
+   *
+   * It stayed dormant here for a specific reason worth knowing, because the
+   * reason expired: `placeableBlocks` used to be `null` for every flat
+   * document, so `offered` was `blocks` itself and nothing allocated. Giving
+   * flat documents a per-version block set turned that alias into a fresh
+   * 1197-element array per keystroke, and woke it for every schematic rather
+   * than only the legacy ones.
+   *
+   * Raw because nothing writes *into* it: it is fetched once and replaced or
+   * not at all, which is the one thing `raw` is for.
+   */
+  let blockRegistry = $state.raw<string[]>([]);
   /**
    * The pre-Flattening block table, inverted once and then never again.
    *

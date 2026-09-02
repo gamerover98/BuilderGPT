@@ -3717,11 +3717,69 @@ console.log("\n--- the block picker's search ---");
   );
   check("...which is more than forty", oak.length > 40, `${oak.length}`);
 
+  /*
+   * Nothing is dropped -- against the block **name**, which is the rule now.
+   * This check used to compare against `b.includes(q)` on the namespaced id,
+   * so it did not merely miss the bug below: it stated it as the requirement.
+   */
+  const named = (block: string): string => block.slice(block.indexOf(":") + 1);
   check(
     "nothing is dropped for any query",
-    ["a", "e", "stone", "wood", "minecraft", "_"].every(
-      (q) => searchBlocks(registry, q).length === registry.filter((b) => b.includes(q)).length,
+    ["a", "e", "stone", "wood", "_"].every(
+      (q) => searchBlocks(registry, q).length === registry.filter((b) => named(b).includes(q)).length,
     ),
+  );
+
+  /*
+   * **No letter of `minecraft` returns the whole registry.**
+   *
+   * `rank` used to fall back to matching the namespaced id, and every block
+   * here is `minecraft:something` -- so `m`, `i`, `n`, `e`, `c`, `r`, `a`, `f`
+   * and `t`, nine of the commonest letters in English, each returned all 1197
+   * ids. `mi` returned 1197 to show the one block whose name contains it.
+   *
+   * A bad search on its own, and the load behind a total freeze: the picker
+   * mounts a row per match, so a single keystroke built and threw away some
+   * five thousand DOM nodes inside a panel a few rows tall.
+   *
+   * Stated letter by letter rather than as one predicate, because a failure
+   * here should name which letter -- and because this is the check that would
+   * otherwise be deleted as redundant with the one above it.
+   */
+  for (const letter of "minecraft") {
+    const hits = searchBlocks(registry, letter).length;
+    check(
+      `"${letter}" does not return the whole registry`,
+      hits < registry.length,
+      `${hits} of ${registry.length}`,
+    );
+  }
+  equal(
+    "...and `mi` returns the one block whose name has it",
+    searchBlocks(registry, "mi").length,
+    registry.filter((b) => named(b).includes("mi")).length,
+  );
+  check(
+    "...which is one",
+    searchBlocks(registry, "mi").length === 1,
+    String(searchBlocks(registry, "mi").length),
+  );
+
+  /*
+   * A query may still *carry* the namespace, because pasting a full id is a
+   * real thing to do. It is stripped from the query rather than matched in the
+   * id, so there is one place that decides and no way back to matching
+   * everything.
+   */
+  equal(
+    "a pasted namespace is stripped, not matched",
+    searchBlocks(registry, "minecraft:sto").length,
+    searchBlocks(registry, "sto").length,
+  );
+  equal(
+    "...and the namespace alone names no block",
+    searchBlocks(registry, "minecraft").length,
+    0,
   );
 
   // Ranking. Alphabetically `minecraft:stone` lands after `blackstone` and the

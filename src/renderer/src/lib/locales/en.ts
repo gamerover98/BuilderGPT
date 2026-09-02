@@ -555,6 +555,8 @@ export const en = {
 
   "blocks.all": "all {count} blocks",
   "blocks.matches": "{count} of {total}",
+  "blocks.capped":
+    "First {shown} of {count} matches — type another letter to narrow it.",
 
   "recovery.title": "Unsaved work was found",
   "recovery.unnamed": "An unsaved schematic",

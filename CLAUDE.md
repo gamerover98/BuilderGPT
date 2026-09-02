@@ -281,6 +281,81 @@ index cost. The palette may grow underneath the pass -- `setBlock` interns `to`
 if it is new -- and reading past the end yields `undefined`, which is falsy and
 is the right answer: a row added during the pass *is* `to`.
 
+**A search that matches the namespace matches everything, and that was the
+load behind a total freeze.** `rank` in `block_search.ts` ended with
+`id.includes(query)` on the **namespaced** id. Every block here is
+`minecraft:something`, so every letter of `minecraft:` returned the whole
+registry — measured on the shipped list of 1197: `a`, `m`, `e`, `c`, `r` and
+`t` each returned all 1197, and **`mi` returned 1197 to show the one block
+whose name contains it.**
+
+Nine of the commonest letters in English, each mounting one row per match —
+some five thousand DOM nodes built and thrown away per keystroke, inside a
+floating panel a few rows tall where almost none of them is visible. Reported
+as typing `aaa` into the selection panel's block field: fine after the first
+`a`, dead the instant the second arrived, because that is the keystroke that
+takes 1197 keyed rows to nothing.
+
+A query may still *carry* the namespace — pasting `minecraft:sto` has to work
+— so it is stripped from the query rather than matched in the id. One place
+decides, and the namespace cannot come back as a way of matching everything.
+`tests/blocks.ts` states it letter by letter rather than as one predicate, so
+a failure names which letter; the check it replaced compared against
+`b.includes(q)` on the full id, which did not merely miss the fault, it stated
+it as the requirement.
+
+**`blockRegistry` is `$state.raw`, and the line below it says why.** Plain
+`$state` on an array is a deep proxy, so reading it inside a `$derived`
+registers a signal per entry. It sat next to `legacyIndex`, which had been
+moved to `raw` for exactly that, with the post-mortem written on it — and it
+was missed.
+
+It stayed dormant for a reason that then expired, which is the part worth
+knowing: `placeableBlocks` used to be `null` for every flat document, so
+`offered` was `blocks` itself and nothing allocated. **Giving flat documents a
+per-version block set turned that alias into a fresh 1197-element array per
+keystroke**, and woke the fault for every schematic rather than only the legacy
+ones. A dormant hazard and a feature that removes the thing keeping it dormant
+are one change apart.
+
+**`ROW_LIMIT` bounds the rows that exist, not the matches that are found.**
+The picker's own header forbids a cap, and is right: *«a search that genuinely
+had 41 answers quietly showed 40 with nothing to say it had»*. This is not
+that. The line above the list reports `matches.length`, so both numbers are on
+screen and nothing is hidden silently — which is the property that paragraph
+is actually about. Reporting `shown.length` there would turn it back into the
+cap it argues against, so `tests/ui.ts` checks that the count comes from the
+unbounded list and the rows from the bounded one.
+
+**And no `onmouseenter` writing the highlighted row.** The effect beside it
+writes `list.scrollTop`; scrolling moves a different row under a *stationary*
+pointer, the browser fires `mouseenter` for it, and that writes the highlight
+again. The CSS `:hover` already draws the row under the pointer, so the handler
+bought one nicety — Enter taking the hovered row — and cost a feedback path.
+
+**The window can now say that it died, and could not before.** There was no
+`window.onerror`, no `unhandledrejection`, and nothing in main for
+`render-process-gone` or `unresponsive`: zero occurrences across `src/`. So a
+loop that Svelte or the browser aborts took every effect in the window with it
+and **nothing anywhere heard**, which is why the same failure was reported
+twice with a clean console.
+
+`IPC.rendererFailed` is an **event, not a request**, and that is the design: it
+is sent from a window that may be moments from being unable to run anything,
+and a promise to await is exactly what would never come back. The renderer's
+entry registers the listeners **before the mount**, so a failure during mount
+is reported too, and reports **once** — an error handler that reports a loop is
+a loop of reports. Main counts what follows and says so in the dialog.
+
+Offering a reload is safe to offer for a reason worth stating: **autosave is
+main's**, on a 20-second timer, and main is the half still working. So the
+snapshot is current however long the window has been dead, and
+`failure_prompt.ts` says so rather than leaving somebody to weigh a reload
+against an unknown. It is Electron-free for `discard_prompt.ts`'s reason, and
+`ipcMain.on` is a third way to serve a channel that `tests/services.ts`'s walk
+had to be taught — it knew `handle` and `send`, and called a served channel
+unserved.
+
 **`scrollIntoView` scrolls every scrollable ancestor, and this app has a
 floating panel that watches its own geometry.** `BlockPicker`'s dropdown keeps
 the highlighted row in view; it did so with `scrollIntoView({block:"nearest"})`,

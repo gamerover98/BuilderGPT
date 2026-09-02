@@ -177,6 +177,11 @@ export function snapshotsDir(): string {
   return path.join(app.getPath("userData"), "versions");
 }
 
+/** One small file per schematic: the blocks it was last built with. */
+export function hotbarsDir(): string {
+  return path.join(app.getPath("userData"), "hotbars");
+}
+
 /** `generated/` (component.py:137-138), relocated to a writable location. */
 export function generatedDir(): string {
   return path.join(app.getPath("userData"), "generated");

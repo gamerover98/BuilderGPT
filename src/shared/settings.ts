@@ -329,16 +329,29 @@ export interface UiSettings {
   inspectorWindowY: number;
   inspectorWindowW: number;
   inspectorWindowH: number;
-  /**
-   * The nine blocks on the creative hotbar, and which one is held.
-   *
-   * Persisted because a hotbar you have to refill every launch is not a hotbar.
-   * Always exactly `HOTBAR_SLOTS` long after `coerceUi` — a short array would
-   * leave the template indexing past the end, and a long one would draw slots
-   * no key can reach.
-   */
-  hotbar: string[];
-  hotbarSlot: number;
+}
+
+/*
+ * The hotbar is **not** here any more, and that is the point of the change.
+ *
+ * It was one bar for the whole app, in `UiSettings`, written with `patchUi`.
+ * That is right for a window's chrome and wrong for what you are holding: a
+ * schematic is a thing you build with a set of blocks, and opening the next
+ * one handed you the last one's. A legacy `.schematic` was the case that made
+ * it plainly wrong -- it inherited nine blocks that version does not have.
+ *
+ * So a hotbar belongs to a **document**, keyed on its file path, the way its
+ * conversation and its version history already are. A document with no path
+ * has nowhere to keep one and starts from the factory nine, which live
+ * below; it is never written to disk, because there is no name to write it
+ * under.
+ */
+
+/** The nine blocks on the creative hotbar, and which one is held. */
+export interface Hotbar {
+  /** Exactly `HOTBAR_SLOTS` long; `coerceHotbar` guarantees it. */
+  readonly slots: readonly string[];
+  readonly slot: number;
 }
 
 /*
@@ -421,8 +434,6 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   inspectorWindowY: 500,
   inspectorWindowW: 300,
   inspectorWindowH: 320,
-  hotbar: [...DEFAULT_HOTBAR],
-  hotbarSlot: 0,
 };
 
 /**

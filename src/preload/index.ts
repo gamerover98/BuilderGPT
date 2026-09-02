@@ -64,7 +64,7 @@ import {
   type SetNbtRequest,
   type TransformRequest,
 } from "../shared/ipc.js";
-import type { KeyStorageStatus, Provider, Settings } from "../shared/settings.js";
+import type { Hotbar, KeyStorageStatus, Provider, Settings } from "../shared/settings.js";
 
 const api: BgptApi = {
   getSettings: () => ipcRenderer.invoke(IPC.settingsGet) as Promise<Settings>,
@@ -93,6 +93,10 @@ const api: BgptApi = {
   listBlocks: () => ipcRenderer.invoke(IPC.blocksList) as Promise<string[]>,
   listLegacyBlocks: () =>
     ipcRenderer.invoke(IPC.blocksLegacy) as Promise<Record<string, string>>,
+  readHotbar: (filePath: string) =>
+    ipcRenderer.invoke(IPC.hotbarRead, filePath) as Promise<Hotbar>,
+  writeHotbar: (filePath: string, hotbar: Hotbar) =>
+    ipcRenderer.invoke(IPC.hotbarWrite, filePath, hotbar) as Promise<void>,
   getBlockIcons: (req) => ipcRenderer.invoke(IPC.blockIcons, req) as Promise<BlockIconsResponse>,
   warmBlockIcons: () => ipcRenderer.invoke(IPC.blockIconsWarm) as Promise<number>,
 

@@ -7,6 +7,7 @@
  */
 
 import type { SchematicFormat } from "./schematic.js";
+import type { Hotbar } from "./settings.js";
 import { SCHEMATIC_FORMAT_LABEL, SCHEMATIC_FORMATS } from "./schematic.js";
 import type {
   ExportType,
@@ -65,6 +66,20 @@ export const IPC = {
    * to when several produce it.
    */
   blocksLegacy: "bgpt:blocks:legacy",
+
+  /**
+   * The hotbar this schematic was last built with.
+   *
+   * Keyed on the file path, like a conversation and a version history, and
+   * for the same reason: what you are *holding* belongs to the thing you are
+   * building, not to the window. One bar for the whole app meant opening a
+   * legacy `.schematic` handed you nine blocks that version does not have.
+   *
+   * Two channels rather than one that does both, which is this file's rule:
+   * one channel per verb, no dispatcher.
+   */
+  hotbarRead: "bgpt:hotbar:read",
+  hotbarWrite: "bgpt:hotbar:write",
   /**
    * Geometry for a handful of blocks, so the inventory can draw them.
    *
@@ -1760,6 +1775,17 @@ export interface BgptApi {
   listBlocks(): Promise<string[]>;
   /** The pre-Flattening block table; `{}` when it cannot be read. */
   listLegacyBlocks(): Promise<Record<string, string>>;
+
+  /**
+   * The hotbar stored for a schematic, or the factory nine.
+   *
+   * Never rejects and never answers `null`: a document nobody has built in
+   * yet is the ordinary case rather than a failure, and a caller told the
+   * difference would have nothing different to do about it.
+   */
+  readHotbar(filePath: string): Promise<Hotbar>;
+  /** Remember it. A document with no path has nowhere to keep one. */
+  writeHotbar(filePath: string, hotbar: Hotbar): Promise<void>;
   /** Geometry for the blocks the inventory is about to draw. */
   getBlockIcons(req: BlockIconsRequest): Promise<BlockIconsResponse>;
   /** Settles the atlas for the whole block list. Resolves with its version. */

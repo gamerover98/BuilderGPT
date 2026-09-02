@@ -97,6 +97,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     blocksInDocument,
     DEFAULT_SETTINGS,
     DEFAULT_PREVIEW_SETTINGS,
+  DEFAULT_HOTBAR,
   DEFAULT_UI_SETTINGS,
     providerRequiresApiKey,
     type ExportType,
@@ -288,8 +289,27 @@ import ConvertModal from "./lib/ConvertModal.svelte";
    * backwards as an earlier response landed after a later one. The mirror is
    * what is on screen; the write follows behind.
    */
-  let hotbar = $state<string[]>([...DEFAULT_UI_SETTINGS.hotbar]);
-  let hotbarSlot = $state(DEFAULT_UI_SETTINGS.hotbarSlot);
+  let hotbar = $state<string[]>([...DEFAULT_HOTBAR]);
+  let hotbarSlot = $state(0);
+
+  /**
+   * The file path the bar on screen belongs to, or `null` for a document that
+   * has none.
+   *
+   * A hotbar is a **document's** now, not the window's, and this is what says
+   * which document. It is not derived from `docState` because the two move
+   * independently: the path changes the instant a file opens, and the bar has
+   * to be written back under the *old* one before it does.
+   *
+   * `null` is a real state and not a missing value. A new schematic, or a
+   * `.mcfunction` -- read, and never a document's format -- has nowhere on
+   * disk to keep a bar, so it starts from the factory nine and keeps them for
+   * as long as it is open. Writing a file for it would mean inventing a name,
+   * and a name invented here is a file nothing ever comes back for.
+   */
+  let hotbarSubject = $state<string | null>(null);
+  /** Set once the first document has been adopted; see `adoptHotbar`. */
+  let hotbarAdopted = false;
 
   const activeBlock = $derived(hotbar[hotbarSlot] ?? "minecraft:stone");
   const placingBlock = $derived(activeBlock);
@@ -307,8 +327,54 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     if (hotbarWrite !== null) clearTimeout(hotbarWrite);
     hotbarWrite = setTimeout(() => {
       hotbarWrite = null;
-      void patchUi({ hotbar: [...hotbar], hotbarSlot });
+      void flushHotbar();
     }, HOTBAR_WRITE_DELAY);
+  }
+
+  /**
+   * Write it now, under whatever document it currently belongs to.
+   *
+   * Called by the debounce, and **directly** by `adoptHotbar` before it lets
+   * the subject move: a pending write that fired afterwards would put one
+   * schematic's blocks in another's file. That is the whole reason this is a
+   * function rather than the body of the timeout.
+   */
+  async function flushHotbar(): Promise<void> {
+    if (hotbarWrite !== null) {
+      clearTimeout(hotbarWrite);
+      hotbarWrite = null;
+    }
+    if (hotbarSubject === null) return;
+    await api().writeHotbar(hotbarSubject, forIpc({ slots: [...hotbar], slot: hotbarSlot }));
+  }
+
+  /**
+   * Swap the bar to the document now on screen.
+   *
+   * The outgoing one is written **first**, and only then does the subject
+   * move -- otherwise the blocks you were building the last schematic with
+   * land in the file of the one you just opened.
+   *
+   * Guarded on the subject rather than on `docState`, so restoring a version
+   * or a checkpoint costs nothing: those replace the document with another
+   * state of the *same file*, and the bar has not changed hands. That is the
+   * distinction `conversation.ts` already draws between opening and adopting,
+   * arrived at here from the same direction.
+   */
+  async function adoptHotbar(next: string | null): Promise<void> {
+    if (hotbarAdopted && next === hotbarSubject) return;
+    hotbarAdopted = true;
+    await flushHotbar();
+    hotbarSubject = next;
+    const held = next === null ? null : await api().readHotbar(next);
+    /*
+     * A document with no path, or one nobody has built in yet, gets the
+     * factory nine -- not the last bar used. Inheriting would be the old
+     * behaviour under a new name: it is exactly how a legacy `.schematic`
+     * came to be handed nine blocks that version does not have.
+     */
+    hotbar = held === null ? [...DEFAULT_HOTBAR] : [...held.slots];
+    hotbarSlot = held === null ? 0 : held.slot;
   }
 
   /** Reaches for a different slot. */
@@ -821,6 +887,28 @@ import ConvertModal from "./lib/ConvertModal.svelte";
    * ordering and drop selection steps that belong to a future main has
    * discarded.
    */
+  /**
+   * The hotbar follows the document.
+   *
+   * Only the **path** is read, so this fires when a different schematic is on
+   * screen and not when the one that is there changes: an edit, an undo, a
+   * resize and a restored version all leave the path where it was, and a bar
+   * that reloaded itself on every block placed would fight the person placing
+   * them.
+   *
+   * That is also what makes restoring a version free. It replaces the document
+   * with another state of the same file, and the bar has not changed hands --
+   * the same distinction `conversation.ts` draws between opening and adopting,
+   * reached here from the other side.
+   *
+   * `adoptHotbar` writes the outgoing bar before it lets the subject move, so
+   * nothing needs untracking: this reads a path and writes none.
+   */
+  $effect(() => {
+    const subject = docState?.filePath ?? null;
+    void adoptHotbar(subject);
+  });
+
   $effect(() => {
     const depth = docState?.undoDepth ?? null;
     untrack(() => {
@@ -1239,8 +1327,6 @@ import ConvertModal from "./lib/ConvertModal.svelte";
         inspectorWindowW = settings.ui.inspectorWindowW;
         inspectorWindowH = settings.ui.inspectorWindowH;
         clockTicks = settings.preview.timeOfDay;
-        hotbar = [...settings.ui.hotbar];
-        hotbarSlot = settings.ui.hotbarSlot;
         keyStatus = await api().getKeyStatus();
         step("settings", "done");
 

@@ -83,6 +83,7 @@ import {
 import {
   normaliseVoidBlock,
   providerRequiresApiKey,
+  type Hotbar,
   type KeyStorageStatus,
   type PreviewSettings,
   type Provider,
@@ -187,6 +188,7 @@ import {
   mcpBridgeFile,
   mcpDiscoveryFile,
   snapshotsDir,
+  hotbarsDir,
   defaultResourcePackPath,
   generatedDir,
   legacyBlocksPath,
@@ -224,6 +226,11 @@ import {
   takeSnapshot,
   useSnapshotDirectory,
 } from "../services/snapshots.js";
+import {
+  readHotbar,
+  useHotbarDirectory,
+  writeHotbar,
+} from "../services/hotbars.js";
 import { refreshShell, rememberInOsRecents, setKeysToCamera } from "../menu.js";
 import { shellState, useWindow } from "../services/broadcast.js";
 import {
@@ -350,6 +357,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
   useConversationDirectory(conversationsDir());
   useCheckpointDirectory(checkpointsDir());
   useSnapshotDirectory(snapshotsDir());
+  useHotbarDirectory(hotbarsDir());
 
   /*
    * The MCP server's three dependencies, injected for the same reason.
@@ -709,6 +717,26 @@ ${report.stack}`),
       return {};
     }
   });
+
+  /*
+   * The hotbar this schematic was last built with.
+   *
+   * Keyed on the path, like the conversation and the version history: what
+   * you are holding belongs to what you are building. A document with no path
+   * never reaches here -- the renderer has nothing to key on and keeps the
+   * factory nine in memory -- so neither handler has an empty-string case to
+   * get wrong.
+   */
+  ipcMain.handle(IPC.hotbarRead, async (_event, filePath: string): Promise<Hotbar> => {
+    return await readHotbar(filePath);
+  });
+
+  ipcMain.handle(
+    IPC.hotbarWrite,
+    async (_event, filePath: string, hotbar: Hotbar): Promise<void> => {
+      await writeHotbar(filePath, hotbar);
+    },
+  );
 
   ipcMain.handle(
     IPC.blockIcons,

@@ -39,6 +39,11 @@ import {
   useConversationDirectory,
 } from "../src/main/services/conversation.js";
 import {
+  readHotbar,
+  useHotbarDirectory,
+  writeHotbar,
+} from "../src/main/services/hotbars.js";
+import {
   abridgeTrace,
   coerceProject,
   coerceRecord,
@@ -82,6 +87,7 @@ import {
   coerceEditing,
   coerceMcp,
   coerceSettings,
+  coerceHotbar,
   coerceUi,
 } from "../src/main/services/settings_coerce.js";
 import { discardPrompt } from "../src/main/services/discard_prompt.js";
@@ -123,6 +129,8 @@ import {
   DEFAULT_EDITING_SETTINGS,
   normaliseVoidBlock,
   DEFAULT_HOTBAR,
+  HOTBAR_SLOTS,
+  type Hotbar,
   DEFAULT_MCP_SETTINGS,
   DEFAULT_SETTINGS,
   DEFAULT_UI_SETTINGS,
@@ -1401,20 +1409,12 @@ console.log("\n--- settings coercion ---");
     inspectorWindowY: 480,
     inspectorWindowW: 380,
     inspectorWindowH: 400,
-    // Nine entries, none of them the default, so a `coerceUi` that quietly
-    // substituted the default hotbar would not survive the comparison.
-    hotbar: [
-      "minecraft:granite",
-      "minecraft:andesite",
-      "minecraft:diorite",
-      "minecraft:birch_planks",
-      "minecraft:glass_pane",
-      "minecraft:red_sand",
-      "minecraft:mossy_cobblestone",
-      "minecraft:sea_lantern",
-      "minecraft:water",
-    ],
-    hotbarSlot: 4,
+    /*
+     * `hotbar` and `hotbarSlot` were here and belong to a *document* now,
+     * keyed on its path, so they are no longer part of the window's state.
+     * The check they used to earn is below, on `coerceHotbar`, which is the
+     * same validation moved rather than dropped.
+     */
   } satisfies UiSettings;
 
   equal("every ui field survives a round-trip", coerceUi(ui), ui);
@@ -1562,13 +1562,35 @@ console.log("\n--- settings coercion ---");
   equal("a missing ui block is all defaults", coerceUi(undefined), DEFAULT_UI_SETTINGS);
 
   /*
-   * A slot holding air draws nothing and places nothing, and a settings file
-   * written before that rule has one in slot nine -- the old default. Refused
-   * on read, so it heals rather than needing a migration.
+   * The hotbar's own coercion, which used to live inside `coerceUi` and now
+   * answers for a per-document file as well. Both callers read something
+   * nobody validated, so there is one function rather than two that come to
+   * disagree about what a hotbar is.
+   */
+  const bar = {
+    slots: [
+      "minecraft:granite",
+      "minecraft:andesite",
+      "minecraft:diorite",
+      "minecraft:birch_planks",
+      "minecraft:glass_pane",
+      "minecraft:red_sand",
+      "minecraft:mossy_cobblestone",
+      "minecraft:sea_lantern",
+      "minecraft:water",
+    ],
+    slot: 4,
+  } satisfies Hotbar;
+  equal("a hotbar survives a round-trip", coerceHotbar(bar), bar);
+
+  /*
+   * A slot holding air draws nothing and places nothing, and a file written
+   * before that rule has one in slot nine -- the old default. Refused on
+   * read, so it heals rather than needing a migration.
    */
   equal(
     "air is refused from a hotbar slot",
-    coerceUi({ hotbar: ["minecraft:air", ...DEFAULT_HOTBAR.slice(1)] }).hotbar[0],
+    coerceHotbar({ slots: ["minecraft:air", ...DEFAULT_HOTBAR.slice(1)], slot: 0 }).slots[0],
     DEFAULT_HOTBAR[0],
   );
   check(
@@ -1576,6 +1598,30 @@ console.log("\n--- settings coercion ---");
     DEFAULT_HOTBAR.every((block) => block !== "minecraft:air"),
     DEFAULT_HOTBAR.join(", "),
   );
+  /*
+   * Length is not negotiable: the template indexes by slot and the keys 1-9
+   * have to land somewhere. Short is padded, long is cut.
+   */
+  equal(
+    "a short hotbar is padded to nine",
+    coerceHotbar({ slots: ["minecraft:stone"], slot: 0 }).slots.length,
+    HOTBAR_SLOTS,
+  );
+  equal(
+    "...and a long one cut back",
+    coerceHotbar({
+      slots: Array.from({ length: 20 }, () => "minecraft:stone"),
+      slot: 0,
+    }).slots.length,
+    HOTBAR_SLOTS,
+  );
+  // Wrapped rather than clamped, so an index from a build with a different
+  // slot count lands somewhere reachable instead of always on the first.
+  equal("a slot past the end wraps", coerceHotbar({ slot: 11 }).slot, 2);
+  equal("...and nonsense reads as the first", coerceHotbar({ slot: "x" }).slot, 0);
+  equal("a hotbar from nothing at all is the default", coerceHotbar(undefined).slots, [
+    ...DEFAULT_HOTBAR,
+  ]);
 
   // A settings file copied from a 4K screen onto a laptop.
   equal(
@@ -1645,6 +1691,71 @@ console.log("\n--- chat memory boundary ---");
   // shape. Both must put the divider above everything, not below.
   equal("nothing remembered puts the line at the top of nothing", rememberedFromIndex(log, 0), 6);
   equal("an empty log has no boundary", rememberedFromIndex([], 4), 0);
+}
+
+// --- a hotbar belongs to a schematic ---------------------------------------
+//
+// It used to be one bar for the whole app, in `UiSettings`. That is right for
+// a window's chrome and wrong for what you are *holding*: opening the next
+// schematic handed you the last one's blocks, and a legacy `.schematic`
+// inherited nine that its version does not have.
+//
+// Keyed on the file path, like the conversation above and the version history
+// -- the same `storeFileName` hash, so one schematic's three files can be
+// matched up by eye on disk.
+console.log("\n--- a hotbar belongs to a schematic ---");
+{
+  const dir = path.join(workDir, "hotbars");
+  useHotbarDirectory(dir);
+  const houseA = path.join(workDir, "house.schem");
+  const houseB = path.join(workDir, "tower.schem");
+
+  equal(
+    "a schematic nobody has built in yet gets the factory nine",
+    (await readHotbar(houseA)).slots,
+    [...DEFAULT_HOTBAR],
+  );
+
+  await writeHotbar(houseA, { slots: Array.from({ length: HOTBAR_SLOTS }, () => "minecraft:sandstone"), slot: 3 });
+  await writeHotbar(houseB, { slots: Array.from({ length: HOTBAR_SLOTS }, () => "minecraft:obsidian"), slot: 7 });
+
+  /*
+   * Two schematics, two bars. This is the whole feature: without the path in
+   * the key the second write would answer for the first, which is exactly what
+   * one shared bar did.
+   */
+  equal("one schematic keeps its own blocks", (await readHotbar(houseA)).slots[0], "minecraft:sandstone");
+  equal("...and another keeps its own", (await readHotbar(houseB)).slots[0], "minecraft:obsidian");
+  equal("...including which slot was held", (await readHotbar(houseA)).slot, 3);
+  equal("...separately", (await readHotbar(houseB)).slot, 7);
+
+  /*
+   * Coerced on the way in as well as out. Validating only on read would let a
+   * bad value sit on disk; only on write would trust whatever an older build
+   * left there. Air is the case that matters, because it was a *default* once.
+   */
+  await writeHotbar(houseA, { slots: ["minecraft:air"], slot: 99 });
+  const healed = await readHotbar(houseA);
+  equal("air never reaches the file", healed.slots[0], DEFAULT_HOTBAR[0]);
+  equal("...and a short one comes back full length", healed.slots.length, HOTBAR_SLOTS);
+  equal("...with the slot wrapped into range", healed.slot, 99 % HOTBAR_SLOTS);
+
+  /*
+   * Unreadable is not an error. A file half-written by a crash, or one from a
+   * build that spelled this differently, is answered with the factory nine --
+   * a hotbar is a convenience, and refusing to open the schematic over one
+   * would be wildly out of proportion.
+   */
+  await writeFile(path.join(dir, storeFileName(houseB)), "{ not json", "utf8");
+  equal("a corrupt file reads as the default", (await readHotbar(houseB)).slots, [...DEFAULT_HOTBAR]);
+
+  /*
+   * And with no directory injected -- which is every suite that does not ask
+   * for one, and main before startup -- nothing is written and nothing throws.
+   * A document with no path never reaches here at all: the renderer has
+   * nothing to key on and keeps its bar in memory.
+   */
+  useHotbarDirectory(null as unknown as string);
 }
 
 // --- conversations on disk -------------------------------------------------

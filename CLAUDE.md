@@ -228,6 +228,25 @@ merging them.** `legacy_blocks.json` enumerates the pre-Flattening set exactly;
 pre-Flattening label outright. Each is authoritative where the other says
 nothing, and asking both would be two answers to one question.
 
+**That split reaches the inspector, and it did not.** The panel lists the union
+of what the entry carries and what the game says it may carry, and the second
+half asked the modern registry — which has nothing true to say about a numeric
+`ID:DATA` block. So a 1.12.2 schematic offered `waterlogged` on every fence,
+stair, slab and pane in it: a property 1.13 introduced, on a document from a
+version with no such idea. `block_versions.json` cannot answer either, and
+saying why is the point — it dates `waterlogged` only where it *arrived after*
+1.13 (leaves at 1.19, rails at 1.17), and `propertyExistsIn` fails open, so for
+a 1.12.2 fence it answers `true`.
+
+`legacy_blocks.json` answers, because that is the era it is authoritative for:
+its 1,682 rows give 216 names with their states and **not one `waterlogged`
+anywhere**. `buildLegacyIndex` derives the per-name sets in the walk it was
+already doing, so both processes get one answer. What the entry *carries* is
+still listed whatever the era says — that is what lets somebody see a property
+another tool wrote and delete it — and a block the era cannot name contributes
+nothing rather than falling back to the registry, because falling back is the
+claim being removed.
+
 The panel used to declare the limit instead: *«this build has no record of
 which release each block arrived in»*, which was true and is the sentence the
 seventh dataset removed. Saying nothing there would have read as "checked,
@@ -2165,6 +2184,55 @@ staircase with a shape typed onto it.
 `_stem` is not a suffix in the pillar table and must not become one:
 `crimson_stem` is a pillar and `melon_stem` is a crop with an `age`.
 
+**The right button opens what it lands on, and Shift places.** That is the
+game's split, and it was missing entirely: the right button always placed, so
+the only way to open a door in a schematic was the inspector, twice, once per
+half.
+
+`EditRequest.use` is **one** verb rather than two, because only main can tell
+which one a click is — the renderer holds no schematic, so it does not know
+whether the cell under the crosshair is a door, and asking first would be a
+round trip per click and a race with any edit in flight. Its fields are
+`setBlock`'s exactly: the block that might open is one step back along
+`against`, which is the arithmetic `doubleSlabTarget` already does, generalised
+to six faces through `FACE_VECTOR`.
+
+The fall-through is a **rewrite** rather than a copy, so a right-click that
+turns out to be a placement is the same placement in every respect — the slab
+merge, the two-part rule, the flooding, the growth and the volume guard. A
+second path here is how one of those comes to be missing from the commonest
+gesture in the app.
+
+Both halves of a door in one transaction, or Ctrl+Z would take it back a half
+at a time. The far half comes from `TWO_PART`, which already knows a door is
+two blocks and which way the second lies — reading it rather than writing
+`_door` a second time is what makes clicking the **upper** half work, and that
+is the half a person reaches first when the door is at eye level.
+
+Sneaking is not a field on the request: Shift sends a plain `setBlock`, which
+keeps the verb's meaning a question about the block rather than about the
+keyboard. Shift is already the descend key in flight, so it collides with
+nothing. What opens is `open` minus `barrel`, whose `open` means a container is
+being looked into. An **iron** door opens here, which in game it does not
+without redstone — deliberate, because this is an editor and refusing would be
+faithful and useless.
+
+**A hotbar belongs to a schematic, not to the window.** It lived in
+`UiSettings`, written with `patchUi`: one bar for the whole app, so opening the
+next schematic handed you the last one's blocks — and a legacy `.schematic`
+inherited nine that its version does not have. It is keyed on the **file path**
+now, which is `conversation.ts`'s and `snapshots.ts`' shape down to the
+`storeFileName` hash.
+
+Three things are load-bearing. The outgoing bar is written **before** the
+subject moves, so a pending debounce cannot land one schematic's blocks in
+another's file. The effect reads only the **path**, so an edit, an undo, a
+resize and a restored version all leave it alone — which is
+`conversation.ts`'s distinction between opening and adopting, reached from the
+other side. And a document with **no path** keeps its bar in memory and writes
+no file: it starts from the factory nine rather than inheriting the last one
+used, because inheriting is the old behaviour under a new name.
+
 **The hotbar's active slot is what you are holding, in both camera modes.**
 There used to be two answers — an `activeBlock` for orbit, the hotbar for flight
 — chosen between by camera mode. That was tenable only while the hotbar was
@@ -2177,8 +2245,10 @@ wheel only because the game has no zoom to lose.
 empty cell in the document is air, and the writers and the agent both name it —
 but there is nothing to pick up and nothing to draw, so it was a permanently
 blank inventory tile that read as a failure to load. `inventoryBlocks` filters
-it and `coerceUi` refuses it in a slot, which heals a settings file written when
-it was the ninth default.
+it and `coerceHotbar` refuses it in a slot, which heals a file written when it
+was the ninth default. On the write as well as the read: validating only on
+read would let a bad value sit on disk, and only on write would trust whatever
+an older build left there.
 
 **Closing a modal over the viewport must release the pointer lock.** In flight
 the canvas holds it, so a panel opened on top of one appeared over a camera
@@ -3066,6 +3136,56 @@ knowing:
   from `occludesNeighbours` alone — fold the texture into that one and the two
   stop agreeing, so a copper grate becomes a cell the mesher reads light from
   and the flood never lit, and the wall behind it goes black.
+- **A texture that is a sheet of parts makes a correct box invisible.** The
+  header above says derived UVs are wrong for a lantern or a chain; candles are
+  what that costs when the empty part of the tile is where the box happens to
+  look. `candle.png`'s art lives at texels `x 0..1`, the box sits at `x 7..9`,
+  and every face was emitted, textured and drawn with nothing — reported as
+  candles having no model at all. Vanilla says so outright: a candle's sides are
+  `uv [0, 8, 2, 8 + height]` whatever the box is doing.
+
+  **`tests/blocks.ts` walks all 920 ids and fails on any whose every face
+  samples an entirely transparent region.** Nothing else can see it: the block
+  resolves a real texture, so the hashed-cube walk passes; the window is inside
+  the tile, so the off-tile walk passes; the geometry is vanilla's, so every
+  orientation check passes. What is wrong is only *where on the tile* a correct
+  box looked. It found `end_rod` on its first run, invisible for the identical
+  reason and never reported — which is the argument for the check over the fix.
+  `some` rather than `every`, because a chest's hidden faces and a plane's back
+  are legitimately blank.
+- **A property may choose the texture, and a candidate list cannot.**
+  `SPECIAL_FACE_RULES` is keyed on the block, so the campfire's row put
+  `campfire_log_lit` first *because the default state is lit* — and a cold
+  campfire then wore burning logs. A shape function sees the state, so `lit`
+  belongs there: it swaps the texture and moves not one coordinate, which is
+  what vanilla does through `campfire_off.json`. Same for a candle. What is left
+  in the face rule is the particle texture and the fallback the boxes resolve
+  against.
+- **The blockstate decides the authoring direction, and three of five disagreed.**
+  The campfire is authored facing **south**, the hopper north, and a bell's two
+  *wall* models east while its floor and ceiling ones face north. Guessing one
+  convention for a block family leaves it a quarter or a half turn out, and a
+  campfire turned 180° is still a campfire. Read the blockstate, every time.
+- **A bell has no block model at all.** `bell_floor.json` and its three siblings
+  hold only the supports — a dark-oak bar, and two stone posts on the floor. The
+  bell is a block entity, like a chest, and `unwrapCube` already reads that
+  layout. Its two cubes were **measured off** `entity/bell/bell_body.png`: a
+  6×7×6 unwrap at (0, 0) and an 8×2×8 at (0, 13), which is that layout and
+  nothing else could produce it. Whether the body turns with `facing` is
+  unobservable — its four side windows are byte-identical, because a bell is a
+  body of revolution — so it turns with the supports and that is one `transform`
+  rather than two.
+- **`hopper_side.png` is not a file vanilla has ever had.** The generic
+  candidate list asks for it, so every hopper wore its own lid on all six faces
+  — `hopper_top` being the only name that resolved — and `hopper_inside` was
+  unreachable from a face rule at all, because it belongs to the bowl's floor
+  and the funnel's underside rather than to a side of the block. The hopper is
+  also the one of the five whose UVs were right and whose *geometry* was the
+  whole fault: the rim as a solid lump, with no bowl, funnel or spout.
+- **`signal_fire` has no geometry, and that is the finding rather than an
+  omission.** It changes the height of the smoke column, which is a particle and
+  part of no model. Giving it a shape would be inventing, which is the one thing
+  this file is not allowed to do.
 - **A flowerbed is one quarter-plate per segment, and they sit above the
   floor.** Pink petals, wildflowers and leaf litter were a full 16×16 plate at
   `y = 0` whatever the count: one petal carpeted the cell, and a plate that
@@ -3259,6 +3379,36 @@ knowing:
   before it, every one of them wore `<name>_side` on all four sides, fire
   included, because the generic candidate list offers `_front` only after
   `_side`. `_front_on` comes first when the block is lit.
+
+**A bare pre-Flattening name is a member of its own family, and one place
+asked otherwise.** `shapeFor` learned this once — `EXACT_SHAPES` carries `sign`
+and `wall_sign` because neither ends in the suffix that names its family — and
+the lesson reached the lookup and not the function the lookup calls. `signBoard`
+asked `endsWith("_wall_sign")`, so a legacy `wall_sign` fell through to the
+**standing** board: at `z 7..9`, the middle of the cell, turned by a `rotation`
+a wall sign has never carried — `NaN`, guarded to zero, so north. Reported as
+both of those at once, which is what one missing underscore looks like from
+outside. `inFamily` is the rule now, and the three sign arms all ask it.
+
+**And a standing sign is turned by `rotation`, which nothing derived.** The word
+did not appear in `block_orientation.ts` at all, so every sign ever placed by
+hand landed on `rotation=0` — facing south — whatever the camera was doing. It
+is vanilla's own `floor((yaw + 180) * 16 / 360 + 0.5) & 15`, and the `+ 180` is
+the half no screenshot can check: a sign facing exactly the wrong way still
+reads as a sign. `tests/blocks.ts` states it against the four cardinal answers.
+
+`_wall_hanging_sign` is excluded **by name**, and the suite caught that it had
+to be: a wall sign is answered by `WALL_MOUNTED` before the rotation arm is
+reached, but a wall *hanging* sign is deliberately absent from that table and
+ends in `_hanging_sign`, so it matched. Two exclusions by two mechanisms, one
+of them not obvious.
+
+**A hopper points into the block it was clicked onto**, which is the whole of
+what makes one feed a chest. It was in none of `orientPlacement`'s tables, so
+every hopper landed on the registry default `down` with its spout hanging in
+mid-air beside whatever it was meant to feed. `facing` is the clicked face
+reversed, with the one exception the game states outright: there is no
+upward-facing hopper, so a click on a floor gives `down`.
 
 **A sign says what is written on it, and that is the one thing in the pipeline
 that is a function of a *position*.** Two signs of the same block state say

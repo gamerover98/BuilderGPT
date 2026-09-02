@@ -77,12 +77,32 @@ export interface LegacyIndex {
    * same line the MCEdit writer draws between a fatal loss and a degraded one.
    */
   readonly names: ReadonlySet<string>;
+  /**
+   * Base name -> every property that block may hold **before the Flattening**.
+   *
+   * The union across its `ID:DATA` rows, because the states are spread over
+   * them: `oak_stairs` is sixty-four rows and each names `facing`, `half` and
+   * `shape`, while `stone_slab` names only `type`.
+   *
+   * This is the pre-1.13 half of a question the modern registry answers for
+   * the flat era, and CLAUDE.md's rule about the two tables is why it is a
+   * second answer rather than a merge: **each is authoritative exactly where
+   * the other says nothing.** Asking the registry about a legacy document
+   * offered `waterlogged` on every fence, stair, slab and pane in it -- a
+   * property 1.13 introduced, on blocks from versions that had no such idea --
+   * which is how it was reported.
+   *
+   * There is no `waterlogged` anywhere in the 1,682 rows. That is not an
+   * accident of the data: it is the era.
+   */
+  readonly properties: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 export function buildLegacyIndex(table: Readonly<Record<string, string>>): LegacyIndex {
   const byName = new Map<string, LegacyId>();
   const byId = new Map<string, string>();
   const names = new Set<string>();
+  const properties = new Map<string, Set<string>>();
 
   const rank = (a: LegacyId, b: LegacyId): number => a.id - b.id || a.meta - b.meta;
 
@@ -95,9 +115,45 @@ export function buildLegacyIndex(table: Readonly<Record<string, string>>): Legac
     names.add(name);
     const existing = byName.get(name);
     if (existing === undefined || rank(legacy, existing) < 0) byName.set(name, legacy);
+
+    let held = properties.get(name);
+    if (held === undefined) {
+      held = new Set<string>();
+      properties.set(name, held);
+    }
+    for (const pair of statePairs(modern)) held.add(pair);
   }
 
-  return { byName, byId, names };
+  return { byName, byId, names, properties };
+}
+
+/** The property names inside `oak_fence[east=false,north=false]`, if any. */
+function statePairs(modern: string): string[] {
+  const open = modern.indexOf("[");
+  if (open < 0 || !modern.endsWith("]")) return [];
+  return modern
+    .slice(open + 1, -1)
+    .split(",")
+    .map((pair) => pair.split("=")[0].trim())
+    .filter((name) => name !== "");
+}
+
+/**
+ * Which properties a block may hold in the era this index describes, or `null`
+ * where the table has never heard of the block.
+ *
+ * `null` and an empty set are different answers and the caller has to tell
+ * them apart: a block with no states -- `minecraft:stone` -- really holds
+ * none, while a block the table does not list is one this era cannot name at
+ * all. Offering the modern registry's properties for the second would be the
+ * exact claim this function exists to stop making.
+ */
+export function legacyPropertiesOf(
+  index: LegacyIndex | null,
+  block: string,
+): ReadonlySet<string> | null {
+  if (index === null) return null;
+  return index.properties.get(legacyBaseName(block)) ?? null;
 }
 
 /**

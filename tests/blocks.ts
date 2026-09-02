@@ -150,6 +150,44 @@ function texelOn(
   };
 }
 
+/**
+ * Whether a face has **any** opaque texel anywhere in the window it samples.
+ *
+ * The failure this exists for is the one that produced a block nobody could
+ * see. `candle.png` is a sheet: its art lives at texels `x 0..1`, and the
+ * candle's box sits at `x 7..9`, so UVs derived from the box addressed a
+ * corner of the tile with nothing in it. Every face was emitted, textured, and
+ * drawn -- entirely transparent. Reported as candles having no model at all.
+ *
+ * Nothing else could catch it. The block resolves a real texture, so the
+ * hashed-cube walk passes; the window is inside the tile, so the off-tile walk
+ * passes; the geometry is vanilla's, so every orientation check passes. What
+ * is wrong is only *where on the tile* a correct box looked, and that is a
+ * question about pixels.
+ *
+ * Every texel in the rect is read rather than a sample grid: the rects are a
+ * few hundred pixels and a sliver of art is exactly what a grid steps over.
+ */
+function facePaintsSomething(face: BakedFace): boolean {
+  const image = baker.textures[face.textureKey];
+  if (image === undefined) return true;
+  const us = [face.uvs[0], face.uvs[2], face.uvs[4], face.uvs[6]];
+  const vs = [face.uvs[1], face.uvs[3], face.uvs[5], face.uvs[7]];
+  const span = (values: number[], size: number): [number, number] => {
+    const lo = Math.max(0, Math.floor(Math.min(...values) * size));
+    const hi = Math.min(size, Math.ceil(Math.max(...values) * size));
+    return [lo, Math.max(lo + 1, hi)];
+  };
+  const [x0, x1] = span(us, image.width);
+  const [y0, y1] = span(vs, image.height);
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      if (image.data[(y * image.width + x) * 4 + 3] > 0) return true;
+    }
+  }
+  return false;
+}
+
 // --- texture orientation ----------------------------------------------------
 //
 // The defect: `_UNIT_UVS` put V=0 at the world *bottom* of a face, but glTF
@@ -958,6 +996,7 @@ if (pack === null) {
   const ids = [...parseBlockList(readFileSync(listPath, "utf8"))];
   const unresolved: string[] = [];
   const offTile: string[] = [];
+  const invisible: string[] = [];
   for (const id of ids) {
     const entry: PaletteEntry = { namespacedName: id, properties: {} };
     // Air is every empty cell in the document and is never drawn; it has no
@@ -970,6 +1009,9 @@ if (pack === null) {
     const all: BakedFace[] = [...Object.values(baked.faces), ...baked.extraFaces];
     if (all.some((f) => [...f.uvs].some((n) => n < -1e-6 || n > 1 + 1e-6))) {
       offTile.push(id.replace("minecraft:", ""));
+    }
+    if (all.length > 0 && !all.some(facePaintsSomething)) {
+      invisible.push(id.replace("minecraft:", ""));
     }
   }
   check(
@@ -997,6 +1039,22 @@ if (pack === null) {
     "...and none of them samples outside its own tile",
     offTile.length === 0,
     offTile.length === 0 ? undefined : `${offTile.length} run off the tile: ${offTile.join(" ")}`,
+  );
+  /*
+   * ...and none of them is drawn out of thin air.
+   *
+   * A block whose every face samples empty pixels is emitted, textured and
+   * invisible -- which is what candles were, and which passes both checks
+   * above. `some` rather than `every`: a chest's hidden faces and a plane's
+   * back are legitimately blank, and it is a block with **nothing** anywhere
+   * that is the defect.
+   */
+  check(
+    "...and none of them draws nothing at all",
+    invisible.length === 0,
+    invisible.length === 0
+      ? undefined
+      : `${invisible.length} are invisible: ${invisible.join(" ")}`,
   );
 }
 
@@ -2432,7 +2490,50 @@ console.log("\n--- placement orientation ---");
   // Nor a standing torch, which has no `facing` at all: writing one would be a
   // state the game refuses, on a block whose name is one character away.
   equal("a standing torch is left alone", orientPlacement("minecraft:torch", north), {});
-  equal("...and a standing sign too", orientPlacement("minecraft:oak_sign", north), {});
+
+  /*
+   * A standing sign is **not** left alone, and this check used to say it was.
+   *
+   * It carries a sixteenth-turn `rotation` rather than a `facing`, and nothing
+   * here derived one -- the word did not appear in `block_orientation.ts` at
+   * all -- so every sign ever placed by hand landed on `rotation=0`, which is
+   * a sign facing south, whatever the camera was doing. Reported against the
+   * pre-Flattening `sign`, whose sixteen values `legacy_blocks.json` spells
+   * out as `63:0`..`63:15`, and true of every modern one as well.
+   *
+   * The formula is vanilla's: `floor((yaw + 180) * 16 / 360 + 0.5) & 15`. The
+   * `+ 180` is the half that cannot be checked by looking -- a sign turned
+   * exactly the wrong way still reads as a sign -- so it is checked here
+   * against the four cardinal answers the wiki names: rotation 0 faces south,
+   * 4 west, 8 north, 12 east.
+   */
+  for (const [name, direction, expected] of [
+    ["looking north", [0, 0, -1], "0"],
+    ["looking east", [1, 0, 0], "4"],
+    ["looking south", [0, 0, 1], "8"],
+    ["looking west", [-1, 0, 0], "12"],
+  ] as const) {
+    const look = looking(direction[0], direction[1], direction[2], "up");
+    equal(
+      `a standing sign placed ${name} faces back at you`,
+      orientPlacement("minecraft:oak_sign", look).rotation,
+      expected,
+    );
+    equal(
+      `...and so does the pre-Flattening one`,
+      orientPlacement("minecraft:sign", look).rotation,
+      expected,
+    );
+  }
+  /*
+   * A ceiling-hung sign is the same property and the same rule. A wall-hung
+   * one is neither, and is the name both suffixes catch by accident.
+   */
+  equal(
+    "a hanging sign is spun too",
+    orientPlacement("minecraft:oak_hanging_sign", looking(0, 0, 1, "down")).rotation,
+    "8",
+  );
   equal(
     "a button on a wall knows it is on a wall",
     orientPlacement("minecraft:stone_button", looking(0, 0, -1, "south")),
@@ -3950,6 +4051,161 @@ console.log("\n--- face vectors ---");
     "...rather than from six numbers of their own",
     !connect.includes(NORTH_LITERAL),
   );
+}
+
+// --- the five blocks that were reported unrendered --------------------------
+//
+// Candles invisible, a candle cake with no candle, and a bell, a hopper and a
+// campfire drawn as single crude boxes. One cause behind four of the five: UVs
+// derived from box coordinates over a texture that is a **sheet of parts**, so
+// a correct box read the wrong -- often empty -- corner of a correct texture.
+//
+// The invisibility itself is caught by the 920-id walk above, which is where it
+// belongs: it is a property every block must have, not a fact about candles.
+// What is here is what that walk cannot see -- that the right *number* of
+// things is drawn, and that a property changes what it is supposed to change.
+console.log("\n--- the five blocks that were reported unrendered ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const shapeOf = (name: string, props: Record<string, string> = {}) =>
+    shapeFor({ namespacedName: `minecraft:${name}`, properties: props });
+  const parts = (name: string, props: Record<string, string> = {}) => {
+    const shape = shapeOf(name, props);
+    return shape.kind === "boxes" ? shape.boxes : [];
+  };
+  const keysOf = async (name: string, props: Record<string, string> = {}) => {
+    const baked = await baker.bakeBlockstate({
+      namespacedName: `minecraft:${name}`,
+      properties: props,
+    });
+    return new Set([...Object.values(baked.faces), ...baked.extraFaces].map((f) => f.textureKey));
+  };
+
+  /*
+   * A candle group is one body plus two crossed quads per candle, so the count
+   * is `3n`. Vanilla writes four separate models and the heights differ inside
+   * a group -- one arrangement scaled by n would draw four identical posts.
+   */
+  for (const n of [1, 2, 3, 4]) {
+    const held = parts("candle", { candles: String(n) });
+    equal(`a candle group of ${n} is ${3 * n} boxes`, held.length, 3 * n);
+    equal(
+      `...standing ${n} of them on the floor`,
+      held.filter((box) => box.box[1] === 0).length,
+      n,
+    );
+  }
+  /*
+   * Vanilla's own heights, which is the half that stops four candles reading
+   * as a grid: 3, 5, 5 and 6 units, not four of anything.
+   */
+  equal(
+    "four candles stand at four vanilla heights",
+    parts("candle", { candles: "4" })
+      .filter((box) => box.box[1] === 0)
+      .map((box) => box.box[4])
+      .sort((a, b) => a - b),
+    [3, 5, 5, 6],
+  );
+
+  /*
+   * `lit` changes the **texture** and not one coordinate -- which is what
+   * vanilla does, and why one shape covers both. A candle that grew a flame by
+   * growing geometry would pass every check above and be wrong.
+   */
+  equal("lighting a candle moves nothing", parts("candle", { lit: "true" }).map((b) => b.box), parts("candle", { lit: "false" }).map((b) => b.box));
+  check("...and does change what it wears", (await keysOf("candle", { lit: "true" })).has("minecraft:block/candle_lit"));
+  check("...which an unlit one does not", !(await keysOf("candle", { lit: "false" })).has("minecraft:block/candle_lit"));
+
+  /*
+   * The candle cake's candle wears a **candle**. `model_baker.ts` aliases the
+   * whole block to `cake` so the cake is drawn right, and without a box naming
+   * its own texture the candle was a slice of cake standing on a cake --
+   * reported as the candle simply not being there.
+   */
+  const cakeKeys = await keysOf("white_candle_cake");
+  check("a candle cake wears cake", cakeKeys.has("minecraft:block/cake_side"), [...cakeKeys].join(" "));
+  check("...and its candle wears a candle", cakeKeys.has("minecraft:block/white_candle"), [...cakeKeys].join(" "));
+
+  /*
+   * The bell is drawn from the block-entity sheet, like a chest. Its four
+   * attachments differ only in what holds it up, so the bell's own two boxes
+   * are in all of them and the support count is what moves: a floor bell has
+   * a bar and two posts, the other three have a bar.
+   */
+  for (const [attachment, total] of [
+    ["floor", 5],
+    ["ceiling", 3],
+    ["single_wall", 3],
+    ["double_wall", 3],
+  ] as const) {
+    equal(`a ${attachment} bell is ${total} boxes`, parts("bell", { attachment, facing: "north" }).length, total);
+  }
+  const bellKeys = await keysOf("bell", { attachment: "floor", facing: "north" });
+  check("a bell wears its entity sheet", bellKeys.has("minecraft:entity/bell/bell_body"), [...bellKeys].join(" "));
+  check("...and its posts are stone", bellKeys.has("minecraft:block/stone"), [...bellKeys].join(" "));
+
+  /*
+   * A hopper has a bowl, a funnel and a spout, and `hopper_inside` is a
+   * texture nothing could reach before: the generic candidate list asks for
+   * `hopper_side`, which is not a file this pack -- or vanilla -- contains.
+   */
+  equal("a hopper is seven boxes", parts("hopper", { facing: "down" }).length, 7);
+  const hopperKeys = await keysOf("hopper", { facing: "down" });
+  for (const wanted of [
+    "minecraft:block/hopper_top",
+    "minecraft:block/hopper_outside",
+    "minecraft:block/hopper_inside",
+  ]) {
+    check(`a hopper wears ${wanted.replace("minecraft:block/", "")}`, hopperKeys.has(wanted), [...hopperKeys].join(" "));
+  }
+  /*
+   * ...and its spout moves when it is asked to feed something sideways. The
+   * down spout hangs below the funnel; the side one comes out of a wall at mid
+   * height. Compared as the lowest box, which is the spout in both.
+   */
+  const downSpout = Math.min(...parts("hopper", { facing: "down" }).map((b) => b.box[1]));
+  const sideSpout = Math.min(...parts("hopper", { facing: "north" }).map((b) => b.box[1]));
+  check("a hopper facing down drops its spout to the floor", downSpout === 0, String(downSpout));
+  check("...and one facing north does not", sideSpout > 0, String(sideSpout));
+
+  /*
+   * A campfire is four logs and an ash plate, plus two sheets of flame when it
+   * is lit. An unlit one drawing fire is the failure the old candidate list
+   * had -- `campfire_log_lit` came first, so a cold campfire wore burning logs.
+   */
+  equal("an unlit campfire is five boxes", parts("campfire", { lit: "false", facing: "south" }).length, 5);
+  equal("...and a lit one is seven", parts("campfire", { lit: "true", facing: "south" }).length, 7);
+  const cold = await keysOf("campfire", { lit: "false", facing: "south" });
+  const hot = await keysOf("campfire", { lit: "true", facing: "south" });
+  check("a cold campfire wears no lit log", !cold.has("minecraft:block/campfire_log_lit"), [...cold].join(" "));
+  check("...and no fire", !cold.has("minecraft:block/campfire_fire"), [...cold].join(" "));
+  check("a lit one wears both", hot.has("minecraft:block/campfire_log_lit") && hot.has("minecraft:block/campfire_fire"), [...hot].join(" "));
+  const soul = await keysOf("soul_campfire", { lit: "true", facing: "south" });
+  check("a soul campfire burns blue", soul.has("minecraft:block/soul_campfire_fire"), [...soul].join(" "));
+
+  /*
+   * And the sign, which is a different fault in the same file: `signBoard`
+   * asked `endsWith("_wall_sign")`, and the pre-Flattening name `wall_sign`
+   * does not end in that. It fell through to the standing board -- in the
+   * **middle** of the cell, turned by a `rotation` a wall sign never carries,
+   * so `NaN`, guarded to zero, so north. Both halves of the report, one
+   * missing underscore.
+   *
+   * Stated as the two spellings agreeing, because that is the rule: a bare
+   * family name is a member of its own family.
+   */
+  for (const facing of ["north", "east", "south", "west"]) {
+    equal(`wall_sign and oak_wall_sign agree facing ${facing}`, parts("wall_sign", { facing }).map((b) => b.box), parts("oak_wall_sign", { facing }).map((b) => b.box));
+  }
+  /*
+   * ...and the board really is against a wall rather than in mid-air. A wall
+   * sign facing north is bolted to the south face of its cell: thin in z, and
+   * the standing board it used to draw was at z 7..9, the middle.
+   */
+  const wallBoard = parts("wall_sign", { facing: "north" })[0].box;
+  check("a north-facing wall sign is against the far wall", wallBoard[2] >= 14, wallBoard.join(","));
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

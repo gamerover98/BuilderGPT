@@ -74,7 +74,8 @@ import { loadStructure } from "../pipeline/loader.js";
 import type { PaletteEntry } from "../pipeline/types.js";
 import { paletteEntryCacheKey } from "../pipeline/types.js";
 import { parsePaletteEntry } from "../pipeline/loader_formats.js";
-import { hasProperty } from "../../shared/block_states.js";
+import { hasProperty, isOpenable } from "../../shared/block_states.js";
+import { FACE_VECTOR } from "../../shared/block_orientation.js";
 import { normaliseVoidBlock, voidSources } from "../../shared/settings.js";
 import { mcVersion, refusalFor } from "../../shared/mc_versions.js";
 import {
@@ -548,6 +549,83 @@ function floodedPlacement(
   return { ...entry, properties: { ...entry.properties, waterlogged: "true" } };
 }
 
+interface OpenTarget {
+  readonly cells: readonly { x: number; y: number; z: number; entry: PaletteEntry }[];
+  /** `true` when the door is being opened; only the undo label reads it. */
+  readonly opening: boolean;
+  readonly name: string;
+}
+
+/**
+ * What a right-click should **open**, or `null` when it should place instead.
+ *
+ * The gesture is the game's: right-click a door and it swings, and you have to
+ * sneak to put a block on it. Here it did the second thing always, so the one
+ * way to open a door was the inspector.
+ *
+ * The clicked cell is one step back along `against` from the cell a placement
+ * would use -- the same arithmetic `doubleSlabTarget` does for its two faces,
+ * generalised to six through `FACE_VECTOR`, which `block_orientation.ts` owns
+ * and `connect.ts` already reads rather than keeping six numbers of its own.
+ * With no `against` there is no clicked block: a click on the build grid is a
+ * placement and nothing else.
+ *
+ * **Both halves of a door, or neither.** A door open at the bottom and shut at
+ * the top is a shape the game cannot hold, and it is what one `setBlock` would
+ * leave -- so the far half is found through `TWO_PART`, the table that already
+ * knows a door is two blocks and which way the second one lies. Reading it
+ * rather than writing `_door` a second time is what makes clicking the *upper*
+ * half work, which is the half a person reaches first when the door is at eye
+ * level.
+ *
+ * The far half is only taken when it is the same block. A door with something
+ * else above it is already broken, and opening half of it would not mend it.
+ */
+function openTarget(
+  doc: SchematicDocument,
+  request: { x: number; y: number; z: number; against?: string },
+): OpenTarget | null {
+  const against = request.against;
+  if (against === undefined) return null;
+  const step = FACE_VECTOR[against as keyof typeof FACE_VECTOR];
+  if (step === undefined) return null;
+  const at = { x: request.x - step.x, y: request.y - step.y, z: request.z - step.z };
+
+  const existing = getBlock(doc, at.x, at.y, at.z);
+  /*
+   * The registry decides, which excludes air for free and covers every wood
+   * without a list. A block carrying `open` that the registry has never heard
+   * of is left alone -- an omission that costs nothing, where a wrong guess
+   * would write a state onto something that has no such property.
+   */
+  if (!isOpenable(existing.namespacedName)) return null;
+  const opening = existing.properties.open !== "true";
+  const next = opening ? "true" : "false";
+  const swung = (entry: PaletteEntry): PaletteEntry => ({
+    ...entry,
+    properties: { ...entry.properties, open: next },
+  });
+
+  const cells = [{ ...at, entry: swung(existing) }];
+  const family = TWO_PART.find((candidate) =>
+    existing.namespacedName.endsWith(candidate.suffix),
+  );
+  const held = family === undefined ? undefined : existing.properties[family.property];
+  if (family !== undefined && family.step !== null && (held === family.near || held === family.far)) {
+    const away = held === family.near ? 1 : -1;
+    const other = {
+      x: at.x + family.step[0] * away,
+      y: at.y + family.step[1] * away,
+      z: at.z + family.step[2] * away,
+    };
+    const there = getBlock(doc, other.x, other.y, other.z);
+    if (there.namespacedName === existing.namespacedName) {
+      cells.push({ ...other, entry: swung(there) });
+    }
+  }
+  return { cells, opening, name: existing.namespacedName };
+}
+
 /**
  * The families that are one block to place and two blocks in the file.
  *
@@ -790,6 +868,38 @@ export function applyEdit(
    * because the grid has no negative index; that is `grow.ts`'s arithmetic and
    * the same answer a fill dragged under the floor already gives.
    */
+  /*
+   * Open what was clicked, or fall through and place what is held.
+   *
+   * The fall-through is a rewrite rather than a copy, so a right-click that
+   * turns out to be a placement is the *same* placement in every respect --
+   * the slab merge, the two-part rule, the flooding, the growth and the
+   * volume guard. A second path here is how one of those comes to be missing
+   * from the commonest gesture in the app.
+   *
+   * Both halves land in one transaction, or Ctrl+Z would take a door back a
+   * half at a time -- which is the rule the placement below already keeps,
+   * arrived at from the other direction. None of these blocks carries a block
+   * entity, so `setBlock` dropping one is not a hazard here the way it is in
+   * `connect.ts`.
+   */
+  if (request.kind === "use") {
+    const target = openTarget(doc, request);
+    if (target === null) {
+      return applyEdit(session, { ...request, kind: "setBlock" }, options);
+    }
+    return runTransaction(
+      doc,
+      history,
+      `${target.opening ? "Open" : "Close"} ${target.name}`,
+      (tx) =>
+        target.cells.reduce(
+          (changed, cell) => changed + (tx.setBlock(cell.x, cell.y, cell.z, cell.entry) ? 1 : 0),
+          0,
+        ),
+    );
+  }
+
   if (request.kind === "setBlock") {
     const entry = placeable(floodedPlacement(doc, request, toEntry(request.block)));
 

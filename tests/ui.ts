@@ -2879,5 +2879,34 @@ console.log("\n--- what a block may hold depends on the era ---");
   );
 }
 
+// --- the right button opens, and Shift places -------------------------------
+//
+// The split is the game's, and the *decision* is main's -- the renderer holds
+// no schematic, so it cannot know whether the cell under the crosshair opens.
+// What lives here is only which verb the click sends, which is a browser fact
+// this harness has no browser for. So it is read out of the source, the way the
+// flight-mode modifier gate is.
+//
+// Shift is already the descend key in flight, so sneak-to-place costs nothing
+// and collides with nothing -- and that is the whole reason this arrangement is
+// available at all rather than needing a key nobody uses.
+console.log("\n--- the right button opens, and Shift places ---");
+{
+  const viewer = readFileSync(path.join(RENDERER, "lib", "Viewer.svelte"), "utf-8");
+  check(
+    "the right button dispatches on Shift",
+    /onbuild\(\s*event\.shiftKey \? "place" : "use"/.test(viewer),
+  );
+  /*
+   * And the left one is untouched. A gesture that started opening things on
+   * the *break* button would be a very fast way to lose a build, and it is one
+   * character away.
+   */
+  check(
+    "the left button still breaks",
+    /event\.button === 0\)\s*\{\s*\n?\s*onbuild\("break"/.test(viewer.replace(/\r/g, "")),
+  );
+}
+
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

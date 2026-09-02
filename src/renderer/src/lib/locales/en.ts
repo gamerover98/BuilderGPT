@@ -628,6 +628,7 @@ export const en = {
   "task.redoing": "Redoing",
   "task.placingBlock": "Placing a block",
   "task.breakingBlock": "Breaking a block",
+  "task.usingBlock": "Opening a block",
   "task.changingBlockState": "Changing a block state",
   "task.removingBlockState": "Removing a block state",
   "task.editingNbt": "Editing block entity data",

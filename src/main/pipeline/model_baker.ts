@@ -352,21 +352,31 @@ export const SPECIAL_FACE_RULES: Record<string, SpecialFaceRule> = {
   },
 
   /*
-   * A campfire's default state is `lit=true`, so the lit logs come first and
-   * the cold ones stand behind them -- the pack ships no `soul_campfire_log`,
-   * only the lit one, which is why the soul row falls back to the ordinary log
-   * rather than to a name that does not exist.
+   * A campfire's logs, and `lit` is deliberately **not** decided here.
+   *
+   * This used to put `campfire_log_lit` first and the cold log behind it, on
+   * the reasoning that the default state is lit -- which is true, and which
+   * made an *unlit* campfire wear the burning logs, because a candidate list
+   * cannot see a property. `block_shapes.ts` reads `lit` and names the
+   * texture per face, which is what vanilla does through `campfire_off.json`.
+   *
+   * What is left here is the block's particle texture and the fallback its
+   * boxes resolve against, so it names the one log every campfire has.
    */
-  campfire: {
-    top: ["campfire_log_lit", "campfire_log"],
-    side: ["campfire_log_lit", "campfire_log"],
-    bottom: ["campfire_log_lit", "campfire_log"],
-  },
-  soul_campfire: {
-    top: ["soul_campfire_log_lit", "campfire_log"],
-    side: ["soul_campfire_log_lit", "campfire_log"],
-    bottom: ["soul_campfire_log_lit", "campfire_log"],
-  },
+  campfire: { top: ["campfire_log"], side: ["campfire_log"], bottom: ["campfire_log"] },
+  soul_campfire: { top: ["campfire_log"], side: ["campfire_log"], bottom: ["campfire_log"] },
+
+  /*
+   * A hopper's sides are `hopper_outside`, and the generic list asks for
+   * `hopper_side` -- **a file the pack does not contain**, because vanilla
+   * has never called it that. So every hopper wore its own lid on all six
+   * faces, `hopper_top` being the only name that resolved.
+   *
+   * `hopper_inside` is not reachable from a face rule at all: it belongs to
+   * the bowl's floor and the funnel's underside, which are boxes rather than
+   * sides of the block. `block_shapes.ts` names it per box.
+   */
+  hopper: { top: ["hopper_top"], side: ["hopper_outside"], bottom: ["hopper_outside"] },
   fire: { top: ["fire_0"], side: ["fire_0"], bottom: ["fire_0"] },
   soul_fire: { top: ["soul_fire_0"], side: ["soul_fire_0"], bottom: ["soul_fire_0"] },
 

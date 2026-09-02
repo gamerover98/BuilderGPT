@@ -52,17 +52,31 @@
    */
   import type { BlockInspection } from "../../../shared/ipc.js";
   import { propertyRows } from "./inspector_rows.js";
+  import type { LegacyIndex } from "../../../shared/legacy_ids.js";
   import { t } from "./i18n.svelte.js";
 
   interface Props {
     inspection: BlockInspection | null;
     at: { x: number; y: number; z: number } | null;
     busy: boolean;
+    /**
+     * The open document's legacy table when it is a pre-Flattening one, and
+     * `null` otherwise -- which is the whole of how this panel knows not to
+     * offer `waterlogged` on a 1.12.2 fence. `App.svelte` already derives it.
+     */
+    legacy?: LegacyIndex | null;
     onchangeproperty: (name: string, value: string) => void;
     onchangenbt: (path: (string | number)[], value: string) => void;
   }
 
-  const { inspection, at, busy, onchangeproperty, onchangenbt }: Props = $props();
+  const {
+    inspection,
+    at,
+    busy,
+    legacy = null,
+    onchangeproperty,
+    onchangenbt,
+  }: Props = $props();
 
   /** Raw NBT is worth showing, but not by default — it is long and wrapped. */
   let showRaw = $state(false);
@@ -82,7 +96,7 @@
   const rows = $derived.by(() => {
     const block = inspection?.block;
     if (block === undefined) return [];
-    return propertyRows(block, inspection?.properties ?? {});
+    return propertyRows(block, inspection?.properties ?? {}, legacy);
   });
 
   /**

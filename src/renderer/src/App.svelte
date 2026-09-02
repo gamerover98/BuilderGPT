@@ -4157,6 +4157,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
           {inspection}
           at={inspectedAt}
           {busy}
+          legacy={legacyForDoc}
           onchangeproperty={changeBlockProperty}
           onchangenbt={changeNbtValue}
         />

@@ -169,6 +169,60 @@ const FRONT_TO_PLAYER_ANY_AXIS: ReadonlySet<string> = new Set([
   "barrel",
 ]);
 
+/**
+ * Blocks that point **into** the block they were clicked onto.
+ *
+ * A hopper is the whole family, and it is the one everybody notices: you put
+ * one against the side of a chest so that it feeds the chest, and the spout
+ * has to end up pointing at it. `facing` is the clicked face reversed, with
+ * one exception the game states outright -- there is no upward-facing hopper,
+ * so a click on a floor gives `down` rather than `up`.
+ *
+ * Absent from every table until now, so every hopper ever placed here landed
+ * on the registry default `down` and its spout hung in mid-air beside whatever
+ * it was meant to feed.
+ */
+const POINTS_INTO_CLICKED: ReadonlySet<string> = new Set(["hopper"]);
+
+/**
+ * Signs that carry a sixteenth-turn `rotation` rather than a `facing`.
+ *
+ * The bare `sign` is the pre-Flattening spelling, whose sixteen values
+ * `legacy_blocks.json` enumerates as `63:0`..`63:15`; `_sign` catches every
+ * modern standing one, and `_hanging_sign` the ones hung from a ceiling. The
+ * two *wall* families carry `facing` and no `rotation` at all, and are
+ * kept out by two different mechanisms -- which is worth saying, because one
+ * of them is not obvious and the suite caught it:
+ *
+ * - a **wall sign** is answered by `WALL_MOUNTED` above, before this is asked;
+ * - a **wall hanging sign** is not, because it is deliberately absent from
+ *   that table -- and `oak_wall_hanging_sign` ends in `_hanging_sign`, so it
+ *   matches here. It is excluded by name.
+ */
+const SPUN_SIGNS: ReadonlySet<string> = new Set(["sign"]);
+
+const SPUN_SIGN_SUFFIXES = ["_sign", "_hanging_sign"] as const;
+
+/** The one member of both suffixes that must reach neither rule. */
+const WALL_HUNG_SIGN = "_wall_hanging_sign";
+
+/**
+ * Vanilla's own sixteenth of a turn, from the direction the camera was facing.
+ *
+ * `RotationSegment.convertToSegment(yaw + 180)`, which is
+ * `floor(degrees * 16 / 360 + 0.5) & 15`. The `+ 180` is what turns the sign
+ * round to face the person who placed it, and it is the half that cannot be
+ * checked by looking at a screenshot: a sign facing exactly the wrong way still
+ * reads as a sign, and the mistake only shows when somebody walks round it.
+ *
+ * Minecraft's yaw is zero at south and increases towards west, which is
+ * `atan2(-x, z)` in this app's axes.
+ */
+export function signRotation(direction: { readonly x: number; readonly z: number }): number {
+  const yaw = (Math.atan2(-direction.x, direction.z) * 180) / Math.PI;
+  return Math.floor(((yaw + 180) * 16) / 360 + 0.5) & 15;
+}
+
 /** Blocks that point where you are looking, because that is where they act. */
 const AWAY_FROM_PLAYER_ANY_AXIS: ReadonlySet<string> = new Set(["piston", "sticky_piston"]);
 
@@ -343,6 +397,25 @@ export function orientPlacement(id: string, look: PlacementLook): Record<string,
     return { facing: OPPOSITE[horizontalFacing(look.direction)] };
   }
 
+  /*
+   * Below the wall-mounted arm on purpose: `oak_wall_sign` ends in `_sign`
+   * too, and it is the arm above that has its answer. Asking here first would
+   * write a `rotation` onto a block that has none and take away the `facing`
+   * that puts it on the wall.
+   */
+  if (
+    !name.endsWith(WALL_HUNG_SIGN) &&
+    (SPUN_SIGNS.has(name) || SPUN_SIGN_SUFFIXES.some((suffix) => name.endsWith(suffix)))
+  ) {
+    return { rotation: String(signRotation(look.direction)) };
+  }
+
+  if (POINTS_INTO_CLICKED.has(name)) {
+    if (look.against === null) return {};
+    const into = OPPOSITE[look.against];
+    return { facing: into === "up" ? "down" : into };
+  }
+
   if (FACE_AND_FACING.has(name) || FACE_AND_FACING_SUFFIXES.some((s) => name.endsWith(s))) {
     if (look.against === "up") return { face: "floor", facing: horizontalFacing(look.direction) };
     if (look.against === "down") {
@@ -426,4 +499,6 @@ export const ORIENTED_BLOCK_NAMES: readonly string[] = [
   ...AWAY_FROM_PLAYER_ANY_AXIS,
   ...WALL_MOUNTED,
   ...FACE_AND_FACING,
+  ...POINTS_INTO_CLICKED,
+  ...SPUN_SIGNS,
 ];

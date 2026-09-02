@@ -783,7 +783,7 @@ const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => Bl
   ["_sign", standingSign],
   ["_torch", torchShape],
   ["_rail", () => boxes([0, 0, 0, 16, 1, 16])],
-  ["_candle", () => boxes([7, 0, 7, 9, 6, 9])],
+  ["_candle", candleShape],
   ["_sapling", () => ({ kind: "cross" })],
   /*
    * `_chain` covers the rename and everything that came with it: `chain` became
@@ -828,7 +828,7 @@ const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => Bl
   ["_head", () => boxes([4, 0, 4, 12, 8, 12])],
   ["_skull", () => boxes([4, 0, 4, 12, 8, 12])],
   // A cake with a candle on it: the cake, and the candle standing on top.
-  ["_candle_cake", () => boxes([1, 0, 1, 15, 8, 15], [7, 8, 7, 9, 14, 9])],
+  ["_candle_cake", candleCake],
   // A cauldron with something in it is the same iron pot.
   ["_cauldron", () => boxes([0, 0, 0, 16, 16, 16])],
   // The copper golem, stood still. A statue is not a cube and drawing it as one
@@ -837,6 +837,481 @@ const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => Bl
   ["_tulip", () => ({ kind: "cross" })],
   ["_mushroom", () => ({ kind: "cross" })],
 ];
+
+/**
+ * One candle in a group: where its 2x2 footprint starts, and how tall it is.
+ *
+ * Vanilla writes four separate models -- `template_candle` through
+ * `template_four_candles` -- and the heights differ *within* a group (3, 5 and
+ * 6 units), which is what stops four candles reading as a grid of identical
+ * posts. They are transcribed rather than spaced by arithmetic.
+ */
+type CandleStick = readonly [x: number, z: number, height: number];
+
+/** The four vanilla arrangements, indexed by `candles` - 1. */
+const CANDLE_GROUPS: readonly (readonly CandleStick[])[] = [
+  [[7, 7, 6]],
+  [
+    [5, 7, 5],
+    [9, 6, 6],
+  ],
+  [
+    [7, 9, 3],
+    [5, 7, 5],
+    [8, 6, 6],
+  ],
+  [
+    [6, 8, 3],
+    [9, 8, 5],
+    [5, 5, 5],
+    [8, 5, 6],
+  ],
+];
+
+/**
+ * Candles, and the reason they were **invisible** rather than merely wrong.
+ *
+ * The shape was one box with no windows, so its UVs came from its own
+ * coordinates: `x 7..9` of the tile. Decoded from the bundled pack,
+ * `candle.png`'s opaque art lives at `x 0..1`, `y 5..15` -- so every face was
+ * drawn, textured with nothing, and the block did not appear at all. This is
+ * the sheet-of-parts case the header already names for the lantern and the
+ * chain, arriving as a block that could not be seen.
+ *
+ * The vanilla windows say the same thing outright: a candle's sides are
+ * `[0, 8, 2, 8 + height]` whatever the box is doing.
+ *
+ * The little cross on top is the wick, or the flame when it is lit. Two quads
+ * of no thickness at +/-45 degrees -- so their four side faces have no area
+ * and are not drawn, which is the rule this file already keeps for a chain.
+ * Its position is derived from the stick because in all eight of vanilla's
+ * candles it is exactly the stick's centre; that regularity is stated here
+ * rather than transcribed eight times.
+ *
+ * `lit` swaps the **texture**, not the geometry -- `candle_lit.png` carries the
+ * flame where `candle.png` carries the wick, in the same window. That is what
+ * vanilla does, and it is why one shape covers both. `resolveBoxTexture` falls
+ * back to the block's own texture for a pack shipping no `_lit`, so a candle
+ * is never worse off than it was.
+ */
+function candleShape(entry: PaletteEntry): BlockShape {
+  const wanted = Math.trunc(Number(entry.properties.candles));
+  const count = Number.isFinite(wanted) ? Math.min(4, Math.max(1, wanted)) : 1;
+  const texture = entry.properties.lit === "true" ? `${baseName(entry)}_lit` : undefined;
+  const parts: ShapeBox[] = [];
+  for (const [x, z, height] of CANDLE_GROUPS[count - 1]) {
+    const side: UvWindow = [0, 8, 2, 8 + height];
+    parts.push({
+      box: [x, 0, z, x + 2, height, z + 2],
+      texture,
+      uv: {
+        north: side,
+        south: side,
+        east: side,
+        west: side,
+        up: [0, 6, 2, 8],
+        down: [0, 14, 2, 16],
+      },
+    });
+    const cx = x + 1;
+    const cz = z + 1;
+    for (const angle of [45, -45]) {
+      parts.push({
+        box: [cx - 0.5, height, cz, cx + 0.5, height + 1, cz],
+        rotation: { origin: [cx, height, cz], axis: "y", angle },
+        texture,
+        uv: { north: [0, 5, 1, 6], south: [0, 5, 1, 6] },
+      });
+    }
+  }
+  return boxes(...parts);
+}
+
+/**
+ * A cake with a candle standing in it.
+ *
+ * Two boxes wearing two textures, which is the beacon's arrangement and needs
+ * to be: `model_baker.ts` aliases the whole block to `cake`, so without a box
+ * naming its own the candle was a slice of cake standing on a cake. Reported
+ * as the candle simply not being there, which from a distance is what a
+ * cake-coloured stub on a cake looks like.
+ *
+ * The candle is vanilla's own `[7, 8, 7]..[9, 14, 9]` with the same windows a
+ * lone candle uses, and the flame sits on top of it by the same rule.
+ */
+function candleCake(entry: PaletteEntry): BlockShape {
+  const name = baseName(entry);
+  const dyed = name.endsWith("_candle_cake") ? name.slice(0, -"_cake".length) : "candle";
+  const texture = entry.properties.lit === "true" ? `${dyed}_lit` : dyed;
+  const parts: ShapeBox[] = [
+    { box: [1, 0, 1, 15, 8, 15] },
+    {
+      box: [7, 8, 7, 9, 14, 9],
+      texture,
+      uv: {
+        north: [0, 8, 2, 14],
+        south: [0, 8, 2, 14],
+        east: [0, 8, 2, 14],
+        west: [0, 8, 2, 14],
+        up: [0, 6, 2, 8],
+        down: [0, 14, 2, 16],
+      },
+    },
+  ];
+  for (const angle of [45, -45]) {
+    parts.push({
+      box: [7.5, 14, 8, 8.5, 15, 8],
+      rotation: { origin: [8, 14, 8], axis: "y", angle },
+      texture,
+      uv: { north: [0, 5, 1, 6], south: [0, 5, 1, 6] },
+    });
+  }
+  return boxes(...parts);
+}
+
+// --- the bell, the hopper and the campfire ----------------------------------
+//
+// Three blocks that were single crude boxes wearing the wrong pixels. All
+// three are transcribed from vanilla at 1.21.4, and in all three the
+// **blockstate** decided something the model could not: the campfire is
+// authored facing *south*, the hopper facing north, and a bell's two wall
+// models are authored facing east while its floor and ceiling ones face north.
+// Assuming one convention for all of them would have left half of them a
+// quarter or a half turn out, which still looks like a bell.
+
+/** `entity/bell/bell_body.png`, which is 32 texels square rather than 64. */
+const BELL_SHEET = "entity/bell/bell_body";
+const BELL_SHEET_WIDTH = 32;
+
+/**
+ * The bell itself, which has **no block model at all**.
+ *
+ * `bell_floor.json` and its three siblings contain only the supports -- a
+ * dark-oak bar and, on the floor, two stone posts. The bell is drawn by a block
+ * entity renderer from `entity/bell/bell_body.png`, exactly as a chest is, so
+ * `unwrapCube` is already the function that reads it.
+ *
+ * The two cubes and their offsets were **measured off the sheet** rather than
+ * recalled: its opaque regions are a 6x7x6 unwrap at (0, 0) and an 8x2x8 one at
+ * (0, 13), which is that layout and nothing else could produce it. What was
+ * there before was `boxes([4, 4, 4, 12, 12, 12])` wearing `bell_side` -- a cube
+ * in the middle of the cell showing a piece of the *support's* texture.
+ */
+const BELL_BODY = unwrapCube(0, 0, 6, 7, 6, BELL_SHEET_WIDTH);
+const BELL_CROWN = unwrapCube(0, 13, 8, 2, 8, BELL_SHEET_WIDTH);
+
+/**
+ * The supports, by `attachment`, and the quarter-turns each is authored for.
+ *
+ * `bell.json`'s variants are the source: floor and ceiling put `y: 0` on
+ * `facing=north`, and both wall models put it on `facing=east`. Two conventions
+ * in one block, which is exactly the sort of thing that is invisible in a
+ * screenshot -- a bell turned a quarter still hangs.
+ */
+function bellSupports(entry: PaletteEntry): { parts: ShapeBox[]; steps: number } {
+  const bar = "dark_oak_planks";
+  switch (entry.properties.attachment) {
+    case "ceiling":
+      return {
+        parts: [{ box: [7, 13, 7, 9, 16, 9], texture: bar }],
+        steps: northFacingSteps(entry),
+      };
+    case "single_wall":
+      return {
+        parts: [{ box: [3, 13, 7, 16, 15, 9], texture: bar }],
+        steps: facingSteps(entry),
+      };
+    case "double_wall":
+      return {
+        parts: [{ box: [0, 13, 7, 16, 15, 9], texture: bar }],
+        steps: facingSteps(entry),
+      };
+    default:
+      // `floor`, and the answer for an entry that names no attachment at all.
+      return {
+        parts: [
+          { box: [2, 13, 7, 14, 15, 9], texture: bar },
+          { box: [0, 0, 6, 2, 16, 10], texture: "stone" },
+          { box: [14, 0, 6, 16, 16, 10], texture: "stone" },
+        ],
+        steps: northFacingSteps(entry),
+      };
+  }
+}
+
+/**
+ * The bell hangs from y 4 to y 13 whatever holds it up: the crown's top meets
+ * the underside of every one of the four bars, which all sit at y 13.
+ *
+ * The body turns with the supports, and whether it should is **unobservable**:
+ * its four side windows are byte-identical on the sheet, as are the crown's,
+ * because a bell is a body of revolution. Turning everything together is one
+ * `transform` instead of two.
+ */
+function bell(entry: PaletteEntry): BlockShape {
+  const { parts, steps } = bellSupports(entry);
+  return transform(
+    [
+      { box: [5, 4, 5, 11, 11, 11], texture: BELL_SHEET, uv: BELL_BODY },
+      { box: [4, 11, 4, 12, 13, 12], texture: BELL_SHEET, uv: BELL_CROWN },
+      ...parts,
+    ],
+    steps,
+    false,
+  );
+}
+
+/**
+ * A hopper: a bowl with walls, a funnel and a spout.
+ *
+ * Its UVs really are derived from the box -- `hopper.json` states not one
+ * window -- so this is the one of the five where the *geometry* was the whole
+ * fault. It was `boxes([0, 10, 0, 16, 16, 16])`: the rim as a solid lump, with
+ * no bowl inside it, no funnel and no spout.
+ *
+ * The three textures are the other half. `hopper_top` goes on the rim, and the
+ * bowl's floor and the funnel's underside wear `hopper_inside`, which nothing
+ * would ever have reached: the generic candidate list asks for `hopper_side`,
+ * and **the pack has no such file** -- vanilla calls it `hopper_outside`.
+ *
+ * `omit` follows vanilla's own omissions rather than being decided here. Each
+ * one is a face that meets another box of the same hopper exactly: the walls'
+ * undersides on the bowl floor, the funnel's top on that same plane, the
+ * spout's top on the funnel's bottom. Drawn, they are coplanar pairs, and a
+ * coplanar pair is the dotted seam this file already records fixing on a chest.
+ */
+const HOPPER_FACES: Readonly<Record<string, string>> = {
+  up: "hopper_top",
+  down: "hopper_inside",
+  north: "hopper_outside",
+  south: "hopper_outside",
+  east: "hopper_outside",
+  west: "hopper_outside",
+};
+
+const HOPPER_BOWL: readonly ShapeBox[] = [
+  // The bowl's floor: `hopper_inside` above as well as below, which is what
+  // you see looking down into it.
+  {
+    box: [0, 10, 0, 16, 11, 16],
+    textures: { ...HOPPER_FACES, up: "hopper_inside" },
+  },
+  { box: [0, 11, 0, 2, 16, 16], textures: HOPPER_FACES, omit: ["down"] },
+  { box: [14, 11, 0, 16, 16, 16], textures: HOPPER_FACES, omit: ["down"] },
+  { box: [2, 11, 0, 14, 16, 2], textures: HOPPER_FACES, omit: ["down"] },
+  { box: [2, 11, 14, 14, 16, 16], textures: HOPPER_FACES, omit: ["down"] },
+  { box: [4, 4, 4, 12, 10, 12], textures: HOPPER_FACES, omit: ["up"] },
+];
+
+function hopper(entry: PaletteEntry): BlockShape {
+  const facing = entry.properties.facing;
+  if (facing === undefined || facing === "down" || facing === "up") {
+    return boxes(...HOPPER_BOWL, {
+      box: [6, 0, 6, 10, 4, 10],
+      textures: HOPPER_FACES,
+      omit: ["up"],
+    });
+  }
+  /*
+   * `hopper_side.json`, authored **north** -- `hopper.json`'s blockstate puts
+   * `y: 0` on `facing=north`. The spout comes out of the side at mid height
+   * instead of dropping from the bottom, which is the shape that reads as
+   * feeding the chest beside it.
+   */
+  return transform(
+    [...HOPPER_BOWL, { box: [6, 4, 0, 10, 8, 4], textures: HOPPER_FACES, omit: ["south"] }],
+    northFacingSteps(entry),
+    false,
+  );
+}
+
+/**
+ * A campfire: four logs, a base plate, and two crossed sheets of flame.
+ *
+ * Every face of it carries a transcribed window -- `campfire_log.png` is a
+ * sheet holding a log's end, its length and the ash, so derived UVs put the
+ * wrong quarter of it on every surface. It was one slab, `[0, 0, 0, 16, 7, 16]`,
+ * which is not even the right silhouette.
+ *
+ * **Authored facing south.** `campfire.json`'s blockstate puts `y: 0` on
+ * `facing=south` and 180 on north, so the obvious guess is exactly half a turn
+ * wrong -- and a campfire turned 180 degrees is still a campfire, which is how
+ * that survives review.
+ *
+ * `signal_fire` is deliberately absent. It changes the height of the smoke
+ * column, which is a particle effect and part of no model at all; giving it
+ * geometry would be inventing rather than transcribing.
+ */
+const CAMPFIRE_LOGS: readonly ShapeBox[] = [
+  {
+    box: [1, 0, 0, 5, 4, 16],
+    textures: { east: "lit_log" },
+    uv: {
+      north: [0, 4, 4, 8],
+      east: [0, 1, 16, 5],
+      south: [0, 4, 4, 8],
+      west: [16, 0, 0, 4],
+      up: [0, 0, 16, 4],
+      down: [0, 0, 16, 4],
+    },
+  },
+  {
+    box: [11, 0, 0, 15, 4, 16],
+    textures: { west: "lit_log" },
+    uv: {
+      north: [0, 4, 4, 8],
+      east: [0, 0, 16, 4],
+      south: [0, 4, 4, 8],
+      west: [16, 1, 0, 5],
+      up: [0, 0, 16, 4],
+      down: [0, 0, 16, 4],
+    },
+  },
+  {
+    box: [0, 3, 11, 16, 7, 15],
+    textures: { north: "lit_log", south: "lit_log", down: "lit_log" },
+    uv: {
+      north: [16, 0, 0, 4],
+      east: [0, 4, 4, 8],
+      south: [0, 0, 16, 4],
+      west: [0, 4, 4, 8],
+      up: [0, 0, 16, 4],
+      down: [0, 4, 16, 8],
+    },
+  },
+  {
+    box: [0, 3, 1, 16, 7, 5],
+    textures: { north: "lit_log", south: "lit_log", down: "lit_log" },
+    uv: {
+      north: [0, 0, 16, 4],
+      east: [0, 4, 4, 8],
+      south: [16, 0, 0, 4],
+      west: [0, 4, 4, 8],
+      up: [0, 0, 16, 4],
+      down: [0, 4, 16, 8],
+    },
+  },
+  // The ash the logs sit on. One unit tall, so its four sides are a sliver.
+  {
+    box: [5, 0, 0, 11, 1, 16],
+    textures: { up: "lit_log" },
+    uv: {
+      north: [0, 15, 6, 16],
+      south: [10, 15, 16, 16],
+      up: [0, 8, 16, 14],
+      down: [0, 8, 16, 14],
+    },
+  },
+];
+
+/** The flame sheets, which are the same square of `#fire` twice, crossed. */
+const CAMPFIRE_FIRE: Readonly<Record<string, UvWindow>> = {
+  north: [0, 0, 16, 16],
+  south: [0, 0, 16, 16],
+  east: [0, 0, 16, 16],
+  west: [0, 0, 16, 16],
+};
+
+function campfire(entry: PaletteEntry): BlockShape {
+  const soul = baseName(entry).startsWith("soul_");
+  const lit = entry.properties.lit !== "false";
+  /*
+   * Unlit, every `lit_log` face falls back to the plain log -- which is what
+   * `campfire_off.json` does, by rebinding the texture rather than by changing
+   * a single coordinate. The pack ships no `soul_campfire_log` and needs none:
+   * a cold soul campfire is cold wood.
+   */
+  const litLog = lit ? (soul ? "soul_campfire_log_lit" : "campfire_log_lit") : "campfire_log";
+  const parts: ShapeBox[] = CAMPFIRE_LOGS.map((part) => ({
+    ...part,
+    texture: "campfire_log",
+    textures: Object.fromEntries(Object.keys(part.textures ?? {}).map((face) => [face, litLog])),
+  }));
+  if (lit) {
+    const fire = soul ? "soul_campfire_fire" : "campfire_fire";
+    parts.push(
+      {
+        box: [0.8, 1, 8, 15.2, 17, 8],
+        rotation: { origin: [8, 8, 8], axis: "y", angle: 45 },
+        texture: fire,
+        uv: CAMPFIRE_FIRE,
+      },
+      {
+        box: [8, 1, 0.8, 8, 17, 15.2],
+        rotation: { origin: [8, 8, 8], axis: "y", angle: 45 },
+        texture: fire,
+        uv: CAMPFIRE_FIRE,
+      },
+    );
+  }
+  return transform(parts, southFacingSteps(entry), false);
+}
+
+/**
+ * An end rod: a short base plate and a long rod, both reading a sheet.
+ *
+ * Found by the check that was written for the candles rather than by a report,
+ * and it is the same fault exactly: `boxes([6, 0, 6, 10, 16, 10])` with derived
+ * UVs, over an `end_rod.png` whose art occupies texels `x 0..6, y 0..7`. Every
+ * face sampled the empty three quarters of the tile, so an end rod was **also**
+ * drawn and invisible -- and nobody had said so, which is the argument for the
+ * check over the fix.
+ *
+ * Both boxes and all twelve windows are `end_rod.json` verbatim.
+ */
+const END_ROD: readonly ShapeBox[] = [
+  {
+    box: [6, 0, 6, 10, 1, 10],
+    uv: {
+      down: [6, 6, 2, 2],
+      up: [2, 2, 6, 6],
+      north: [2, 6, 6, 7],
+      south: [2, 6, 6, 7],
+      west: [2, 6, 6, 7],
+      east: [2, 6, 6, 7],
+    },
+  },
+  {
+    box: [7, 1, 7, 9, 16, 9],
+    uv: {
+      up: [2, 0, 4, 2],
+      north: [0, 0, 2, 15],
+      south: [0, 0, 2, 15],
+      west: [0, 0, 2, 15],
+      east: [0, 0, 2, 15],
+    },
+    omit: ["down"],
+  },
+];
+
+/**
+ * Where the rod points, as **one** rotation each.
+ *
+ * `end_rod.json`'s blockstate spells east and west as an x turn *and* a y turn,
+ * and a `ShapeBox` carries one rotation rather than a pair -- so those two are
+ * restated as a single turn about z, which lands the rod on the same axis. The
+ * difference between the two spellings is a roll about the rod's own length,
+ * and that is **unobservable here**: all four of the rod's side faces wear the
+ * identical window `[0, 0, 2, 15]`, as do the base's. The same argument the
+ * bell's body rests on, for the same reason.
+ *
+ * Vanilla's `x` turns the opposite way from `tiltFace`'s, which is why north is
+ * -90 and not +90. Getting that backwards points every rod at the block behind
+ * the one it grew from.
+ */
+const END_ROD_TURN: Readonly<Record<string, BoxRotation | undefined>> = {
+  up: undefined,
+  down: { origin: [8, 8, 8], axis: "x", angle: 180 },
+  north: { origin: [8, 8, 8], axis: "x", angle: -90 },
+  south: { origin: [8, 8, 8], axis: "x", angle: 90 },
+  east: { origin: [8, 8, 8], axis: "z", angle: -90 },
+  west: { origin: [8, 8, 8], axis: "z", angle: 90 },
+};
+
+function endRod(entry: PaletteEntry): BlockShape {
+  const turn = END_ROD_TURN[entry.properties.facing ?? "up"];
+  return boxes(...(turn === undefined ? END_ROD : END_ROD.map((part) => ({ ...part, rotation: turn }))));
+}
 
 /**
  * `template_fence_gate.json`: two posts and the bars between them, authored
@@ -1555,22 +2030,42 @@ const HANGING_CHAIN: Readonly<Record<string, UvWindow>> = {
  * sign either way — and both stop being invisible the moment there is *text* on
  * it, which is why they are fixed here rather than filed.
  */
+/**
+ * Whether a block name is in a family, counting the bare name as a member.
+ *
+ * `wall_sign` and `sign` are the two pre-Flattening spellings this app still
+ * offers, and neither ends in the suffix that names its own family: a name that
+ * *is* `wall_sign` does not end in `_wall_sign`. `shapeFor` learned that once --
+ * `EXACT_SHAPES` carries both bare names for exactly this reason -- and the
+ * lesson reached the lookup and not the function the lookup calls.
+ *
+ * So a legacy `wall_sign` was handed to `wallSign`, correctly, and then asked
+ * `signBoard` a question it answered as though the block were a standing sign:
+ * the board at `z 7..9`, in the **middle of the cell** rather than flat on the
+ * wall, turned by a `rotation` a wall sign has never carried -- `NaN`, guarded
+ * to zero, so north. Reported as both of those at once, which is what one
+ * missing underscore looks like from the outside.
+ */
+function inFamily(name: string, family: string): boolean {
+  return name === family || name.endsWith(`_${family}`);
+}
+
 function signBoard(entry: PaletteEntry): { box: Box; steps: number } {
   const name = entry.namespacedName.slice(entry.namespacedName.indexOf(":") + 1);
   // `rotation` is 0..15 around the compass; the boards are square in plan, so
   // the sixteenth-turns land on the nearest quarter.
   const sixteenths = Number(entry.properties.rotation);
   const spun = Number.isFinite(sixteenths) ? Math.round(sixteenths / 4) : null;
-  if (name.endsWith("_wall_sign")) {
+  if (inFamily(name, "wall_sign")) {
     return { box: [0, 4, 14, 16, 12, 16], steps: northFacingSteps(entry) };
   }
-  if (name.endsWith("_wall_hanging_sign")) {
+  if (inFamily(name, "wall_hanging_sign")) {
     // The one bolted to a wall carries `facing` and no `rotation` at all, and
     // the model is authored looking south. Reading `rotation` off it gave
     // `NaN`, which the guard turned into zero: twelve blocks all facing south.
     return { box: [1, 0, 7, 15, 10, 9], steps: southFacingSteps(entry) };
   }
-  if (name.endsWith("_hanging_sign")) {
+  if (inFamily(name, "hanging_sign")) {
     // ...and the one that hangs from a ceiling carries `rotation` and no
     // `facing`. Falling through to a facing-derived answer here would default
     // it to east and turn every one of them a quarter.
@@ -1780,7 +2275,7 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
   kelp: () => ({ kind: "cross" }),
   kelp_plant: () => ({ kind: "cross" }),
   sea_pickle: () => boxes([6, 0, 6, 10, 6, 10]),
-  candle: () => boxes([7, 0, 7, 9, 6, 9]),
+  candle: candleShape,
 
   // Workstations that are not full blocks. `composter` is left a cube on
   // purpose: its outer shell really is 16x16x16, only its inside is hollow.
@@ -1814,13 +2309,13 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
       { box: [2, 2, 2, 14, 14, 14], texture: "beacon" },
     ),
   flower_pot: () => boxes(...FLOWER_POT),
-  campfire: () => boxes([0, 0, 0, 16, 7, 16]),
-  soul_campfire: () => boxes([0, 0, 0, 16, 7, 16]),
+  campfire,
+  soul_campfire: campfire,
   cauldron: () => boxes([0, 0, 0, 16, 16, 16]),
-  hopper: () => boxes([0, 10, 0, 16, 16, 16]),
-  end_rod: () => boxes([6, 0, 6, 10, 16, 10]),
+  hopper,
+  end_rod: endRod,
   chain,
-  bell: () => boxes([4, 4, 4, 12, 12, 12]),
+  bell,
   conduit: () => boxes([5, 5, 5, 11, 11, 11]),
   lily_pad: () => boxes([0, 0, 0, 16, 1, 16]),
 
@@ -1846,7 +2341,7 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
    * was deleting a face from all six of its neighbours. A crop stem across a
    * field took the field with it.
    */
-  candle_cake: () => boxes([1, 0, 1, 15, 8, 15], [7, 8, 7, 9, 14, 9]),
+  candle_cake: candleCake,
   dragon_egg: () => boxes([1, 0, 1, 15, 16, 15]),
   turtle_egg: () => boxes([5, 0, 5, 11, 7, 11]),
   chorus_flower: () => boxes([2, 2, 2, 14, 14, 14]),

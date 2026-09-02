@@ -34,6 +34,7 @@ import {
   OVERSCAN_ROWS,
 } from "../src/renderer/src/lib/inventory.js";
 import { blocksIn } from "../src/shared/block_versions.js";
+import { buildLegacyIndex } from "../src/shared/legacy_ids.js";
 import {
   emptyTimeline,
   recordDocumentEdit,
@@ -2803,6 +2804,80 @@ console.log("\n--- `bind:this` writes null ---");
   }
 }
 
+
+// --- what a block may hold depends on the era -------------------------------
+//
+// A 1.12.2 schematic showed `waterlogged` on its fences, stairs, slabs and
+// panes. The property is 1.13's; the document is from a version with no such
+// idea. Reported exactly that way.
+//
+// The inspector lists the union of what the entry carries and what the game
+// says it may carry, and the second half was asking the **modern registry** --
+// which has nothing true to say about a numeric `ID:DATA` block. Before 1.13
+// the authority is `legacy_blocks.json`, which is the same table the MCEdit
+// writer decides the save on, so what the panel offers is what the file can
+// hold.
+console.log("\n--- what a block may hold depends on the era ---");
+{
+  const table = JSON.parse(
+    readFileSync(path.join(here, "..", "resources", "legacy_blocks.json"), "utf8"),
+  ) as { blocks: Record<string, string> };
+  const legacy = buildLegacyIndex(table.blocks);
+
+  /*
+   * The fact underneath all of it, stated once: the property is not in the
+   * table anywhere. Not an accident of the data -- it is the era.
+   */
+  const anyWaterlogged = [...legacy.properties.values()].some((held) => held.has("waterlogged"));
+  check("no pre-Flattening block holds waterlogged", !anyWaterlogged);
+
+  /*
+   * The four families it was reported on. Each is checked from both sides,
+   * because a rule that returned nothing at all would pass the first half.
+   */
+  for (const [name, wanted] of [
+    ["minecraft:oak_fence", ["east", "north", "south", "west"]],
+    ["minecraft:oak_stairs", ["facing", "half", "shape"]],
+    ["minecraft:stone_slab", ["type"]],
+    ["minecraft:oak_door", ["facing", "half", "hinge", "open", "powered"]],
+  ] as const) {
+    const rows = propertyRows(name, {}, legacy).map((row) => row.name);
+    equal(`${name.replace("minecraft:", "")} holds exactly its legacy states`, rows, [...wanted]);
+  }
+
+  /*
+   * ...and the flat era is untouched, which is the half that says the fix is a
+   * rule about versions rather than a property nobody may see.
+   */
+  check(
+    "a flat document still offers waterlogged on a stair",
+    propertyRows("minecraft:oak_stairs", {}, null).some((row) => row.name === "waterlogged"),
+  );
+
+  /*
+   * What the entry *carries* is always listed, whatever the era says. That is
+   * what lets somebody see a property another tool wrote and delete it -- and
+   * it is why the registry half being wrong was a bug rather than a mercy.
+   */
+  check(
+    "a state the file carries is shown even where the era denies it",
+    propertyRows("minecraft:oak_fence", { waterlogged: "true" }, legacy).some(
+      (row) => row.name === "waterlogged" && row.value === "true",
+    ),
+  );
+
+  /*
+   * A block that era cannot name at all contributes nothing rather than
+   * falling back to the registry. Falling back is the claim the change exists
+   * to stop making, so an unlisted block is the case that would silently undo
+   * it.
+   */
+  equal(
+    "a block the era never had offers none of the registry's states",
+    propertyRows("minecraft:lantern", {}, legacy).map((row) => row.name),
+    [],
+  );
+}
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

@@ -31,9 +31,9 @@
   const { conversations, activeId, busy, onrefresh, onopen, ondelete }: Props = $props();
 
   let open = $state(false);
-  let root: HTMLDivElement | undefined;
-  let trigger = $state<HTMLButtonElement | undefined>(undefined);
-  let panel = $state<HTMLDivElement | undefined>(undefined);
+  let root: HTMLDivElement | null = null;
+  let trigger = $state<HTMLButtonElement | null>(null);
+  let panel = $state<HTMLDivElement | null>(null);
   let placement = $state<{ x: number; y: number } | null>(null);
   let innerWidth = $state(0);
   let innerHeight = $state(0);

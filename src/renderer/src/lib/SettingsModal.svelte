@@ -242,7 +242,7 @@
   $effect(() => {
     if (open && startOn !== null) category = startOn;
   });
-  let dialog = $state<HTMLDivElement | undefined>(undefined);
+  let dialog = $state<HTMLDivElement | null>(null);
 
   const preview = $derived(settings.preview);
 

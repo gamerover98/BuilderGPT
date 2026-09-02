@@ -57,7 +57,7 @@
     onclose,
   }: Props = $props();
 
-  let dialog = $state<HTMLDivElement | undefined>(undefined);
+  let dialog = $state<HTMLDivElement | null>(null);
   let draft = $state<[string, string, string]>(["", "", ""]);
 
   /**

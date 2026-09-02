@@ -167,7 +167,7 @@
   const BUILD_EXAMPLES = ["chat.build1", "chat.build2", "chat.build3"];
   const examples = $derived(hasDocument ? EDIT_EXAMPLES : BUILD_EXAMPLES);
 
-  let log = $state<HTMLDivElement | undefined>(undefined);
+  let log = $state<HTMLDivElement | null>(null);
   /** Which agent turns have had their tool list opened, by index. */
   let expanded = $state<Record<number, boolean>>({});
 

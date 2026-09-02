@@ -67,8 +67,8 @@ import { legacyIdFor, type LegacyIndex } from "../../../shared/legacy_ids.js";
   let query = $state("");
   let scrollTop = $state(0);
   let viewportHeight = $state(420);
-  let scroller = $state<HTMLDivElement | undefined>(undefined);
-  let search = $state<HTMLInputElement | undefined>(undefined);
+  let scroller = $state<HTMLDivElement | null>(null);
+  let search = $state<HTMLInputElement | null>(null);
 
   const filtered = $derived(inventoryBlocks(blocks, query, placeable));
   const view = $derived(

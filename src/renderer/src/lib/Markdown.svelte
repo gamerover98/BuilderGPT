@@ -26,7 +26,7 @@
 
   const html = $derived(toSafeHtml(source, DOMPurify as unknown as Purifier));
 
-  let container = $state<HTMLDivElement | undefined>(undefined);
+  let container = $state<HTMLDivElement | null>(null);
   /** Which `<pre>` last had its contents copied, so the label can say so. */
   let copied = $state<HTMLElement | null>(null);
 

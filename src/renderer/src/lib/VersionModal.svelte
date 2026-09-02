@@ -52,7 +52,7 @@
     $props();
 
   let version = $state("");
-  let dialog = $state<HTMLDivElement | undefined>(undefined);
+  let dialog = $state<HTMLDivElement | null>(null);
 
   /**
    * Re-seeded every time it opens, not once at construction.

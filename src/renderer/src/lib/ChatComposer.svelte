@@ -94,7 +94,7 @@
     onopensettings,
   }: Props = $props();
 
-  let input = $state<HTMLTextAreaElement | undefined>(undefined);
+  let input = $state<HTMLTextAreaElement | null>(null);
 
   const volume = $derived(
     selection === null

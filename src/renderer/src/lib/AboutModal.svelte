@@ -40,7 +40,7 @@
 
   const { open, info, onclose }: Props = $props();
 
-  let dialog = $state<HTMLDivElement | undefined>(undefined);
+  let dialog = $state<HTMLDivElement | null>(null);
 
   const REPOSITORY = "https://github.com/gamerover98/Schematic-Ai-Studio";
   const UPSTREAM = "https://github.com/CyniaAI/BuilderGPT";

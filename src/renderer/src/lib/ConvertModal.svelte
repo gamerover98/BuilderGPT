@@ -51,7 +51,7 @@
     onclose,
   }: Props = $props();
 
-  let dialog = $state<HTMLDivElement | undefined>(undefined);
+  let dialog = $state<HTMLDivElement | null>(null);
   let format = $state<FileKind>("sponge3");
   /** Empty means "whatever the source says", which is what a conversion wants. */
   let version = $state<string>("");

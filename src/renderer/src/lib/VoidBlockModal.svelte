@@ -101,7 +101,7 @@
     onclose,
   }: Props = $props();
 
-  let dialog = $state<HTMLDivElement | undefined>(undefined);
+  let dialog = $state<HTMLDivElement | null>(null);
 
   /**
    * The blocks worth offering, and why they are a list rather than the whole

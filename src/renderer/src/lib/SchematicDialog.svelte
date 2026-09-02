@@ -59,7 +59,7 @@
   let length = $state(16);
   let format = $state<SchematicFormat>("sponge3");
   let version = $state("");
-  let dialog = $state<HTMLDivElement | undefined>(undefined);
+  let dialog = $state<HTMLDivElement | null>(null);
 
   /**
    * Re-seeded every time it opens, not once at construction.

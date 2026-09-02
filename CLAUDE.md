@@ -333,6 +333,55 @@ pointer, the browser fires `mouseenter` for it, and that writes the highlight
 again. The CSS `:hover` already draws the row under the pointer, so the handler
 bought one nicety — Enter taking the hovered row — and cost a feedback path.
 
+**`bind:this` writes `null`, and a binding typed `| undefined` is a lie the
+compiler cannot catch.** That was the freeze, all of it. The picker's scroll
+effect guarded `list === undefined` on a `$state<HTMLUListElement | undefined>`
+— so at exactly the moment the element went away the guard was **false**, and
+the next line read `.children` off `null` *inside the effect flush*, where
+Svelte has nowhere to put it. The scheduler is left broken and takes every
+effect in the window with it.
+
+The trigger is any query that matches nothing, because that is what unmounts
+the list: `aa` in a block field, or `zzzz` after Ctrl+K. **`CommandPalette` had
+the identical fault and nobody had reported it** — which is the argument for
+fixing the class rather than the site.
+
+So every `bind:this` target in the renderer is declared `| null` and
+initialised `null`. That makes `=== undefined` a **compile** error, TS2367, and
+it named all three sites the moment the types changed rather than waiting for
+somebody to type `aa`.
+
+`tests/ui.ts` still checks it, and the reason is worth keeping: **`tsc` catches
+the mismatch, not the mistake.** Put the declaration and the guard back
+*together* and it compiles clean and freezes the window — verified by doing
+exactly that. What has to be refused is the declaration, so the check walks
+every `bind:this` and reads the type behind it, with comments stripped first
+because these sites are recognisable precisely by the prose explaining them.
+
+The two in `Viewer.svelte` are named exceptions rather than skipped: they are
+not inside a conditional, so they live as long as the component and are only
+read from `onMount` and from handlers bound to them.
+
+**Three things were fixed before this one that were not this one**, and the
+distinction is worth keeping: the namespace search returning all 1197 blocks,
+the deep `$state` proxy over the registry, and the unbounded rows were the
+*load*. This was the *crash*. Correcting the load made the picker faster and
+the search right, and would never have closed the report.
+
+**The dialog hands over the report.** It copies the whole thing — app version,
+platform, Electron, Chromium, Node, then the message and the stack — and opens
+a pre-filled issue on the repository `package.json` already names, imported
+rather than written out a second time. It publishes nothing; the Submit is the
+user's.
+
+Two details that are not decoration. The dialog is **shown again** after a
+copy, because copying is not an answer to "what do you want to do about the
+window" — closing on it would leave the app just as dead with the report in
+hand. And **the URL carries an abridged body while the clipboard carries
+everything**: GitHub takes the body as a query parameter, a stack clears that
+ceiling easily, and a body truncated by a browser looks exactly like a complete
+one. `abridgeTrace`'s rule — cap on the way out and say what was dropped.
+
 **The window can now say that it died, and could not before.** There was no
 `window.onerror`, no `unhandledrejection`, and nothing in main for
 `render-process-gone` or `unresponsive`: zero occurrences across `src/`. So a

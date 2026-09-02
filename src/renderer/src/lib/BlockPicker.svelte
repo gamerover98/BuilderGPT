@@ -76,13 +76,13 @@ const ROW_LIMIT = 120;
 
   let open = $state(false);
   let highlighted = $state(0);
-  let root: HTMLDivElement | undefined;
+  let root: HTMLDivElement | null = null;
   /*
    * Both `$state`, because the placement effect is driven by them binding: the
    * dropdown only exists once there is something to show. `ModelPicker`'s shape.
    */
-  let field = $state<HTMLInputElement | undefined>(undefined);
-  let popover = $state<HTMLDivElement | undefined>(undefined);
+  let field = $state<HTMLInputElement | null>(null);
+  let popover = $state<HTMLDivElement | null>(null);
   let placement = $state<{ x: number; y: number } | null>(null);
   let innerWidth = $state(0);
   let innerHeight = $state(0);
@@ -90,8 +90,19 @@ const ROW_LIMIT = 120;
    * `$state`, unlike `root` below it, because the scroll effect reads it: a
    * plain `let` is written by `bind:this` without waking anything, so the
    * effect would not re-run when the dropdown opens and the element appears.
+   *
+   * **`| null`, because that is what `bind:this` writes when the element goes
+   * away.** Typed `| undefined` — which it was — the guard `list === undefined`
+   * is false at exactly the moment the element is gone, so the next line read
+   * `.children` off `null` and threw *inside the effect flush*. Svelte has
+   * nowhere to put that: the scheduler is left broken and takes every effect in
+   * the window with it, while the viewport keeps drawing and main keeps
+   * answering. Navigable and completely dead.
+   *
+   * The type was a lie the compiler could not catch: it validated a comparison
+   * that can never be true. Declared honestly, `=== undefined` does not compile.
    */
-  let list = $state<HTMLUListElement | undefined>(undefined);
+  let list = $state<HTMLUListElement | null>(null);
 
   const offered = $derived(
     placeable === null ? blocks : blocks.filter((block) => placeable.has(block)),
@@ -133,7 +144,7 @@ const ROW_LIMIT = 120;
    * the first place; this makes it not matter if something ever does again.
    */
   $effect(() => {
-    if (!open || list === undefined) return;
+    if (!open || list === null) return;
     const row = list.children[highlighted] as HTMLElement | undefined;
     if (row === undefined) return;
     const top = row.offsetTop;
@@ -154,7 +165,7 @@ const ROW_LIMIT = 120;
    * rather than left where the last one was.
    */
   $effect(() => {
-    if (!open || popover === undefined || field === undefined) {
+    if (!open || popover === null || field === null) {
       placement = null;
       return;
     }

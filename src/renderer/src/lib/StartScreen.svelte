@@ -78,7 +78,7 @@
       .slice(0, 4),
   );
 
-  let dialog = $state<HTMLDivElement | undefined>(undefined);
+  let dialog = $state<HTMLDivElement | null>(null);
 
   // Focus so Escape reaches the wrapper, and release the pointer lock: this
   // can appear over a canvas that was still flying when the document closed.

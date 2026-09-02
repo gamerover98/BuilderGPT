@@ -211,6 +211,21 @@ export const IPC = {
    * and has no way to ask, so the renderer says so when it changes.
    */
   pointerLock: "bgpt:viewport:pointerLock",
+  /**
+   * The renderer telling main it has just thrown something it did not catch.
+   *
+   * An **event, not a request**, and that is the whole design. It is sent from
+   * a window that may be seconds from being unable to run anything at all, and
+   * a promise to await is exactly the thing that would never come back.
+   *
+   * It exists because the failure it reports is otherwise **silent and total**.
+   * A reactive loop that Svelte or the browser aborts takes every effect in the
+   * window with it: the viewport goes on drawing, because its
+   * `requestAnimationFrame` chain owes Svelte nothing, and main goes on
+   * answering, so the menu still opens. The app is navigable and completely
+   * dead, with a clean console, and it has been reported that way twice.
+   */
+  rendererFailed: "bgpt:renderer:failed",
   /** The sun and moon images out of the resource pack. */
   skyTextures: "bgpt:sky:textures",
   /** The wooden axe, drawn on the cell WorldEdit would paste from. */
@@ -1002,6 +1017,23 @@ export type EditRequest =
 /**
  * A new Minecraft version for the open schematic.
  */
+/**
+ * What the renderer managed to say on its way down.
+ *
+ * Strings only, and deliberately: this crosses the boundary from a window that
+ * is already failing, so anything that had to be serialised from a live object
+ * is one more thing that can throw inside the error handler.
+ */
+export interface RendererFailure {
+  message: string;
+  /** A stack when there was one; `""` rather than absent, for the same reason. */
+  stack: string;
+  /** `"error"` for a thrown exception, `"rejection"` for an unhandled promise. */
+  kind: "error" | "rejection";
+  /** `file:line:column`, when the event carried one. */
+  at: string;
+}
+
 export interface VersionRequest {
   /** A name from `MC_VERSIONS`, e.g. `JE_1_12_2`. */
   version: string;
@@ -1743,6 +1775,10 @@ export interface BgptApi {
   setVoidBlock(request: VoidBlockRequest): Promise<EditResponse>;
   /** Change which Minecraft version the open schematic is for. */
   setDocumentVersion(request: VersionRequest): Promise<EditResponse>;
+  /**
+   * Tell main the renderer threw. Fire and forget; see `IPC.rendererFailed`.
+   */
+  reportFailure(report: RendererFailure): void;
   /** One file into another. Never overwrites; touches no open document. */
   convertFile(request: ConvertRequest): Promise<ConvertResponse>;
   undo(): Promise<EditResponse>;

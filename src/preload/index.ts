@@ -30,6 +30,7 @@ import {
   type EditRequest,
   type ResizeRequest,
   type VersionRequest,
+  type RendererFailure,
   type VoidBlockRequest,
   type EditResponse,
   type GenerateRequest,
@@ -124,6 +125,10 @@ const api: BgptApi = {
     ipcRenderer.invoke(IPC.docSetVoidBlock, request) as Promise<EditResponse>,
   setDocumentVersion: (request: VersionRequest) =>
     ipcRenderer.invoke(IPC.docSetVersion, request) as Promise<EditResponse>,
+  // `send`, not `invoke`: the window reporting this may be moments from being
+  // unable to run anything, and a promise to await is the one thing that would
+  // never come back.
+  reportFailure: (report: RendererFailure) => ipcRenderer.send(IPC.rendererFailed, report),
   convertFile: (request: ConvertRequest) =>
     ipcRenderer.invoke(IPC.convertFile, request) as Promise<ConvertResponse>,
   undo: () => ipcRenderer.invoke(IPC.docUndo) as Promise<EditResponse>,

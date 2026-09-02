@@ -6,11 +6,21 @@
    * is judged against"). Typing anything the list does not contain is still
    * allowed; this only makes the common case a click instead of a memory test.
    *
-   * Every match is listed. The registry is ~920 blocks, so an earlier cap of 40
-   * meant the list silently stopped a third of the way through the As — and
+   * Every match is *found*. The registry is ~1200 blocks, so an earlier cap of
+   * 40 meant the list silently stopped a third of the way through the As — and
    * worse, a search that genuinely had 41 answers quietly showed 40 with nothing
    * to say it had. A dropdown that hides matches is harder to trust than a plain
    * text field, which was the thing this replaced.
+   *
+   * `ROW_LIMIT` is not that cap coming back, and the difference is the whole of
+   * why it is allowed. It bounds how many rows *exist in the DOM*, and the line
+   * above the list says both numbers out loud — so nothing is hidden silently,
+   * which is the property the paragraph above is actually about.
+   *
+   * It exists because mounting one row per match is unbounded work on every
+   * keystroke: `e` matches 974 of the 1197 ids, which is some five thousand DOM
+   * nodes built and thrown away per character, inside a floating panel a few
+   * rows tall. That is what the freeze was made of.
    */
   import { searchBlocks } from "./block_search.js";
 import {
@@ -54,6 +64,15 @@ import {
     onchange,
   }: Props = $props();
 
+/**
+ * How many rows may exist at once.
+ *
+ * The list is 220px tall and a row is about 21, so this is a dozen screens of
+ * scrolling — far past where anybody keeps scrolling instead of typing another
+ * letter, and two orders of magnitude off the thousand-row worst case.
+ */
+const ROW_LIMIT = 120;
+
   let open = $state(false);
   let highlighted = $state(0);
   let root: HTMLDivElement | undefined;
@@ -76,6 +95,13 @@ import {
    */
   const query = $derived(resolveBlockInput(value, legacy));
   const matches = $derived(searchBlocks(offered, query));
+  /*
+   * What is drawn. `matches` stays the honest answer and is what the count
+   * line reports; this is only how much of it is on screen at once.
+   */
+  const shown = $derived(
+    matches.length <= ROW_LIMIT ? matches : matches.slice(0, ROW_LIMIT),
+  );
 
   /**
    * Keeps the highlighted row on screen.
@@ -120,14 +146,14 @@ import {
     }
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      highlighted = Math.min(highlighted + 1, matches.length - 1);
+      highlighted = Math.min(highlighted + 1, shown.length - 1);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       highlighted = Math.max(highlighted - 1, 0);
     } else if (event.key === "Enter") {
-      if (matches[highlighted]) {
+      if (shown[highlighted]) {
         event.preventDefault();
-        choose(matches[highlighted]);
+        choose(shown[highlighted]);
       }
     } else if (event.key === "Escape") {
       open = false;
@@ -158,7 +184,7 @@ import {
     onfocus={() => (open = true)}
     onkeydown={onKeydown}
   />
-  {#if open && matches.length > 0}
+  {#if open && shown.length > 0}
     <div class="dropdown">
       <!--
         Outside the scrolling list on purpose: `list.children` is indexed by the
@@ -166,19 +192,28 @@ import {
         keyboard selection one off from what is drawn.
       -->
       <p class="count">
-        {#if matches.length === offered.length}
+        {#if shown.length < matches.length}
+          {t("blocks.capped", { shown: shown.length, count: matches.length })}
+        {:else if matches.length === offered.length}
           {t("blocks.all", { count: offered.length })}
         {:else}
           {t("blocks.matches", { count: matches.length, total: offered.length })}
         {/if}
       </p>
       <ul role="listbox" bind:this={list}>
-      {#each matches as block, i (block)}
+      {#each shown as block, i (block)}
         <li>
+          <!--
+            No `onmouseenter` writing `highlighted`. The CSS `:hover` below
+            already draws the row under the pointer, so the handler bought only
+            "Enter takes the hovered row" -- and it cost a feedback path: the
+            effect above writes `list.scrollTop`, scrolling moves a different
+            row under a *stationary* pointer, the browser fires `mouseenter`
+            for it, and that writes `highlighted` again.
+          -->
           <button
             type="button"
             class:highlighted={i === highlighted}
-            onmouseenter={() => (highlighted = i)}
             onmousedown={(event) => {
               // mousedown, not click: fires before the input's blur, so the
               // dropdown is still open when the selection lands.

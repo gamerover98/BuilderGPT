@@ -22,6 +22,7 @@ import {
   type EditRequest,
   type ResizeRequest,
   type VersionRequest,
+  type RendererFailure,
   type VoidBlockRequest,
   type EditResponse,
   type ConvertRequest,
@@ -204,6 +205,7 @@ import {
   setSettings,
 } from "../services/settings-store.js";
 import { discardPrompt } from "../services/discard_prompt.js";
+import { failurePrompt } from "../services/failure_prompt.js";
 import {
   deleteSnapshot,
   listSnapshots,
@@ -478,6 +480,58 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       return answer.response === 0;
     },
   );
+
+  /*
+   * The renderer telling us it threw. See `IPC.rendererFailed`.
+   *
+   * `ipcMain.on`, not `handle`: the window sending this may be moments from
+   * being unable to run anything, so there is nothing to reply to.
+   */
+  let failureShowing = false;
+  let failuresSince = 0;
+  ipcMain.on(IPC.rendererFailed, (_event, report: RendererFailure): void => {
+    /*
+     * Logged first and unconditionally. The dialog is for the person; this is
+     * the half that survives into a terminal, and it is the only record that
+     * exists of a failure the console never showed.
+     */
+    console.error(
+      `[renderer ${report.kind}] ${report.message}` +
+        (report.at === "" ? "" : ` (${report.at})`) +
+        (report.stack === "" ? "" : `
+${report.stack}`),
+    );
+
+    // One dialog. A window failing in a loop would otherwise raise one per
+    // iteration, which is worse than the freeze it is describing.
+    if (failureShowing) {
+      failuresSince += 1;
+      return;
+    }
+    failureShowing = true;
+    const prompt = failurePrompt(report.message, failuresSince);
+    const window = getWindow();
+    const options: Electron.MessageBoxOptions = {
+      type: "error",
+      buttons: [...prompt.buttons],
+      defaultId: prompt.confirmIndex,
+      cancelId: prompt.cancelIndex,
+      message: prompt.message,
+      detail: prompt.detail,
+    };
+    const asked = window
+      ? dialog.showMessageBox(window, options)
+      : dialog.showMessageBox(options);
+    void asked.then((answer) => {
+      failureShowing = false;
+      failuresSince = 0;
+      if (answer.response !== prompt.confirmIndex) return;
+      // `reload`, not `reloadIgnoringCache`: the code is fine, the window's
+      // state is not, and re-fetching the bundle would only be slower.
+      getWindow()?.webContents.reload();
+    });
+  });
+
 
   ipcMain.handle(IPC.pickFile, async (_event, req: PickFileRequest): Promise<PickFileResponse> => {
     const window = getWindow();

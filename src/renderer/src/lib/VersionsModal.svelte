@@ -32,7 +32,7 @@
 
   const { open, versions, busy, saved, onsave, onrestore, ondelete, onclose }: Props = $props();
 
-  let dialog = $state<HTMLDivElement | undefined>(undefined);
+  let dialog = $state<HTMLDivElement | null>(null);
 
   $effect(() => {
     if (open) {

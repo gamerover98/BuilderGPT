@@ -59,7 +59,7 @@
     children,
   }: Props = $props();
 
-  let panel = $state<HTMLDivElement | undefined>(undefined);
+  let panel = $state<HTMLDivElement | null>(null);
   let dragging = $state(false);
   let resizing = $state(false);
   /** Where the corner was grabbed, so the panel does not jump to the pointer. */

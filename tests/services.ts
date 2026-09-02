@@ -85,7 +85,12 @@ import {
   coerceUi,
 } from "../src/main/services/settings_coerce.js";
 import { discardPrompt } from "../src/main/services/discard_prompt.js";
-import { failurePrompt } from "../src/main/services/failure_prompt.js";
+import {
+  failurePrompt,
+  failureReport,
+  issueBody,
+  issueUrl,
+} from "../src/main/services/failure_prompt.js";
 import {
   buildBlockIcons,
   forgetBlockIcons,
@@ -2005,26 +2010,22 @@ console.log("\n--- recovering is opening ---");
 console.log("\n--- what the window says on its way down ---");
 {
   const plain = failurePrompt("");
-  check(
-    "the reload is the confirming button",
-    plain.confirmIndex === 0 && plain.cancelIndex === 1,
-  );
   /*
    * Escape and the window's close button both land on `cancelId`, so the half
    * that reloads must never be the one they reach. `discard_prompt`'s rule, and
    * here it matters more: this dialog is raised *by* an error, so it can appear
    * while somebody is in the middle of something else.
    *
-   * That the two differ is not checked, because the literal types `0` and `1`
-   * already make it unsayable -- tsc rejects the comparison outright. What is
-   * checked is that they are two distinct buttons with words on them, which no
-   * type states.
+   * The indices are literal types, so `tsc` rejects any comparison between them
+   * outright -- which is a stronger statement than a check could make, and is
+   * why there is not one. What no type states is that they are three distinct
+   * buttons with words on them.
    */
   check(
-    "there are two buttons and they say different things",
-    plain.buttons.length === 2 &&
-      plain.buttons[0].trim() !== "" &&
-      plain.buttons[0] !== plain.buttons[1],
+    "three buttons, and they say different things",
+    plain.buttons.length === 3 &&
+      plain.buttons.every((label) => label.trim() !== "") &&
+      new Set(plain.buttons).size === 3,
     plain.buttons.join(" | "),
   );
   check(
@@ -2064,6 +2065,88 @@ console.log("\n--- what the window says on its way down ---");
   check(
     "...counted in the singular when it is one",
     failurePrompt("x", 1).detail.includes("1 further error since"),
+  );
+
+  /*
+   * The report, which is the thing a person actually pastes. The versions are
+   * in it because an issue asks for them every time, and because main has all
+   * of them without asking the renderer -- which matters when the renderer is
+   * the half that has stopped answering.
+   */
+  const facts = {
+    appName: "Schematic AI Studio",
+    appVersion: "1.0.0",
+    platform: "win32 x64",
+    electron: "33.0.0",
+    chrome: "130.0.0",
+    node: "20.18.0",
+    kind: "error" as const,
+    message: "Cannot read properties of null (reading 'children')",
+    at: "app.js:1:2",
+    stack: "at $effect (BlockPicker.svelte)",
+  };
+  const text = failureReport(facts);
+  for (const wanted of [
+    "1.0.0",
+    "win32 x64",
+    "33.0.0",
+    "Cannot read properties of null",
+    "BlockPicker.svelte",
+  ]) {
+    check(`the report carries ${wanted}`, text.includes(wanted), text);
+  }
+
+  /*
+   * An empty stack or location leaves no ragged blank line behind. It is the
+   * ordinary case for a rejection, not an edge one.
+   */
+  const bare = failureReport({ ...facts, at: "", stack: "" });
+  check(
+    "...and says nothing where there was nothing to say",
+    !bare.includes("at ") && !/\n\s*\n\s*$/.test(bare),
+    JSON.stringify(bare),
+  );
+
+  /*
+   * The issue URL is built from the repository the manifest already names, and
+   * carries an **abridged** body: GitHub takes it as a query parameter, so it
+   * travels in a URL, and a stack clears that ceiling easily. `abridgeTrace`'s
+   * rule -- cap on the way out and say what was dropped. The whole report is on
+   * the clipboard by then, so the sentence is an instruction, not an apology.
+   */
+  const long = failureReport({ ...facts, stack: "at frame\n".repeat(400) });
+  check(
+    "a long report is abridged for the URL",
+    issueBody(long).length < long.length,
+    `${issueBody(long).length} vs ${long.length}`,
+  );
+  check(
+    "...and says where the rest of it is",
+    issueBody(long).includes("clipboard"),
+  );
+  check(
+    "a short one is carried whole",
+    issueBody(text).includes(facts.message),
+  );
+
+  const url = issueUrl("https://github.com/gamerover98/Schematic-Ai-Studio", text);
+  check(
+    "the URL points at the repository the manifest names",
+    url.startsWith("https://github.com/gamerover98/Schematic-Ai-Studio/issues/new?"),
+    url,
+  );
+  /*
+   * And it survives the round trip. A body that arrived percent-mangled would
+   * still open a page, which is exactly the kind of wrong that looks right.
+   */
+  const body = new URL(url).searchParams.get("body") ?? "";
+  check(
+    "...and the body decodes back to what was put in it",
+    body === issueBody(text),
+  );
+  check(
+    "...trailing slash or not",
+    issueUrl("https://example.com/repo/", text).includes("/repo/issues/new?"),
   );
 }
 

@@ -205,7 +205,18 @@ import {
   setSettings,
 } from "../services/settings-store.js";
 import { discardPrompt } from "../services/discard_prompt.js";
-import { failurePrompt } from "../services/failure_prompt.js";
+import {
+  failurePrompt,
+  failureReport,
+  issueUrl,
+} from "../services/failure_prompt.js";
+/*
+ * The manifest, for its `homepage`. Imported rather than read at runtime: it is
+ * inlined at build time, so there is nothing to find on disk and nothing to
+ * fail when the app is packed into an asar -- and it stays the one place in
+ * this app that knows where its issues live.
+ */
+import manifest from "../../../package.json" with { type: "json" };
 import {
   deleteSnapshot,
   listSnapshots,
@@ -509,27 +520,69 @@ ${report.stack}`),
       return;
     }
     failureShowing = true;
-    const prompt = failurePrompt(report.message, failuresSince);
-    const window = getWindow();
-    const options: Electron.MessageBoxOptions = {
-      type: "error",
-      buttons: [...prompt.buttons],
-      defaultId: prompt.confirmIndex,
-      cancelId: prompt.cancelIndex,
-      message: prompt.message,
-      detail: prompt.detail,
-    };
-    const asked = window
-      ? dialog.showMessageBox(window, options)
-      : dialog.showMessageBox(options);
-    void asked.then((answer) => {
-      failureShowing = false;
-      failuresSince = 0;
-      if (answer.response !== prompt.confirmIndex) return;
-      // `reload`, not `reloadIgnoringCache`: the code is fine, the window's
-      // state is not, and re-fetching the bundle would only be slower.
-      getWindow()?.webContents.reload();
+
+    /*
+     * Everything a bug report wants, gathered here rather than asked for: the
+     * renderer is the half that has stopped answering, and main has all of it
+     * for free.
+     */
+    const text = failureReport({
+      appName: app.getName(),
+      appVersion: app.getVersion(),
+      platform: `${process.platform} ${process.arch}`,
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+      kind: report.kind,
+      message: report.message,
+      at: report.at,
+      stack: report.stack,
     });
+
+    /*
+     * Shown again after a copy, rather than once.
+     *
+     * Copying is not an answer to "what do you want to do about the window" --
+     * a dialog that closed on it would leave the app exactly as dead, with the
+     * report in hand and no way back to Reload. So the two decisions are asked
+     * separately, and only Reload or Leave it end the conversation.
+     */
+    const ask = (): void => {
+      const prompt = failurePrompt(report.message, failuresSince);
+      const window = getWindow();
+      const options: Electron.MessageBoxOptions = {
+        type: "error",
+        buttons: [...prompt.buttons],
+        defaultId: prompt.confirmIndex,
+        cancelId: prompt.cancelIndex,
+        message: prompt.message,
+        detail: prompt.detail,
+      };
+      const asked = window
+        ? dialog.showMessageBox(window, options)
+        : dialog.showMessageBox(options);
+      void asked.then((answer) => {
+        if (answer.response === prompt.reportIndex) {
+          clipboard.writeText(text);
+          /*
+           * The repository the manifest already names. A second place in this
+           * app that knew where its issues live is the place that goes stale.
+           * `openExternal` is how this app hands a URL to the browser already,
+           * and it publishes nothing -- the Submit is the user's.
+           */
+          void shell.openExternal(issueUrl(manifest.homepage, text));
+          ask();
+          return;
+        }
+        failureShowing = false;
+        failuresSince = 0;
+        if (answer.response !== prompt.confirmIndex) return;
+        // `reload`, not `reloadIgnoringCache`: the code is fine, the window's
+        // state is not, and re-fetching the bundle would only be slower.
+        getWindow()?.webContents.reload();
+      });
+    };
+    ask();
   });
 
 

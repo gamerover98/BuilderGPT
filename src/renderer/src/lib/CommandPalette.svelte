@@ -63,8 +63,8 @@
 
   let query = $state("");
   let highlighted = $state(0);
-  let input = $state<HTMLInputElement | undefined>(undefined);
-  let list = $state<HTMLUListElement | undefined>(undefined);
+  let input = $state<HTMLInputElement | null>(null);
+  let list = $state<HTMLUListElement | null>(null);
 
   const matches = $derived(searchCommands(commands, query));
 
@@ -78,9 +78,29 @@
     }
   });
 
+  /**
+   * Keeps the highlighted row in view.
+   *
+   * `list === null`, not `=== undefined`: `bind:this` writes **`null`** when the
+   * element goes away, and the `<ul>` goes away whenever the query matches
+   * nothing. Typed and guarded against `undefined` — which this was — the guard
+   * is false at exactly that moment and `.children` throws inside the effect
+   * flush, which leaves Svelte's scheduler broken and every effect in the window
+   * with it. Ctrl+K and a query that matches nothing was a total freeze.
+   *
+   * And `list.scrollTop`, not `scrollIntoView`: that method scrolls *every*
+   * scrollable ancestor. `BlockPicker` has the long version of why.
+   */
   $effect(() => {
-    if (!open || list === undefined) return;
-    (list.children[highlighted] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" });
+    if (!open || list === null) return;
+    const row = list.children[highlighted] as HTMLElement | undefined;
+    if (row === undefined) return;
+    const top = row.offsetTop;
+    const bottom = top + row.offsetHeight;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (bottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = bottom - list.clientHeight;
+    }
   });
 
   function choose(command: Command): void {

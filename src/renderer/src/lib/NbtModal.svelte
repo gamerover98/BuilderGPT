@@ -55,7 +55,7 @@
     onclose,
   }: Props = $props();
 
-  let dialog = $state<HTMLDivElement | undefined>(undefined);
+  let dialog = $state<HTMLDivElement | null>(null);
   /** The edit in progress. Reset from `text` whenever main hands over a new one. */
   let draft = $state("");
   let originDraft = $state<[string, string, string]>(["", "", ""]);

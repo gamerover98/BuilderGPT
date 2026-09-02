@@ -2692,5 +2692,117 @@ console.log("\n--- the picker draws a bounded number of rows ---");
 }
 
 
+// --- `bind:this` writes null ------------------------------------------------
+/*
+ * The rule, and the freeze it cost.
+ *
+ * `bind:this` sets its binding to **`null`** when the element goes away. Three
+ * of them were declared `| undefined` and guarded with `=== undefined`, so at
+ * exactly the moment the element vanished the guard was false and the next line
+ * read a property off `null` -- inside the effect flush, where Svelte has
+ * nowhere to put it. The scheduler is left broken and takes every effect in the
+ * window with it, while the viewport keeps drawing from its own
+ * `requestAnimationFrame` chain and main keeps answering. Navigable and
+ * completely dead, twice reported that way.
+ *
+ * The type was a lie `tsc` could not catch: it validated a comparison that can
+ * never be true. Declared honestly, `=== undefined` no longer compiles.
+ *
+ * Which is not enough on its own, and that is why this check exists rather than
+ * being redundant with the compiler. `tsc` catches the *mismatch*; put the
+ * declaration and the guard back **together** and it is silent again -- verified
+ * by doing exactly that. A consistent pair of wrong answers compiles clean and
+ * freezes the window, so the thing that has to be refused is the declaration.
+ */
+console.log("\n--- `bind:this` writes null ---");
+{
+  function svelteFiles(dir: string): string[] {
+    const found: string[] = [];
+    for (const entry of readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      if (statSync(full).isDirectory()) found.push(...svelteFiles(full));
+      else if (entry.endsWith(".svelte")) found.push(full);
+    }
+    return found;
+  }
+
+  /*
+   * Named rather than skipped. `Viewer`'s two are declared non-nullable and
+   * are not in a conditional, so they exist for the whole life of the component
+   * and are only ever read from `onMount` and from handlers bound to them --
+   * never after the element is gone. Making them `| null` would add a `!` at
+   * every use across a 140 kB file and buy nothing.
+   */
+  const UNCONDITIONAL = new Set(["canvas", "container"]);
+
+  const offenders: string[] = [];
+  const compared: string[] = [];
+  for (const file of svelteFiles(RENDERER)) {
+    /*
+     * Comments stripped first, and that is not fastidiousness: the whole reason
+     * these sites are recognisable is that somebody wrote down what went wrong,
+     * quoting the guard that was there. A scan that read prose would find the
+     * explanation and call it the fault.
+     */
+    const source = readFileSync(file, "utf-8")
+      .replace(/\/\*[^]*?\*\//g, " ")
+      .replace(/<!--[^]*?-->/g, " ")
+      .replace(/(^|[^:])\/\/.*/g, "$1");
+    const name = path.basename(file);
+    for (const match of source.matchAll(/bind:this=\{(\w+)\}/g)) {
+      const bound = match[1];
+      if (UNCONDITIONAL.has(bound)) continue;
+      /*
+       * The declaration, in either form this codebase uses: a rune for the ones
+       * an effect reads, a plain `let` for the ones only a handler does.
+       */
+      const declared = new RegExp(
+        `let ${bound}(?:\\s*[:=]\\s*\\$state<([^>]*)>|\\s*:\\s*([^;=]*))`,
+      ).exec(source);
+      const type = declared === null ? null : (declared[1] ?? declared[2] ?? "");
+      if (type !== null && /undefined/.test(type)) {
+        offenders.push(`${name}: ${bound} is ${type.trim()}`);
+      }
+      if (new RegExp(`\\b${bound}\\s*[!=]==\\s*undefined`).test(source)) {
+        compared.push(`${name}: ${bound}`);
+      }
+    }
+  }
+
+  equal(
+    "no `bind:this` binding is declared undefined",
+    offenders.join(", "),
+    "",
+  );
+  /*
+   * And nothing compares one against `undefined`. Once the declarations are
+   * honest `tsc` refuses this on its own -- so this half is here to say *why*,
+   * and to catch the pair arriving together in a file nobody has typed yet.
+   */
+  equal(
+    "...and none is compared against it",
+    compared.join(", "),
+    "",
+  );
+
+  /*
+   * The two that were reported, by name, so a regression says which. Both
+   * unmount their list the moment a query matches nothing -- typing `aa` in a
+   * block field, or `zzzz` after Ctrl+K.
+   */
+  for (const [file, binding] of [
+    ["BlockPicker.svelte", "list"],
+    ["CommandPalette.svelte", "list"],
+  ] as const) {
+    const source = readFileSync(path.join(RENDERER, "lib", file), "utf-8")
+      .replace(/\/\*[^]*?\*\//g, " ");
+    check(
+      `${file} guards its list against null`,
+      new RegExp(`${binding} === null`).test(source),
+    );
+  }
+}
+
+
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

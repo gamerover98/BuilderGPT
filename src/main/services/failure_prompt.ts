@@ -32,12 +32,28 @@
 export interface FailurePrompt {
   message: string;
   detail: string;
-  /** Confirm first; see `confirmIndex`. */
-  buttons: readonly [string, string];
+  buttons: readonly [string, string, string];
+  /** Copies the report and opens the issue form. Does not close the matter. */
+  reportIndex: 0;
   /** Which button reloads. Stated rather than inferred; `discard_prompt`'s rule. */
-  confirmIndex: 0;
+  confirmIndex: 1;
   /** Escape and the window's close button both land here. */
-  cancelIndex: 1;
+  cancelIndex: 2;
+}
+
+/** Everything a bug report wants, and everything this side can know. */
+export interface FailureFacts {
+  appName: string;
+  appVersion: string;
+  platform: string;
+  electron: string;
+  chrome: string;
+  node: string;
+  kind: "error" | "rejection";
+  message: string;
+  /** `file:line:column`, or `""`. */
+  at: string;
+  stack: string;
 }
 
 /**
@@ -62,11 +78,85 @@ export function failurePrompt(summary: string, repeats = 0): FailurePrompt {
       "view still draws and the menus still open, but nothing else will " +
       "respond.\n\nReloading fixes it. Your schematic is saved automatically " +
       "every 20 seconds by the part of the app that is still working, so at " +
-      "most that much editing is lost — along with the undo history." +
+      "most that much editing is lost — along with the undo history.\n\n" +
+      "Copying the details puts the whole report on your clipboard and opens a " +
+      "pre-filled issue in your browser. It publishes nothing: the Submit is " +
+      "yours." +
       said +
       more,
-    buttons: ["Reload the window", "Leave it as it is"],
-    confirmIndex: 0,
-    cancelIndex: 1,
+    buttons: ["Copy the details and report it", "Reload the window", "Leave it as it is"],
+    reportIndex: 0,
+    confirmIndex: 1,
+    cancelIndex: 2,
   };
+}
+
+/**
+ * The whole report, for the clipboard.
+ *
+ * The versions are here because an issue asks for them every time and nobody
+ * enjoys hunting for them twice -- and because main has all of them for free,
+ * without asking the renderer anything, which matters when the renderer is the
+ * half that has stopped answering.
+ */
+export function failureReport(facts: FailureFacts): string {
+  const lines = [
+    `${facts.appName} ${facts.appVersion} on ${facts.platform}`,
+    `Electron ${facts.electron} · Chromium ${facts.chrome} · Node ${facts.node}`,
+    "",
+    `${facts.kind}: ${facts.message}`,
+  ];
+  if (facts.at !== "") lines.push(`at ${facts.at}`);
+  if (facts.stack.trim() !== "") lines.push("", facts.stack.trim());
+  return lines.join("\n");
+}
+
+/**
+ * How much of the report a URL may carry.
+ *
+ * GitHub takes the issue body as a query parameter, so it travels in a URL --
+ * and a URL has a practical ceiling that a stack trace clears easily. Encoding
+ * roughly triples a newline-heavy string, so this is well under where browsers
+ * and servers start truncating silently, which is the failure worth avoiding: a
+ * body cut in the middle looks like a complete one.
+ */
+export const MAX_ISSUE_BODY = 1500;
+
+/**
+ * The issue body, abridged, with the clipboard named as the rest of it.
+ *
+ * `abridgeTrace`'s rule: cap on the way out and **say what was dropped**. The
+ * full report is already on the clipboard by the time this URL opens, so the
+ * sentence is an instruction rather than an apology.
+ */
+export function issueBody(report: string): string {
+  const head = [
+    "<!-- The full report is on your clipboard: paste it below. -->",
+    "",
+    "### What happened",
+    "",
+    "The window stopped updating.",
+    "",
+    "### Report",
+    "",
+    "```",
+  ];
+  const kept =
+    report.length <= MAX_ISSUE_BODY
+      ? report
+      : `${report.slice(0, MAX_ISSUE_BODY)}\n… cut here; the full report is on your clipboard.`;
+  return [...head, kept, "```", ""].join("\n");
+}
+
+/**
+ * Where to send it. Built from the repository the manifest already names, so
+ * there is no second place in this app that knows where its issues live.
+ */
+export function issueUrl(homepage: string, report: string): string {
+  const base = homepage.replace(/\/+$/, "");
+  const query = new URLSearchParams({
+    title: "The window stopped updating",
+    body: issueBody(report),
+  });
+  return `${base}/issues/new?${query.toString()}`;
 }

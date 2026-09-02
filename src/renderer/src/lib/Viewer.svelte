@@ -120,8 +120,15 @@ import { isTyping } from "./typing.js";
     cursorY: number;
   }
 
-  /** Placing or removing one block, from the crosshair in flight. */
-  export type BuildAction = "place" | "break";
+  /**
+   * What a click at the crosshair means.
+   *
+   * `"use"` is the right button on its own: **open what is under the
+   * crosshair, or place if it does not open.** Which of the two it turns
+   * out to be is main's to decide -- this component holds no schematic and
+   * cannot know whether that cell is a door.
+   */
+  export type BuildAction = "place" | "break" | "use";
 
   /** One of the six faces of the selection box, as a drag handle. */
   interface FaceHandle {
@@ -2493,7 +2500,16 @@ import { isTyping } from "./typing.js";
           if (event.button === 0) {
             onbuild("break", { x: target.x, y: target.y, z: target.z }, lookAt(target));
           } else if (event.button === 2 && target.place) {
-            onbuild("place", target.place, lookAt(target));
+            /*
+             * Shift places, the right button alone uses -- which is the game's
+             * own split, and Shift is already the descend key here, so
+             * sneak-to-place costs nothing and collides with nothing.
+             *
+             * Ctrl is deliberately not consulted: with the pointer locked it
+             * belongs to the camera, and this is a mouse button rather than
+             * one of the shortcuts that rule is about.
+             */
+            onbuild(event.shiftKey ? "place" : "use", target.place, lookAt(target));
           }
           return;
         }

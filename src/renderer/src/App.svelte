@@ -678,7 +678,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
    * typed into the block field means north, wherever the camera is pointing.
    */
   async function onBuild(
-    action: "place" | "break",
+    action: "place" | "break" | "use",
     at: { x: number; y: number; z: number },
     look: PlacementLook,
   ): Promise<void> {
@@ -704,16 +704,33 @@ import ConvertModal from "./lib/ConvertModal.svelte";
               ...(held.properties ?? {}),
             },
           };
-    await runDocument(action === "break" ? t("task.breakingBlock") : t("task.placingBlock"), () =>
+    const label =
+      action === "break"
+        ? t("task.breakingBlock")
+        : action === "use"
+          ? t("task.usingBlock")
+          : t("task.placingBlock");
+    /*
+     * `"use"` is one verb meaning "open it, or place if it does not open",
+     * and it carries exactly what a placement carries. Only main can tell the
+     * two apart -- this half holds no schematic, so it does not know whether
+     * the cell the crosshair found is a door -- and asking first would be a
+     * round trip per click and a race with any edit in flight.
+     *
+     * The block travels either way, because the fall-through half of the verb
+     * is a placement and needs it.
+     */
+    await runDocument(label, () =>
       api().applyEdit({
-        kind: "setBlock",
+        kind: action === "use" ? "use" : "setBlock",
         x: at.x,
         y: at.y,
         z: at.z,
         block,
         // Only main can see what was clicked -- the renderer holds no schematic
-        // -- so it needs the direction to look in. Two slabs meeting is the one
-        // rule that reads it.
+        // -- so it needs the direction to look in. Two slabs meeting reads it,
+        // and so does `use`: the block that might open is one step back along
+        // this face from the cell a placement would fill.
         ...(look.against === null ? {} : { against: look.against }),
       }),
     );

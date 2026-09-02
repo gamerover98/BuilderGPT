@@ -1476,6 +1476,28 @@ export function hasProperty(id: string, property: string): boolean {
   return shape !== null && shape.values[property] !== undefined;
 }
 
+/**
+ * Whether right-clicking this block should **open** it rather than place
+ * what you are holding.
+ *
+ * The game's own rule, and `open` is the whole of it: doors, trapdoors and
+ * fence gates carry it and nothing else a player can reach does. Asking the
+ * registry rather than listing the families is what makes it cover every
+ * wood, the copper ones, and whatever the next update adds -- the same
+ * argument `DEFAULT_STATE` records for being generated rather than curated.
+ *
+ * `barrel` is the one exclusion and it is a real one: its `open` reflects a
+ * container being looked into, not an door on a hinge, and toggling it in a
+ * schematic would write a state that means nothing and draws nothing.
+ *
+ * An **iron** door opens here, which in game it does not without redstone.
+ * That is deliberate: this is an editor, and refusing would be faithful and
+ * useless.
+ */
+export function isOpenable(id: string): boolean {
+  return bareName(id) !== "barrel" && hasProperty(id, "open");
+}
+
 /** Whether the table knows this block at all. */
 export function isKnownBlock(id: string): boolean {
   return BLOCK_SHAPE[bareName(id)] !== undefined;

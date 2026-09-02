@@ -1001,6 +1001,32 @@ export type EditRequest =
    * already there.
    */
   | { kind: "setState"; x: number; y: number; z: number; block: BlockSpec }
+  /**
+   * The right-click gesture: **open what was clicked, or place what is held.**
+   *
+   * One verb rather than two because only main can tell which one it is. The
+   * renderer holds no schematic, so it does not know whether the cell under
+   * the crosshair is a door -- and asking first would be a round trip per
+   * click and a race with any edit in flight.
+   *
+   * The fields are `setBlock`'s exactly, and `x/y/z` is the **empty** cell a
+   * placement would use. The clicked block is one step back along `against`,
+   * which is the same arithmetic the double-slab merge already does -- so
+   * this carries nothing a placement does not already carry, and a click on
+   * the build grid, where there is no `against`, is simply a placement.
+   *
+   * Sneaking is **not** a field here. Holding Shift sends a plain `setBlock`,
+   * exactly as it always did, which keeps this verb's meaning a question
+   * about the block rather than about the keyboard.
+   */
+  | {
+      kind: "use";
+      x: number;
+      y: number;
+      z: number;
+      block: BlockSpec;
+      against?: "up" | "down" | "north" | "south" | "east" | "west";
+    }
   | { kind: "fill"; region: RegionSpec; block: BlockSpec }
   | { kind: "replace"; region: RegionSpec; from: BlockSpec; to: BlockSpec };
 

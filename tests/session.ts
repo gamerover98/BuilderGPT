@@ -1023,6 +1023,193 @@ console.log("\n--- turning a region ---");
   equal("...and so does undoing all four", snapshot(), before);
 }
 
+// --- the right button opens what it lands on ------------------------------
+//
+// In the game, right-clicking a door swings it and you have to sneak to place
+// a block against it. Here the right button always placed, so the only way to
+// open a door in a schematic was the inspector -- twice, once per half.
+//
+// `use` is one verb because only this side can tell the two apart. The renderer
+// holds no schematic, so it cannot know whether the cell under the crosshair is
+// a door; asking first would be a round trip per click.
+console.log("\n--- the right button opens what it lands on ---");
+{
+  const door = (half: string, open: string) => ({
+    namespacedName: "minecraft:oak_door",
+    properties: { facing: "north", half, hinge: "left", open, powered: "false" },
+  });
+  const withDoor = (): DocumentSession => {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    setBlock(session.doc, 1, 0, 1, door("lower", "false"));
+    setBlock(session.doc, 1, 1, 1, door("upper", "false"));
+    return session;
+  };
+  const openAt = (session: DocumentSession, y: number) => getBlock(session.doc, 1, y, 1).properties.open;
+
+  /*
+   * Clicking the **lower** half. The click lands in the empty cell in front of
+   * it, and `against` is the face that was hit -- so the door is one step back
+   * along that face, which is the arithmetic the slab merge already does.
+   */
+  {
+    const session = withDoor();
+    const changed = applyEdit(session, {
+      kind: "use",
+      x: 1,
+      y: 0,
+      z: 0,
+      block: { namespacedName: "minecraft:stone", properties: {} },
+      against: "north",
+    });
+    equal("opening a door writes both halves", changed, 2);
+    equal("...the one that was clicked", openAt(session, 0), "true");
+    equal("...and the one above it", openAt(session, 1), "true");
+    /*
+     * One transaction, or Ctrl+Z would take a door back a half at a time --
+     * and half an open door is a shape the game cannot hold. The same rule the
+     * placement of a door already keeps, arrived at from the other end.
+     */
+    undoEdit(session);
+    equal("one undo closes both", `${openAt(session, 0)} ${openAt(session, 1)}`, "false false");
+  }
+
+  /*
+   * ...and the **upper** half, which is the one a person reaches first when the
+   * door is at eye level. It works because the far cell comes from `TWO_PART`
+   * rather than from a hard-coded step: the table already knows which way the
+   * second half lies, and reading it is what makes this direction free.
+   */
+  {
+    const session = withDoor();
+    applyEdit(session, {
+      kind: "use",
+      x: 1,
+      y: 1,
+      z: 0,
+      block: { namespacedName: "minecraft:stone", properties: {} },
+      against: "north",
+    });
+    equal("clicking the top opens the bottom too", `${openAt(session, 0)} ${openAt(session, 1)}`, "true true");
+  }
+
+  // An open door closes. The state is toggled from what is there, not set.
+  {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    setBlock(session.doc, 1, 0, 1, door("lower", "true"));
+    setBlock(session.doc, 1, 1, 1, door("upper", "true"));
+    applyEdit(session, {
+      kind: "use",
+      x: 1,
+      y: 0,
+      z: 0,
+      block: { namespacedName: "minecraft:stone", properties: {} },
+      against: "north",
+    });
+    equal("an open door closes", `${openAt(session, 0)} ${openAt(session, 1)}`, "false false");
+  }
+
+  /*
+   * A trapdoor is one block and must not drag its neighbour with it. The check
+   * is the block *above* rather than the trapdoor itself: a rule that reached
+   * for a second cell by height alone would open whatever happened to be there.
+   */
+  {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    setBlock(session.doc, 1, 0, 1, {
+      namespacedName: "minecraft:oak_trapdoor",
+      properties: { facing: "north", half: "bottom", open: "false", powered: "false" },
+    });
+    setBlock(session.doc, 1, 1, 1, {
+      namespacedName: "minecraft:oak_trapdoor",
+      properties: { facing: "north", half: "bottom", open: "false", powered: "false" },
+    });
+    const changed = applyEdit(session, {
+      kind: "use",
+      x: 1,
+      y: 0,
+      z: 0,
+      block: { namespacedName: "minecraft:stone", properties: {} },
+      against: "north",
+    });
+    equal("a trapdoor opens alone", changed, 1);
+    equal(
+      "...leaving the one above it shut",
+      getBlock(session.doc, 1, 1, 1).properties.open,
+      "false",
+    );
+  }
+
+  /*
+   * Everything that does not open is a placement, and it is the **same**
+   * placement -- the verb falls through by rewriting itself rather than by
+   * copying the placement path, so the slab merge, the two-part rule, the
+   * flooding and the growth all still apply. A second path here is how one of
+   * those comes to be missing from the commonest gesture in the app.
+   */
+  {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    setBlock(session.doc, 1, 0, 1, { namespacedName: "minecraft:oak_slab", properties: { type: "bottom" } });
+    applyEdit(session, {
+      kind: "use",
+      x: 1,
+      y: 1,
+      z: 1,
+      block: { namespacedName: "minecraft:oak_slab", properties: { type: "top" } },
+      against: "up",
+    });
+    equal(
+      "a right-click on a slab still merges it",
+      getBlock(session.doc, 1, 0, 1).properties.type,
+      "double",
+    );
+  }
+
+  // No `against` is a click on the build grid: there is no block to open.
+  {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    applyEdit(session, {
+      kind: "use",
+      x: 2,
+      y: 0,
+      z: 2,
+      block: { namespacedName: "minecraft:stone", properties: {} },
+    });
+    equal(
+      "with nothing to open, it places",
+      getBlock(session.doc, 2, 0, 2).namespacedName,
+      "minecraft:stone",
+    );
+  }
+
+  /*
+   * A barrel carries `open`, and it is not a door: the property reflects a
+   * container being looked into. Toggling it would write a state that means
+   * nothing here and draws nothing, so the registry rule excludes it by name
+   * and the click places, as it did before.
+   */
+  {
+    const session = newDocument({ width: 4, height: 4, length: 4 });
+    setBlock(session.doc, 1, 0, 1, {
+      namespacedName: "minecraft:barrel",
+      properties: { facing: "up", open: "false" },
+    });
+    applyEdit(session, {
+      kind: "use",
+      x: 1,
+      y: 0,
+      z: 0,
+      block: { namespacedName: "minecraft:stone", properties: {} },
+      against: "north",
+    });
+    equal("a barrel is not opened", getBlock(session.doc, 1, 0, 1).properties.open, "false");
+    equal(
+      "...the block is placed in front of it instead",
+      getBlock(session.doc, 1, 0, 0).namespacedName,
+      "minecraft:stone",
+    );
+  }
+}
+
 // --- two slabs are one block ------------------------------------------------
 //
 // In the game a slab placed against the top of a matching bottom slab does not

@@ -122,11 +122,34 @@ export interface PopoverBounds {
  * pinned to the top-left margin rather than centred on nothing: the controls
  * are read from the top down, so that is the half worth keeping.
  */
-export function placePopover(anchor: AnchorRect, bounds: PopoverBounds): Point {
+/**
+ * Which side to try first, when both fit.
+ *
+ * `"above"` is the default and is what a control at the bottom of a panel
+ * wants. `"below"` is for a field you are **typing into**: an autocomplete that
+ * appears above the caret is surprising, and worse, `placePopover` would put it
+ * above or below depending on where the panel happened to be — so the same
+ * field would behave differently after dragging its window.
+ *
+ * Only the preference. Either way the result is clamped into the viewport, and
+ * the clamp is the guarantee.
+ */
+export type PopoverSide = "above" | "below";
+
+export function placePopover(
+  anchor: AnchorRect,
+  bounds: PopoverBounds,
+  prefer: PopoverSide = "above",
+): Point {
   const preferredLeft = anchor.left + anchor.width - bounds.popoverWidth;
   const above = anchor.top - bounds.gap - bounds.popoverHeight;
+  const below = anchor.top + anchor.height + bounds.gap;
   const preferredTop =
-    above >= bounds.margin ? above : anchor.top + anchor.height + bounds.gap;
+    prefer === "below"
+      ? (below + bounds.popoverHeight <= bounds.viewportHeight - bounds.margin
+          ? below
+          : (above >= bounds.margin ? above : below))
+      : (above >= bounds.margin ? above : below);
 
   // `max` last, so it wins when the popover is wider or taller than the window
   // allows -- `maxLeft` is below `margin` then, and clamping the other way

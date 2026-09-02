@@ -23,6 +23,7 @@
    * rows tall. That is what the freeze was made of.
    */
   import { searchBlocks } from "./block_search.js";
+  import { placePopover } from "./floating.js";
 import {
   legacyIdFor,
   resolveBlockInput,
@@ -76,6 +77,15 @@ const ROW_LIMIT = 120;
   let open = $state(false);
   let highlighted = $state(0);
   let root: HTMLDivElement | undefined;
+  /*
+   * Both `$state`, because the placement effect is driven by them binding: the
+   * dropdown only exists once there is something to show. `ModelPicker`'s shape.
+   */
+  let field = $state<HTMLInputElement | undefined>(undefined);
+  let popover = $state<HTMLDivElement | undefined>(undefined);
+  let placement = $state<{ x: number; y: number } | null>(null);
+  let innerWidth = $state(0);
+  let innerHeight = $state(0);
   /**
    * `$state`, unlike `root` below it, because the scroll effect reads it: a
    * plain `let` is written by `bind:this` without waking anything, so the
@@ -134,6 +144,37 @@ const ROW_LIMIT = 120;
     }
   });
 
+  /*
+   * Measure, then place. `ModelPicker`'s comment applies verbatim: the popover
+   * has to be in the DOM to know how tall it is, so it renders hidden for one
+   * flush and `placement` reveals it -- an `$effect` runs after the DOM is
+   * updated and before paint, so there is nothing to see in between.
+   *
+   * `shown` is read so a list that grows or shrinks as you type is re-placed
+   * rather than left where the last one was.
+   */
+  $effect(() => {
+    if (!open || popover === undefined || field === undefined) {
+      placement = null;
+      return;
+    }
+    void shown.length;
+    const anchor = field.getBoundingClientRect();
+    const box = popover.getBoundingClientRect();
+    placement = placePopover(
+      { left: anchor.left, top: anchor.top, width: anchor.width, height: anchor.height },
+      {
+        viewportWidth: innerWidth,
+        viewportHeight: innerHeight,
+        popoverWidth: box.width,
+        popoverHeight: box.height,
+        margin: 8,
+        gap: 4,
+      },
+      "below",
+    );
+  });
+
   function choose(block: string): void {
     onchange(block);
     open = false;
@@ -167,13 +208,14 @@ const ROW_LIMIT = 120;
   }
 </script>
 
-<svelte:window onclick={onWindowClick} />
+<svelte:window onclick={onWindowClick} bind:innerWidth bind:innerHeight />
 
 <div class="picker" bind:this={root}>
   <input
     {id}
     {value}
     {placeholder}
+    bind:this={field}
     spellcheck="false"
     autocomplete="off"
     oninput={(event) => {
@@ -185,7 +227,13 @@ const ROW_LIMIT = 120;
     onkeydown={onKeydown}
   />
   {#if open && shown.length > 0}
-    <div class="dropdown">
+    <div
+      class="dropdown"
+      bind:this={popover}
+      style={placement === null
+        ? "visibility: hidden"
+        : `left: ${placement.x}px; top: ${placement.y}px`}
+    >
       <!--
         Outside the scrolling list on purpose: `list.children` is indexed by the
         highlighted row, so anything else living in that element would put the
@@ -256,12 +304,24 @@ const ROW_LIMIT = 120;
     box-sizing: border-box;
   }
 
+  /*
+   * Positioned against the window by `placePopover`, not against the field.
+   *
+   * `ModelPicker`'s rule and its reason, which applies harder here: this field
+   * lives inside a `ToolWindow`, whose `.body` is `overflow-y: auto` and whose
+   * frame is `overflow: hidden` — so laid out from the field, a list of blocks
+   * is cut off by a panel a few rows tall, and its own margin box drives that
+   * scroller's overflow. `fixed` escapes both: nothing to clip it, and nothing
+   * it can resize. No ancestor here has a transform or a filter, which are what
+   * would make it a containing block again.
+   *
+   * It stays a DOM child of the picker, so dismiss-on-outside-click remains a
+   * plain `root.contains()` test and needs no portal.
+   */
   .dropdown {
-    position: absolute;
+    position: fixed;
     z-index: 20;
-    top: calc(100% + 2px);
-    left: 0;
-    right: 0;
+    width: min(320px, calc(100vw - 16px));
     padding: 4px;
     background: var(--bg-panel);
     border: 1px solid var(--border);

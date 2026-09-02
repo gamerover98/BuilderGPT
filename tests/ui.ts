@@ -2622,6 +2622,73 @@ console.log("\n--- the picker draws a bounded number of rows ---");
     "the block registry is raw state, not a deep proxy",
     /let blockRegistry = \$state\.raw</.test(app),
   );
+
+  /*
+   * And the list is positioned against the window rather than the field. Laid
+   * out from the field it is clipped by a `ToolWindow` a few rows tall, and its
+   * own margin box drives that panel's scroller -- so what it can reach, it can
+   * also resize.
+   */
+  check(
+    "the dropdown is placed against the window",
+    /placePopover\(/.test(picker) && /position: fixed/.test(picker),
+  );
+  check(
+    "...below the field it belongs to, not above it",
+    /"below"/.test(picker),
+  );
+}
+
+{
+  /*
+   * `placePopover`'s new preference, and the reason it is not merely taste: a
+   * list that opens above the caret when the panel is low and below it when the
+   * panel is high behaves differently after you drag its window.
+   *
+   * The preference is the design; the clamp is the guarantee, and only the
+   * clamp is load-bearing.
+   */
+  const anchor = { left: 400, top: 300, width: 180, height: 24 };
+  const box = {
+    viewportWidth: 1280,
+    viewportHeight: 800,
+    popoverWidth: 320,
+    popoverHeight: 240,
+    margin: 8,
+    gap: 4,
+  };
+  equal(
+    "with room on both sides, above is still the default",
+    placePopover(anchor, box).y,
+    300 - 4 - 240,
+  );
+  equal(
+    "...and below is taken when it is asked for",
+    placePopover(anchor, box, "below").y,
+    300 + 24 + 4,
+  );
+  /*
+   * Asking for below and not fitting falls back to above rather than hanging
+   * off the bottom -- a list of blocks under a field near the foot of the
+   * window is the ordinary case, not an edge one.
+   */
+  const low = { ...anchor, top: 700 };
+  equal(
+    "...falling back to above when below does not fit",
+    placePopover(low, box, "below").y,
+    700 - 4 - 240,
+  );
+  /*
+   * And when neither fits, the clamp still puts it on screen. That is the half
+   * that is a guarantee rather than a preference.
+   */
+  const tall = { ...box, popoverHeight: 780 };
+  const squeezed = placePopover({ ...anchor, top: 400 }, tall, "below");
+  check(
+    "with room nowhere it is still inside the window",
+    squeezed.y >= 8 && squeezed.y <= 800 - 8,
+    String(squeezed.y),
+  );
 }
 
 

@@ -2170,6 +2170,22 @@ allowlist is the one that was intended, not that it holds. The `mailto:`/`tel:`
 cases are load-bearing: DOMPurify's own default permits both, so without them
 `hardenLink` could be deleted and nothing would fail.
 
+**The block picker's list is one of those, and was not.** It was
+`position: absolute` against the field, inside a `ToolWindow` whose `.body` is
+`overflow-y: auto` and whose frame is `overflow: hidden` — so a list of blocks
+was cut off by a panel a few rows tall, *and* its own margin box drove that
+scroller's overflow. What it could reach, it could also resize. `fixed` removes
+both at once: nothing clips it, and nothing it can grow into.
+
+`placePopover` grew a `prefer` argument for it, defaulting to the old
+behaviour so the two existing callers are untouched. Above is right for a
+control at the foot of a panel; for a field you are **typing into** it is not,
+and the arithmetic made it worse than a fixed choice — `above >= margin` is
+true or false depending on where the panel happens to be, so the same field
+opened upwards or downwards according to where you had dragged its window.
+Below still falls back to above when it does not fit, and the clamp is still
+the only part that is a guarantee.
+
 **A popover is positioned against the window, not against its control.**
 Everything from `.controls` down is `overflow: hidden`, and the controls that
 open popovers sit at the trailing edge of a right-hand panel — so a popover laid

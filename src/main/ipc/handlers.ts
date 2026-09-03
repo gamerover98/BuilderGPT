@@ -79,6 +79,7 @@ import {
   documentVersionName,
   mcVersion,
   refusalFor,
+  resolveVersionName,
 } from "../../shared/mc_versions.js";
 import {
   normaliseVoidBlock,
@@ -174,6 +175,8 @@ import { loadAnchorTexture, loadSkyTextures } from "../services/sky_textures.js"
 import { SchematicFormatError } from "../pipeline/loader.js";
 import { classifyGenerateError, generate } from "../services/generate.js";
 import { fetchOpenCodeModels } from "../services/opencode.js";
+import { apiKeyRefusal } from "../services/llm_key.js";
+import { orphanedProfile } from "../services/legacy_profile.js";
 import {
   buildPreview,
   EmptyPreviewError,
@@ -192,6 +195,7 @@ import {
   defaultResourcePackPath,
   generatedDir,
   legacyBlocksPath,
+  legacyUserDataDir,
   openCodeSnapshotPath,
   resourcesDir,
 } from "../services/resources.js";
@@ -241,6 +245,7 @@ import {
   stopMcpServer,
   useHost,
 } from "../mcp/server.js";
+import { servingChanged } from "../mcp/policy.js";
 import { VERSION_NAMES } from "../services/versions.js";
 import { convertFile, extensionForKind } from "../services/convert.js";
 
@@ -443,8 +448,28 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
 
   ipcMain.handle(IPC.settingsGet, async (): Promise<Settings> => await getSettings());
 
+  /*
+   * Saving settings also **applies** the ones a running listener is made of.
+   *
+   * `mcpSetEnabled` starts and stops, and for a long time that was the only
+   * thing that reached the server -- so the port, the bind address and
+   * whether a token is required were written to disk and then ignored until
+   * the next launch. Turning authentication off and back on left the pane
+   * saying one thing while the socket did another, and the token disappeared
+   * from the pane with no way to bring it back.
+   *
+   * Only the three fields the listener is *built* from. `root` and
+   * `allowDelete` are asked at the moment of each call -- deliberately, so
+   * that revoking deletion revokes it now -- and restarting for those would
+   * drop every session for nothing.
+   */
   ipcMain.handle(IPC.settingsSet, async (_event, next: Settings): Promise<Settings> => {
-    return await setSettings(next);
+    const before = await getSettings();
+    const saved = await setSettings(next);
+    if (servingChanged(before.mcp, saved.mcp) && saved.mcp.enabled) {
+      await startMcpServer(saved.mcp);
+    }
+    return saved;
   });
 
   ipcMain.handle(IPC.keysStatus, async (): Promise<KeyStorageStatus> => await getKeyStatus());
@@ -885,30 +910,27 @@ ${report.stack}`),
     const apiKey = await getApiKey(settings.provider);
 
     // component.py:383-384 exempted OpenCode from the key gate wholesale,
-    // because "OpenCode has free models". Most of them are not: 9 of the 61
-    // models it serves are free and the rest bill per token. The gate is now
-    // per model, and the reference image is gated the same way -- a text-only
+    // because "OpenCode has free models". Most of them are not, and the
+    // proportion moves, so the gate is per model. It lives in
+    // `services/llm_key.ts` now: it was written out here, again for the agent
+    // turn below, and **nowhere** on the MCP path -- where its absence came
+    // back as `LLM API Error: Invalid API key` and was read as an MCP
+    // authentication failure, because that is what it looks like.
+    const noKey = await apiKeyRefusal({
+      provider: settings.provider,
+      model: settings.model,
+      apiKey,
+      snapshotPath: openCodeSnapshotPath(),
+      legacyProfilePath: (await orphanedProfile(app.getPath("userData"), legacyUserDataDir()))?.path ?? null,
+    });
+    if (noKey !== null) return settle({ ok: false, kind: "no-api-key", message: noKey });
+
+    // The reference image is gated the same way and separately -- a text-only
     // model answers an image with an opaque 400.
     let acceptsImages: boolean | undefined;
     if (settings.provider === "OpenCode") {
       const catalogue = await fetchOpenCodeModels({ snapshotPath: openCodeSnapshotPath() });
-      const model = catalogue?.find((entry) => entry.id === settings.model);
-      if (apiKey.trim() === "" && openCodeModelRequiresKey(model)) {
-        return settle({
-          ok: false,
-          kind: "no-api-key",
-          message:
-            `${model?.name ?? settings.model} is a paid OpenCode model. Add an API key, ` +
-            `or pick one of the free models in the LLM provider panel.`,
-        });
-      }
-      acceptsImages = model?.imageInput !== "no";
-    } else if (apiKey.trim() === "" && providerRequiresApiKey(settings.provider)) {
-      return settle({
-        ok: false,
-        kind: "no-api-key",
-        message: `Add an API key for ${settings.provider} in Settings.`,
-      });
+      acceptsImages = catalogue?.find((entry) => entry.id === settings.model)?.imageInput !== "no";
     }
 
     /*
@@ -1112,10 +1134,26 @@ ${report.stack}`),
     IPC.docNew,
     async (_event, req: NewDocumentRequest): Promise<DocumentStateResponse> => {
       try {
+        /*
+         * Resolved before it is used, like every other caller. The dropdown
+         * only ever sends a real name, so this is unreachable from the
+         * window -- which is the argument for it rather than against: a rule
+         * kept true by one caller's good behaviour is wrong at the next one,
+         * and `dataVersionOf` fails open, so an unrecognised name here would
+         * silently produce a document with no version tag.
+         */
+        const version = resolveVersionName(req.version);
+        if (version === null) {
+          return {
+            ok: false,
+            kind: "invalid-input",
+            message: `${req.version} is not a Minecraft version this build knows.`,
+          };
+        }
         // Mirrored by the dialog and enforced here. A renderer that filtered
         // correctly today is not the same thing as a rule, and this is the only
         // side that writes files.
-        const refusal = refusalFor(req.format, req.version);
+        const refusal = refusalFor(req.format, version);
         if (refusal !== null) {
           return { ok: false, kind: "invalid-input", message: refusal };
         }
@@ -1123,7 +1161,7 @@ ${report.stack}`),
           newDocument(
             { width: req.width, height: req.height, length: req.length },
             req.format,
-            dataVersionOf(req.version),
+            dataVersionOf(version),
           ),
         );
         await adoptSubject(null);
@@ -1240,8 +1278,16 @@ ${report.stack}`),
          * became 1.12? Passing the current one would check it against itself
          * and always find nothing.
          */
-        const legacy = eraOf(request.version) === "legacy";
-        const result = setDocumentVersion(session, request.version, {
+        const version = resolveVersionName(request.version);
+        if (version === null) {
+          return {
+            ok: false,
+            kind: "invalid-input",
+            message: `${request.version} is not a Minecraft version this build knows.`,
+          };
+        }
+        const legacy = eraOf(version) === "legacy";
+        const result = setDocumentVersion(session, version, {
           dropUnrepresentable: request.dropUnrepresentable === true,
           placeableNames: legacy
             ? legacyBlockNames(await loadLegacyBlockTable(legacyBlocksPath()))
@@ -1250,7 +1296,7 @@ ${report.stack}`),
         // The sidecar has to agree, or reopening the file preselects the
         // version it used to be.
         if (session.doc.filePath !== null) {
-          await rememberProject(session.doc.filePath, { version: request.version });
+          await rememberProject(session.doc.filePath, { version });
         }
         return {
           ok: true,
@@ -1515,8 +1561,17 @@ ${report.stack}`),
   ipcMain.handle(IPC.docSave, async (_event, request: SaveRequest): Promise<SaveResponse> => {
     try {
       const session = requireSession();
-      if (request.version !== undefined) {
-        const refusal = refusalFor(request.format ?? session.doc.format, request.version);
+      const stamped =
+        request.version === undefined ? undefined : resolveVersionName(request.version);
+      if (stamped === null) {
+        return {
+          ok: false,
+          kind: "invalid-input",
+          message: `${String(request.version)} is not a Minecraft version this build knows.`,
+        };
+      }
+      if (stamped !== undefined) {
+        const refusal = refusalFor(request.format ?? session.doc.format, stamped);
         if (refusal !== null) {
           return { ok: false, kind: "invalid-input", message: refusal };
         }
@@ -1527,7 +1582,7 @@ ${report.stack}`),
         // Only when asked. Omitting it means "keep what the document carries",
         // which is what a plain Save wants; passing `null` unconditionally would
         // strip the version tag off every file the app touched.
-        ...(request.version === undefined ? {} : { dataVersion: dataVersionOf(request.version) }),
+        ...(stamped === undefined ? {} : { dataVersion: dataVersionOf(stamped) }),
         legacyBlocksPath: legacyBlocksPath(),
       });
       /*
@@ -1731,21 +1786,18 @@ ${report.stack}`),
         return refuse(failed.kind, failed.message);
       }
 
-      // The same key gate as generation, for the same reason: a paid model with
-      // no key returns an opaque 401 that reaches the user as "LLM API Error".
+      // The same key gate as generation, and now literally the same function:
+      // a paid model with no key returns an opaque 401 that reaches the user as
+      // "LLM API Error", which says nothing about which key.
       const apiKey = await getApiKey(settings.provider);
-      if (settings.provider === "OpenCode") {
-        const catalogue = await fetchOpenCodeModels({ snapshotPath: openCodeSnapshotPath() });
-        const model = catalogue?.find((entry) => entry.id === settings.model);
-        if (apiKey.trim() === "" && openCodeModelRequiresKey(model)) {
-          return refuse(
-            "no-api-key",
-            `${model?.name ?? settings.model} is a paid OpenCode model. Add an API key, or pick a free one.`,
-          );
-        }
-      } else if (apiKey.trim() === "" && providerRequiresApiKey(settings.provider)) {
-        return refuse("no-api-key", `Add an API key for ${settings.provider} in Settings.`);
-      }
+      const noKey = await apiKeyRefusal({
+        provider: settings.provider,
+        model: settings.model,
+        apiKey,
+        snapshotPath: openCodeSnapshotPath(),
+        legacyProfilePath: (await orphanedProfile(app.getPath("userData"), legacyUserDataDir()))?.path ?? null,
+      });
+      if (noKey !== null) return refuse("no-api-key", noKey);
 
       // Registered before the run so a Stop arriving while the model is still
       // being resolved still finds something to abort.

@@ -3676,6 +3676,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   {busy}
   onpickoutputdir={() => pick("directory")}
   onrevealoutputdir={() => api().revealPath(settings.outputDir || defaultOutputDir)}
+  onrevealpath={(target) => void api().revealPath(target)}
   onclose={() => {
     settingsOpen = false;
     settingsCategory = null;
@@ -4094,6 +4095,8 @@ import ConvertModal from "./lib/ConvertModal.svelte";
         onopenrecent={openDocumentAt}
         onopenartifact={(artifact) => void openDocumentAt(artifact.path)}
         onrevealartifact={(artifact) => api().revealPath(artifact.path)}
+        legacyProfile={keyStatus?.legacyProfile ?? null}
+        onrevealpath={(target) => void api().revealPath(target)}
       />
     {/if}
 

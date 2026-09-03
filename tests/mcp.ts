@@ -14,14 +14,20 @@
  */
 
 import { spawn } from "child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { createServer } from "http";
 import { tmpdir } from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 
 import { TOOL_SPECS, buildTools, type ToolContext } from "../src/main/agent/tools.js";
-import { callTool, describeTools, findTool, isReadOnly, serialised } from "../src/main/mcp/tools.js";
+import {
+  callTool,
+  describeTools,
+  findTool,
+  isReadOnly,
+  serialised,
+} from "../src/main/mcp/tools.js";
 import { LIFECYCLE_SPECS, findLifecycle, type Lifecycle } from "../src/main/mcp/lifecycle.js";
 import { DOCUMENT_SPECS, findDocumentTool } from "../src/main/mcp/document_tools.js";
 import {
@@ -31,10 +37,17 @@ import {
   isInside,
   mayDelete,
   mayReplaceDocument,
+  routeRequest,
+  servingChanged,
   samePath,
+  startupRefusal,
   withinRoot,
 } from "../src/main/mcp/policy.js";
 import { countBlocks, getBlock } from "../src/main/domain/document.js";
+import {
+  MC_VERSION_NAMES,
+  dataVersionOf,
+} from "../src/shared/mc_versions.js";
 
 /*
  * An absolute path, spelled the way the platform running this spells one.
@@ -118,9 +131,19 @@ function fakeLifecycle(over: Partial<Lifecycle> & { log?: string[] } = {}): Life
       log.push(`open:${filePath}`);
       return open();
     },
-    create: async () => {
-      log.push("create");
-      return open();
+    /*
+     * Honoured rather than ignored, because what is under test is that the
+     * name reaching here is already canonical: `create_document` resolves a
+     * label before calling, so a fake that dropped the argument would let the
+     * whole fix be deleted with every check still green.
+     */
+    create: async (size, format, version) => {
+      log.push(`create:${format}:${version}`);
+      closeDocument();
+      newDocument(size, format, dataVersionOf(version));
+      const session = currentSession();
+      if (session === null) throw new Error("newDocument left nothing open");
+      return session;
     },
     save: async (_session, options) => {
       log.push(`save:${options.filePath ?? "(same)"}`);
@@ -156,10 +179,6 @@ function fakeLifecycle(over: Partial<Lifecycle> & { log?: string[] } = {}): Life
       log.push(`restore:${id}`);
       return id === "v1" ? open() : null;
     },
-    generate: async (prompt) => {
-      log.push(`generate:${prompt}`);
-      return { filePath: abs("builds", "made.schem"), blocks: 12 };
-    },
     ...over,
   };
   return base;
@@ -180,6 +199,27 @@ function options(sink: { changed: number }, lifecycle?: Lifecycle) {
       sink.changed += 1;
     },
   };
+}
+
+/**
+ * A call whose failure is a value rather than the end of the suite.
+ *
+ * Every check below is about a call that is *supposed* to work, so a bare
+ * `await` would abort the run on the first regression and hide everything
+ * after it -- which is the arrangement `check.sh` deliberately avoids. The
+ * error message comes back as the result instead, and the equality check that
+ * was going to name the fault still names it.
+ */
+async function attempt(
+  tool: string,
+  args: unknown,
+  opts: Parameters<typeof callTool>[2],
+): Promise<Record<string, unknown>> {
+  try {
+    return ((await callTool(tool, args, opts)).result ?? {}) as Record<string, unknown>;
+  } catch (err) {
+    return { refused: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 function open(): DocumentSession {
@@ -251,6 +291,31 @@ try {
     // so making it queue behind every mutation would be a `get_region` waiting
     // on a build script for no reason.
     check("...and so is the block reference", isReadOnly("describe_block"));
+
+    /*
+     * There is no `generate_schematic`, and that is the check.
+     *
+     * It asked the model the *user* configured in this app to build the
+     * schematic -- a second model on a second budget, doing what the model
+     * driving the connection was already doing with `run_build_script`. This
+     * server's whole stated value is what a harness cannot do for itself, and
+     * calling an LLM is exactly what it can.
+     *
+     * It also made the app's provider key a precondition for a connection that
+     * has nothing to do with it, so a missing key came back as the gateway's
+     * `Invalid API key.` -- reported twice as an MCP authentication failure
+     * before anyone doubted the tool.
+     */
+    check(
+      "no tool asks the app's own model to do the work",
+      !describeTools().some((tool) => tool.name === "generate_schematic"),
+      "generate_schematic is back on the wire",
+    );
+    // The one that replaces it, and needs no key from anybody.
+    check(
+      "...and the block tools are what a model builds with",
+      describeTools().some((tool) => tool.name === "run_build_script"),
+    );
 
     // `describeTools` reads the two tables and must not be a copy of either.
     equal(
@@ -946,18 +1011,433 @@ try {
       "announce",
     ]);
 
-    // Generation spends the *user's* API budget, not the calling model's, so an
-    // empty prompt is refused rather than sent.
-    let blank: string | null = null;
-    try {
-      await callTool("generate_schematic", { prompt: "   " }, options(sink, host));
-    } catch (err) {
-      blank = err instanceof Error ? err.message : String(err);
-    }
-    check("an empty generation prompt is refused", blank !== null, String(blank));
-    equal("...and nothing was generated", log.filter((entry) => entry.startsWith("generate:")), []);
   }
 
+  // --- the version is the client's to choose -------------------------------
+  //
+  // The report this section came from: asked for a 26.2 schematic, an MCP client
+  // produced a 1.20.4 one every time. Four separate faults arrived at that, and
+  // the first is the one below -- `create_document` took any string at all,
+  // `dataVersionOf` failed open on it, and the document was created carrying no
+  // version tag with nothing raised anywhere.
+  console.log("\n--- the version a client asks for is the version it gets ---");
+  {
+    const sink = { changed: 0 };
+    const log: string[] = [];
+    const host = fakeLifecycle({ log });
+
+    /*
+     * The label, which is what a model actually sends. `26.2` is how the request
+     * arrives -- nobody asks for `JE_26_2` -- and it used to resolve to nothing,
+     * silently, because that is also what 1.8.8's genuine absence of a
+     * DataVersion looks like from inside `dataVersionOf`.
+     */
+    const made = await attempt(
+      "create_document",
+      { width: 4, height: 4, length: 4, format: "sponge3", version: "26.2" },
+      options(sink, host),
+    );
+    equal(
+      "a version asked for by label reaches the host canonically",
+      log.filter((entry) => entry.startsWith("create:")),
+      ["create:sponge3:JE_26_2"],
+    );
+    equal("...and the document carries its DataVersion", made.dataVersion, dataVersionOf("JE_26_2"));
+    /*
+     * Reported back as well, because a client that cannot read what it got has
+     * no way to notice the thing that was reported.
+     */
+    equal("...and the answer says which version that is", made.version, "JE_26_2");
+
+    // The canonical name still works, and must: it is what settings round-trip
+    // and what every other table is keyed on.
+    await attempt(
+      "create_document",
+      { width: 4, height: 4, length: 4, version: "JE_1_21_4" },
+      options(sink, host),
+    );
+    equal(
+      "...and so does the canonical name",
+      log.filter((entry) => entry.startsWith("create:")).slice(-1),
+      ["create:sponge3:JE_1_21_4"],
+    );
+
+    /*
+     * And the fault itself, from the other side. This is the check that fails
+     * with the guard deleted: before it, an unrecognised string produced a
+     * document rather than a refusal.
+     */
+    let unknown: string | null = null;
+    const before = log.length;
+    try {
+      await callTool(
+        "create_document",
+        { width: 4, height: 4, length: 4, version: "banana" },
+        options(sink, host),
+      );
+    } catch (err) {
+      unknown = err instanceof Error ? err.message : String(err);
+    }
+    check("a version this build does not know is refused by name", unknown !== null, String(unknown));
+    check(
+      "...and the refusal repeats what was asked for",
+      (unknown ?? "").includes("banana"),
+      unknown ?? "(none)",
+    );
+    equal("...and no document was created", log.length, before);
+
+    /*
+     * Required, not defaulted. The container and the version are not
+     * independent -- `NewDocumentRequest.version` has been required on IPC for
+     * exactly that reason -- and an optional one here is what produced a
+     * schematic with no version at all.
+     */
+    const spec = findLifecycle("create_document");
+    const required = ((spec?.schema ?? {}) as { required?: string[] }).required ?? [];
+    check("create_document requires a version", required.includes("version"), required.join(","));
+
+    /*
+     * The verb that did not exist. `setDocumentVersion` was IPC-only, so a
+     * client that guessed wrong, or opened a file carrying no tag, had no way
+     * back at all.
+     */
+    const changer = findDocumentTool("set_document_version");
+    check("an open schematic's version can be changed", changer !== null);
+    check(
+      "...and the window is told, because the document moved",
+      changer?.changesDocument === true,
+    );
+
+    {
+      const session = open();
+      const raised: string[] = [];
+      try {
+        await callTool("set_document_version", { version: "nope" }, options(sink, host));
+      } catch (err) {
+        raised.push(err instanceof Error ? err.message : String(err));
+      }
+      check(
+        "...and it refuses a version this build does not know",
+        raised.length === 1,
+        raised.join(" "),
+      );
+      equal(
+        "...without touching the document",
+        session.history.undoStack.length,
+        0,
+      );
+
+      const moved = await attempt(
+        "set_document_version",
+        { version: "1.16.5" },
+        options(sink, host),
+      );
+      equal("a label works here too", moved.version, "JE_1_16_5");
+      equal(
+        "...and it is one undo step, so the version comes back with the blocks",
+        session.history.undoStack.length,
+        1,
+      );
+      equal("...and the document says so", session.doc.dataVersion, dataVersionOf("JE_1_16_5"));
+    }
+
+  }
+
+  // --- nothing on the wire repeats a vendored fact -------------------------
+  //
+  // The check that makes the next Minecraft release free.
+  //
+  // The fault underneath the report was a hand-typed `JE_1_20_4` going stale: it
+  // was the only spelling a model could see, in a schema that offered no `enum`
+  // at all. Writing out fifty names and a sentence saying "39 versions" would
+  // have been that same mistake four tools wide, so every version fact on the
+  // wire is read from the table -- and this is what says so.
+  console.log("\n--- the schemas quote the table, never a copy of it ---");
+  {
+    const descriptions: { tool: string; text: string }[] = [];
+    const enums: { tool: string; values: readonly unknown[] }[] = [];
+
+    const walk = (tool: string, node: unknown, key: string | null): void => {
+      if (Array.isArray(node)) return;
+      if (typeof node !== "object" || node === null) return;
+      const record = node as Record<string, unknown>;
+      if (typeof record.description === "string") {
+        descriptions.push({ tool, text: record.description });
+      }
+      if (key === "version" && Array.isArray(record.enum)) {
+        enums.push({ tool, values: record.enum });
+      }
+      for (const [name, value] of Object.entries(record)) {
+        if (name === "enum") continue;
+        walk(tool, value, name);
+      }
+    };
+    for (const tool of describeTools()) {
+      descriptions.push({ tool: tool.name, text: tool.description });
+      walk(tool.name, tool.inputSchema, null);
+    }
+
+    /*
+     * Every `version` enum is the table itself. Deep equality rather than a
+     * length or a spot check: a list copied today and edited tomorrow is exactly
+     * the failure being prevented.
+     */
+    const copied = enums.filter(
+      (found) => found.values.join("\u0000") !== MC_VERSION_NAMES.join("\u0000"),
+    );
+    equal("every version enum is the version table", copied.map((f) => f.tool), []);
+    /*
+     * ...and there are the four there should be. Without this the walk is
+     * satisfied by finding none, which is what deleting an enum would leave.
+     *
+     * It was five. `generate_schematic` carried one too, and went with the
+     * tool -- listed here rather than counted, so removing another one names
+     * which.
+     */
+    equal(
+      "...on every tool that names a version",
+      enums.map((found) => found.tool).sort(),
+      [
+        "convert_schematic",
+        "create_document",
+        "save_document_as",
+        "set_document_version",
+      ],
+    );
+
+    /*
+     * And no prose names a version except the newest, which is the one place a
+     * derived example can legitimately land. A literal `JE_1_20_4` typed into a
+     * description -- which is what shipped -- fails here by naming its tool.
+     */
+    const stale: string[] = [];
+    for (const { tool, text } of descriptions) {
+      for (const found of text.match(/JE_[A-Za-z0-9_]+/g) ?? []) {
+        if (found !== MC_VERSION_NAMES[0]) stale.push(`${tool}: ${found}`);
+      }
+    }
+    equal("no schema spells out a version but the newest", stale, []);
+  }
+
+  // --- one session per client, and a reload is a new one ---------------------
+  //
+  // The report: with Antigravity connected, pressing Reload answered
+  // `Session not found` and the server had to be switched off and on again.
+  //
+  // The server held **one** `StreamableHTTPServerTransport` for its whole life,
+  // and the SDK's stateful mode is one per session: a second `initialize` on an
+  // initialised transport is refused outright, and any other session id comes
+  // back 404. So a reload could not get back in, and a second client could never
+  // connect at all.
+  //
+  // The decision is `routeRequest` because `server.ts` imports `electron` and
+  // `node:http` and cannot be loaded here -- `selection_drag.ts`'s arrangement,
+  // for `selection_drag.ts`'s reason.
+  console.log("\n--- routing a request to a session ---");
+  {
+    equal(
+      "a session this server holds is answered by it",
+      routeRequest({ sessionId: "s1", known: true, isInitialize: false }).kind,
+      "existing",
+    );
+    /*
+     * An `initialize` with no id opens one. This is the reload: the client has
+     * thrown its session away and is starting again, and before this it met a
+     * transport that had already been initialised and refused.
+     */
+    equal(
+      "an initialize with no session opens one",
+      routeRequest({ sessionId: null, known: false, isInitialize: true }).kind,
+      "new",
+    );
+    /*
+     * ...and it must keep opening one. Two clients, or one client twice, are
+     * the same request twice, and the shared transport could serve it once.
+     */
+    equal(
+      "...and a second one opens another",
+      routeRequest({ sessionId: null, known: false, isInitialize: true }).kind,
+      "new",
+    );
+
+    /*
+     * A session id this server never issued -- held across a restart, say. 404
+     * rather than a fresh session under the same id: handing back a different
+     * session would look like success and behave like amnesia.
+     */
+    const stale = routeRequest({ sessionId: "gone", known: false, isInitialize: false });
+    equal("a session this server forgot is refused", stale.kind, "refused");
+    check(
+      "...with 404, and naming the id",
+      stale.kind === "refused" && stale.status === 404 && stale.refused.includes("gone"),
+      stale.kind === "refused" ? stale.refused : stale.kind,
+    );
+    /*
+     * Even an initialize carrying an unknown id: the client is confused about
+     * which session it has, and inventing one for it hides that.
+     */
+    equal(
+      "...even when it is an initialize",
+      routeRequest({ sessionId: "gone", known: false, isInitialize: true }).kind,
+      "refused",
+    );
+
+    /*
+     * No id and not an initialize. Refused rather than opened, or every
+     * malformed POST would leave a transport and a `Server` behind that nothing
+     * ever closes -- which is a leak reachable by anything that can reach the
+     * port.
+     */
+    const nothing = routeRequest({ sessionId: null, known: false, isInitialize: false });
+    equal("a request that is neither is refused", nothing.kind, "refused");
+    check(
+      "...with 400, and says what to send",
+      nothing.kind === "refused" && nothing.status === 400 && nothing.refused.includes("initialize"),
+      nothing.kind === "refused" ? nothing.refused : nothing.kind,
+    );
+  }
+
+  // --- the two things the harness cannot watch, checked in the source --------
+  //
+  // `server.ts` cannot be imported here, and both of these are single calls
+  // whose absence is invisible from every angle except the one that matters.
+  console.log("\n--- what server.ts must not stop doing ---");
+  {
+    const source = await readFile(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "main", "mcp", "server.ts"),
+      "utf8",
+    );
+
+    /*
+     * The hang. `server.close()` stops new connections and waits for the open
+     * ones to finish; it does not finish them. An MCP client holds a keep-alive
+     * connection, so the callback never came -- and `regenerateMcpToken` and the
+     * Enabled checkbox both await this. That is why Regenerate did nothing
+     * until the app was restarted: the token had already been written.
+     */
+    check(
+      "stopping the server closes the connections it is waiting on",
+      source.includes("closeAllConnections()"),
+      "server.close() alone never resolves while a client is attached",
+    );
+
+    /*
+     * And the shape that made a reload impossible. A single module-level
+     * transport is the thing being prevented; a map keyed by session is what
+     * replaced it.
+     */
+    check(
+      "there is a transport per session, not one for the server",
+      /const transports = new Map</.test(source),
+      "a single shared transport can only ever hold one session",
+    );
+  }
+
+  // --- a setting that only reaches the disk is not applied -------------------
+  //
+  // `mcpSetEnabled` starts and stops the listener, and for a long time it was
+  // the only thing that reached it: the port, the address and whether a token
+  // is required were written and then ignored until the next launch.
+  //
+  // What that cost was reported: turning authentication off and back on left
+  // the running server still serving anybody, and the token row -- which keyed
+  // on what the server said -- gone with no way to bring it back.
+  console.log("\n--- which settings the listener is built from ---");
+  {
+    const base = { port: 4571, bindAddress: "127.0.0.1", requireAuth: true };
+    equal("nothing moved, nothing restarts", servingChanged(base, { ...base }), false);
+    check("the port is one it is built from", servingChanged(base, { ...base, port: 4600 }));
+    check("...and the address", servingChanged(base, { ...base, bindAddress: "0.0.0.0" }));
+    /*
+     * The one the report turned on: without this, the checkbox wrote to disk
+     * and the socket went on doing what it had been doing.
+     */
+    check("...and whether a token is required", servingChanged(base, { ...base, requireAuth: false }));
+  }
+  // --- the address, and the one combination that is refused -----------------
+  console.log("\n--- where it listens, and to whom ---");
+  {
+    /*
+     * The `Host` check is the DNS-rebinding defence: a page on the open web
+     * resolves a name it controls to this machine and then talks to whatever is
+     * listening. Binding to loopback does not stop it -- the browser really is
+     * on loopback -- so the header has to be checked, and it stays checked with
+     * authentication off. Turning off a token is not a reason to let a web page
+     * in.
+     */
+    check("our own host is still served", acceptsRequest({ host: "127.0.0.1:4571" }, 4571).ok);
+    check("a host on another port is still not", !acceptsRequest({ host: "127.0.0.1:9999" }, 4571).ok);
+
+    // Bound to one real address: that address is served, and loopback with it,
+    // because a server is always reachable from the machine it runs on.
+    check(
+      "the address it is bound to is served",
+      acceptsRequest({ host: "192.168.1.42:4571" }, 4571, "192.168.1.42").ok,
+    );
+    check(
+      "...and loopback alongside it",
+      acceptsRequest({ host: "127.0.0.1:4571" }, 4571, "192.168.1.42").ok,
+    );
+    check(
+      "...but not some other address",
+      !acceptsRequest({ host: "10.0.0.9:4571" }, 4571, "192.168.1.42").ok,
+    );
+
+    /*
+     * Bound to every interface, which address a client arrived on is not
+     * knowable -- but a **name** still must not be served, and that is the whole
+     * of the rebinding defence: the attack is a domain resolving here, and a
+     * domain is a name. An IP literal has nothing to resolve.
+     */
+    check(
+      "on every interface, an address is served",
+      acceptsRequest({ host: "192.168.1.42:4571" }, 4571, "0.0.0.0").ok,
+    );
+    check(
+      "...and a name is not, which is the rebinding rule",
+      !acceptsRequest({ host: "evil.example.com:4571" }, 4571, "0.0.0.0").ok,
+    );
+    // The Origin rule is untouched by any of this.
+    check(
+      "a web page is refused wherever it is bound",
+      !acceptsRequest({ host: "192.168.1.42:4571", origin: "https://evil.example.com" }, 4571, "0.0.0.0").ok,
+    );
+
+    /*
+     * The one combination refused rather than warned about. Each half alone is
+     * defensible -- on loopback the token is a convenience rather than the
+     * boundary, and off loopback the token *is* the access control -- and
+     * together they are an anonymous write endpoint on somebody's files.
+     */
+    equal(
+      "loopback with a token is fine",
+      startupRefusal({ requireAuth: true, bindAddress: "127.0.0.1" }),
+      null,
+    );
+    equal(
+      "...and loopback without one",
+      startupRefusal({ requireAuth: false, bindAddress: "127.0.0.1" }),
+      null,
+    );
+    equal(
+      "...and the network with one",
+      startupRefusal({ requireAuth: true, bindAddress: "0.0.0.0" }),
+      null,
+    );
+    const both = startupRefusal({ requireAuth: false, bindAddress: "0.0.0.0" });
+    check("the network without one is refused", both !== null);
+    check(
+      "...and the refusal says which of the two to change",
+      (both ?? "").includes("token") && (both ?? "").includes("127.0.0.1"),
+      both ?? "(none)",
+    );
+    // The address is checked here too, so a bad one is named before `listen`
+    // turns it into an EADDRNOTAVAIL that explains nothing.
+    check(
+      "a range is refused before the socket exists",
+      (startupRefusal({ requireAuth: true, bindAddress: "192.168.1.0/24" }) ?? "").includes("range"),
+    );
+  }
   // --- the root ------------------------------------------------------------
   console.log("\n--- the write root ---");
   {
@@ -1248,6 +1728,187 @@ console.log("\n--- answering with nothing open ---");
   );
 
   equal("...and nothing told the window anything", sink.changed, 0);
+}
+// --- what may be placed here, and it must agree with what places -----------
+/*
+ * `list_blocks` arrived when `generate_schematic` left. That tool handed the
+ * whole job to the app's own model -- the one thing this server is explicitly
+ * not for -- and what it was genuinely carrying was the block list, which the
+ * app splices into its own prompt and no MCP client could obtain:
+ * `describe_block` answers about ids you already have, `get_palette` lists what
+ * the schematic already uses, and nothing enumerated.
+ */
+console.log("\n--- what this schematic may hold ---");
+{
+  const sink = { changed: 0 };
+
+  /*
+   * A set with both eras in it. `ALLOWED` above is four blocks, which is right
+   * for the checks it serves and useless here: every question below is about
+   * the *difference* between what a legacy document may hold and what a modern
+   * one may, and four blocks cannot show a difference.
+   *
+   * The first eight are in `legacy_blocks.json`, the last four are not --
+   * verified against the vendored table rather than assumed.
+   */
+  const BOTH_ERAS = new Set([
+    "minecraft:stone",
+    "minecraft:oak_planks",
+    "minecraft:oak_stairs",
+    "minecraft:cobblestone",
+    "minecraft:oak_fence",
+    "minecraft:sandstone",
+    "minecraft:glass",
+    "minecraft:torch",
+    "minecraft:deepslate",
+    "minecraft:copper_block",
+    "minecraft:jungle_hanging_sign",
+    "minecraft:campfire",
+    "minecraft:air",
+  ]);
+  const rich = (lifecycle?: Lifecycle) => ({
+    ...options(sink, lifecycle),
+    allowedBlocks: BOTH_ERAS,
+  });
+
+  /*
+   * The rule the whole tool stands on: it is `checkBlockAllowed` read
+   * backwards. Every name it offers has to be one `set_block` will take, on the
+   * *same* document -- a list that disagrees with the verb that places blocks is
+   * worse than no list, because it sends a model to build with names that
+   * cannot land, confidently.
+   *
+   * Stated on a **legacy** document, which is the only place the two can come
+   * apart: `checkBlockAllowed` asks `legacy_blocks.json` there and nowhere
+   * else, so the same check on a flat document would pass with that half
+   * deleted.
+   */
+  {
+    closeDocument();
+    newDocument({ width: 4, height: 4, length: 4 }, "sponge3", 3953);
+    const flat = (await callTool("list_blocks", {}, rich())).result as { total: number };
+
+    closeDocument();
+    newDocument({ width: 4, height: 4, length: 4 }, "mcedit", 1343);
+    const legacy = (await callTool("list_blocks", {}, rich())).result as {
+      blocks: string[];
+      total: number;
+    };
+    check(
+      "a legacy schematic is offered fewer blocks than a modern one",
+      legacy.total < flat.total,
+      `${legacy.total} legacy vs ${flat.total} flat`,
+    );
+    check(
+      "...and the ones 1.12 never had are the ones missing",
+      !legacy.blocks.includes("minecraft:deepslate") &&
+        !legacy.blocks.includes("minecraft:copper_block"),
+      legacy.blocks.join(" "),
+    );
+    check(
+      "...while the ones it did have are there",
+      legacy.blocks.includes("minecraft:oak_stairs") && legacy.blocks.includes("minecraft:torch"),
+      legacy.blocks.join(" "),
+    );
+
+    // And the round trip: every name it offered, placed for real on the
+    // document it offered them for.
+    const refused: string[] = [];
+    for (const block of legacy.blocks) {
+      try {
+        await callTool("set_block", { x: 0, y: 0, z: 0, block }, rich());
+      } catch (err) {
+        refused.push(`${block}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    equal("every block it offers is one set_block accepts", refused, []);
+
+    /*
+     * ...and the other direction, which is what makes the first one mean
+     * something: a name the list left out really is refused. Without this, a
+     * `list_blocks` that returned nothing at all would pass the check above.
+     */
+    let deep: string | null = null;
+    try {
+      await callTool("set_block", { x: 0, y: 0, z: 0, block: "minecraft:deepslate" }, rich());
+    } catch (err) {
+      deep = err instanceof Error ? err.message : String(err);
+    }
+    check("a block it left out is refused by set_block", deep !== null, String(deep));
+  }
+
+  /*
+   * The namespace is not a filter.
+   *
+   * `block_search.ts` had this exact bug and it is written up at length: every
+   * block is `minecraft:something`, so matching the namespaced id makes every
+   * letter of `minecraft:` return the whole set. Letter by letter rather than
+   * as one predicate, so a failure names which letter -- the way that check is
+   * written, for its reason.
+   */
+  {
+    closeDocument();
+    newDocument({ width: 4, height: 4, length: 4 }, "sponge3", 3953);
+    const all = (await callTool("list_blocks", {}, rich())).result as { total: number };
+    for (const letter of ["m", "i", "n", "e", "c", "r", "a", "f", "t"]) {
+      const hit = (await callTool("list_blocks", { contains: letter }, rich())).result as {
+        total: number;
+      };
+      check(
+        `${letter} does not match every block`,
+        hit.total < all.total,
+        `${letter} matched ${hit.total} of ${all.total}`,
+      );
+    }
+    /*
+     * ...and pasting the namespace still works, because that is a real thing
+     * somebody does. Stripped from the *query*, never matched against the id.
+     */
+    const pasted = (await callTool("list_blocks", { contains: "minecraft:oak_st" }, rich())).result as {
+      blocks: string[];
+    };
+    check(
+      "a query may still carry the namespace",
+      pasted.blocks.includes("minecraft:oak_stairs"),
+      pasted.blocks.join(" "),
+    );
+
+    /*
+     * Two numbers, and they are different questions. `ROW_LIMIT`'s rule in the
+     * block picker: a limit bounds what comes back, never what was found. A
+     * list truncated in silence is how a model concludes a block does not
+     * exist.
+     */
+    const capped = (await callTool("list_blocks", { contains: "o", limit: 2 }, rich())).result as {
+      blocks: string[];
+      total: number;
+      shown: number;
+      note?: string;
+    };
+    equal("the limit bounds the rows", capped.blocks.length, 2);
+    equal("...and shown counts them", capped.shown, 2);
+    check(
+      "...while total counts what matched",
+      capped.total > capped.shown,
+      `${capped.total} vs ${capped.shown}`,
+    );
+    check(
+      "...and it says the list was cut",
+      typeof capped.note === "string",
+      capped.note ?? "(none)",
+    );
+
+    // Air is a real id and is not a thing anybody builds with -- `get_palette`
+    // leaves it out for the same reason.
+    const air = (await callTool("list_blocks", { contains: "air" }, rich())).result as {
+      blocks: string[];
+    };
+    check(
+      "air is not offered as a building block",
+      !air.blocks.includes("minecraft:air"),
+      air.blocks.join(" "),
+    );
+  }
 }
 // --- the model is told which Minecraft it is working in ---------------------
 /*

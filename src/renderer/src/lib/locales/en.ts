@@ -69,7 +69,11 @@ export const en = {
   "mcp.title": "MCP server",
   "mcp.short": "MCP",
   "mcp.keywords": "mcp server claude code codex api integration remote",
-  "mcp.stateListening": "listening, no client connected",
+  // The client count is its own line now, so this no longer says it. It said
+  // "listening, no client connected", which the unauthenticated state then
+  // displaced -- and with it the only place the count appeared.
+  "mcp.stateListening": "listening",
+  "mcp.stateUnauthenticated": "listening — no token required",
   "mcp.stateStarting": "starting",
   "mcp.stateError": "could not start",
   "mcp.stateOff": "off",
@@ -103,8 +107,15 @@ export const en = {
   "mcp.activity": "Recent calls",
   "mcp.activityEmpty": "Nothing yet.",
   "mcp.activityFailed": "failed",
+  "mcp.clients": "Clients",
   "mcp.clients.one": "1 client connected",
   "mcp.clients.other": "{count} clients connected",
+  "mcp.requireAuth": "Require a token",
+  "mcp.requireAuthHint":
+    "On, a client has to send the token above. Off, anything that can reach the address below can read, write and save your schematics — and delete them if that is allowed too. Only offered while the server is bound to this machine.",
+  "mcp.bindAddress": "Listen on",
+  "mcp.bindAddressHint":
+    "127.0.0.1 is this machine only. 0.0.0.0 is every network interface, which puts the editor on your network — the token is what stands between it and anyone who can route to you, so it cannot be turned off there. This is an address, not a range.",
   "settings.theme": "Theme",
   "settings.theme.system": "Match the system",
   "settings.theme.light": "Light",
@@ -469,6 +480,13 @@ export const en = {
   "provider.needsKey":
     "{model} is billed per token, so it needs a key. The free models in the list above do not.",
   "provider.keyStored": "A key is stored for {provider}. It is never sent back to this window.",
+  "start.legacyProfile":
+    "An earlier version of this app kept your {providers} API key in a different folder, and this one does not read it. Generation will not work until you paste it in again.",
+  "provider.legacyProfile":
+    "An earlier version of this app stored keys for {providers} in {path}. This version reads a different folder and does not migrate them — paste the keys again below.",
+  "provider.legacyProfileReveal": "Show me that folder",
+  "provider.keyUnreadable":
+    "A key for {provider} is stored but this machine can no longer decrypt it — paste it again.",
   "provider.addKey": "Add one in Settings",
   "provider.noEncryption":
     "OS-backed encryption is unavailable on this system, so keys are kept in memory for this " +

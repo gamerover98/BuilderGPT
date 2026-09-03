@@ -17,8 +17,15 @@
  * that speaks Streamable HTTP and can send an `Authorization` header will do,
  * which is what the address and the token beside it are for.
  */
-export function connectCommand(url: string, token: string): string {
-  return `claude mcp add --transport http schematic ${url} --header "Authorization: Bearer ${token}"`;
+export function connectCommand(url: string, token: string | null): string {
+  const base = `claude mcp add --transport http schematic ${url}`;
+  /*
+   * No header when there is no token. Printing an empty `Bearer ` would be a
+   * command that looks right, runs, and then fails to connect -- with the
+   * error naming authentication on a server that is not asking for any.
+   */
+  if (token === null || token === "") return base;
+  return `${base} --header "Authorization: Bearer ${token}"`;
 }
 
 /**

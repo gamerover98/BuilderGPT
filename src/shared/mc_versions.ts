@@ -137,8 +137,48 @@ export const MC_VERSIONS: readonly McVersionInfo[] = [
 
 const BY_NAME = new Map(MC_VERSIONS.map((entry) => [entry.name, entry]));
 
+/**
+ * The same rows under the spelling a person uses.
+ *
+ * `26.2` is what somebody asks for and `JE_26_2` is what the table calls it,
+ * and until this existed only the second one worked -- see
+ * `resolveVersionName` for what that cost.
+ */
+const BY_LABEL = new Map(MC_VERSIONS.map((entry) => [entry.label, entry]));
+
 export function mcVersion(name: string): McVersionInfo | undefined {
   return BY_NAME.get(name);
+}
+
+/**
+ * The canonical name of a version, given the name **or** the label.
+ * `null` for anything this build does not know.
+ *
+ * ## Why a second spelling
+ *
+ * The name is what settings round-trip and what every table is keyed on, so
+ * it stays the canonical form. But `JE_26_2` is a spelling nobody says out
+ * loud: asked for 26.2, a model sends `"26.2"`, and before this that string
+ * reached `dataVersionOf`, missed, and came back `null` -- which is
+ * indistinguishable from 1.8.8's genuine absence of a DataVersion and from no
+ * version having been asked for at all. The document was created with no
+ * version tag and **nothing was raised**.
+ *
+ * ## Why `null` rather than a guess
+ *
+ * Two spellings is the limit. `1.20` does not resolve to `JE_1_20_4`, and a
+ * near-miss is not repaired: this is the function every caller checks before
+ * refusing by name, so a guess here would put the silence back one level
+ * down. `UnknownVersionError` already has the sentence for the refusal.
+ *
+ * Every caller resolves **first** and passes the canonical name onwards, so
+ * there is one place that knows about labels and everything downstream keeps
+ * seeing exactly what it saw before.
+ */
+export function resolveVersionName(input: string): string | null {
+  const asked = input.trim();
+  if (asked === "") return null;
+  return (BY_NAME.get(asked) ?? BY_LABEL.get(asked))?.name ?? null;
 }
 
 /**
@@ -195,6 +235,19 @@ export function formatSupportsVersion(format: SchematicFormat, name: string): bo
  * there is none — the format genuinely cannot represent that version.
  */
 export function refusalFor(format: SchematicFormat, name: string): string | null {
+  /*
+   * Named first, because the sentence below interpolates the label and an
+   * empty name interpolates nothing: the refusal came out reading "a
+   * .litematic claiming  would open in the mod as the wrong blocks", which
+   * is a message with a hole where the fact should be. Reachable from any
+   * caller that treats an absent version as a version.
+   */
+  if (name.trim() === "") {
+    return (
+      `No Minecraft version was given, and a container has to know one to be written. ` +
+      `Name one, such as ${MC_VERSIONS[0].name} (${MC_VERSIONS[0].label}).`
+    );
+  }
   if (formatSupportsVersion(format, name)) return null;
   const label = mcVersion(name)?.label ?? name;
   /*
@@ -218,6 +271,33 @@ export function refusalFor(format: SchematicFormat, name: string): string | null
 
 /** Every version name, newest first — what the dropdown shows. */
 export const MC_VERSION_NAMES: readonly string[] = MC_VERSIONS.map((entry) => entry.name);
+
+/**
+ * Which versions each container holds, as one sentence, built from the table.
+ *
+ * For the tool schemas an MCP client reads. Every number in it is looked up
+ * rather than typed: `oldestFor` asks `versionsFor`, which asks the era rule
+ * and the two floors, so a release added to `mc_versions.json` moves this
+ * sentence with it and the MCP surface needs no edit at all.
+ *
+ * That is the whole point rather than tidiness. The bug this was written for
+ * was a hand-typed `JE_1_20_4` in a tool description going stale, and an
+ * `enum` of fifty names plus a sentence saying "39 versions" would be the
+ * same mistake four tools wide.
+ */
+export function versionRangesSentence(): string {
+  const oldestFor = (format: SchematicFormat): string => {
+    const offered = versionsFor(format);
+    const last = offered[offered.length - 1] ?? "";
+    return mcVersion(last)?.label ?? last;
+  };
+  const lastLegacy = MC_VERSIONS.find((entry) => entry.era === "legacy")?.label ?? "";
+  return (
+    `sponge3 and sponge2 need ${oldestFor("sponge3")} or newer; litematic needs ` +
+    `${oldestFor("litematic")} or newer; mcedit takes any version, natively up to ` +
+    `${lastLegacy} and lossily above it.`
+  );
+}
 
 /** Versions that can be written to a given container, newest first. */
 export function versionsFor(format: SchematicFormat): readonly string[] {

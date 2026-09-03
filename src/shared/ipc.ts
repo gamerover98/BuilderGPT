@@ -1729,6 +1729,17 @@ export interface McpStatus {
    * them.
    */
   bridge: string | null;
+  /**
+   * Whether the running server is asking for a token.
+   *
+   * Reality, not the checkbox -- `McpSettings.requireAuth` is the intent, and
+   * this is what the listener is actually doing. They come apart while a
+   * change is in flight, and the direction that matters is the one where the
+   * pane says "required" over a server serving anybody.
+   */
+  requiresAuth: boolean;
+  /** The address it is bound to, so the pane can say what that means. */
+  bindAddress: string;
 }
 
 /** One line of the activity log: what was called, and when. */

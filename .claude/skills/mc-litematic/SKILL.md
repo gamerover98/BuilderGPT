@@ -56,6 +56,19 @@ Where a version is only claimed by prose â€” a changelog, a discussion thread â€
 record it in `evidence` and leave `verified: false`. The generator drops it and
 prints it to stderr. That list is to be **read**, not counted.
 
+## What reads this downstream
+
+`LITEMATIC_MIN_LABEL` is now quoted **to an MCP client**, not only to the
+format picker: `versionRangesSentence()` in `src/shared/mc_versions.ts` reads
+it, and every MCP tool that takes a version puts that sentence in its schema.
+So a model choosing a container is told this floor in the words this file
+decides.
+
+Nothing there has to be edited when the floor moves -- it is read, not copied,
+which is the same arrangement `formatsFor` already had. It is written down
+because the alternative is somebody finding the sentence in a tool description
+and hard-coding 1.13.2 into it.
+
 ## Doing it
 
 1. **Read `resources/litematica_versions.json`** for what is known and when it

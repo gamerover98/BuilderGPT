@@ -38,6 +38,8 @@
  * from.
  */
 
+import type { McEra } from "./mc_versions.js";
+
 export interface CommandForm {
   /** `setblock`, `fill`, or `block-argument` for the shared block spelling. */
   readonly command: string;
@@ -81,6 +83,51 @@ export const MCFUNCTION_MIN_DATA_VERSION = 1519;
 
 /** How a human says it. Beside the number so a refusal can name the release. */
 export const MCFUNCTION_MIN_LABEL = "1.13";
+
+/**
+ * Whether a version can be written as commands at all.
+ *
+ * `litematicCanCarry`'s sibling, and it answers the opposite way about
+ * `null`: a litematic **must** stamp a `MinecraftDataVersion` and has nothing
+ * honest to put there, while a `.mcfunction` carries no version tag of any
+ * kind. An absent number is therefore not a claim this container has to
+ * make, and refusing it would refuse every conversion that named no version.
+ *
+ * The era is asked as well as the number, and it is the half that does the
+ * work: 1.8.8 and 1.8.9 genuinely have no DataVersion, so a number-only rule
+ * would let the two oldest releases in the table through as though they had
+ * said nothing. The floor is stated beside it rather than left implied --
+ * the flat era happens to begin at exactly this release today, and
+ * `tests/formats.ts` already states that this floor and Litematica's are
+ * different releases, which is the reason not to write either as `era`.
+ *
+ * Until then this constant was reachable from nowhere but the tests: the
+ * converter skipped its refusal for `.mcfunction` outright, so a 1.12.2
+ * schematic came out as commands naming blocks that version has never had.
+ */
+export function mcfunctionCanCarry(era: McEra, dataVersion: number | null): boolean {
+  if (era === "legacy") return false;
+  return dataVersion === null || dataVersion >= MCFUNCTION_MIN_DATA_VERSION;
+}
+
+/**
+ * Why commands cannot be written for a version, phrased for whoever picked
+ * it. `refusalFor`'s shape, for `refusalFor`'s reason: the useful part is
+ * which way to move, not that something is unavailable.
+ */
+export function mcfunctionRefusal(
+  era: McEra,
+  dataVersion: number | null,
+  label: string,
+): string | null {
+  if (mcfunctionCanCarry(era, dataVersion)) return null;
+  return (
+    `A .mcfunction places blocks with setblock and fill, which name a block the ` +
+    `flattened way -- minecraft:oak_stairs[facing=north]. That spelling arrived in ` +
+    `${MCFUNCTION_MIN_LABEL}, so ${label} cannot be written as commands at all. Save ` +
+    `it as MCEdit (.schematic) instead.`
+  );
+}
 
 /**
  * A limit by name, or a thrown error.

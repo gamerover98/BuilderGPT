@@ -70,8 +70,6 @@ export const VERSION_TABLE: Readonly<Record<string, number>> = TABLE;
  */
 export const VERSION_NAMES: readonly string[] = Object.keys(TABLE);
 
-export const DEFAULT_VERSION = "JE_1_20_4";
-
 export function dataVersionFor(name: string): number {
   const found = TABLE[name];
   if (found === undefined) {

@@ -87,6 +87,8 @@ import {
   MAX_FILL_VOLUME,
   MCFUNCTION_MIN_DATA_VERSION,
   commandLimit,
+  mcfunctionCanCarry,
+  mcfunctionRefusal,
 } from "../src/shared/command_syntax.js";
 import { dataVersionFor as _unusedDataVersionFor, VERSION_NAMES } from "../src/main/services/versions.js";
 import {
@@ -106,7 +108,10 @@ import {
   MC_VERSIONS,
   mcVersion,
   refusalFor,
+  resolveVersionName,
   versionNameOf,
+  versionRangesSentence,
+  versionsFor,
 } from "../src/shared/mc_versions.js";
 
 let failures = 0;
@@ -1706,6 +1711,78 @@ console.log("\n--- convert ---");
       legacy ?? "",
     );
 
+    /*
+     * ...and the `.mcfunction` case, which used to be refused by nothing at all.
+     *
+     * `convertFile` skipped `refusalFor` for this format outright -- reasonably,
+     * because a function carries no version tag for a container rule to be about
+     * -- and the consequence was that `MCFUNCTION_MIN_DATA_VERSION` was read by
+     * the tests and by nothing else. A 1.12.2 schematic converted happily into
+     * commands naming flattened blocks that version has never had: a file that
+     * runs, places almost nothing, and reports no error at all.
+     */
+    let commands: string | null = null;
+    try {
+      await convertFile({
+        source: start,
+        target: path.join(workDir, "legacy.mcfunction"),
+        format: "mcfunction",
+        version: "JE_1_12_2",
+      });
+    } catch (err) {
+      commands = err instanceof Error ? err.message : String(err);
+    }
+    check("a pre-Flattening version as commands is refused", commands !== null);
+    check(
+      "...naming the release setblock needs, not Sponge's palette",
+      (commands ?? "").includes("1.13") && !(commands ?? "").includes("palette"),
+      commands ?? "",
+    );
+
+    /*
+     * And the label, which this file refused while accepting the name -- the
+     * same asymmetry that produced the report, one verb along. `26.2` is what
+     * anybody types.
+     */
+    /*
+     * Caught rather than awaited bare: dropping the label index makes this
+     * *throw*, and an uncaught throw here would abort the suite and hide every
+     * check after it -- which is the failure `check.sh` is arranged not to have.
+     */
+    let labelled: number | null | string = null;
+    try {
+      const byLabel = await convertFile({
+        source: start,
+        target: path.join(workDir, "labelled.schem"),
+        format: "sponge3",
+        version: "1.16.5",
+      });
+      labelled = documentFromLoaded(
+        await loadStructure(byLabel.files[0]),
+        byLabel.files[0],
+      ).dataVersion;
+    } catch (err) {
+      labelled = err instanceof Error ? err.message : String(err);
+    }
+    equal(
+      "a version named by label converts like one named canonically",
+      labelled,
+      mcVersion("JE_1_16_5")?.dataVersion ?? null,
+    );
+
+    let nonsense: string | null = null;
+    try {
+      await convertFile({
+        source: start,
+        target: path.join(workDir, "nonsense.schem"),
+        format: "sponge3",
+        version: "banana",
+      });
+    } catch (err) {
+      nonsense = err instanceof Error ? err.message : String(err);
+    }
+    check("...while a version this build never had is still refused", nonsense !== null);
+
     const stamped = await convertFile({
       source: start,
       target: path.join(workDir, "stamped.schem"),
@@ -2098,6 +2175,124 @@ console.log("\n--- litematic and mcfunction floors ---");
     refused = true;
   }
   check("an unknown limit throws rather than defaulting", refused);
+
+  /*
+   * ...and the mcfunction floor stops being a number only the tests look at.
+   *
+   * `MCFUNCTION_MIN_DATA_VERSION` was declared, documented and read nowhere:
+   * the converter skipped `refusalFor` for `.mcfunction` outright, so a 1.12.2
+   * schematic came out as commands naming blocks that version has never had --
+   * a file that runs, places nothing recognisable, and reports no error.
+   */
+  check("commands cannot be written for the legacy era", !mcfunctionCanCarry("legacy", 1343));
+  check(
+    "...not even for the two releases that carry no DataVersion at all",
+    !mcfunctionCanCarry("legacy", null),
+  );
+  /*
+   * That second one is the case a number-only rule lets through, and it is not
+   * hypothetical: 1.8.8 and 1.8.9 have `dataVersion: null` in the table, so
+   * "no number" and "no claim" would be the same answer without the era.
+   */
+  check("1.13 can", mcfunctionCanCarry("flat", 1519));
+  check(
+    "...and so can a conversion that named no version at all",
+    mcfunctionCanCarry("flat", null),
+  );
+  check(
+    "the refusal names the release rather than saying unavailable",
+    (mcfunctionRefusal("legacy", 1343, "1.12.2") ?? "").includes("1.13"),
+    mcfunctionRefusal("legacy", 1343, "1.12.2") ?? "(none)",
+  );
+  equal("a version that can be written is not refused", mcfunctionRefusal("flat", 1519, "1.13"), null);
+
+  // --- a version is one thing under two spellings -------------------------
+  console.log("\n--- a name and a label are the same version ---");
+
+  /*
+   * The whole table, both ways round.
+   *
+   * `JE_26_2` is what everything is keyed on and `26.2` is what a person says,
+   * and until `resolveVersionName` existed only the first one worked: the
+   * second reached `dataVersionOf`, missed, and came back `null` -- which is
+   * indistinguishable from 1.8.8's genuine absence of a DataVersion and from
+   * no version having been asked for. An MCP client asked for 26.2 and got a
+   * schematic with no version tag, in silence.
+   *
+   * Stated over every row rather than on a couple of examples, because a row
+   * added by hand to the generated table is exactly what a sampled check
+   * misses.
+   */
+  {
+    const wrong: string[] = [];
+    for (const row of MC_VERSIONS) {
+      if (resolveVersionName(row.name) !== row.name) wrong.push(`name ${row.name}`);
+      if (resolveVersionName(row.label) !== row.name) wrong.push(`label ${row.label}`);
+    }
+    equal("every version resolves from its name and from its label", wrong, []);
+  }
+
+  /*
+   * And a near miss is refused rather than repaired. Two spellings is the
+   * limit: this is the function every caller checks before refusing by name,
+   * so a guess here would put the silence back one level down.
+   */
+  equal("a version this build has never heard of resolves to nothing", resolveVersionName("banana"), null);
+  equal("...and so does an empty string", resolveVersionName(""), null);
+  equal("...and a partial label is not completed", resolveVersionName("26"), null);
+  /*
+   * `26` and not `1.20`: that one is a real label of its own, which is the
+   * mistake this line was first written with and the check caught.
+   */
+  equal("...nor is a name with the wrong separators", resolveVersionName("JE-26-2"), null);
+  equal("surrounding space is not a different version", resolveVersionName("  26.2  "), "JE_26_2");
+
+  /*
+   * The sentence the MCP schemas carry is composed from the table, so a
+   * release added tomorrow moves it with no edit anywhere near the server.
+   * Checked against the floors rather than against its own wording -- the
+   * phrasing is free to change, the numbers in it are not.
+   */
+  {
+    const sentence = versionRangesSentence();
+    const oldestSponge = versionsFor("sponge3").slice(-1)[0] ?? "";
+    const oldestLitematic = versionsFor("litematic").slice(-1)[0] ?? "";
+    check(
+      "the ranges sentence names the Sponge floor",
+      sentence.includes(mcVersion(oldestSponge)?.label ?? "\u0000"),
+      sentence,
+    );
+    check(
+      "...and the litematic floor, which is a later release",
+      sentence.includes(mcVersion(oldestLitematic)?.label ?? "\u0000"),
+      sentence,
+    );
+    check(
+      "...and says mcedit is lossy rather than listing a floor for it",
+      sentence.includes("mcedit") && sentence.includes("lossily"),
+      sentence,
+    );
+  }
+
+  /*
+   * The refusal used to interpolate an empty label when no version was named,
+   * producing "a .litematic claiming  would open in the mod as the wrong
+   * blocks" -- a sentence with a hole where the fact belongs. Reachable from
+   * `create_document`, which treated an absent version as a version.
+   */
+  {
+    const empty = refusalFor("litematic", "") ?? "";
+    check(
+      "an absent version is refused by saying so",
+      empty.includes("No Minecraft version was given"),
+      empty,
+    );
+    check(
+      "...and the sentence has no hole in it",
+      !empty.includes("claiming  ") && !empty.includes("  "),
+      empty,
+    );
+  }
 
   /*
    * The forms are the ones the writer emits, without a mode word. Omitted means

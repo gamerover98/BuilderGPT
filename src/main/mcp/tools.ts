@@ -65,6 +65,10 @@ const READ_ONLY = new Set([
   "get_schematic_info",
   "get_palette",
   "get_region",
+  // Answers what this schematic may hold. It needs the document -- the
+  // pre-Flattening set is a few hundred names rather than nine hundred -- and
+  // changes nothing about it.
+  "list_blocks",
   // Not about the open document at all -- it answers a question about
   // Minecraft. It still belongs here rather than in a table of its own,
   // because "does this write" is the only question this set asks.
@@ -334,7 +338,7 @@ export async function callTool(
       );
     }
     const run = async (): Promise<CallOutcome> => {
-      const result = await owned.run(session, args ?? {});
+      const result = await owned.run(session, args ?? {}, options.legacyBlocksPath ?? null);
       if (owned.changesDocument) options.onChanged(session);
       return { result, summary: name };
     };

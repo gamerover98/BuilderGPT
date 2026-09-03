@@ -133,6 +133,20 @@ reports anything else as `degraded`. So:
 the exclusion — not only here — because this is precisely the kind of rule a
 future refresh removes for looking arbitrary.
 
+## What reads this downstream
+
+`describe_block` -- the MCP tool a model asks before it places anything with a
+direction, a shape or an on/off state. Its `properties`, its legal `values` and
+its `placedAs` are this table, through `propertiesOf`, `legalValuesFor` and
+`toPlacedEntry`. Nothing is copied, so **a block added here is answered
+correctly over MCP with no code change at all.**
+
+What is *not* derived is whether the answer is still true, and that is the
+verification step: after a release, ask `describe_block` about two or three of
+its new blocks and read the reply, rather than trusting that the generator ran.
+A property missing from the table is a property a model will not know to set,
+and the block is placed bare -- which looks like nothing at all going wrong.
+
 ## Doing it
 
 1. **Read `resources/block_states.json`** to see what is known and when it was

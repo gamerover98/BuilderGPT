@@ -128,7 +128,27 @@ export function openCodeSnapshotPath(): string {
  * this app does not read them. Nothing migrates: the files are still there and
  * are recoverable by hand, and writing a migration for an app with no audience
  * yet would be more code to be wrong than the case is worth.
+ *
+ * That last clause held right up until it did not. An install with working
+ * keys came back after the rename reading an empty profile, so generation
+ * stopped -- and stopped *silently*, because nothing else in the app needs a
+ * key. What surfaced was the provider's own `Invalid API key.`, which is true
+ * and points at a key the user had already set, in a directory this app was no
+ * longer reading. Two reports and a wrong diagnosis later, the conclusion is
+ * that the decision not to migrate was right and the silence was not:
+ * `services/legacy_profile.ts` looks next door and says so.
  */
+
+/**
+ * The pre-rename userData directory, beside the current one.
+ *
+ * Derived rather than written out, so it follows `app.getPath` wherever the
+ * platform puts it. The name is the one thing that has to be a literal: it is
+ * the old `package.json` `name`, and there is nowhere left to read it from.
+ */
+export function legacyUserDataDir(): string {
+  return path.join(path.dirname(app.getPath("userData")), "buildergpt");
+}
 
 /**
  * Where crash-recovery snapshots live.

@@ -27,7 +27,13 @@ import type { McpStatus } from "../../../shared/ipc.js";
  * or "somebody is using it right now" is a presentation question, and this is
  * where presentation questions are answered.
  */
-export type McpDot = "off" | "starting" | "listening" | "active" | "error";
+export type McpDot =
+  | "off"
+  | "starting"
+  | "listening"
+  | "active"
+  | "unauthenticated"
+  | "error";
 
 export function dotFor(status: McpStatus | null): McpDot {
   /*
@@ -39,6 +45,18 @@ export function dotFor(status: McpStatus | null): McpDot {
    * and it must never appear because a question has not come back yet.
    */
   if (status === null) return "starting";
+  /*
+   * A server with no token outranks both of the ordinary listening states,
+   * and outranking `active` is the half that matters: the moment somebody
+   * connects is exactly when a warning about *anybody* being able to would
+   * otherwise disappear.
+   *
+   * Read from the status rather than from the setting, like everything else
+   * here -- the checkbox is what was asked for and this is what is being
+   * served, and the direction worth catching is the one where the pane says
+   * a token is required over a listener that is not asking for one.
+   */
+  if (status.state === "listening" && !status.requiresAuth) return "unauthenticated";
   if (status.state === "listening") return status.clients > 0 ? "active" : "listening";
   return status.state;
 }
@@ -50,6 +68,11 @@ export function dotColor(dot: McpDot): string {
       return "--accent";
     case "listening":
       return "--ok";
+    // Not `--danger`: nothing has gone wrong, and a red dot for a working
+    // server would teach people to ignore red. It is the colour for a thing
+    // that is running and is worth knowing about.
+    case "unauthenticated":
+      return "--warn";
     case "error":
       return "--danger";
     default:

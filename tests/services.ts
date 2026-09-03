@@ -16,7 +16,7 @@
 
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { createServer } from "http";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -132,6 +132,8 @@ import {
   HOTBAR_SLOTS,
   type Hotbar,
   DEFAULT_MCP_SETTINGS,
+  bindAddressRefusal,
+  isLoopbackAddress,
   DEFAULT_SETTINGS,
   DEFAULT_UI_SETTINGS,
   SIDEBAR_WIDTH,
@@ -141,6 +143,7 @@ import {
   type Settings,
   type UiSettings,
 } from "../src/shared/settings.js";
+import { MC_VERSIONS, eraOf, resolveVersionName } from "../src/shared/mc_versions.js";
 
 /**
  * Mirrors `services/resources.ts`'s `defaultResourcePackPath()` without pulling
@@ -198,6 +201,12 @@ function equal(label: string, actual: unknown, expected: unknown): void {
   }
   check(label, ok);
 }
+
+import { apiKeyRefusal } from "../src/main/services/llm_key.js";
+import {
+  orphanedProfile,
+  type OrphanedProfile,
+} from "../src/main/services/legacy_profile.js";
 
 console.log("=== Schematic AI Studio redesign-slice service smoke test ===\n");
 
@@ -1377,6 +1386,245 @@ console.log("\n--- growth ---");
 }
 
 // --- settings coercion: the fields that vanish when nobody names them ------
+console.log("\n--- a stored key and a readable one ---");
+{
+  /*
+   * `settings-store.ts` imports `safeStorage`, so it cannot be loaded here --
+   * which is why `settings_coerce.ts` exists at all. The rule is checked in the
+   * source, like `closeAllConnections` in `tests/mcp.ts`, because the mistake is
+   * a single predicate and its absence is invisible from every angle but one.
+   *
+   * The mistake: `hasKey` was `Boolean(encryptedKeys[provider])` -- the presence
+   * of *ciphertext*. `getApiKey` returns `""` for absent, for no keyring, and
+   * for ciphertext that will not decrypt, so a key encrypted under a keyring
+   * this profile no longer has presents as **saved** in the pane and as
+   * **missing** to every caller. The provider then answers `Invalid API key.`
+   * and nothing anywhere suggests the app is the one that lost it.
+   */
+  const store = await readFile(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "main", "services", "settings-store.ts"),
+    "utf8",
+  );
+  const status = store.slice(store.indexOf("export async function getKeyStatus"));
+  check(
+    "a saved key is one that decrypts, not one that is merely there",
+    status.includes("decrypts("),
+    "hasKey read the presence of ciphertext, which getApiKey does not",
+  );
+  /*
+   * And the two states stay apart. `unreadable` is what lets the pane say
+   * "paste it again" rather than "paste one", which is the only part of this
+   * that is not obvious from `hasKey: false`.
+   */
+  check(
+    "...and ciphertext that will not decrypt says so",
+    status.includes("unreadable"),
+    "the two states were collapsed into one",
+  );
+}
+console.log("\n--- the profile the rename left behind ---");
+{
+  /*
+   * `app.getName()` names the userData directory, so renaming the app at 1.0.0
+   * started it on an empty profile. Nothing migrates, which is defensible --
+   * and was done in silence, which is what cost.
+   *
+   * The whole failure, once: an install with working keys came back with none.
+   * Generation stopped and every other part of the app kept working, because
+   * nothing else needs a key. What surfaced was the provider's own
+   * `Invalid API key.` -- true, and pointing at a key that *was* set, in a
+   * folder this app no longer reads. It took two reports and a wrong diagnosis
+   * about the MCP bearer token to find.
+   */
+  const root = await mkdtemp(path.join(tmpdir(), "bgpt-profiles-"));
+  const make = async (name: string, body: unknown): Promise<string> => {
+    const dir = path.join(root, name);
+    await mkdir(dir, { recursive: true });
+    if (body !== undefined) {
+      await writeFile(path.join(dir, "settings.json"), JSON.stringify(body), "utf8");
+    }
+    return dir;
+  };
+
+  /*
+   * Every call below goes through this. `orphanedProfile` runs at startup and
+   * its whole contract on a bad directory is *silence*, so a guard removed
+   * makes these throw -- and an uncaught throw takes the rest of the suite
+   * with it, which is the failure `check.sh` is arranged not to have. The
+   * message comes back as the value and the equality names the fault.
+   */
+  const orphan = async (a: string, b: string): Promise<unknown> => {
+    try {
+      return await orphanedProfile(a, b);
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  };
+
+  const withKeys = await make("old", {
+    encryptedKeys: { OpenCode: "AAAA", "Custom (OpenAI Compatible)": "BBBB" },
+  });
+  const empty = await make("new", { encryptedKeys: {} });
+
+  {
+    const found = (await orphan(empty, withKeys)) as OrphanedProfile | null;
+    check("a profile with keys beside one without is found", found !== null);
+    equal(
+      "...and it names which providers, so the sentence can",
+      found?.providers,
+      ["Custom (OpenAI Compatible)", "OpenCode"],
+    );
+    equal("...and where to look", found?.path, withKeys);
+  }
+
+  /*
+   * The one that stops the notice outliving its cause. Once a key has been
+   * pasted back, there is nothing to recover and a warning still on screen is
+   * one people learn to ignore.
+   */
+  const alsoHasOne = await make("done", { encryptedKeys: { OpenAI: "CCCC" } });
+  equal(
+    "a profile that already has a key is told nothing",
+    await orphan(alsoHasOne, withKeys),
+    null,
+  );
+
+  /*
+   * Existing is not the same as holding something. A fresh install on a machine
+   * that once ran the old build leaves the directory behind with no keys in it.
+   */
+  const oldButEmpty = await make("old-empty", { encryptedKeys: {} });
+  equal(
+    "an old profile with no keys is nothing to report",
+    await orphan(empty, oldButEmpty),
+    null,
+  );
+  equal(
+    "...and neither is one that was never there",
+    await orphan(empty, path.join(root, "never-existed")),
+    null,
+  );
+
+  /*
+   * And it must not be able to stop the app starting. This runs at startup, and
+   * a corrupt file in a directory the app has *stopped using* is the least
+   * deserving reason to fail to launch there is.
+   */
+  const corrupt = path.join(root, "corrupt");
+  await mkdir(corrupt, { recursive: true });
+  await writeFile(path.join(corrupt, "settings.json"), "{ not json at all", "utf8");
+  equal(
+    "an unreadable old profile is silence, not an exception",
+    await orphan(empty, corrupt),
+    null,
+  );
+
+  // Same directory twice: nothing is next door to itself.
+  equal(
+    "a profile is not its own predecessor",
+    await orphan(withKeys, withKeys),
+    null,
+  );
+
+  /*
+   * Conversations are counted but do not raise the notice on their own: losing
+   * a chat log is an inconvenience, and losing a key looks like the app being
+   * broken. They are worth naming once somebody is being sent to the folder.
+   */
+  await mkdir(path.join(withKeys, "conversations"), { recursive: true });
+  await writeFile(path.join(withKeys, "conversations", "a.json"), "{}", "utf8");
+  await writeFile(path.join(withKeys, "conversations", "b.json"), "{}", "utf8");
+  equal(
+    "the conversations left behind are counted",
+    ((await orphan(empty, withKeys)) as OrphanedProfile | null)?.conversations,
+    2,
+  );
+
+  /*
+   * And the clause reaches the sentence somebody actually reads. Without a
+   * legacy profile it says nothing about folders -- a clean install must not be
+   * told about a directory that was never there.
+   */
+  const plain = await apiKeyRefusal({
+    provider: "OpenAI",
+    model: "gpt-4o-mini",
+    apiKey: "",
+    snapshotPath: null,
+  });
+  check(
+    "a refusal on a clean install invents no folder",
+    !(plain ?? "").includes("earlier version"),
+    plain ?? "(none)",
+  );
+  const hinted = await apiKeyRefusal({
+    provider: "OpenAI",
+    model: "gpt-4o-mini",
+    apiKey: "",
+    snapshotPath: null,
+    legacyProfilePath: withKeys,
+  });
+  check(
+    "...and one with a profile next door says where",
+    (hinted ?? "").includes(withKeys),
+    hinted ?? "(none)",
+  );
+
+  await rm(root, { recursive: true, force: true });
+}
+console.log("\n--- whose API key it is ---");
+{
+  /*
+   * Reported as an MCP authentication failure, and it is not one.
+   *
+   * `generate_schematic` spends the *user's* provider budget, and with no key
+   * the provider's own answer came back verbatim through `LlmError`:
+   *
+   *     generate_schematic  LLM API Error: Invalid API key.
+   *
+   * A sentence about an API key, arriving over a connection the reader had just
+   * authenticated to with a bearer token. The two IPC callers had a gate that
+   * says which key and where it lives; the MCP one had none -- this file's
+   * recurring shape, a rule reaching every place that asks but one.
+   *
+   * The OpenCode arm is deliberately not exercised here: it consults the live
+   * catalogue, and a check that reaches the network is a check that fails on a
+   * train. What is covered is every path that decides without one.
+   */
+  const refusal = await apiKeyRefusal({
+    provider: "OpenAI",
+    model: "gpt-4o-mini",
+    apiKey: "",
+    snapshotPath: null,
+  });
+  check("a provider with no key is refused", refusal !== null);
+  check(
+    "...and the refusal names the provider",
+    (refusal ?? "").includes("OpenAI"),
+    refusal ?? "(none)",
+  );
+  equal(
+    "...and a key is all it takes",
+    await apiKeyRefusal({ provider: "OpenAI", model: "gpt-4o-mini", apiKey: "sk-x", snapshotPath: null }),
+    null,
+  );
+  // Whitespace is not a key. This is what a field pasted into and cleared again
+  // leaves behind.
+  check(
+    "blank space is not a key",
+    (await apiKeyRefusal({ provider: "OpenAI", model: "m", apiKey: "   ", snapshotPath: null })) !== null,
+  );
+
+  /*
+   * There is deliberately no second function relabelling the provider's own
+   * refusal.
+   *
+   * There were two, because `generate_schematic` carried this sentence to a
+   * reader outside the window and it had to say *whose* key it was. That tool
+   * is gone -- it asked a second model to do what the calling one was already
+   * doing -- so the only readers left are in front of the pane that has the
+   * field in it, and a paragraph explaining where they are would be noise.
+   */
+}
 console.log("\n--- settings coercion ---");
 {
   /*
@@ -1426,9 +1674,60 @@ console.log("\n--- settings coercion ---");
     port: 4600,
     root: "C:/builds/mcp",
     allowDelete: true,
+    // The opposite of the default, so a `coerceMcp` that dropped the field
+    // and substituted the default would fail rather than round-trip.
+    requireAuth: false,
+    bindAddress: "127.0.0.1",
   } satisfies McpSettings;
 
   equal("every mcp field survives a round-trip", coerceMcp(mcp), mcp);
+
+  /*
+   * The one field here whose safe answer is `true`, and therefore the one
+   * read as `!== false` while `enabled` and `allowDelete` are read as
+   * `=== true`.
+   *
+   * This is the check that fails if somebody copies the two lines above it.
+   * **No settings file in existence carries this key** -- it did not exist
+   * until now -- so `=== true` would come back `false` for every user the app
+   * has, and turn authentication off on the next launch without a word.
+   */
+  equal("a settings file with no mcp block still requires a token", coerceMcp(undefined).requireAuth, true);
+  equal("...and one with an mcp block that predates the field", coerceMcp({ port: 4571 }).requireAuth, true);
+  // Only an explicit `false` turns it off, which is what the checkbox writes.
+  equal("an explicit false is honoured", coerceMcp({ requireAuth: false }).requireAuth, false);
+  equal("...and a truthy string does not turn it off", coerceMcp({ requireAuth: "no" }).requireAuth, true);
+
+  /*
+   * The address is a single address, and the CIDR case is the one worth
+   * naming: it is what somebody reaches for when they mean "only my LAN",
+   * and it is not a thing `listen` can bind. Which clients may connect is the
+   * token's question, not this one.
+   */
+  equal("loopback is an address", bindAddressRefusal("127.0.0.1"), null);
+  equal("...and so is every interface", bindAddressRefusal("0.0.0.0"), null);
+  equal("...and a real IPv4 one", bindAddressRefusal("192.168.1.42"), null);
+  equal("...and IPv6", bindAddressRefusal("::1"), null);
+  check(
+    "a CIDR is refused as the range it is",
+    (bindAddressRefusal("192.168.1.0/24") ?? "").includes("range"),
+    bindAddressRefusal("192.168.1.0/24") ?? "(none)",
+  );
+  /*
+   * A hostname is refused too, and the reason is not tidiness: the `Host`
+   * header is compared against this string as written, so a value that would
+   * have to be resolved first could never be compared at all.
+   */
+  check("a hostname is refused", bindAddressRefusal("my-desktop.local") !== null);
+  check("...and so is nonsense", bindAddressRefusal("999.1.1.1") !== null);
+  check("an empty address says what to type", (bindAddressRefusal("") ?? "").includes("127.0.0.1"));
+  // A bad value falls back rather than reaching `listen`, where it would come
+  // back as EADDRNOTAVAIL naming nothing.
+  equal(
+    "a refused address falls back to the default",
+    coerceMcp({ bindAddress: "192.168.1.0/24" }).bindAddress,
+    DEFAULT_MCP_SETTINGS.bindAddress,
+  );
 
   // The opposite of its default, for the reason above: a `coerceEditing`
   // that dropped the field and substituted the default would still pass a
@@ -1527,6 +1826,45 @@ console.log("\n--- settings coercion ---");
   } satisfies Settings;
 
   equal("every settings field survives a round-trip", coerceSettings(settings), settings);
+
+  /*
+   * The default version is the newest release this build knows.
+   *
+   * A **decision** rather than a derivation -- a default is a statement to a
+   * person, the same argument that keeps this app's own version bump manual --
+   * so it is written out in `settings.ts` and pinned here instead of being read
+   * from `MC_VERSIONS[0]` at runtime. What that costs is one edit per release;
+   * what it buys is that the edit cannot be forgotten in silence.
+   *
+   * It was forgotten in silence. `JE_1_20_4` stood through fifteen newer
+   * releases while generation stamped it and the New and Save As dialogs fell
+   * back to it, and the first anybody heard was a report that an MCP client
+   * would not stop producing 1.20.4 schematics. Nothing in the app could have
+   * said so, because nothing was looking.
+   */
+  equal(
+    "the default version is the newest the table knows",
+    DEFAULT_SETTINGS.version,
+    MC_VERSIONS[0].name,
+  );
+  /*
+   * And it has to be a flat one, which is not pedantry: generation writes
+   * Sponge, and Sponge cannot express a pre-Flattening version at all, so a
+   * legacy default would make the app's own default configuration unable to
+   * generate anything.
+   */
+  equal("...and is one Sponge can carry", eraOf(DEFAULT_SETTINGS.version), "flat");
+  /*
+   * Stated as a resolution as well, because the two spellings are now both
+   * accepted and a default written as a label -- 26.2 -- would round-trip
+   * through settings, work everywhere, and quietly stop matching the name
+   * every other table is keyed on.
+   */
+  equal(
+    "...spelled as a canonical name rather than a label",
+    resolveVersionName(DEFAULT_SETTINGS.version),
+    DEFAULT_SETTINGS.version,
+  );
 
   /*
    * The two flags are compared against `true` rather than coerced, because

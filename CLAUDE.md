@@ -1163,6 +1163,28 @@ every time, the ordering or the formatting has drifted and *that* is the bug.
 | `resources/command_syntax.json` | `gen-command-syntax.mjs` | `mc-commands` |
 | `resources/block_versions.json` | `gen-block-versions.mjs` | `mc-block-versions` |
 
+**Every one of them now names what reads it downstream, and six of the seven
+say «the MCP wire».** That section was missing and its absence had a cost: the
+skills described JSON → generator → table and stopped, so somebody could do
+everything `mc-versions` asked, twice, and leave `DEFAULT_SETTINGS.version`
+fifteen releases behind with nothing anywhere complaining.
+
+The datasets themselves reach a model **derived**, so a release or a block
+added to one arrives on the wire with no code change — `describe_block` is its
+three block tables through `propertiesOf`, `legalValuesFor`, `toPlacedEntry`
+and `versionSpan`, and the version enums are `MC_VERSION_NAMES`. What the
+skills add is the half no generator covers: whether the answer is still *true*.
+So each carries a verification step that reads a real answer rather than
+trusting that the generator ran.
+
+`mc-blockproperties` is where that matters most, and it sharpens the warning
+already below: its substance is prose, which fails no check anywhere, and that
+prose is now read by something that builds on it in a session nobody is
+watching. `mc-block-models` is the one exception — geometry never leaves this
+process — with the caveat that `capture_viewport` photographs whatever was
+drawn, so a wrong shape can still mislead a model that checks its work by
+looking.
+
 The skills' trust rules deliberately differ, and the difference is the point.
 `mc-versions` buys trust with **two independent sources that agree**, because a
 transposed digit in a DataVersion is undetectable by any local check — the file
@@ -1492,6 +1514,65 @@ the stdio-only clients by forwarding to the running app; it is dependency-free
 plain Node because it is run by whatever `node` the *client* has, which cannot
 see this app's `node_modules`.
 
+**There is no `generate_schematic`, and its absence is the rule stated above
+working.** A tool by that name lived in `mcp/lifecycle.ts` and asked the model
+the *user* configured in this app to build the schematic — a second model, on a
+second budget, doing what the model driving the connection was already doing
+with `run_build_script`. It is the one thing this server exists not to be:
+calling an LLM is precisely what a harness can do for itself.
+
+It was never in `TOOL_SPECS`, so the chat inside the app never had it and is
+untouched by its removal — that path is `IPC.generate`, with its own key gate.
+What the tool did have was the app's provider key as a precondition for a
+connection that has nothing to do with it, so a missing key came back as the
+gateway's own `Invalid API key.` over a link the reader had just authenticated
+to with a bearer token. **Reported twice as an MCP authentication failure**, and
+diagnosed twice as something else, before the tool itself was doubted.
+
+**`list_blocks` is what it was genuinely carrying.** Generation splices the
+whole placeable set into its prompt; an MCP client could not obtain it at all —
+`describe_block` answers about ids you already have, `get_palette` lists what
+the schematic already uses, and nothing enumerated. So a model building with
+`run_build_script` guessed names and found out by refusal.
+
+**It is `checkBlockAllowed` read backwards, and that is the whole rule.** That
+function accepts a block if it is in `allowedBlocks` **and**, on a
+pre-Flattening document, in `legacy_blocks.json`; `placeableNames` asks both, in
+that order, from the same inputs. A list offering something `set_block` then
+refuses would be worse than no list — it sends a model to build with names that
+cannot land, confidently. `tests/mcp.ts` states it as a round trip: every name
+the tool returns for a **legacy** document is placed for real on that document,
+and a name it left out is refused. The legacy half is the only place the two can
+come apart, so a check on a flat document would pass with it deleted.
+
+Two lessons this project had already paid for are re-spent here. The filter
+matches the id **without the namespace** — `block_search.ts`'s bug, where every
+letter of `minecraft:` returned the whole registry — and it reports `total`
+beside `shown`, which is `ROW_LIMIT`'s rule: a limit bounds what comes back,
+never what was found, and a list truncated in silence is how a model concludes a
+block does not exist.
+
+**The 1.0.0 rename orphaned a profile, and the app now says so.** `app.getName()
+` names the userData directory, so `buildergpt` became `schematic-ai-studio` and
+an install with working API keys came back reading an empty one. Generation
+stopped; everything else kept working, because nothing else needs a key. What
+surfaced was the provider calling the key invalid — true, and pointing at a key
+that *was* set, in a folder the app had stopped reading.
+
+The decision not to migrate stands: `safeStorage` encrypts with a key held in
+the profile's own `Local State`, the two differ, and reading the old ciphertext
+would want `CryptUnprotectData` — a native dependency this project does not have
+and should not gain. What was wrong was the silence. `services/legacy_profile.ts`
+answers one question — *is there a profile next door with keys this one lacks* —
+and three places say it: the start screen at launch, `apiKeyRefusal` at the
+failure, and the keys pane where it is fixed.
+
+`null` once this profile has a key of its own, which is the part that matters: a
+warning that outlives its cause is one people learn to ignore. And a corrupt
+`settings.json` in a directory the app has stopped using is `null` rather than a
+throw — this runs at startup, and that is the least deserving reason to fail to
+launch there is.
+
 **Never a native dialog.** `discard_prompt.ts` is right for a person at the
 keyboard and wrong twice over here: a background agent must not be able to make
 a modal appear on somebody's screen, and must certainly not answer its own
@@ -1526,6 +1607,155 @@ in `READ_ONLY` — and fires with a sentence naming the mistake.
 writes the clipboard the user's own paste reads, so it is not read-only; the
 schematic did not move, so the viewport has nothing to redraw. One flag would
 make one of those a lie.
+
+**One transport per session, which is what the SDK's stateful mode means.**
+`server.ts` held a single `StreamableHTTPServerTransport` for the life of the
+listener, and that is a one-session server wearing the shape of a many-session
+one. The SDK is explicit about both halves: a second `initialize` on an
+already-initialised transport is refused outright — *«Invalid Request: Server
+already initialized»* — and any `Mcp-Session-Id` but the single one it holds
+comes back 404 `Session not found`.
+
+So a client that pressed **Reload** could not get back in without the server
+being switched off and on, and a second client could not connect **at all**.
+Both were reported as one bug. `transports` is a `Map` keyed by session now,
+with a `Server` per entry — which costs nothing, because `buildMcpServer` holds
+no state of its own and every answer comes through `host` and
+`currentSession()`.
+
+An entry goes in from `onsessioninitialized` and **never earlier**, so a
+malformed POST cannot leave a transport behind; it comes out from
+`onsessionclosed`, which is the DELETE, **and** from `transport.onclose`, which
+is the case that actually happens — a client that simply goes away. Without the
+second the client count only ever grows.
+
+The routing decision is `routeRequest` in `policy.ts` rather than a branch
+inside `handle`, for `selection_drag.ts`'s reason: `server.ts` imports
+`electron` and `node:http` and the suites cannot load it, and this is the part
+that was wrong. A session id this server never issued is **refused**, not
+honoured with a fresh session under the same id — that would look like success
+and behave like amnesia.
+
+**`server.close()` does not close connections, and that was the Regenerate
+button doing nothing.** It stops accepting new ones and waits for the open ones
+to end; an MCP client holds a keep-alive connection and often an SSE stream, so
+the callback never came and `stopMcpServer`'s promise never settled.
+`regenerateMcpToken` and the Enabled checkbox both await it.
+
+The shape of the report is worth keeping: **the new token had already been
+written to disk** by `ensureToken(true)` before the hang, so restarting the app
+showed it and the button looked merely inert. `closeAllConnections()` is the
+missing line, and `tests/mcp.ts` checks for it in the source because the
+harness cannot hold a socket open against a server it cannot start.
+
+**The token is read per request, not captured when the listener started.** It
+was closed over as `secret`, which meant a setting could only take effect by
+restarting and a regenerate whose restart failed would go on checking the old
+one.
+
+**The key gate is one copy, and it was written out twice.** `ipc/handlers.ts`
+asked "is there a key for this provider" in two places and phrased the answer
+twice; `services/llm_key.ts` is the single copy. The OpenCode arm is per
+*model*, because some of its models are free and the proportion moves, and the
+snapshot path is injected as a string exactly as `ToolContext.legacyBlocksPath`
+is — that module must not reach Electron.
+
+**Its fail-open is deliberate and has a cost worth knowing.**
+`openCodeModelRequiresKey` is `pricing === "paid"`, so a model absent from the
+catalogue — which `mimo-v2.5-free` is — passes the gate with **no key at
+all**, and an empty credential goes to the gateway. That is the right trade:
+a models.dev outage must not make the free models unusable. What it produces
+when it is wrong is the gateway's own `Invalid API key.`, which is a true
+sentence pointing at nothing the user can see. Narrowing it would refuse a
+free model every time the catalogue is stale, which is the commoner case.
+
+**`ProviderKeyStatus.hasKey` means "stored *and* readable", and meant "there
+are bytes on disk".** `getApiKey` answers `""` for absent, for no keyring, and
+for ciphertext that will not decrypt; `getKeyStatus` was reporting the third of
+those as a saved key. So a key encrypted under a keyring the profile no longer
+has showed as saved in the pane while every caller got an empty string, and the
+provider's refusal pointed nowhere. `unreadable` keeps the two apart, because
+they want different sentences: one is "paste a key" and the other is "paste it
+again".
+
+Neither `settings-store.ts` nor `server.ts` can be loaded by the suites —
+`safeStorage` and `electron` — so both rules are checked in the source, the way
+`closeAllConnections` is. That is the weaker kind of check and is worth saying:
+it proves the predicate is still consulted, not that it is right.
+
+**Authentication can be turned off, and the bind address can be changed, and
+the two together are refused.** Each half alone is defensible — on loopback the
+token is a convenience rather than the boundary, and off loopback the token *is*
+the access control — and together they are an anonymous write endpoint on
+somebody's files, reachable by anything that can route to the machine.
+`startupRefusal` says which of the two to change.
+
+Four things about it are load-bearing:
+
+- **`coerceMcp` reads `requireAuth` as `!== false`**, where `enabled` and
+  `allowDelete` are `=== true`. That is the same rule — read towards the safe
+  answer — applied to the one field whose safe answer is the other one. Written
+  the other way, every `settings.json` in existence (none of which carries the
+  key) would come back with authentication off on the next launch. It is
+  `editing.autoGrow`'s trap, and `tests/services.ts` states it.
+- **A CIDR is not an address.** `listen` binds one interface; `192.168.1.0/24`
+  is not something that can be bound, and what it *would* mean — which clients
+  may connect — is the token's question. `bindAddressRefusal` says so by name
+  rather than letting it reach `listen` and come back as `EADDRNOTAVAIL`. A
+  **hostname is refused too**, and not out of fussiness: `acceptsRequest`
+  compares the `Host` header against this string as written, so a value needing
+  resolution could never be compared at all.
+- **The Host and Origin checks stay, with authentication off and off loopback
+  alike.** They are the DNS-rebinding defence — a page on the open web pointing
+  a domain it controls at this machine — which is a question about who may
+  *reach* the server, not who may use it. Bound to a wildcard the rule becomes
+  "an address, never a name", because a name is the whole of the attack and an
+  IP literal has nothing to resolve.
+- **The dot gets a fifth state.** `unauthenticated`, painted `--warn`, and it
+  **outranks `active`** — the moment somebody connects is exactly when a warning
+  that anybody could would otherwise disappear. Not `--danger`: nothing has gone
+  wrong, and a red dot over a working server teaches people that red means
+  nothing.
+
+The warning beside the checkbox says the true thing rather than the expected
+one. On loopback the risk is not the network — it cannot be reached from there
+— it is that **any program on this machine** can read, write and save the
+user's schematics, and trash them where `allowDelete` is on.
+
+`writeDiscovery` writes `token: null` rather than returning early, or the stdio
+bridge could not find the app at all with authentication off; `mcp-bridge.mjs`
+accepts that and omits the header instead of sending `Bearer ` with nothing
+after it, which a server would compare and reject — reading as a wrong token
+rather than as no token being wanted. `connectCommand` drops `--header` for the
+same reason.
+
+**A settings change has to reach the listener, and for a long time only the
+toggle did.** `mcpSetEnabled` started and stopped; everything else in
+`McpSettings` was written to disk and ignored until the next launch. Turning
+authentication off and back on therefore left the socket serving anybody, and
+the token row -- keyed on what the *server* said -- gone with no way to bring
+it back. `servingChanged` names the three fields a listener is built from;
+`root` and `allowDelete` are deliberately not among them, because those are
+asked at the moment of each call and revoking deletion has to revoke it now.
+
+**The token row is shown from the setting, and the dot from the status.** That
+is not a contradiction of the rule above it, it is the rule: the pane is where
+the token is *configured*, so ticking the box has to produce the string
+immediately, whatever the listener has caught up to — while the dot is the one
+place that must never claim more than is true.
+
+**The client count is a line of its own.** It used to be the *label* of the
+`active` state, so the moment a fifth state outranked `active` the count
+silently left the pane. Two facts, two lines: what the server is doing, and how
+many clients are on it.
+
+**`apiKeyRefusal` answers "is there a key", which is not the same question as
+"does the key work".** A key that is present and wrong sails past it and is
+refused by the provider, and what comes back is the provider's own
+`Invalid API key.` with nothing said about whose key it is. That half is
+still open, and it is only reachable from the chat inside the window now —
+which is the one reader who can see the provider panel from where they are
+standing.
 
 **The checkbox is intent; `McpStatus` is reality.** They come apart when a port
 is already held by a second copy of the app, and a navbar dot derived from the
@@ -2405,6 +2635,95 @@ they are refreshed. Two independent sources that agree or the number does not
 ship — and minecraft.wiki plus its Fandom mirror is *one* source. A wrong
 DataVersion produces a file that opens fine and misbehaves in game, which is
 discovered a long way from here.
+
+**A version name and a version label are one version, and only one spelling
+worked.** `JE_26_2` is what every table is keyed on and `26.2` is what anybody
+asks for. `resolveVersionName` in `shared/mc_versions.ts` takes either and is
+the **first** thing every caller does; from there down only the canonical name
+circulates, so nothing else had to learn about labels.
+
+Two spellings is the limit, deliberately. `1.20` does not become `JE_1_20_4`,
+and a near-miss is not repaired — this is the function every caller checks
+before refusing by name, so a guess here puts the silence back one level down.
+
+**The silence is what this replaces.** `dataVersionOf` fails open: an
+unrecognised name comes back `null`, which is *also* what 1.8.8's genuine
+absence of a DataVersion looks like, and what no version at all looks like.
+`refusalFor` cannot catch it either, because `eraOf` answers `flat` for
+anything it does not know — the right permissive answer for a settings string
+written by a newer build, and the wrong one for a name a model just typed. So
+`create_document` accepted `"26.2"`, accepted `"banana"`, and produced a
+document with **no version tag** either way, reporting success.
+
+Two of the three callers already had the guard: `services/convert.ts` threw by
+name, and `setDocumentVersion` throws `UnknownVersionError`. The MCP tool was
+the one that did not — the shape this file records over and over, a rule
+reaching all but one of the places that ask the same question.
+
+**And `create_document`'s `version` is required**, as `NewDocumentRequest`'s
+has always been on IPC and for the reason written there: the container and the
+version are not independent, so they are chosen together at the start rather
+than discovered at save time. Optional, its absence *was* the bug rather than a
+default that needed choosing better — and it also produced the one refusal in
+the app with a hole in it, `refusalFor` interpolating an empty label into «a
+.litematic claiming &nbsp; would open in the mod as the wrong blocks».
+
+**Nothing on the MCP wire repeats a vendored fact, and that is the half that
+makes the next release free.** The `enum` on all five tools that name a version
+is `MC_VERSION_NAMES`; the sentence describing which container holds which
+versions is `versionRangesSentence()`, built from `versionsFor` and the two
+`*_MIN_LABEL` constants. A release added to `resources/mc_versions.json` reaches
+a model with no edit anywhere near `src/main/mcp/`.
+
+This is not tidiness, it is the same bug avoided twice. What went stale was a
+hand-typed `JE_1_20_4` in a tool description — the only spelling a model could
+see, in a schema with no `enum` at all — and writing out fifty names plus a
+sentence saying «39 versions» would have been that mistake four tools wide.
+`tests/mcp.ts` walks every schema and fails on any `enum` that is not the table
+and any description naming a version other than the newest.
+
+**Two things cannot be derived, and both are tripwired instead.**
+`DEFAULT_SETTINGS.version` is a *decision* — a default is a statement to a
+person, the same argument that keeps this app's own version bump manual — so it
+is written out and `tests/services.ts` pins it to the newest flat row. It had
+sat at `JE_1_20_4` through fifteen newer releases while generation stamped it
+and both dialogs fell back to it, and nothing anywhere was looking. The other
+is the prose above.
+
+`DEFAULT_VERSION` in `services/versions.ts` was a third copy of that number,
+exported, imported by nothing, and the one that looked most like the authority.
+It is gone.
+
+**`set_document_version` exists over MCP now**, and it is the other road to the
+wrong number. `setDocumentVersion` was IPC-only, so a client that guessed wrong
+— or opened a file carrying no tag — had no way back at all, and the only
+answer left was to build the document again.
+
+The tool is in `mcp/document_tools.ts` rather than `TOOL_SPECS`, by that file's
+own rule: `setDocumentVersion` opens its own transaction and `callTool` would
+wrap a second round it. `DocumentSpec.run` grew a third parameter for it — the
+`legacy_blocks.json` path, injected as a string exactly as `ToolContext` does
+it, because a backport below 1.13 needs that table and `services/resources.ts`
+reaches Electron, which this module must not.
+
+**`list_versions` is the file's snapshot history and says so now.** It is the
+name a model looking for Minecraft versions finds first, and it answers a
+different question entirely.
+
+**A `.mcfunction`'s 1.13 floor is enforced.** `MCFUNCTION_MIN_DATA_VERSION` was
+declared, documented, and read by the tests and nothing else: `convert.ts`
+skipped `refusalFor` for that format outright — reasonably, since a function
+carries no version tag for a container rule to be about — so a 1.12.2 schematic
+converted into commands naming flattened blocks that version has never had. A
+file that runs, places almost nothing, and reports no error.
+
+`mcfunctionCanCarry` in `shared/command_syntax.ts` is `litematicCanCarry`'s
+sibling and answers the **opposite** way about `null`: a litematic must stamp a
+`MinecraftDataVersion` and has nothing honest to put there, while a function
+carries none at all, so an absent number is not a claim it has to make. It asks
+the **era** as well as the number, and the era is the half that works — 1.8.8
+and 1.8.9 have `dataVersion: null`, so a number-only rule would let the two
+oldest releases through as though they had said nothing.
 
 **`showSaveDialog` exists now, and the format is chosen before it opens.**
 `.schem` is both Sponge v2 and v3 and Electron reports the chosen path but not

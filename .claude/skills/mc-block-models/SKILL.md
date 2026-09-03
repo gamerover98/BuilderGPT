@@ -153,6 +153,19 @@ texture — `white_wool` is. `oak_wood` needs `oak_log`; `warped_hyphae` needs
 `warped_stem`; `waxed_cut_copper` needs `cut_copper`. Every rule added here must
 be checked against the pack, not reasoned about.
 
+## What reads this downstream
+
+**Not the MCP wire**, which is worth saying because every other dataset in
+`.claude/skills/` is on it. Geometry does not leave this process: `describe_block`
+answers with states and versions, never with a shape, so a box transcribed
+wrongly here cannot mislead a model directly.
+
+It can still mislead one indirectly, through `capture_viewport` -- the one tool
+that answers with a picture. A block drawn as the wrong shape is photographed
+as the wrong shape, and a model checking its own work by looking will believe
+it. That is an argument for the tripwires in `tests/blocks.ts` rather than for
+anything here.
+
 ## Doing it
 
 1. **Name the block and reproduce the fault.** Coloured cube (texture) or wrong

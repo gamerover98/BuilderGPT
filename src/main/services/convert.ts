@@ -36,7 +36,14 @@ import path from "path";
 import { documentFromLoaded, documentSize, countBlocks } from "../domain/document.js";
 import { isMcfunctionPath, loadStructure, type FileKind } from "../pipeline/loader.js";
 import { schematicExtension, type SchematicFormat } from "../../shared/schematic.js";
-import { dataVersionOf, mcVersion, refusalFor } from "../../shared/mc_versions.js";
+import {
+  dataVersionOf,
+  eraOf,
+  mcVersion,
+  refusalFor,
+  resolveVersionName,
+} from "../../shared/mc_versions.js";
+import { mcfunctionRefusal } from "../../shared/command_syntax.js";
 import { resolveOutputPath } from "./output.js";
 import { writeDocument } from "./writers.js";
 import { saveMcfunction } from "./mcfunction_writer.js";
@@ -98,20 +105,42 @@ export async function convertFile(options: ConvertOptions): Promise<ConvertResul
 
   if (options.version !== undefined) {
     /*
-     * Refused before anything is written, and by the same function the format
-     * picker asks. A container that cannot express a version is not a setting
-     * away from working, so the sentence says which way to move rather than
-     * "not available".
+     * Resolved first, so a label and a name are the same request and an
+     * unknown string is refused here rather than becoming `null` further
+     * down -- which is indistinguishable from 1.8.8 having no DataVersion.
+     * This file already had the guard; what it did not have was the label,
+     * so `26.2` was refused while `JE_26_2` worked.
      */
-    if (options.format !== "mcfunction") {
-      const refusal = refusalFor(options.format as SchematicFormat, options.version);
-      if (refusal !== null) throw new ConvertError(refusal);
-    }
-    const dataVersion = dataVersionOf(options.version);
-    if (dataVersion === null && mcVersion(options.version) === undefined) {
+    const version = resolveVersionName(options.version);
+    if (version === null) {
       throw new ConvertError(`${options.version} is not a Minecraft version this build knows`);
     }
-    doc.dataVersion = dataVersion;
+    /*
+     * Refused before anything is written, and by the same function the format
+     * picker asks. A container that cannot express a version is not a setting
+     * away from working, so the sentence says which way to move rather than "not
+     * available".
+     *
+     * `.mcfunction` used to skip this outright, which left its 1.13 floor
+     * enforced nowhere: `MCFUNCTION_MIN_DATA_VERSION` was read only by the
+     * tests, and a 1.12.2 schematic converted to commands naming flattened
+     * blocks that version has never had. It is a different question from
+     * `refusalFor`'s -- commands carry no version tag, so the refusal is about
+     * the *spelling* of a block rather than about a container's palette --
+     * which is why it is its own function rather than a fifth branch there.
+     */
+    if (options.format === "mcfunction") {
+      const refusal = mcfunctionRefusal(
+        eraOf(version),
+        dataVersionOf(version),
+        mcVersion(version)?.label ?? version,
+      );
+      if (refusal !== null) throw new ConvertError(refusal);
+    } else {
+      const refusal = refusalFor(options.format as SchematicFormat, version);
+      if (refusal !== null) throw new ConvertError(refusal);
+    }
+    doc.dataVersion = dataVersionOf(version);
   }
 
   const directory = path.dirname(options.target);

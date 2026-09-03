@@ -967,9 +967,45 @@ console.log("\n--- the MCP indicator ---");
     calls: 0,
     message: null,
     bridge: "C:/app/resources/mcp-bridge.mjs",
+    requiresAuth: true,
+    bindAddress: "127.0.0.1",
     ...over,
   });
 
+  /*
+   * The fifth state, and the reason it outranks the other two.
+   *
+   * A server with no token is the most permissive thing this app can be doing,
+   * and `active` would hide it at exactly the wrong moment: somebody connecting
+   * is when "anybody could" stops being hypothetical. So it wins over both.
+   *
+   * Read from the status rather than from the setting, like everything else
+   * here -- `requiresAuth` is what the listener is doing, and the checkbox is
+   * only what was asked for.
+   */
+  equal("a listening server with no token warns", dotFor(listening({ requiresAuth: false })), "unauthenticated");
+  equal(
+    "...and goes on warning once a client arrives",
+    dotFor(listening({ requiresAuth: false, clients: 3 })),
+    "unauthenticated",
+  );
+  equal("a listening server that wants one does not", dotFor(listening()), "listening");
+  equal("...and still says when somebody is using it", dotFor(listening({ clients: 1 })), "active");
+  /*
+   * Off is off. The warning is about a server that is serving, and a dot that
+   * warned about a stopped one would be the boy who cried wolf.
+   */
+  equal(
+    "a server that is not running warns about nothing",
+    dotFor(listening({ state: "off", requiresAuth: false })),
+    "off",
+  );
+  /*
+   * Its own colour, and not `--danger`: nothing has gone wrong. A red dot over
+   * a working server teaches people that red means nothing.
+   */
+  equal("the warning has its own colour", dotColor("unauthenticated"), "--warn");
+  check("...which is not the error colour", dotColor("unauthenticated") !== dotColor("error"));
   /*
    * The whole reason this is a function of `McpStatus` and not of the setting.
    *
@@ -1023,6 +1059,18 @@ console.log("\n--- the MCP indicator ---");
   const command = connectCommand("http://127.0.0.1:4571/mcp", "s3cret");
   check("the connect command names the transport", command.includes("--transport http"), command);
   check("...and carries the token as a bearer header", command.includes("Bearer s3cret"), command);
+  /*
+   * ...and omits it when there is none, which authentication being off is.
+   * An empty `Bearer ` would be a command that looks right, runs, and fails to
+   * connect -- with an error naming authentication on a server not asking for
+   * any.
+   */
+  check(
+    "no token, no header",
+    !connectCommand("http://127.0.0.1:4571/mcp", null).includes("--header"),
+    connectCommand("http://127.0.0.1:4571/mcp", null),
+  );
+  check("...and the address is still there", connectCommand("http://x/mcp", null).includes("http://x/mcp"));
 
   /*
    * The stdio form quotes the path, and that is not cosmetic: the bridge ships

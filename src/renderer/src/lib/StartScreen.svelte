@@ -48,6 +48,18 @@
     onopenrecent: (filePath: string) => void;
     onopenartifact: (artifact: Artifact) => void;
     onrevealartifact: (artifact: Artifact) => void;
+    /**
+     * The pre-1.0.0 profile, when it holds keys this one does not.
+     *
+     * Here because this is what launching the app looks like with nothing
+     * open, and because the alternative was what happened: the app knew the
+     * keys were next door and said nothing, so generation stopped and what
+     * surfaced was the provider calling the key invalid. Not a native dialog
+     * -- blocking the launch over something recoverable by pasting a key
+     * again would be out of proportion.
+     */
+    legacyProfile?: { path: string; providers: string[] } | null;
+    onrevealpath: (target: string) => void;
   }
 
   const {
@@ -60,6 +72,8 @@
     onopenrecent,
     onopenartifact,
     onrevealartifact,
+    legacyProfile = null,
+    onrevealpath,
   }: Props = $props();
 
   /** Six is what fits without the card starting to scroll. */
@@ -129,6 +143,15 @@
     <h2>{t("start.title")}</h2>
     <p class="lead">{t("start.lead")}</p>
 
+    {#if legacyProfile}
+      <p class="lead warn">
+        {t("start.legacyProfile", { providers: legacyProfile.providers.join(", ") })}
+        <button class="link" onclick={() => onrevealpath(legacyProfile?.path ?? "")}>
+          {t("provider.legacyProfileReveal")}
+        </button>
+      </p>
+    {/if}
+
     <div class="actions">
       <button class="primary" onclick={onnew} disabled={busy}>{t("doc.new")}</button>
       <button onclick={onopen} disabled={busy}>{t("doc.open")}</button>
@@ -194,6 +217,22 @@
 </div>
 
 <style>
+  /* A warning that is still prose: the line reads as a sentence, and the
+     button in it is the one useful verb rather than a second paragraph. */
+  .lead.warn {
+    color: var(--warn);
+  }
+
+  .lead.warn .link {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
   /*
    * `fixed`, so it covers the window rather than the viewport section it is
    * mounted in: the camera buttons, the gear and the sidebar all acted on a

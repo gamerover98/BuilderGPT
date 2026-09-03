@@ -112,6 +112,23 @@ Record the version as the wiki names it, and say what the change *costs* rather
 than only that it happened. A note that reads "changed in 1.16" tells the next
 reader nothing they can act on.
 
+## What reads this downstream, and why it matters most here
+
+`describe_block` over MCP puts the `description` of each property in front of a
+model that is about to place a block. Derived, so a new property arrives there
+on its own -- and that is exactly what makes this file the most dangerous of
+the seven.
+
+The trust rule above already says the substance here is **prose**, which fails
+no check anywhere: the file saves, the block is placed, the picture is right.
+What is new is that the sentence is no longer read only by whoever opens the
+inspector. It is read by something that then builds on it, in a session nobody
+is watching, and a wrong sentence becomes a wrong structure with every
+mechanical check green.
+
+So the verification step is to *read the answer*: call `describe_block` on the
+properties this pass touched and check the sentences say what the game does.
+
 ## Doing it
 
 1. **Read `resources/block_properties.json`** to see what is described and when

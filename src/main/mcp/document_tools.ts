@@ -49,9 +49,20 @@ import {
   moveRegion,
   pasteSelection,
   redoEdit,
+  setDocumentVersion,
   undoEdit,
+  VersionWouldLoseBlocksError,
   type DocumentSession,
 } from "../services/session.js";
+import { loadLegacyBlockTable } from "../pipeline/loader_formats.js";
+import { legacyBlockNames } from "../services/writers.js";
+import {
+  MC_VERSION_NAMES,
+  eraOf,
+  mcVersion,
+  resolveVersionName,
+  versionRangesSentence,
+} from "../../shared/mc_versions.js";
 import { applyNbt, schematicNbtText, setWorldEditAnchor, setWorldOrigin } from "../services/schematic_nbt.js";
 import { McpRefusal } from "./lifecycle.js";
 
@@ -71,7 +82,18 @@ export interface DocumentSpec {
   readonly destructive: boolean;
   /** Whether the schematic itself moved: queued, and the window is told. */
   readonly changesDocument: boolean;
-  run(session: DocumentSession, args: unknown): Promise<unknown>;
+  /**
+   * `legacyBlocksPath` is injected as a string, exactly as it is on
+   * `ToolContext`: the file is real but `services/resources.ts` reaches
+   * Electron to find it, and this module deliberately imports none -- see
+   * the header. Eleven of the twelve tools declare two parameters and stay
+   * assignable, so nothing else moved.
+   */
+  run(
+    session: DocumentSession,
+    args: unknown,
+    legacyBlocksPath: string | null,
+  ): Promise<unknown>;
 }
 
 const REGION = {
@@ -358,6 +380,94 @@ export const DOCUMENT_SPECS: readonly DocumentSpec[] = [
       const origin = clearing ? null : vector(args, ["x", "y", "z"]);
       setWorldOrigin(session.doc, session.history, origin, "Set the world origin");
       return { worldOrigin: origin };
+    },
+  },
+
+  {
+    /*
+     * The verb that was missing entirely.
+     *
+     * `setDocumentVersion` has existed since the version modal did, on IPC
+     * and nowhere else, so over MCP the version could be chosen once at
+     * `create_document` and never afterwards -- a client that got it wrong,
+     * or opened a file that carried no tag, had no way back. Reported as a
+     * schematic that would not stop being 1.20.4.
+     *
+     * Here rather than in `TOOL_SPECS` for this file's own rule: it opens its
+     * own transaction, and `callTool` would wrap a second one round it.
+     */
+    name: "set_document_version",
+    description:
+      "Change which Minecraft version the open schematic is for. Renames blocks that were renamed, rewrites states the target spells differently, and only then drops what genuinely does not exist -- so going back and forth does not quietly destroy anything. Refuses and counts first if blocks would be lost; call again with dropUnrepresentable to go ahead. One undo step, blocks and version together. It does not change the container: use save_document_as or convert_schematic for that.",
+    schema: {
+      type: "object",
+      properties: {
+        version: {
+          type: "string",
+          enum: [...MC_VERSION_NAMES],
+          description:
+            `The Minecraft version, by name (${MC_VERSION_NAMES[0]}) or by label. ` +
+            `The open container has to be able to carry it: ` +
+            versionRangesSentence(),
+        },
+        dropUnrepresentable: {
+          type: "boolean",
+          description:
+            "Only after the refusal has said how many blocks would go, and the user has agreed. Never assume it.",
+        },
+      },
+      required: ["version"],
+      additionalProperties: false,
+    },
+    readOnly: false,
+    destructive: true,
+    changesDocument: true,
+    async run(session, args, legacyBlocksPath) {
+      const a = (args ?? {}) as Record<string, unknown>;
+      const version = resolveVersionName(String(a.version ?? ""));
+      if (version === null) {
+        throw new McpRefusal(
+          `${String(a.version ?? "")} is not a Minecraft version this build knows. ` +
+            `Name one of the versions in this tool's schema, such as ${MC_VERSION_NAMES[0]}.`,
+        );
+      }
+      /*
+       * The *target* version's block set, not the document's -- that is the
+       * question being asked. Below 1.13 the authority is
+       * `legacy_blocks.json`, because `block_versions.json` is the flat era
+       * only and its generator refuses a pre-Flattening label outright.
+       */
+      const legacy = eraOf(version) === "legacy";
+      if (legacy && legacyBlocksPath === null) {
+        throw new McpRefusal(
+          `Backporting to ${mcVersion(version)?.label ?? version} needs the ` +
+            `pre-Flattening block table, which this server was started without.`,
+        );
+      }
+      try {
+        const result = setDocumentVersion(session, version, {
+          dropUnrepresentable: a.dropUnrepresentable === true,
+          placeableNames: legacy
+            ? legacyBlockNames(await loadLegacyBlockTable(legacyBlocksPath as string))
+            : null,
+        });
+        return { version, ...result };
+      } catch (err) {
+        /*
+         * Re-phrased rather than relayed, and only this one. The sentence
+         * names the count and the blocks, which is the half a model has to
+         * put in front of the user; what it cannot know is that there is a
+         * second call that goes ahead. Never a dialog -- a background agent
+         * must not make a modal appear, still less answer it.
+         */
+        if (err instanceof VersionWouldLoseBlocksError) {
+          throw new McpRefusal(
+            `${err.message} Tell the user, and call again with ` +
+              `dropUnrepresentable: true only if they agree.`,
+          );
+        }
+        throw err;
+      }
     },
   },
 ];

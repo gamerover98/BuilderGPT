@@ -97,6 +97,27 @@ mcmeta's silence before 1.20.5 is meaningful for a block only when it lists that
 block at every version from the claimed arrival to the end of its life — which
 is to say, only when the block has always had properties.
 
+## What reads this downstream
+
+Two consumers, and they fail in opposite ways.
+
+`describe_block` over MCP reports `since` and `until` from this table, through
+`versionSpan`. That is what stops a model reaching for a block the open
+schematic's version predates, and it is derived -- a release added here reaches
+the wire with no code change.
+
+`set_document_version`, also over MCP, is the other one, and it is the reason
+the warning at the top of this file is not decorative: a client can now
+backport somebody's open schematic, and this table decides what survives. The
+other six datasets fail by being incomplete; a wrong row here replaces real
+blocks with empty space, reports a healthy count, and looks entirely
+deliberate.
+
+The verification step is `set_document_version` on a document holding blocks
+from the release under test, in both directions: forward, then back, and the
+blocks must be the ones that went in. A rename that is missing shows up
+precisely here and nowhere else.
+
 ## Doing it
 
 1. **Read `resources/block_versions.json` first**, especially `coverage`. If a

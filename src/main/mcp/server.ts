@@ -46,11 +46,16 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  isInitializeRequest,
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { type McpActivity, type McpStatus } from "../../shared/ipc.js";
-import { type McpSettings } from "../../shared/settings.js";
-import { acceptsRequest, chooseToken } from "./policy.js";
+import {
+  DEFAULT_MCP_SETTINGS,
+  isWildcardAddress,
+  type McpSettings,
+} from "../../shared/settings.js";
+import { acceptsRequest, chooseToken, routeRequest, startupRefusal } from "./policy.js";
 import { callTool, describeTools } from "./tools.js";
 import { app, shell } from "electron";
 
@@ -62,16 +67,13 @@ import {
   openDocument,
   saveSession,
 } from "../services/session.js";
-import { countBlocks } from "../domain/document.js";
 import { listSnapshots, readSnapshot, takeSnapshot } from "../services/snapshots.js";
-import { generate } from "../services/generate.js";
 import { announceDocument } from "../services/broadcast.js";
 import { isDirty } from "../domain/history.js";
 import { dataVersionOf, refusalFor } from "../../shared/mc_versions.js";
 import { legacyBlocksPath } from "../services/resources.js";
 import { adoptSubject } from "../services/conversation.js";
 import {
-  getApiKey,
   getMcpToken,
   getRecentDocuments,
   getSettings,
@@ -101,15 +103,40 @@ export interface McpHost {
 
 let host: McpHost | null = null;
 let http: HttpServer | null = null;
-let mcp: Server | null = null;
-let transport: StreamableHTTPServerTransport | null = null;
+
+/**
+ * One transport per session, which is what the SDK's stateful mode means.
+ *
+ * This was a single `transport` shared by the whole server, and that is a
+ * one-session server wearing the shape of a many-session one. The SDK is
+ * explicit about both halves: a second `initialize` on an already-initialised
+ * transport is refused outright (*«Invalid Request: Server already
+ * initialized»*), and any `mcp-session-id` other than the single one it holds
+ * comes back 404 `Session not found`.
+ *
+ * So a client that reloaded -- which re-sends `initialize` -- could not get
+ * back in without the whole server being restarted, and a second client could
+ * not connect at all. Reported as both.
+ *
+ * A `Server` goes with each one, because `Server.connect` binds one to one.
+ * That costs nothing: `buildMcpServer` holds no state of its own -- every
+ * answer comes through `host` and `currentSession()`.
+ */
+const transports = new Map<string, { transport: StreamableHTTPServerTransport; mcp: Server }>();
 
 let state: McpStatus["state"] = "off";
 let message: string | null = null;
 let token: string | null = null;
 let url: string | null = null;
 let calls = 0;
-const sessions = new Set<string>();
+/*
+ * What the listener is *doing*, as opposed to what the settings ask for.
+ * `handle` reads these per request rather than closing over them, so a
+ * change takes effect without a restart and a restart that failed cannot
+ * leave the old answer being served.
+ */
+let requireAuth = DEFAULT_MCP_SETTINGS.requireAuth;
+let bindAddress = DEFAULT_MCP_SETTINGS.bindAddress;
 const activity: McpActivity[] = [];
 
 export function useHost(next: McpHost): void {
@@ -126,10 +153,12 @@ export function mcpStatus(): McpStatus {
     state,
     url,
     token,
-    clients: sessions.size,
+    clients: transports.size,
     calls,
     message,
     bridge: host?.bridgeFile ?? null,
+    requiresAuth: requireAuth,
+    bindAddress,
   };
 }
 
@@ -227,8 +256,16 @@ function lifecycleHost(): Lifecycle {
       await adoptSubject(filePath);
       return session;
     },
+    /*
+     * `version` arrives already resolved to a canonical name, so
+     * `dataVersionOf` is asked a question it can answer. It used to be
+     * handed whatever the client typed, and it fails open: an unknown name
+     * came back `null`, which is exactly what 1.8.8 and "no version at all"
+     * also look like from here. Asking for 26.2 and getting a document with
+     * no version tag was that `null`, in silence.
+     */
     create: async (size, format, version) => {
-      const session = newDocument(size, format, dataVersionOf(version ?? ""));
+      const session = newDocument(size, format, dataVersionOf(version));
       await adoptSubject(null);
       return session;
     },
@@ -236,6 +273,11 @@ function lifecycleHost(): Lifecycle {
       const result = await saveSession(session, {
         filePath: options.filePath,
         format: options.format,
+        // Only when asked, for `SaveRequest.version`'s reason: passing `null`
+        // unconditionally would strip the tag off every file saved.
+        ...(options.version === undefined
+          ? {}
+          : { dataVersion: dataVersionOf(options.version) }),
         legacyBlocksPath: legacyBlocksPath(),
       });
       await adoptSubject(result.filePath);
@@ -288,29 +330,6 @@ function lifecycleHost(): Lifecycle {
       await takeSnapshot(session, "manual", "Before going back");
       return adoptDocument(restored.doc, restored.history);
     },
-    generate: async (prompt) => {
-      const settings = await getSettings();
-      const apiKey = (await getApiKey(settings.provider)) ?? "";
-      const outcome = await generate({
-        provider: settings.provider,
-        model: settings.model,
-        apiKey,
-        baseUrl: settings.baseUrl,
-        description: prompt,
-        version: settings.version,
-        exportType: settings.exportType,
-        imagePath: null,
-        outputDir: settings.outputDir,
-      });
-      // Opened, like every other route that produces a schematic: generating and
-      // then not showing the result is how the app used to work, and it left the
-      // one thing you asked for behind a preview nothing could edit.
-      const session = await openDocument(outcome.path, { legacyBlocksPath: legacyBlocksPath() });
-      await rememberRecentDocument(outcome.path);
-      await adoptSubject(outcome.path);
-      announceDocument(session);
-      return { filePath: outcome.path, blocks: countBlocks(session.doc) };
-    },
   };
 }
 
@@ -334,6 +353,16 @@ function buildMcpServer(): Server {
     },
   );
 
+  /*
+   * Every tool, unconditionally.
+   *
+   * This briefly filtered the list, because `generate_schematic` needed the
+   * *app's* provider key and was the one tool that could fail for a reason
+   * having nothing to do with schematics. That tool is gone -- see the note
+   * on `Lifecycle` -- and with it the only reason a tool here could be
+   * unavailable. Nothing left in this list depends on anything but the app
+   * being open.
+   */
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: describeTools(),
   }));
@@ -391,10 +420,17 @@ function buildMcpServer(): Server {
 }
 
 async function writeDiscovery(): Promise<void> {
-  if (host === null || url === null || token === null) return;
+  if (host === null || url === null) return;
+  /*
+   * Written even with no token, as `token: null`. It used to return early on
+   * that, which with authentication off would have left the stdio bridge
+   * unable to find the app at all -- the file is how it does that, and the
+   * port may be 0 precisely so nothing has to agree on a number twice.
+   */
+  const offered = requireAuth ? token : null;
   await writeFile(
     host.discoveryFile,
-    `${JSON.stringify({ version: 1, url, token, pid: process.pid }, null, 2)}\n`,
+    `${JSON.stringify({ version: 1, url, token: offered, pid: process.pid }, null, 2)}\n`,
     // 0600 where the platform honours it. Windows ignores the mode, which is
     // why this file holds a token that can be rotated rather than one that has
     // to stay secret forever.
@@ -419,25 +455,35 @@ export async function startMcpServer(settings: McpSettings): Promise<McpStatus> 
   await stopMcpServer();
   state = "starting";
   message = null;
+  requireAuth = settings.requireAuth;
+  bindAddress = settings.bindAddress;
   announce();
 
-  const secret = await ensureToken(false);
-  mcp = buildMcpServer();
-  transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-    onsessioninitialized: (id) => {
-      sessions.add(id);
-      announce();
-    },
-    onsessionclosed: (id) => {
-      sessions.delete(id);
-      announce();
-    },
-  });
-  await mcp.connect(transport);
+  /*
+   * Refused before the socket exists, not after. `startupRefusal` holds the
+   * one combination that is not allowed -- no token, bound past loopback --
+   * and the address check with it, so a bad address says what is wrong with
+   * it instead of arriving as EADDRNOTAVAIL.
+   */
+  const refusal = startupRefusal(settings);
+  if (refusal !== null) {
+    state = "error";
+    message = refusal;
+    url = null;
+    announce();
+    return mcpStatus();
+  }
+
+  /*
+   * The token is made ready but **not** captured: `handle` reads the module
+   * variable per request instead. A closure over the secret meant a setting
+   * could only take effect by restarting, and left a regenerate whose restart
+   * failed still checking against the old one.
+   */
+  await ensureToken(false);
 
   const server = createServer((request, response) => {
-    void handle(request, response, secret);
+    void handle(request, response);
   });
   http = server;
 
@@ -454,13 +500,15 @@ export async function startMcpServer(settings: McpSettings): Promise<McpStatus> 
       announce();
       resolve(mcpStatus());
     });
-    // Loopback only. The address is not a preference: everything about this
-    // server assumes the client is on this machine, and binding anywhere else
-    // would put the editing surface on the network.
-    server.listen(settings.port, "127.0.0.1", () => {
+    /*
+     * Loopback unless somebody typed otherwise, and typing otherwise puts the
+     * editing surface on the network -- which is why the combination with no
+     * token is refused above rather than merely warned about.
+     */
+    server.listen(settings.port, settings.bindAddress, () => {
       const address = server.address();
       const port = typeof address === "object" && address !== null ? address.port : settings.port;
-      url = `http://127.0.0.1:${port}/mcp`;
+      url = `http://${reachableHost(settings.bindAddress)}:${port}/mcp`;
       state = "listening";
       message = null;
       void writeDiscovery();
@@ -470,26 +518,108 @@ export async function startMcpServer(settings: McpSettings): Promise<McpStatus> 
   });
 }
 
+/**
+ * The address to *show*, which is not always the address bound to.
+ *
+ * `0.0.0.0` is every interface, and is not something anybody can connect to:
+ * offered as a URL it is a copyable string that does not work. What is always
+ * true of a server bound to it is that loopback reaches it, so that is what
+ * the pane shows -- and a client elsewhere on the network needs this
+ * machine's own address, which is a thing only its user knows.
+ */
+function reachableHost(address: string): string {
+  if (isWildcardAddress(address)) return "127.0.0.1";
+  const trimmed = address.trim();
+  // A bare IPv6 literal has to be bracketed inside a URL.
+  if (trimmed.includes(":") && !trimmed.startsWith("[")) return `[${trimmed}]`;
+  return trimmed;
+}
+
 /** The port the listener actually got, for the Host check. */
 function boundPort(): number {
   const address = http?.address();
   return typeof address === "object" && address !== null ? address.port : 0;
 }
 
-async function handle(
-  request: IncomingMessage,
-  response: ServerResponse,
-  secret: string,
-): Promise<void> {
+/**
+ * The request body, as far as `MAX_BODY`.
+ *
+ * Read here rather than left to the transport because routing needs it: an
+ * `initialize` is what may open a session, and telling one apart from any other
+ * POST is a question about the payload. `handleRequest` takes the parsed body
+ * back, so nothing is read twice.
+ *
+ * The cap is not decoration. This is a listening socket, and an unbounded read
+ * into memory is the one thing that turns a local convenience into a way to
+ * exhaust the app.
+ */
+const MAX_BODY = 8 * 1024 * 1024;
+
+async function readBody(request: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const piece = chunk as Buffer;
+    size += piece.length;
+    if (size > MAX_BODY) throw new Error(`Body larger than ${MAX_BODY} bytes.`);
+    chunks.push(piece);
+  }
+  if (chunks.length === 0) return undefined;
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+/** Builds a session, and remembers it only once the SDK says it has one. */
+async function openSession(): Promise<StreamableHTTPServerTransport> {
+  const server = buildMcpServer();
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+    /*
+     * Added here and nowhere earlier: a POST that is not an `initialize`, or
+     * one the SDK refuses, must not leave a transport behind in the map.
+     */
+    onsessioninitialized: (id) => {
+      transports.set(id, { transport, mcp: server });
+      announce();
+    },
+    onsessionclosed: (id) => {
+      transports.delete(id);
+      announce();
+    },
+  });
+  /*
+   * `onsessionclosed` is the DELETE, which a well-behaved client sends and a
+   * client that simply goes away does not. Without this second hook the count
+   * in the settings pane only ever grows, and every dead session's `Server`
+   * stays alive with it.
+   */
+  transport.onclose = () => {
+    const id = transport.sessionId;
+    if (id !== undefined) transports.delete(id);
+    void server.close().catch(() => undefined);
+    announce();
+  };
+  await server.connect(transport);
+  return transport;
+}
+
+async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const accepted = acceptsRequest(
     { host: request.headers.host, origin: request.headers.origin },
     boundPort(),
+    bindAddress,
   );
   if (!accepted.ok) {
     deny(response, 403, accepted.refused);
     return;
   }
-  if (!tokenMatches(bearerOf(request), secret)) {
+  /*
+   * Read per request rather than captured when the listener started -- see
+   * `startMcpServer`. The Host and Origin checks above are **not** skipped
+   * with authentication off: they are the rebinding defence, which is about
+   * who may reach the server rather than who may use it, and turning off a
+   * token is not a reason to let a web page in.
+   */
+  if (requireAuth && !tokenMatches(bearerOf(request), token)) {
     deny(response, 401, "A bearer token is required. Settings → MCP has the current one.");
     return;
   }
@@ -497,27 +627,66 @@ async function handle(
     deny(response, 404, "This server speaks MCP at /mcp.");
     return;
   }
-  if (transport === null) {
-    deny(response, 503, "The server is not ready.");
+
+  const header = request.headers["mcp-session-id"];
+  const id = typeof header === "string" ? header : null;
+  const held = id === null ? undefined : transports.get(id);
+  if (held !== undefined) {
+    await held.transport.handleRequest(request, response);
     return;
   }
-  await transport.handleRequest(request, response);
+
+  let body: unknown;
+  try {
+    body = await readBody(request);
+  } catch (err) {
+    deny(response, 400, err instanceof Error ? err.message : String(err));
+    return;
+  }
+
+  // The decision itself is `policy.ts`'s, where it can be checked.
+  const route = routeRequest({ sessionId: id, known: false, isInitialize: isInitializeRequest(body) });
+  if (route.kind === "refused") {
+    deny(response, route.status, route.refused);
+    return;
+  }
+
+  const fresh = await openSession();
+  await fresh.handleRequest(request, response, body);
 }
 
+/**
+ * Stops listening, and **returns**.
+ *
+ * `server.close()` stops new connections and waits for the open ones to end;
+ * it does not end them. An MCP client holds a keep-alive connection and often
+ * an SSE stream, so the callback never came and this promise never settled --
+ * which took `regenerateMcpToken` and the Enabled checkbox down with it, both
+ * of which await this. The token had already been written by then, so the
+ * button looked inert until the app was restarted and the new one appeared.
+ * `closeAllConnections` is the missing half.
+ *
+ * The transports go first, so each client sees its stream end rather than the
+ * socket vanish, and the state is reported before the sockets are cut: a
+ * window that learns nothing is half of what was reported.
+ */
 export async function stopMcpServer(): Promise<McpStatus> {
   const server = http;
   http = null;
-  if (server !== null) {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+  for (const { transport, mcp } of transports.values()) {
+    await transport.close().catch(() => undefined);
+    await mcp.close().catch(() => undefined);
   }
-  await transport?.close().catch(() => undefined);
-  await mcp?.close().catch(() => undefined);
-  transport = null;
-  mcp = null;
-  sessions.clear();
+  transports.clear();
   url = null;
   state = "off";
   message = null;
+  announce();
+  if (server !== null) {
+    const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+    server.closeAllConnections();
+    await closed;
+  }
   await clearDiscovery();
   announce();
   return mcpStatus();

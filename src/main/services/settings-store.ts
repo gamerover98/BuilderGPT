@@ -28,6 +28,8 @@ import {
 } from "../../shared/settings.js";
 import { coerceRecents, forgetRecent, rememberRecent } from "./recent_documents.js";
 import { coerceSettings } from "./settings_coerce.js";
+import { orphanedProfile } from "./legacy_profile.js";
+import { legacyUserDataDir } from "./resources.js";
 import type { RecentDocument } from "../../shared/ipc.js";
 
 interface PersistedFile {
@@ -214,15 +216,52 @@ export async function clearApiKey(provider: Provider): Promise<void> {
   await setApiKey(provider, "");
 }
 
+/**
+ * Whether stored ciphertext can actually be turned back into a key.
+ *
+ * `getApiKey` already answers `""` for all three of absent, no keyring, and
+ * undecryptable -- which is right for a caller about to make a request and
+ * wrong for the pane, which was reporting the *presence of bytes* as a saved
+ * key. That is how "I have set the key" and "Invalid API key" came to be
+ * true at the same time.
+ */
+function decrypts(encoded: string | undefined): boolean {
+  if (!encoded) return false;
+  if (!safeStorage.isEncryptionAvailable()) return false;
+  try {
+    return safeStorage.decryptString(Buffer.from(encoded, "base64")).trim() !== "";
+  } catch {
+    return false;
+  }
+}
+
 export async function getKeyStatus(): Promise<KeyStorageStatus> {
   const data = await load();
   const encryptionAvailable = safeStorage.isEncryptionAvailable();
+  /*
+   * Asked here because this is the answer about *stored keys*, which is the
+   * question the pane is already asking. `null` once this profile has one of
+   * its own -- `orphanedProfile`'s rule -- so the notice cannot outlive its
+   * cause.
+   */
+  const legacyProfile = await orphanedProfile(
+    app.getPath("userData"),
+    legacyUserDataDir(),
+  );
   return {
     encryptionAvailable,
-    keys: PROVIDERS.map((provider) => ({
-      provider,
-      hasKey: memoryKeys.has(provider) || Boolean(data.encryptedKeys[provider]),
-    })),
+    legacyProfile,
+    keys: PROVIDERS.map((provider) => {
+      const stored = data.encryptedKeys[provider];
+      const usable = memoryKeys.has(provider) || decrypts(stored);
+      return {
+        provider,
+        hasKey: usable,
+        // Bytes on disk that yield nothing. Reported rather than folded into
+        // `hasKey: false`, so the pane can say which of the two it is.
+        ...(usable || !stored ? {} : { unreadable: true }),
+      };
+    }),
   };
 }
 

@@ -33,7 +33,13 @@
 import path from "path";
 
 import { type SchematicFormat } from "../../shared/schematic.js";
-import { documentEra, documentVersionName } from "../../shared/mc_versions.js";
+import {
+  MC_VERSION_NAMES,
+  documentEra,
+  documentVersionName,
+  resolveVersionName,
+  versionRangesSentence,
+} from "../../shared/mc_versions.js";
 import { mayDelete, mayReplaceDocument, withinRoot, type Verdict } from "./policy.js";
 import { type DocumentSession } from "../services/session.js";
 
@@ -44,14 +50,24 @@ export interface Lifecycle {
   /** Whether it differs from disk. */
   isDirty(session: DocumentSession): boolean;
   open(filePath: string): Promise<DocumentSession>;
+  /**
+   * `version` is a name the caller has already resolved, never a label and
+   * never absent. It was `string | null`, and `null` reached `dataVersionOf`
+   * as a document with no version tag at all -- the report this came from.
+   */
   create(
     size: { width: number; height: number; length: number },
     format: SchematicFormat,
-    version: string | null,
+    version: string,
   ): Promise<DocumentSession>;
   save(
     session: DocumentSession,
-    options: { filePath: string | null; format?: SchematicFormat },
+    options: {
+      filePath: string | null;
+      format?: SchematicFormat;
+      /** Omitted keeps what the document carries -- `SaveRequest.version`'s rule. */
+      version?: string;
+    },
   ): Promise<{
     filePath: string;
     format: SchematicFormat;
@@ -105,13 +121,25 @@ export interface Lifecycle {
    * snapshotted, and why this is a fork rather than a one-way door.
    */
   restoreVersion(id: string): Promise<DocumentSession | null>;
-  /**
-   * Build a schematic from a sentence, with the app's own model and key.
+  /*
+   * There is deliberately no `generate`.
    *
-   * The key never reaches the caller: this is the app spending the user's
-   * budget on their behalf, which is why the tool says so in its description.
+   * A `generate_schematic` tool lived here and asked the model the *user*
+   * configured in this app to build the schematic -- a second model, on a
+   * second budget, doing what the model driving this connection was already
+   * doing with `run_build_script`. It is the one thing this server exists not
+   * to be: the header above says the whole value is what a harness cannot do
+   * for itself, and calling an LLM is precisely what it can.
+   *
+   * It also made the app's own provider key a precondition for a connection
+   * that has nothing to do with it, so a missing key came back as the
+   * gateway's `Invalid API key.` over a link the reader had just authenticated
+   * to with a bearer token. That was reported as an MCP authentication failure
+   * twice before anyone doubted the tool itself.
+   *
+   * The chat inside the app is untouched: it never had this tool. It generates
+   * through `IPC.generate`, which has its own key gate.
    */
-  generate(prompt: string): Promise<{ filePath: string; blocks: number }>;
 }
 
 export interface LifecycleSpec {
@@ -189,6 +217,30 @@ const DISCARD = {
  * description says what the picture is of, rather than letting a model assume
  * it chose the angle.
  */
+/**
+ * The `version` property every tool that names one shares.
+ *
+ * One object, spread into four schemas, and **built from the table** rather
+ * than written out. That is the fix for the report this came from as much as
+ * the validation is: the only spelling a model could see was the example
+ * `JE_1_20_4` in a hand-written sentence, so asked for 26.2 it sent the label
+ * `"26.2"`, which resolved to nothing and produced a document with no version
+ * at all. An `enum` is what stops a model guessing; deriving it is what stops
+ * the enum itself going stale the way that example did.
+ *
+ * The format decides which of these are legal and JSON Schema cannot say so,
+ * so the sentence names the ranges and `refusalFor` enforces them -- it has a
+ * phrasing per container already.
+ */
+const VERSION_PROPERTY = {
+  type: "string",
+  enum: [...MC_VERSION_NAMES],
+  description:
+    `The Minecraft version, by name (${MC_VERSION_NAMES[0]}) or by label ` +
+    `(${MC_VERSION_NAMES[0].replace(/^JE_/, "").replace(/_/g, ".")}). ` +
+    versionRangesSentence(),
+} as const;
+
 const CAPTURE: LifecycleSpec = {
   name: "capture_viewport",
   description:
@@ -285,14 +337,18 @@ export const LIFECYCLE_SPECS: readonly LifecycleSpec[] = [
           enum: ["sponge3", "sponge2", "mcedit", "litematic"],
           description: "Container format. Defaults to sponge3.",
         },
-        version: {
-          type: "string",
-          description:
-            'Game version name, e.g. "JE_1_20_4". Anything up to 1.12.2 can only be mcedit.',
-        },
+        version: VERSION_PROPERTY,
         ...DISCARD,
       },
-      required: ["width", "height", "length"],
+      /*
+       * Required, exactly as `NewDocumentRequest.version` is on IPC and for the
+       * reason written there: the container and the version are not independent,
+       * so they are chosen together at the start rather than discovered at save
+       * time. Optional here, its absence produced a document with no version tag
+       * and raised nothing -- which is the bug, not a default that needed
+       * choosing better.
+       */
+      required: ["width", "height", "length", "version"],
       additionalProperties: false,
     },
     readOnly: false,
@@ -307,7 +363,19 @@ export const LIFECYCLE_SPECS: readonly LifecycleSpec[] = [
         discardUnsavedChanges?: boolean;
       };
       const format = a.format ?? "sponge3";
-      const version = a.version ?? null;
+      /*
+       * Resolved before anything else looks at it, so a label and a name are
+       * the same request from here on and an unknown string is refused by name
+       * rather than falling through as `null` -- which `dataVersionOf` cannot
+       * tell from 1.8.8's genuine absence of a DataVersion.
+       */
+      const version = resolveVersionName(String(a.version ?? ""));
+      if (version === null) {
+        throw new McpRefusal(
+          `${String(a.version ?? "")} is not a Minecraft version this build knows. ` +
+            `Name one of the versions in this tool's schema, such as ${MC_VERSION_NAMES[0]}.`,
+        );
+      }
       const refusal = host.refusalFor(format, version);
       if (refusal !== null) throw new McpRefusal(refusal);
 
@@ -371,6 +439,13 @@ export const LIFECYCLE_SPECS: readonly LifecycleSpec[] = [
       properties: {
         path: { type: "string" },
         format: { type: "string", enum: ["sponge3", "sponge2", "mcedit", "litematic"] },
+        /*
+         * Optional, and `SaveRequest.version`'s reason for it holds here: left
+         * out means "keep what the document carries", which is what a plain save
+         * wants. Present at all because it was not, so a client that had created
+         * a document could never state its version anywhere.
+         */
+        version: VERSION_PROPERTY,
       },
       required: ["path"],
       additionalProperties: false,
@@ -378,11 +453,25 @@ export const LIFECYCLE_SPECS: readonly LifecycleSpec[] = [
     readOnly: false,
     destructive: false,
     async run(host, args) {
-      const a = args as { path: string; format?: SchematicFormat };
+      const a = args as { path: string; format?: SchematicFormat; version?: string };
       const session = host.session();
       if (session === null) throw new McpRefusal("No schematic is open.");
+      const version = a.version === undefined ? undefined : resolveVersionName(a.version);
+      if (version === null) {
+        throw new McpRefusal(
+          `${String(a.version)} is not a Minecraft version this build knows.`,
+        );
+      }
+      if (version !== undefined) {
+        const refusal = host.refusalFor(a.format ?? session.doc.format, version);
+        if (refusal !== null) throw new McpRefusal(refusal);
+      }
       const target = must(withinRoot(await host.root(), a.path));
-      const result = await host.save(session, { filePath: target, format: a.format });
+      const result = await host.save(session, {
+        filePath: target,
+        format: a.format,
+        ...(version === undefined ? {} : { version }),
+      });
       host.announce(session);
       return {
         filePath: result.filePath,
@@ -458,7 +547,7 @@ export const LIFECYCLE_SPECS: readonly LifecycleSpec[] = [
   {
     name: "list_versions",
     description:
-      "The open schematic's own version history — snapshots of the file, kept beside it and outliving this session.",
+      "The open schematic's own version history — snapshots of the file, kept beside it and outliving this session. Not Minecraft versions: for those, see the version argument on create_document, or set_document_version to change the one this schematic is for.",
     schema: { type: "object", properties: {}, additionalProperties: false },
     readOnly: true,
     destructive: false,
@@ -507,27 +596,6 @@ export const LIFECYCLE_SPECS: readonly LifecycleSpec[] = [
       }
       host.announce(session);
       return describe(session, true);
-    },
-  },
-
-  {
-    name: "generate_schematic",
-    description:
-      "Build a whole schematic from a description, using the model the user configured in this app — not you. Costs the user's own API budget, so prefer building it yourself with the block tools unless they asked for this specifically. The result is opened.",
-    schema: {
-      type: "object",
-      properties: { prompt: { type: "string", description: "What to build." } },
-      required: ["prompt"],
-      additionalProperties: false,
-    },
-    readOnly: false,
-    destructive: false,
-    async run(host, args) {
-      const { prompt } = args as { prompt: string };
-      if (String(prompt ?? "").trim() === "") {
-        throw new McpRefusal("Say what to build.");
-      }
-      return await host.generate(prompt);
     },
   },
 

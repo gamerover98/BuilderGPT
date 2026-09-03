@@ -47,6 +47,23 @@ table**, not written beside it. That is the point of vendoring them: refreshing
 the data moves the writer, and there is no second copy of 32,768 anywhere to
 drift.
 
+## What reads this downstream
+
+Two things beyond the writer, and one of them is new.
+
+`MCFUNCTION_MIN_DATA_VERSION` was, for a long time, read by **the tests and
+nothing else**: `services/convert.ts` skipped its version refusal for
+`.mcfunction` outright, so converting a 1.12.2 schematic produced commands
+naming flattened blocks that version has never had -- a file that runs, places
+almost nothing, and reports no error. `mcfunctionCanCarry` and
+`mcfunctionRefusal` beside the constant are what enforce it now, and
+`tests/formats.ts` states it from both sides.
+
+And `MCFUNCTION_MIN_LABEL` reaches an MCP client, through
+`versionRangesSentence()`: the floor this file decides is the sentence a model
+reads when it picks a version. Read, not copied -- moving the label moves the
+sentence, and nothing under `src/main/mcp/` needs touching.
+
 ## Doing it
 
 1. **Read `resources/command_syntax.json`** for what is known and when it was

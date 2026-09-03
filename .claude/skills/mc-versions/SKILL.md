@@ -51,6 +51,34 @@ has no entry yet" is a different situation from "two sources, different
 numbers", and the second one must never be resolved by picking a favourite —
 report both and stop.
 
+## What reads this downstream
+
+The three files above are not the end of it, and this section exists because
+believing they were is how the app came to offer 26.2 in its picker while
+every schematic an MCP client created came out 1.20.4.
+
+**Most of it needs nothing.** The MCP tools that name a version --
+`create_document`, `save_document_as`, `set_document_version`,
+`generate_schematic`, `convert_schematic` -- build their JSON Schema `enum`
+from `MC_VERSION_NAMES` and their descriptions from `versionRangesSentence()`,
+so a release added here appears on the wire with no edit anywhere near
+`src/main/mcp/`. That is deliberate and `tests/mcp.ts` enforces it: a
+hand-written enum, or a version spelled out in a description, fails by name.
+
+**Two things are decisions and cannot be derived**, so they are the two to
+look at:
+
+- **`DEFAULT_SETTINGS.version` in `src/shared/settings.ts`.** What a new
+  install generates for, and what the New and Save As dialogs fall back to.
+  It is written out rather than read from the table because a default is a
+  statement to a person -- the same argument that keeps this app's version
+  bump manual -- so adding a release does *not* move it and moving it is a
+  choice. It sat at `JE_1_20_4` through fifteen newer releases before anybody
+  noticed. `tests/services.ts` now fails until it is decided either way.
+- **The era.** A new release is `flat`, which the step below already says;
+  what follows from it is that `versionsFor` will offer the release for every
+  container. Nothing else has to be told.
+
 ## Doing it
 
 1. **Read `resources/mc_versions.json`** to see what is already known and when
@@ -96,7 +124,19 @@ report both and stop.
    That suite is where versions are used for real — it checks the era rule in
    both directions, and that the generator's table is exactly the flat era
    rather than "everything with a number". The two are different sets: 1.12.2
-   has a DataVersion of 1343 and still cannot be written as Sponge.
+   has a DataVersion of 1343 and still cannot be written as Sponge. It also
+   walks the whole table requiring every row to resolve from its **label** as
+   well as its name, which is the half a row added by hand tends to miss.
+
+   ```bash
+   npx tsx tests/mcp.ts
+   ```
+
+   And that one is the MCP surface: it requires every version `enum` on the
+   wire to be this table exactly, and refuses any tool description that spells
+   out a version other than the newest. Both fail loudly rather than drifting,
+   which is the point — a stale `JE_1_20_4` in a schema was the only spelling
+   a model could see, and it was fifteen releases out of date.
 
 8. **Show the user the sources** before treating anything as settled. A number
    with no provenance is indistinguishable from an invented one, and that is the

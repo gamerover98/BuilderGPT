@@ -36,6 +36,7 @@ import {
   type Theme,
   type UiSettings,
   PANEL_SIZE,
+  bindAddressRefusal,
 } from "../../shared/settings.js";
 
 function isProvider(value: unknown): value is Provider {
@@ -217,6 +218,24 @@ export function coerceMcp(raw: unknown): McpSettings {
         : DEFAULT_MCP_SETTINGS.port,
     root: typeof source.root === "string" ? source.root : DEFAULT_MCP_SETTINGS.root,
     allowDelete: source.allowDelete === true,
+    /*
+     * `!== false`, where the two lines above are `=== true`. Not an
+     * inconsistency: it is the same rule -- read towards the safe answer --
+     * applied to the one field whose safe answer is the other one. `enabled`
+     * and `allowDelete` are off by default, so anything that is not exactly
+     * `true` means off; authentication is **on** by default, so anything that
+     * is not exactly `false` means on.
+     *
+     * Written the other way round, every `settings.json` in existence -- none
+     * of which carries this key -- would come back with authentication
+     * disabled, silently, on the next launch.
+     */
+    requireAuth: source.requireAuth !== false,
+    bindAddress:
+      typeof source.bindAddress === "string" &&
+      bindAddressRefusal(source.bindAddress) === null
+        ? source.bindAddress.trim()
+        : DEFAULT_MCP_SETTINGS.bindAddress,
   };
 }
 

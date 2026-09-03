@@ -80,10 +80,12 @@ import {
   type LegacyIndex,
 } from "../../shared/legacy_ids.js";
 import {
+  MC_VERSION_NAMES,
   documentEra,
   documentVersionName,
   mcVersion,
   versionNameOf,
+  versionRangesSentence,
 } from "../../shared/mc_versions.js";
 import { versionRangeOf } from "../../shared/block_versions.js";
 import { paletteEntryCacheKey, type PaletteEntry } from "../pipeline/types.js";
@@ -405,6 +407,46 @@ function resolveRegion(context: ToolContext, args: Partial<RegionArgs>): Resolve
  * Async because the table is read from disk. It is memoised, so this costs a
  * map lookup after the first call in a session.
  */
+/**
+ * How many names one `list_blocks` answer may carry.
+ *
+ * The whole set is around nine hundred ids, which is a wall of tokens for a
+ * question that is almost always narrower than that. The cap is on the *answer*
+ * and the count of matches is reported beside it, so nothing is hidden -- see
+ * the note in the tool.
+ */
+const MAX_LISTED_BLOCKS = 400;
+
+/** `minecraft:oak_stairs` -> `oak_stairs`. */
+function bareBlockName(id: string): string {
+  return id.includes(":") ? (id.split(":").pop() ?? id) : id;
+}
+
+/**
+ * The names this document can actually hold.
+ *
+ * **`checkBlockAllowed` read backwards**, and it has to stay that way: that
+ * function asks the allowlist, and then the pre-Flattening table when the
+ * document is legacy. Both questions, in that order, from the same inputs --
+ * anything else is a second opinion, and a list that disagrees with the verb
+ * that places blocks is worse than no list.
+ *
+ * Air is left out for `get_palette`'s reason: it is a real id everywhere else,
+ * and it is not a thing anybody builds *with*.
+ */
+async function placeableNames(context: ToolContext): Promise<ReadonlySet<string>> {
+  const allowed = new Set(
+    [...context.allowedBlocks].filter((name) => name !== "minecraft:air"),
+  );
+  const { format, dataVersion } = context.doc;
+  if (documentEra(format, dataVersion) !== "legacy") return allowed;
+  const tablePath = context.legacyBlocksPath;
+  // No table, no claim -- `checkBlockAllowed`'s own words. Narrowing the list
+  // because a resource is missing would hide blocks that would place fine.
+  if (tablePath === undefined || tablePath === null) return allowed;
+  const names = legacyBlockNames(await loadLegacyBlockTable(tablePath));
+  return new Set([...allowed].filter((name) => names.has(name)));
+}
 async function checkBlockAllowed(context: ToolContext, entry: PaletteEntry): Promise<void> {
   if (!context.allowedBlocks.has(entry.namespacedName)) {
     // Named, not silently swapped for stone: the model can correct a typo or
@@ -506,7 +548,22 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
           type: "string",
           enum: ["sponge3", "sponge2", "mcedit", "litematic", "mcfunction"],
         },
-        version: { type: "string" },
+        /*
+         * Enumerated and described, and it was neither -- a bare
+         * `{ type: "string" }`, so a model had nothing at all to go on. The
+         * list is built from the table so a release added tomorrow arrives
+         * here by itself; a hand-written one would go stale exactly as the
+         * `JE_1_20_4` example in `create_document` did.
+         */
+        version: {
+          type: "string",
+          enum: [...MC_VERSION_NAMES],
+          description:
+            `Which Minecraft version to stamp on the result, by name ` +
+            `(${MC_VERSION_NAMES[0]}) or by label. Left out, the source file's own ` +
+            `version is kept. ` +
+            versionRangesSentence(),
+        },
         namespace: { type: "string" },
       },
       required: ["source", "target", "format"],
@@ -596,6 +653,105 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
     },
   },
 
+  {
+    /*
+     * What may be placed here, which nothing could ask before.
+     *
+     * ## Why it exists
+     *
+     * The app's own generation splices the whole block list into its prompt, so
+     * the model it drives has always known the answer. A model driving this
+     * table had no way to get it: `describe_block` answers about ids you already
+     * have, `get_palette` lists what the schematic already uses, and nothing
+     * enumerated. So a model building with `run_build_script` guessed names and
+     * found out by refusal -- one round trip per guess, and a wrong guess about
+     * a *family* (`minecraft:jungle_hanging_sign`) costs several.
+     *
+     * This arrived when `generate_schematic` left. That tool handed the whole
+     * job to the app's own model, which is the thing this server is explicitly
+     * not for; what it was genuinely carrying was this list, and this is that
+     * without the second model or the second API key.
+     *
+     * ## It must be the inverse of `checkBlockAllowed`, not a second opinion
+     *
+     * The one rule. That function accepts a block if it is in `allowedBlocks`
+     * **and**, on a pre-Flattening document, in `legacy_blocks.json` -- so this
+     * asks both, in the same order, from the same inputs. A list that offered
+     * something `set_block` then refused would be worse than no list at all: it
+     * would send a model to build with names that cannot land, confidently.
+     *
+     * Which is why it needs a document rather than sitting in `NO_DOCUMENT`
+     * beside `describe_block`. Without one there is no era, and the legacy
+     * answer -- 216 names instead of nine hundred -- is half of what this is
+     * for.
+     */
+    name: "list_blocks",
+    description:
+      "Every block this schematic can hold, which is not every block in the game: a pre-Flattening schematic has a few hundred. Use `contains` to narrow it — \"stairs\", \"copper\", \"jungle\" — rather than pulling the whole list. Names only; describe_block gives a block's states.",
+    schema: {
+      type: "object",
+      properties: {
+        contains: {
+          type: "string",
+          description:
+            "Substring of the block name, matched without the minecraft: prefix. Left out, the whole list up to `limit`.",
+        },
+        limit: {
+          type: "integer",
+          description:
+            `At most ${MAX_LISTED_BLOCKS} names come back, and 'total' reports how many matched.`,
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(context, args: { contains?: string; limit?: number }, id) {
+      /*
+       * Stripped from the *query*, not matched against the id.
+       *
+       * `block_search.ts` had this exact bug and CLAUDE.md tells the story: every
+       * block here is `minecraft:something`, so matching the namespaced id makes
+       * every letter of `minecraft:` return the entire registry -- measured at
+       * 1197 for `a`, `m`, `e`, `c`, `r` and `t` each. One place decides, and the
+       * namespace cannot come back as a way of matching everything.
+       */
+      const query = String(args?.contains ?? "").trim().toLowerCase().replace(/^minecraft:/, "");
+
+      const placeable = await placeableNames(context);
+      const matches = [...placeable]
+        .filter((name) => query === "" || bareBlockName(name).includes(query))
+        .sort();
+
+      const asked = Number(args?.limit);
+      const limit = Number.isFinite(asked) && asked > 0
+        ? Math.min(Math.trunc(asked), MAX_LISTED_BLOCKS)
+        : MAX_LISTED_BLOCKS;
+      const shown = matches.slice(0, limit);
+
+      step(
+        context,
+        "list_blocks",
+        query === ""
+          ? `listing ${matches.length} placeable blocks`
+          : `${matches.length} blocks matching ${query}`,
+        id,
+      );
+
+      /*
+       * Both numbers, always. `ROW_LIMIT`'s rule in the block picker: a limit
+       * bounds what comes back, never what was found, and a list truncated in
+       * silence is how a model concludes a block does not exist. `total` is the
+       * unbounded count and `blocks` is the bounded list.
+       */
+      return {
+        blocks: shown,
+        total: matches.length,
+        shown: shown.length,
+        ...(shown.length < matches.length
+          ? { note: `Narrow it with \`contains\`, or raise \`limit\` to at most ${MAX_LISTED_BLOCKS}.` }
+          : {}),
+      };
+    },
+  },
   {
     name: "get_palette",
     description:

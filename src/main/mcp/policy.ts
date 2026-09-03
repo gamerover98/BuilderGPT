@@ -20,6 +20,12 @@
 
 import path from "path";
 
+import {
+  bindAddressRefusal,
+  isLoopbackAddress,
+  isWildcardAddress,
+} from "../../shared/settings.js";
+
 export { connectCommand } from "../../shared/mcp.js";
 
 /** Why a request was turned down, in words meant for a model to act on. */
@@ -195,18 +201,171 @@ export function chooseToken(stored: string | null, regenerate: boolean, fresh: s
  * the normal case here. A browser always sends one, which is what makes
  * refusing every value that is not ours the right rule rather than a guess.
  */
+/**
+ * Whether a settings change has to reach the listener, or only the disk.
+ *
+ * For a long time nothing but `mcpSetEnabled` reached it at all, so the port,
+ * the bind address and whether a token is required were saved and then ignored
+ * until the next launch. Turning authentication off and on again left the pane
+ * describing one server and the socket being another -- and the token row,
+ * which keys on that, gone with no way to bring it back.
+ *
+ * **Only the three the listener is built from.** `root` and `allowDelete` are
+ * asked at the moment of each call, deliberately -- revoking deletion has to
+ * revoke it now, not at the next restart -- so restarting for those would drop
+ * every session and buy nothing.
+ */
+export function servingChanged(
+  before: { port: number; bindAddress: string; requireAuth: boolean },
+  after: { port: number; bindAddress: string; requireAuth: boolean },
+): boolean {
+  return (
+    before.port !== after.port ||
+    before.bindAddress !== after.bindAddress ||
+    before.requireAuth !== after.requireAuth
+  );
+}
+/**
+ * Which transport a request belongs to.
+ *
+ * A plain function here rather than a branch inside `server.ts`'s `handle`, for
+ * the reason `selection_drag.ts` and `mcp_status.ts` are plain modules: the
+ * server itself imports `electron` and `node:http` and cannot be loaded by the
+ * suites at all, and this is the part that was wrong.
+ *
+ * What was wrong: the server held **one** transport for its whole life. The SDK
+ * refuses a second `initialize` on an already-initialised transport, and answers
+ * 404 `Session not found` to any session id but its own -- so a client that
+ * reloaded could not get back in, and a second client could not connect at all.
+ * Both were reported.
+ */
+export type Route =
+  | { kind: "existing" }
+  | { kind: "new" }
+  | { kind: "refused"; status: number; refused: string };
+
+export function routeRequest(request: {
+  /** The `Mcp-Session-Id` header, if the client sent one. */
+  sessionId: string | null;
+  /** Whether this server currently holds that session. */
+  known: boolean;
+  /** Whether the body is an `initialize`, which is the only thing that opens one. */
+  isInitialize: boolean;
+}): Route {
+  if (request.sessionId !== null && request.known) return { kind: "existing" };
+  /*
+   * A session id this server never issued is **not** a reason to make one.
+   *
+   * The client is holding a session that has been forgotten -- across a restart,
+   * most likely -- and handing back a different session under its id would look
+   * like success and then behave like a machine with amnesia. 404 is also what
+   * the specification asks for, and what a client knows how to recover from.
+   */
+  if (request.sessionId !== null) {
+    return {
+      kind: "refused",
+      status: 404,
+      refused: `No session ${request.sessionId}. Send initialize to start a new one.`,
+    };
+  }
+  /*
+   * No id and not an initialize. Refused rather than opened, or every malformed
+   * POST would build a transport and a `Server` that nothing ever closes.
+   */
+  if (!request.isInitialize) {
+    return {
+      kind: "refused",
+      status: 400,
+      refused: "No session. Send initialize first, or set Mcp-Session-Id.",
+    };
+  }
+  return { kind: "new" };
+}
+/** `host:port` split from the right, so an IPv6 literal's own colons survive. */
+function hostName(header: string): { host: string; port: number } | null {
+  if (header === "") return null;
+  const bracket = header.lastIndexOf("]");
+  const colon = header.lastIndexOf(":");
+  if (colon === -1 || colon < bracket) return null;
+  const port = Number(header.slice(colon + 1));
+  if (!Number.isInteger(port)) return null;
+  const host = header.slice(0, colon).replace(/^\[|\]$/g, "");
+  return { host, port };
+}
+
+/** An IP literal rather than a name — the distinction rebinding turns on. */
+function isNumericHost(host: string): boolean {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    return host.split(".").every((part) => Number(part) <= 255);
+  }
+  return /^[0-9a-f:]+$/.test(host) && host.includes(":");
+}
+
+/**
+ * Why this configuration will not be served at all, or `null`.
+ *
+ * The one combination that is refused rather than warned about: no token, and
+ * bound past loopback. Each half alone is defensible -- on loopback the token
+ * is a convenience rather than the boundary, and off loopback the token *is*
+ * the access control -- but together they are an anonymous write endpoint on
+ * somebody's files, reachable by anything that can route to this machine.
+ *
+ * Refused here rather than left to the user's judgement because the two
+ * settings are in different parts of the pane and neither one says what the
+ * other implies.
+ */
+export function startupRefusal(settings: {
+  requireAuth: boolean;
+  bindAddress: string;
+}): string | null {
+  const address = bindAddressRefusal(settings.bindAddress);
+  if (address !== null) return address;
+  if (settings.requireAuth || isLoopbackAddress(settings.bindAddress)) return null;
+  return (
+    `Listening on ${settings.bindAddress} without a token would let anything that can ` +
+    `reach this machine read, write and save your schematics. Either put the token back ` +
+    `on, or bind to 127.0.0.1 so only this machine can connect.`
+  );
+}
 export function acceptsRequest(
   headers: { host?: string; origin?: string },
   port: number,
+  /**
+   * The address the listener is bound to. Loopback by default, which is what
+   * it was before there was a setting -- so the two existing call sites and
+   * every check written against them keep meaning what they meant.
+   */
+  bindAddress: string = "127.0.0.1",
 ): Verdict<null> {
   const host = (headers.host ?? "").trim().toLowerCase();
-  const allowed = new Set([
-    `127.0.0.1:${port}`,
-    `localhost:${port}`,
-    `[::1]:${port}`,
-  ]);
-  if (!allowed.has(host)) {
+  const named = hostName(host);
+  if (named === null || named.port !== port) {
     return refuse(`Host ${headers.host ?? "(none)"} is not this server.`);
+  }
+  /*
+   * Loopback is always allowed: whatever this is bound to, it is still
+   * reachable from the machine it runs on, and that is the ordinary case.
+   */
+  const localhost = new Set(["127.0.0.1", "localhost", "::1"]);
+  const bound = bindAddress.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  if (!localhost.has(named.host)) {
+    if (isWildcardAddress(bindAddress)) {
+      /*
+       * Bound to every interface, so which address a client arrived on is not
+       * something this can know -- but a **name** still must not be served.
+       * That is the whole of the rebinding defence: the attack is a domain the
+       * attacker controls resolving to this machine, and a domain is a name.
+       * An IP literal cannot be rebound, because there is nothing to resolve.
+       */
+      if (!isNumericHost(named.host)) {
+        return refuse(
+          `Host ${headers.host ?? "(none)"} is a name. This server answers to its own ` +
+            `address, so that a page on the web cannot reach it by pointing a domain here.`,
+        );
+      }
+    } else if (named.host !== bound) {
+      return refuse(`Host ${headers.host ?? "(none)"} is not this server.`);
+    }
   }
   const origin = headers.origin;
   if (origin !== undefined && origin !== "" && origin !== "null") {

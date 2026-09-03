@@ -73,7 +73,16 @@ async function discover() {
     );
   }
   const parsed = JSON.parse(raw);
-  if (typeof parsed.url !== "string" || typeof parsed.token !== "string") {
+  /*
+   * `token` may be `null`: the app can be told to serve without one. Requiring
+   * a string here meant that turning authentication off left this bridge
+   * refusing to start, with a message about the file being malformed -- which
+   * it is not.
+   */
+  if (typeof parsed.url !== "string") {
+    throw new Error(`${file} does not look like a discovery file this bridge understands.`);
+  }
+  if (parsed.token !== null && typeof parsed.token !== "string") {
     throw new Error(`${file} does not look like a discovery file this bridge understands.`);
   }
   return parsed;
@@ -134,8 +143,11 @@ async function main() {
       const headers = {
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
-        authorization: `Bearer ${token}`,
       };
+      // Omitted rather than sent empty: `Bearer ` with nothing after it is a
+      // credential the server would compare and reject, which reads as a wrong
+      // token rather than as no token being wanted.
+      if (token !== null) headers.authorization = `Bearer ${token}`;
       if (sessionId !== null) headers["mcp-session-id"] = sessionId;
 
       const response = await fetch(url, { method: "POST", headers, body: JSON.stringify(message) });

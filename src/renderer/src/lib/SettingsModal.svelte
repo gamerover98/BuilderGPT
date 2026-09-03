@@ -38,6 +38,10 @@
   import { t, tn } from "./i18n.svelte.js";
   import type { McpActivity, McpStatus } from "../../../shared/ipc.js";
   import { dotColor, dotFor, maskToken } from "./mcp_status.js";
+import {
+  bindAddressRefusal,
+  isLoopbackAddress,
+} from "../../../shared/settings.js";
   import { bridgeCommand, connectCommand } from "../../../shared/mcp.js";
   import { api } from "./bridge.svelte.js";
 
@@ -70,6 +74,7 @@
     defaultOutputDir: string;
     onpickoutputdir: () => void;
     onrevealoutputdir: () => void;
+  onrevealpath: (target: string) => void;
     busy: boolean;
     onclose: () => void;
     onchange: (patch: Partial<Settings>) => void;
@@ -111,6 +116,7 @@
     defaultOutputDir,
     onpickoutputdir,
     onrevealoutputdir,
+  onrevealpath,
     busy,
     onclose,
     onchange,
@@ -180,8 +186,14 @@
     copyTimer = setTimeout(() => (copied = null), 1500);
   }
 
+  /*
+   * The token is no longer required for there to be a command: with
+   * authentication off there is a perfectly good one, it simply carries no
+   * `--header`. Gating on the token emptied this field in the one
+   * configuration where somebody most needs to see what they are serving.
+   */
   const command = $derived(
-    mcpStatus?.url && mcpStatus.token ? connectCommand(mcpStatus.url, mcpStatus.token) : "",
+    mcpStatus?.url ? connectCommand(mcpStatus.url, mcpStatus.token) : "",
   );
   /*
    * The same, for a client that will not speak HTTP.
@@ -192,6 +204,15 @@
    * install directory that nobody could be expected to find.
    */
   const bridge = $derived(mcpStatus?.bridge ? bridgeCommand(mcpStatus.bridge) : "");
+
+  /*
+   * The same rules main enforces, mirrored rather than reinvented -- the
+   * arrangement `openCodeModelRequiresKey` and the era rule already have. A
+   * renderer deciding this for itself would be a second answer to a question
+   * that has one, and the two would drift.
+   */
+  const bindProblem = $derived(bindAddressRefusal(settings.mcp.bindAddress));
+  const onLoopback = $derived(isLoopbackAddress(settings.mcp.bindAddress));
 
   /*
    * The state in words.
@@ -209,6 +230,10 @@
         return tn("mcp.clients", mcpStatus?.clients ?? 0);
       case "listening":
         return t("mcp.stateListening");
+      // Said in words as well as painted on the dot: a colour only means
+      // something to somebody who already knows what it means.
+      case "unauthenticated":
+        return t("mcp.stateUnauthenticated");
       case "error":
         return mcpStatus?.message ?? t("mcp.stateError");
       case "starting":
@@ -745,6 +770,21 @@
             </p>
           </div>
 
+          <!--
+            A line of its own rather than a clause inside the state.
+
+            It used to be the *label* of the `active` state, which meant the
+            unauthenticated state displaced it -- a warning arrived and the
+            count silently left. Two facts, two lines: what the server is doing,
+            and how many clients are on it.
+          -->
+          {#if mcpStatus !== null && mcpStatus.state === "listening"}
+            <div class="field">
+              <span class="label">{t("mcp.clients")}</span>
+              <p class="state">{tn("mcp.clients", mcpStatus.clients)}</p>
+            </div>
+          {/if}
+
           {#if mcpStatus?.url}
             <div class="field">
               <label for="mcp-url">{t("mcp.url")}</label>
@@ -756,6 +796,17 @@
               </div>
             </div>
 
+            <!--
+              Shown from the **setting**, not from the status.
+
+              This is the pane where the token is configured, and the intent is
+              what is being configured: tick the box and you need the string
+              immediately, whatever the listener has caught up to. Keyed on the
+              status it vanished the moment authentication was turned off and
+              did not come back when it was turned on again, because nothing
+              restarted the listener -- the dot is where reality belongs.
+            -->
+            {#if settings.mcp.requireAuth}
             <div class="field">
               <label for="mcp-token">{t("mcp.token")}</label>
               <div class="pick-row">
@@ -764,16 +815,40 @@
                   readonly
                   value={revealed ? (mcpStatus.token ?? "") : maskToken(mcpStatus.token)}
                 />
-                <button onclick={() => (revealed = !revealed)}>
-                  {revealed ? t("mcp.hide") : t("mcp.reveal")}
+                <!--
+                  Icons, with the words in `title` and `aria-label`: a glyph is
+                  not a label, and three of them in a row would otherwise be
+                  three buttons nobody can tell apart from a screen reader.
+                -->
+                <button
+                  class="glyph"
+                  onclick={() => (revealed = !revealed)}
+                  title={revealed ? t("mcp.hide") : t("mcp.reveal")}
+                  aria-label={revealed ? t("mcp.hide") : t("mcp.reveal")}
+                >
+                  {revealed ? "🙈" : "👁"}
                 </button>
-                <button onclick={() => copy("token", mcpStatus?.token ?? "")}>
-                  {copied === "token" ? t("mcp.copied") : t("mcp.copy")}
+                <button
+                  class="glyph"
+                  onclick={() => copy("token", mcpStatus?.token ?? "")}
+                  title={copied === "token" ? t("mcp.copied") : t("mcp.copy")}
+                  aria-label={t("mcp.copy")}
+                >
+                  {copied === "token" ? "✅" : "📋"}
                 </button>
-                <button onclick={onmcpregenerate} disabled={busy}>{t("mcp.regenerate")}</button>
+                <button
+                  class="glyph"
+                  onclick={onmcpregenerate}
+                  disabled={busy}
+                  title={t("mcp.regenerate")}
+                  aria-label={t("mcp.regenerate")}
+                >
+                  🔄
+                </button>
               </div>
               <p class="hint">{t("mcp.tokenHint")}</p>
             </div>
+            {/if}
 
             <div class="field">
               <label for="mcp-command">{t("mcp.command")}</label>
@@ -813,6 +888,42 @@
             />
             <p class="hint">{t("mcp.portHint")}</p>
           </div>
+
+          <div class="field">
+            <label for="mcp-bind">{t("mcp.bindAddress")}</label>
+            <input
+              id="mcp-bind"
+              value={settings.mcp.bindAddress}
+              disabled={busy}
+              onchange={(event) =>
+                onchange({ mcp: { ...settings.mcp, bindAddress: event.currentTarget.value } })}
+            />
+            {#if bindProblem !== null}
+              <p class="hint bad">{bindProblem}</p>
+            {:else}
+              <p class="hint">{t("mcp.bindAddressHint")}</p>
+            {/if}
+          </div>
+
+          <!--
+            Off is offered on loopback only. The two together are an anonymous
+            write endpoint on somebody's files over the network, and main
+            refuses to start in that state -- so the box is disabled rather
+            than being a way to arrive at a server that will not run.
+          -->
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={settings.mcp.requireAuth}
+              disabled={busy || !onLoopback}
+              onchange={(event) =>
+                onchange({ mcp: { ...settings.mcp, requireAuth: event.currentTarget.checked } })}
+            />
+            {t("mcp.requireAuth")}
+          </label>
+          <p class="hint" class:warn={!settings.mcp.requireAuth}>
+            {t("mcp.requireAuthHint")}
+          </p>
 
           <div class="field">
             <label for="mcp-root">{t("mcp.root")}</label>
@@ -871,7 +982,7 @@
             {/if}
           </div>
         {:else}
-          <ApiKeysSection {settings} {keyStatus} {onchange} {onsavekey} {onclearkey} />
+          <ApiKeysSection {settings} {keyStatus} {onchange} {onsavekey} {onclearkey} {onrevealpath} />
         {/if}
       </div>
 
@@ -961,6 +1072,17 @@
     gap: 8px;
   }
 
+  /* Square, and never the thing that grows when the row does -- the input is.
+     `line-height: 1` because an emoji's own box is taller than the text
+     beside it and would set the height of the whole row. */
+  .pick-row button.glyph {
+    flex: none;
+    width: 32px;
+    padding: 0;
+    line-height: 1;
+    font-size: 14px;
+  }
+
   /* A label for a row that is read, not edited -- the status and the activity
      list have no control to be the `for` of. */
   .label {
@@ -1024,6 +1146,17 @@
   .activity .tag {
     flex: none;
     color: var(--danger);
+  }
+
+  /* A refused value, and a permitted one worth knowing about. Two colours
+     because they are two different things: an address that cannot be bound
+     is a mistake, and a server with no token is a decision. */
+  .hint.bad {
+    color: var(--danger);
+  }
+
+  .hint.warn {
+    color: var(--warn);
   }
 
   .activity li.failed .tool {

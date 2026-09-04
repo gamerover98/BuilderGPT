@@ -313,6 +313,15 @@ export const en = {
   "gizmo.mirror.x": "Mirror east to west, through the pivot",
   "gizmo.mirror.y": "Flip top to bottom, through the pivot",
   "gizmo.mirror.z": "Mirror north to south, through the pivot",
+  "gizmo.copy": "Copy",
+  "gizmo.copy.hint":
+    "Take the selection to the clipboard, and leave a ghost of it where a paste would land",
+  "gizmo.paste": "Paste",
+  "gizmo.paste.hint": "Write the clipboard in at the selection's corner",
+  "gizmo.skipEmpty": "Keep what is under it",
+  "gizmo.skipEmpty.hint":
+    "Leave {block} where it falls, so a paste does not stamp empty space over what is already there",
+  "gizmo.skipEmpty.air": "Empty space here is air, which a paste never writes",
   "gizmo.resetPivot": "Centre pivot",
   "gizmo.resetPivotHint": "Put the pivot back in the middle of the selection",
   "selection.size": "{width}×{height}×{length}",

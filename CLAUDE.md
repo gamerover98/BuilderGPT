@@ -2350,6 +2350,43 @@ it is — it is what lets `moveRegion` compose `pasteClipboard` with no bounds
 arithmetic of its own, and what a refusal relies on never reaching — and
 `pasteSelection` decides in front of it.
 
+**And the box it grows to is what actually lands, not the clipboard's box.**
+A clipboard holds only the cells that carry something, and `keepUnder` takes
+more of them out again, so growing to the box would make room for cells that
+will never be written — a resize nobody asked for and would have to undo,
+which is `replace`'s stated reason for not growing at all. `includeAir` is the
+exception rather than an oversight: it clears the destination box first, so
+under it the box genuinely is what lands.
+
+**The gizmo's bar carries copy and paste, because the stamp made them a
+loop.** Two one-off commands became «copy, carry the box, paste, carry it
+again», which is worth having under the pointer rather than only on the
+keyboard. Cut is deliberately not there: it is destructive and happens once,
+so it is not part of that loop, and Ctrl+X still does it.
+
+**The third control is WorldEdit's `//paste -a`, for the half this app did not
+already do.** Air is never stored in a clipboard — `copyRegion` keeps only the
+cells that carry something — so a paste has never written air. The empty space
+block is a different matter: with `barrier` or `water` chosen, those cells are
+real palette entries, they travel in the copy, and a paste stamps them over
+whatever was standing at the destination. `PasteOptions.keepUnder` is the
+answer, and it is a **pattern** — `matchesBlockPattern`, for that function's
+own stated reason: the modal's preset is a bare `minecraft:barrier` and a
+barrier out of a file is `minecraft:barrier[waterlogged=false]`, so an exact
+comparison would skip neither spelling and the checkbox would do nothing on
+any real document.
+
+The boolean crosses the wire and the block does not. `PasteRequest.skipEmpty`
+is the wish; *which* block it means is the session's, resolved in
+`pasteSelection` — `EditOptions.voidBlock`'s arrangement reached from the
+other side.
+
+**It is shown disabled and pressed where empty space is air**, rather than
+hidden. Air is the default, so hiding it would mean most people never learn
+the control exists — and it is *true* there: a paste really does leave what is
+under it. Same reason the impossible versions are shown disabled rather than
+filtered out.
+
 **Scale is the least useful of the four modes, and it reports rather than
 refuses.** Whole factors only, because anything else is a build with a different
 number of blocks in every row. Multiplying is exact -- one block becomes n^3 of

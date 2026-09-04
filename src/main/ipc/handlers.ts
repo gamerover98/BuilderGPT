@@ -1579,6 +1579,7 @@ ${report.stack}`),
       const changed = pasteSelection(session, request, {
         ...(await editOptionsFor(session)),
         includeAir: request.includeAir,
+        skipEmpty: request.skipEmpty === true,
       });
       return { ok: true, changed, state: shellState(session) };
     } catch (err) {

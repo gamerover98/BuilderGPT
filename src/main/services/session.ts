@@ -1631,22 +1631,22 @@ export class EmptyClipboardError extends Error {
 export function pasteSelection(
   session: DocumentSession,
   at: { x: number; y: number; z: number },
-  options: PasteOptions & RegionEditOptions = {},
+  options: RegionEditOptions & { includeAir?: boolean; skipEmpty?: boolean } = {},
 ): number {
   if (clipboard === null) {
     throw new EmptyClipboardError();
   }
   const held = clipboard;
   const { doc, history } = session;
-  const landing: Region = {
-    minX: at.x,
-    minY: at.y,
-    minZ: at.z,
-    maxX: at.x + held.width - 1,
-    maxY: at.y + held.height - 1,
-    maxZ: at.z + held.length - 1,
-  };
-  const growth = growthFor(doc, landing, options.autoGrow !== false);
+  /*
+   * The boolean is the renderer's -- "leave the empty space where it falls" --
+   * and *which* block that is is the session's, resolved here. The renderer
+   * says the intent and main supplies the fact, which is `EditOptions.voidBlock`
+   * arriving at the same arrangement from the other side.
+   */
+  const keepUnder = options.skipEmpty === true ? emptyEntry(options.voidBlock) : null;
+  const landing = pasteLanding(held, at, options.includeAir === true, keepUnder);
+  const growth = landing === null ? null : growthFor(doc, landing, options.autoGrow !== false);
   return runTransaction(doc, history, "Paste", (tx) => {
     // The resize first and alone in its command, for `moveRegion`'s reason: a
     // block delta recorded before it would index the old shape.
@@ -1657,9 +1657,59 @@ export function pasteSelection(
       tx,
       held,
       { x: at.x + shift[0], y: at.y + shift[1], z: at.z + shift[2] },
-      options,
+      { includeAir: options.includeAir, keepUnder },
     );
   });
+}
+
+/**
+ * The box a paste actually occupies, or `null` when it writes nothing.
+ *
+ * Not the clipboard's own box, and the difference is what the document is
+ * asked to grow to. A clipboard holds only the cells that carry something --
+ * air is never stored -- and `keepUnder` takes more of them out again, so
+ * growing to the box would make room for cells that will never be written:
+ * a resize nobody asked for and would have to undo, which is `replace`'s
+ * stated reason for not growing at all.
+ *
+ * `includeAir` is the exception rather than an oversight. It clears the whole
+ * destination box before writing, so under it the box genuinely is what lands.
+ */
+function pasteLanding(
+  held: Clipboard,
+  at: { x: number; y: number; z: number },
+  includeAir: boolean,
+  keepUnder: PaletteEntry | null,
+): Region | null {
+  if (includeAir) {
+    return {
+      minX: at.x,
+      minY: at.y,
+      minZ: at.z,
+      maxX: at.x + held.width - 1,
+      maxY: at.y + held.height - 1,
+      maxZ: at.z + held.length - 1,
+    };
+  }
+  let box: Region | null = null;
+  for (const cell of held.cells) {
+    if (keepUnder !== null && matchesBlockPattern(cell.entry, keepUnder)) continue;
+    const x = at.x + cell.dx;
+    const y = at.y + cell.dy;
+    const z = at.z + cell.dz;
+    box =
+      box === null
+        ? { minX: x, minY: y, minZ: z, maxX: x, maxY: y, maxZ: z }
+        : {
+            minX: Math.min(box.minX, x),
+            minY: Math.min(box.minY, y),
+            minZ: Math.min(box.minZ, z),
+            maxX: Math.max(box.maxX, x),
+            maxY: Math.max(box.maxY, y),
+            maxZ: Math.max(box.maxZ, z),
+          };
+  }
+  return box;
 }
 
 /**

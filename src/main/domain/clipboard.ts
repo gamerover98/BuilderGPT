@@ -37,7 +37,7 @@ import {
 } from "./document.js";
 import type { TransactionScope } from "./history.js";
 import type { BlockEntityRecord, PaletteEntry } from "../pipeline/types.js";
-import { paletteEntryIsAir } from "../pipeline/types.js";
+import { matchesBlockPattern, paletteEntryIsAir } from "../pipeline/types.js";
 
 /** One cell of a copied region, offset from the region's own corner. */
 interface ClipboardCell {
@@ -64,6 +64,25 @@ export interface PasteOptions {
    * see the note at the top.
    */
   includeAir?: boolean;
+  /**
+   * A cell holding this is left where it falls rather than written.
+   *
+   * The document's own empty space, for the case air alone cannot cover: with
+   * `barrier` or `water` chosen as empty space, those cells are real palette
+   * entries, so a copied region carries them and a paste stamps them over
+   * whatever was standing there. WorldEdit spells the same wish `//paste -a`;
+   * here air is skipped already and this is the half that was missing.
+   *
+   * A **pattern**, matched by `matchesBlockPattern` -- naming no state means
+   * the block in any state. An exact comparison would skip neither spelling:
+   * the modal's preset is a bare `minecraft:barrier` and a barrier out of a
+   * file is `minecraft:barrier[waterlogged=false]`.
+   *
+   * It answers the opposite question to `includeAir` and the two are never
+   * sent together: that one clears the destination box first, so a cell
+   * skipped under it would come out as air rather than as what was there.
+   */
+  keepUnder?: PaletteEntry | null;
 }
 
 /** Snapshots a region, by value. */
@@ -141,7 +160,9 @@ export function pasteClipboard(
     );
   }
 
+  const keepUnder = options.keepUnder ?? null;
   for (const cell of clipboard.cells) {
+    if (keepUnder !== null && matchesBlockPattern(cell.entry, keepUnder)) continue;
     const x = at.x + cell.dx;
     const y = at.y + cell.dy;
     const z = at.z + cell.dz;

@@ -3157,7 +3157,9 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   async function pasteHere(): Promise<void> {
     if (!selection) return;
     const at = { x: selection.minX, y: selection.minY, z: selection.minZ };
-    const changed = await runDocument(t("task.pasting"), () => api().pasteClipboard(at));
+    const changed = await runDocument(t("task.pasting"), () =>
+      api().pasteClipboard({ ...at, skipEmpty: pasteKeepsUnder }),
+    );
     reportChange(changed);
   }
 
@@ -3230,6 +3232,19 @@ import ConvertModal from "./lib/ConvertModal.svelte";
    * failed would otherwise change what the next drag did, silently.
    */
   let stamp = $state<{ chunks: ChunkGeometry[] } | null>(null);
+
+  /**
+   * Whether a paste leaves this document's empty space where it falls.
+   *
+   * WorldEdit's `//paste -a`, for the half this app did not already do: air is
+   * never stored in a clipboard, but a `barrier` or a `water` chosen as empty
+   * space is a real block in the copy and a paste stamps it over what was
+   * standing there.
+   *
+   * Not persisted, for `gizmoMode`'s reason: it is a fact about what is on the
+   * clipboard right now, not about how you like the app set up.
+   */
+  let pasteKeepsUnder = $state(false);
 
   /*
    * What is aimed at the selection goes when the selection does.
@@ -4469,6 +4484,12 @@ import ConvertModal from "./lib/ConvertModal.svelte";
         moved={pivot !== null}
         onresetpivot={() => (pivot = null)}
         onmirror={(axis) => void mirrorSelection(axis)}
+        oncopy={() => void copySelection(false)}
+        onpaste={() => void pasteHere()}
+        canPaste={clipboard !== null}
+        skipEmpty={pasteKeepsUnder}
+        onskipempty={(next) => (pasteKeepsUnder = next)}
+        emptyBlock={docState?.voidBlock ?? ""}
         {busy}
       />
     {/if}

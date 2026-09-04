@@ -1272,6 +1272,16 @@ export interface PasteRequest {
   z: number;
   /** Write the copied air too, erasing what it lands on. Off by default. */
   includeAir?: boolean;
+  /**
+   * Leave the document's empty space where it falls, rather than writing it.
+   *
+   * WorldEdit's `//paste -a`, for the half of it this app did not already do:
+   * air is never stored in the clipboard and so never pasted, but with
+   * `barrier` or `water` chosen as empty space those cells are real blocks in
+   * the copy and a paste stamps them over what was standing there. The block
+   * itself is the session's, so only the wish crosses.
+   */
+  skipEmpty?: boolean;
 }
 
 export interface SetNbtRequest {

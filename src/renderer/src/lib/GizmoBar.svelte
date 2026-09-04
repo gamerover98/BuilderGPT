@@ -29,9 +29,45 @@
     onresetpivot: () => void;
     onmirror: (axis: Axis) => void;
     busy: boolean;
+    /** Take the selection to the clipboard, and leave a ghost of it behind. */
+    oncopy: () => void;
+    /** Write the clipboard in at the selection's corner. */
+    onpaste: () => void;
+    /** Whether anything has been copied yet. */
+    canPaste: boolean;
+    /** Whether a paste leaves the empty-space block where it falls. */
+    skipEmpty: boolean;
+    onskipempty: (next: boolean) => void;
+    /**
+     * What this document's empty space is made of, or `""` for air.
+     *
+     * The toggle above can only do something when it is *not* air: air is never
+     * stored in a clipboard, so a paste never writes it and there is nothing to
+     * leave alone. Shown disabled and pressed rather than hidden -- the app
+     * shows an impossible version disabled rather than filtering it out, for the
+     * same reason. It is true (a paste really does keep what is under it here)
+     * and it is still there to be found, which a control that came and went
+     * with a setting two panels away would not be.
+     */
+    emptyBlock: string;
   }
 
-  const { mode, onmode, moved, onresetpivot, onmirror, busy }: Props = $props();
+  const {
+    mode,
+    onmode,
+    moved,
+    onresetpivot,
+    onmirror,
+    busy,
+    oncopy,
+    onpaste,
+    canPaste,
+    skipEmpty,
+    onskipempty,
+    emptyBlock,
+  }: Props = $props();
+
+  const emptyIsAir = $derived(emptyBlock === "");
 
   /*
    * Glyphs rather than words, and the name on hover.
@@ -62,6 +98,48 @@
 </script>
 
 <div class="gizmo-bar" role="toolbar" aria-label={t("gizmo.legend")}>
+  <!--
+    Copy and paste, because the stamp turned them into a loop rather than two
+    one-off commands: copy, carry the box, paste, carry it again. Cut is
+    deliberately not here -- it is destructive and happens once, so it is not
+    part of that loop, and Ctrl+X still does it.
+
+    The third is WorldEdit's `//paste -a` for the half this app did not already
+    do. Air is never stored in a clipboard and so is never pasted; a `barrier`
+    or a `water` chosen as empty space *is* a real block in the copy, and a
+    paste stamps it over whatever was standing there.
+  -->
+  <div class="group">
+    <button
+      onclick={oncopy}
+      disabled={busy}
+      aria-label={t("gizmo.copy")}
+      title={`${t("gizmo.copy")} (Ctrl+C) — ${t("gizmo.copy.hint")}`}
+    >
+      ⧉
+    </button>
+    <button
+      onclick={onpaste}
+      disabled={busy || !canPaste}
+      aria-label={t("gizmo.paste")}
+      title={`${t("gizmo.paste")} (Ctrl+V) — ${t("gizmo.paste.hint")}`}
+    >
+      ⤓
+    </button>
+    <button
+      class:active={emptyIsAir || skipEmpty}
+      onclick={() => onskipempty(!skipEmpty)}
+      disabled={busy || emptyIsAir}
+      aria-label={t("gizmo.skipEmpty")}
+      aria-pressed={emptyIsAir || skipEmpty}
+      title={emptyIsAir
+        ? `${t("gizmo.skipEmpty")} — ${t("gizmo.skipEmpty.air")}`
+        : `${t("gizmo.skipEmpty")} — ${t("gizmo.skipEmpty.hint", { block: emptyBlock })}`}
+    >
+      ⬚
+    </button>
+  </div>
+
   <div class="group">
     {#each MODES as entry (entry.mode)}
       <button

@@ -3505,6 +3505,24 @@ console.log("\n--- the picture a copy leaves behind ---");
     "a drag hands the ghost's position back when it ends",
     endDrag.includes("ghostGroup?.position.set(ghostHome"),
   );
+
+  /*
+   * And the toolbar's third clipboard control, which can only mean something
+   * where empty space is not air: air is never stored in a clipboard, so a
+   * paste never writes it and there is nothing to leave alone. Disabled and
+   * reading as pressed rather than hidden -- both halves, because either one
+   * alone is a lie. A live control that does nothing is the Stop button's
+   * fault; an unpressed one would claim a paste was about to stamp air.
+   */
+  const bar = readFileSync(path.join(RENDERER, "lib", "GizmoBar.svelte"), "utf-8");
+  check(
+    "the skip toggle is dead where it could do nothing",
+    bar.includes("disabled={busy || emptyIsAir}"),
+  );
+  check(
+    "...and says so by reading as pressed rather than by vanishing",
+    bar.includes("aria-pressed={emptyIsAir || skipEmpty}"),
+  );
 }
 
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);

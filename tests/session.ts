@@ -1623,6 +1623,82 @@ console.log("\n--- a paste stays inside the schematic ---");
   closeDocument();
 }
 
+// --- a paste can leave the empty space where it falls -------------------------
+//
+// WorldEdit's `//paste -a`, for the half this app did not already do. Air is
+// never stored in a clipboard and so is never pasted; a `barrier` or a `water`
+// chosen as empty space *is* a real block in the copy, so a paste stamped it
+// over whatever was standing there.
+console.log("\n--- a paste can leave the empty space where it falls ---");
+{
+  const stone = { namespacedName: "minecraft:stone", properties: {} };
+  const planks = { namespacedName: "minecraft:oak_planks", properties: {} };
+  /*
+   * With a state on it, deliberately. The setting is a bare `minecraft:barrier`
+   * and a barrier out of a file -- or out of this app's own placement, which
+   * writes the default state -- carries `[waterlogged=false]`. Compared
+   * exactly, neither spelling matches the other and the flag would do nothing
+   * on any real document; `matchesBlockPattern` is what makes a bare name mean
+   * the block in any state.
+   */
+  const barrier = {
+    namespacedName: "minecraft:barrier",
+    properties: { waterlogged: "false" },
+  };
+
+  {
+    const session = newDocument({ width: 8, height: 2, length: 8 });
+    setBlock(session.doc, 0, 0, 0, stone);
+    setBlock(session.doc, 1, 0, 0, barrier);
+    copySelection(session, { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 0 });
+    setBlock(session.doc, 4, 0, 0, planks);
+    setBlock(session.doc, 5, 0, 0, planks);
+    session.history.undoStack.length = 0;
+
+    pasteSelection(session, { x: 4, y: 0, z: 0 }, {
+      voidBlock: "minecraft:barrier",
+      skipEmpty: true,
+    });
+    equal("the blocks still land", getBlock(session.doc, 4, 0, 0).namespacedName, "minecraft:stone");
+    equal(
+      "...and the empty space does not replace what was under it",
+      getBlock(session.doc, 5, 0, 0).namespacedName,
+      "minecraft:oak_planks",
+    );
+
+    undoEdit(session);
+    pasteSelection(session, { x: 4, y: 0, z: 0 }, { voidBlock: "minecraft:barrier" });
+    equal(
+      "...and without the flag it does, which is what was reported",
+      getBlock(session.doc, 5, 0, 0).namespacedName,
+      "minecraft:barrier",
+    );
+    closeDocument();
+  }
+
+  {
+    /*
+     * And the document grows to what actually lands rather than to the
+     * clipboard's box. Room made for cells that will never be written is a
+     * resize nobody asked for and would have to undo -- `replace`'s stated
+     * reason for not growing at all.
+     */
+    const session = newDocument({ width: 6, height: 2, length: 6 });
+    setBlock(session.doc, 0, 0, 0, stone);
+    setBlock(session.doc, 1, 0, 0, barrier);
+    copySelection(session, { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 0 });
+    session.history.undoStack.length = 0;
+
+    pasteSelection(session, { x: 5, y: 0, z: 0 }, {
+      voidBlock: "minecraft:barrier",
+      skipEmpty: true,
+    });
+    equal("a paste does not grow for what it will not write", session.doc.width, 6);
+    equal("...and the block that does write lands", getBlock(session.doc, 5, 0, 0).namespacedName, "minecraft:stone");
+    closeDocument();
+  }
+}
+
 console.log("\n--- turning a region somewhere else ---");
 {
   /*

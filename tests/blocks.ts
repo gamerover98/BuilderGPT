@@ -4476,6 +4476,196 @@ console.log("\n--- neighbour-derived state ---");
 // Two grids and a flood fill, all of it the game's own arithmetic. It is in
 // main because propagation is a walk over the voxel grid and the renderer has
 // no voxels -- it receives geometry.
+// --- redstone dust ----------------------------------------------------------
+//
+// Three faults in one block, and each hid the others. The texture is greyscale
+// -- the shipped pack's palette is three greys and transparency, none darker
+// than 217 -- so an untinted wire is a white square; the shape was one full
+// plate, so it looked the same connected to anything; and the connections were
+// derived from `side.name.includes("redstone")`, which took `redstone_ore` and
+// missed every source not spelled with the word.
+console.log("\n--- redstone dust ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const dust = async (props: Record<string, string>): Promise<BakedFace[]> => {
+    const baked = await baker.bakeBlockstate(block("redstone_wire", props));
+    return [...Object.values(baked.faces), ...baked.extraFaces];
+  };
+  const keysOfDust = async (props: Record<string, string>): Promise<string[]> =>
+    [...new Set((await dust(props)).map((f) => f.textureKey.replace("minecraft:block/", "")))].sort();
+
+  /*
+   * `RedStoneWireBlock.getColorForPower`. The green and blue terms are clamped
+   * away below power 9 and 11, so most of the range is a pure red getting
+   * brighter -- which is why the two ends are the two worth pinning.
+   */
+  equal("an unpowered wire is nearly black red", await keysOfDust({ power: "0" }), [
+    "redstone_dust_dot#4d0000",
+  ]);
+  equal("...and a fully powered one is bright", await keysOfDust({ power: "15" }), [
+    "redstone_dust_dot#ff3300",
+  ]);
+  const powers = new Set<string>();
+  for (let power = 0; power <= 15; power += 1) {
+    powers.add((await keysOfDust({ power: String(power) }))[0]);
+  }
+  equal("all sixteen powers are different", powers.size, 16);
+
+  /*
+   * And the tint is pixels rather than a name. The source is grey, so every one
+   * of the sixteen has to come out with more red in it than green and blue put
+   * together -- which is the whole of what the report was about.
+   */
+  let notRed = 0;
+  for (const key of powers) {
+    const image = baker.textures[`minecraft:block/${key}`];
+    if (image === undefined) {
+      notRed += 1;
+      continue;
+    }
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    for (let i = 0; i < image.data.length; i += 4) {
+      if (image.data[i + 3] === 0) continue;
+      r += image.data[i];
+      g += image.data[i + 1];
+      b += image.data[i + 2];
+    }
+    if (!(r > g + b)) notRed += 1;
+  }
+  equal("every one of them is red", notRed, 0);
+
+  /*
+   * The multipart's dot condition is four `OR`ed pairs -- every way of having
+   * two connections at right angles -- plus the case of having none. A
+   * *straight* run has no dot, which is what makes a long line read as a line
+   * rather than as a row of beads.
+   */
+  equal("a wire connected to nothing is one dot", (await dust({ power: "0" })).length, 2);
+  equal(
+    "a straight run is two arms and no dot",
+    await keysOfDust({ north: "side", south: "side", power: "0" }),
+    ["redstone_dust_line0#4d0000"],
+  );
+  const corner = await keysOfDust({ north: "side", east: "side", power: "0" });
+  equal("...and a corner puts the dot back", corner.length, 3);
+  check("...with both line textures", corner.includes("redstone_dust_line1#4d0000"), corner.join(" "));
+
+  /*
+   * `up` is the state that draws a wire climbing the block next door, and
+   * nothing in this repo ever produced it: `connectedState` wrote only `side`
+   * and `none`, so the geometry had nothing to draw it from.
+   */
+  const climbing = await dust({ north: "up", power: "0" });
+  const highest = Math.max(...climbing.flatMap((f) => [0, 3, 6, 9].map((i) => f.positions[i + 1])));
+  check("a wire that climbs reaches the top of its cell", highest === 1, String(highest));
+  check(
+    "...and still lies flat under it",
+    Math.min(...climbing.flatMap((f) => [0, 3, 6, 9].map((i) => f.positions[i + 1]))) < 0.02,
+  );
+}
+
+// --- what redstone dust attaches to -----------------------------------------
+console.log("\n--- what redstone dust attaches to ---");
+{
+  const solid = (name: string, properties: Record<string, string> = {}) => ({
+    name,
+    properties,
+    solid: true,
+  });
+  const thin = (name: string, properties: Record<string, string> = {}) => ({
+    name,
+    properties,
+    solid: false,
+  });
+  const wire = { name: "redstone_wire", properties: {} };
+  const side = (neighbours: Record<string, unknown>): string =>
+    connectedState(wire, neighbours as never).north;
+
+  equal("dust connects to dust", side({ north: thin("redstone_wire") }), "side");
+
+  /*
+   * The predicate this replaces was `name.includes("redstone")`, wrong in both
+   * directions at once. These three carry the word and are not signal sources.
+   */
+  for (const name of ["redstone_ore", "deepslate_redstone_ore", "redstone_lamp"]) {
+    equal(`...but not to ${name}`, side({ north: solid(name) }), "none");
+  }
+  // ...and these are sources that are not spelled with it.
+  for (const name of [
+    "lever",
+    "stone_button",
+    "oak_pressure_plate",
+    "comparator",
+    "tripwire_hook",
+    "daylight_detector",
+    "detector_rail",
+    "target",
+    "lightning_rod",
+  ]) {
+    equal(`dust connects to a ${name}`, side({ north: thin(name) }), "side");
+  }
+
+  /*
+   * A repeater takes dust along its own axis and refuses it from the sides; an
+   * observer only out of its face. Vanilla names those two specially and
+   * everything else answers `isSignalSource`, which is direction-blind.
+   */
+  equal(
+    "a repeater facing north takes dust to the north",
+    side({ north: solid("repeater", { facing: "north" }) }),
+    "side",
+  );
+  equal(
+    "...and refuses it from the side",
+    side({ north: solid("repeater", { facing: "east" }) }),
+    "none",
+  );
+  equal(
+    "an observer takes dust out of its face",
+    side({ north: solid("observer", { facing: "south" }) }),
+    "side",
+  );
+  equal(
+    "...and not into its back",
+    side({ north: solid("observer", { facing: "north" }) }),
+    "none",
+  );
+
+  /*
+   * The step, which is what was asked for and what `up` exists to draw. Up the
+   * side of a solid neighbour when there is dust on top of it; down onto one
+   * when the neighbour is not solid.
+   */
+  equal(
+    "dust climbs a block with dust on top of it",
+    side({ north: solid("stone"), north_up: thin("redstone_wire") }),
+    "up",
+  );
+  equal(
+    "...but not with something on top of itself",
+    side({ north: solid("stone"), north_up: thin("redstone_wire"), up: solid("stone") }),
+    "none",
+  );
+  equal(
+    "dust drops onto a step below it",
+    side({ north: thin("air"), north_down: thin("redstone_wire") }),
+    "side",
+  );
+  equal(
+    "...and cannot see through a solid block to do it",
+    side({ north: solid("stone"), north_down: thin("redstone_wire") }),
+    "none",
+  );
+  equal(
+    "a wire with nothing near it connects to nothing",
+    connectedState(wire, {}),
+    { north: "none", east: "none", south: "none", west: "none" },
+  );
+}
+
 console.log("\n--- lighting ---");
 {
   const size = { x: 9, y: 5, z: 9 };

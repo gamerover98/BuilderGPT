@@ -60,8 +60,19 @@ export interface NeighbourBlock {
   readonly solid: boolean;
 }
 
+/**
+ * A cell to ask about: one of the six faces, or the cell above or below one
+ * of the four horizontal ones.
+ *
+ * The eight diagonals are redstone's alone and are the whole of what lets a
+ * wire run up and down a step. Nothing else here looks past a face, and a
+ * caller that does not fill them simply gets `undefined`, which reads as air
+ * -- the same answer as before they existed.
+ */
+export type NeighbourKey = Face | `${string}_up` | `${string}_down`;
+
 /** `null` means air, or outside the schematic. The two behave the same. */
-export type Neighbours = Readonly<Partial<Record<Face, NeighbourBlock | null>>>;
+export type Neighbours = Readonly<Partial<Record<NeighbourKey, NeighbourBlock | null>>>;
 
 const CLOCKWISE: Readonly<Record<string, Face>> = {
   north: "east",
@@ -317,6 +328,88 @@ function chestType(
 }
 
 /** Blocks whose six faces show their skin where no sibling covers them. */
+/**
+ * What redstone dust attaches to, which is `RedStoneWireBlock.shouldConnectTo`
+ * read as a list.
+ *
+ * The check it replaces was `side.name.includes("redstone")`, which is wrong
+ * in both directions at once: it took `redstone_ore`, `deepslate_redstone_ore`
+ * and `redstone_lamp`, none of which dust connects to, and missed every source
+ * that is not spelled with the word -- a repeater, a comparator, a lever, a
+ * button, a pressure plate, an observer, a tripwire hook, a daylight detector,
+ * a target, a trapped chest, a lectern, a detector rail, a sculk sensor and a
+ * lightning rod.
+ *
+ * A **repeater** connects only along its own axis and an **observer** only out
+ * of its face; vanilla names those two specially and everything else answers
+ * `isSignalSource`, which is direction-blind. A comparator is deliberately in
+ * the blind half -- it is a signal source and dust runs to any of its sides.
+ */
+const SIGNAL_SOURCES: ReadonlySet<string> = new Set([
+  "redstone_wire",
+  "redstone_torch",
+  "redstone_wall_torch",
+  "redstone_block",
+  "lever",
+  "comparator",
+  "tripwire_hook",
+  "daylight_detector",
+  "detector_rail",
+  "trapped_chest",
+  "target",
+  "lectern",
+  "sculk_sensor",
+  "calibrated_sculk_sensor",
+  "lightning_rod",
+]);
+
+const SIGNAL_SUFFIXES: readonly string[] = ["_button", "_pressure_plate"];
+
+const AXIS_OF: Readonly<Record<string, "x" | "z">> = {
+  north: "z",
+  south: "z",
+  east: "x",
+  west: "x",
+};
+
+/** Whether dust in a cell attaches to `side`, approached from `direction`. */
+function connectsToDust(side: NeighbourBlock | null, direction: Face): boolean {
+  if (side === null) return false;
+  if (side.name === "repeater") {
+    const facing = side.properties.facing ?? "north";
+    return AXIS_OF[facing] === AXIS_OF[direction];
+  }
+  if (side.name === "observer") {
+    // The observer faces *into* what it watches, so dust on the far side of
+    // it is the one this direction points back along.
+    return (side.properties.facing ?? "south") === OPPOSITE[direction];
+  }
+  return SIGNAL_SOURCES.has(side.name) || SIGNAL_SUFFIXES.some((s) => side.name.endsWith(s));
+}
+
+/**
+ * One of `none`, `side` or `up`, by vanilla's own order of questions.
+ *
+ * The two vertical arms are the part that was missing entirely -- `"up"` was
+ * never produced by any code path in this repo, so no wire ever climbed a
+ * step and the geometry that draws one had nothing to draw it from.
+ */
+function redstoneSide(neighbours: Neighbours, direction: Face, roofed: boolean): string {
+  const side = neighbours[direction] ?? null;
+  const above = neighbours[`${direction}_up`] ?? null;
+  const below = neighbours[`${direction}_down`] ?? null;
+  // Up the side of the neighbour, if there is something on top of it to
+  // reach and nothing on top of this wire to stop it.
+  if (!roofed && side !== null && side.solid && connectsToDust(above, direction)) {
+    return "up";
+  }
+  if (connectsToDust(side, direction)) return "side";
+  // A solid neighbour blocks the view of whatever is under it; anything else
+  // -- a slab, a fence, air -- lets the wire drop a step.
+  if (side !== null && side.solid) return "none";
+  return connectsToDust(below, direction) ? "side" : "none";
+}
+
 const MUSHROOM_BLOCKS: ReadonlySet<string> = new Set([
   "brown_mushroom_block",
   "red_mushroom_block",
@@ -391,11 +484,14 @@ export function connectedState(
   }
 
   if (name === "redstone_wire") {
+    /*
+     * `RedStoneWireBlock.getConnectingSide`, transcribed. The wire can climb
+     * only while nothing solid is sitting on top of it -- a wire under a
+     * block cannot run up the side of anything.
+     */
+    const roofed = (neighbours.up ?? null)?.solid === true;
     for (const direction of HORIZONTAL_FACES) {
-      const side = neighbours[direction] ?? null;
-      const connects =
-        side !== null && (side.name === "redstone_wire" || side.name.includes("redstone"));
-      put(direction, connects ? "side" : "none");
+      put(direction, redstoneSide(neighbours, direction, roofed));
     }
     return out;
   }

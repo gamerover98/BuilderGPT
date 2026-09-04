@@ -1306,6 +1306,94 @@ function wallBanner(entry: PaletteEntry): BlockShape {
   );
 }
 
+// --- redstone dust ------------------------------------------------------------
+//
+// Transcribed from `blockstates/redstone_wire.json`, which is a multipart, and
+// the four models it names (1.21.4). It was one flat plate wearing an
+// untinted greyscale texture -- so a line of redstone was a row of white
+// squares, whatever it was connected to and whatever it was carrying.
+
+/** Every part of it is a plane a quarter of a unit off the floor. */
+const DUST_DOT: Box = [0, 0.25, 0, 16, 0.25, 16];
+const DUST_ARM_NEAR: Box = [0, 0.25, 0, 16, 0.25, 8];
+const DUST_ARM_FAR: Box = [0, 0.25, 8, 16, 0.25, 16];
+/** The quad that climbs the side of the block next door. */
+const DUST_RISER: Box = [0, 0, 0.25, 16, 16, 0.25];
+
+/**
+ * `RedStoneWireBlock.getColorForPower`, transcribed.
+ *
+ * Vanilla ships the dust **greyscale** -- the shipped pack's palette is three
+ * greys and transparency, none darker than 217 -- and multiplies it by this,
+ * which is why an untinted wire is a white line rather than a dim red one.
+ * Unpowered is `4c0000` and full is `ff3300`: the green and blue terms are
+ * clamped away below power 9 and 11, so most of the range is a pure red
+ * getting brighter.
+ *
+ * `power` is read from the file and never computed. A schematic records what
+ * the wire was carrying when it was cut; nothing here simulates redstone, and
+ * a legacy `.schematic` carries all sixteen levels in its data nibble.
+ */
+function redstoneColour(power: unknown): string {
+  const stated = Number(power);
+  const level = Number.isFinite(stated) ? Math.min(15, Math.max(0, Math.trunc(stated))) : 0;
+  const f = level / 15;
+  const clamp = (n: number): number => Math.min(1, Math.max(0, n));
+  const channels = [
+    clamp(f * 0.6 + (f > 0 ? 0.4 : 0.3)),
+    clamp(f * f * 0.7 - 0.5),
+    clamp(f * f * 0.6 - 0.7),
+  ];
+  return channels.map((c) => Math.round(c * 255).toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * A wire, the way its four connections and its `power` say.
+ *
+ * The multipart's dot condition is four `OR`ed pairs -- north/east,
+ * east/south, south/west, west/north -- which is every way of having two
+ * connections at right angles, plus the case of having none at all. A
+ * *straight* run has no dot, which is what makes a long line read as a line
+ * rather than as a row of beads.
+ *
+ * `line0` runs north-south and `line1` east-west; vanilla writes the east and
+ * west arms as the same two half-plates turned a quarter, which is what
+ * `turnFlatFaces` does to the picture on a flat face.
+ */
+function redstoneWire(entry: PaletteEntry): BlockShape {
+  const tint = redstoneColour(entry.properties.power);
+  const dot = `redstone_dust_dot#${tint}`;
+  const along = `redstone_dust_line0#${tint}`;
+  const across = `redstone_dust_line1#${tint}`;
+  const linked = (face: string): string => entry.properties[face] ?? "none";
+  const on = (face: string): boolean => linked(face) !== "none";
+  const parts: ShapeBox[] = [];
+
+  const flat = on("north") || on("south") || on("east") || on("west");
+  const corner = (on("north") || on("south")) && (on("east") || on("west"));
+  if (!flat || corner) {
+    parts.push({ box: DUST_DOT, texture: dot });
+  }
+  if (on("north")) parts.push({ box: DUST_ARM_NEAR, texture: along });
+  if (on("south")) parts.push({ box: DUST_ARM_FAR, texture: along });
+  if (on("west")) parts.push(rotateShapeBox({ box: DUST_ARM_NEAR, texture: across }, 3));
+  if (on("east")) parts.push(rotateShapeBox({ box: DUST_ARM_FAR, texture: across }, 3));
+
+  /*
+   * And the quads that climb the block next door, which is the whole of what
+   * `up` means: dust running up a step keeps its line unbroken. Nothing in
+   * this app produced that value before -- `connectedState` wrote only `side`
+   * and `none` -- so this geometry had nothing to draw it from.
+   */
+  const RISE: Readonly<Record<string, number>> = { north: 0, east: 1, south: 2, west: 3 };
+  for (const [face, steps] of Object.entries(RISE)) {
+    if (linked(face) === "up") {
+      parts.push(rotateShapeBox({ box: DUST_RISER, texture: along }, steps));
+    }
+  }
+  return boxes(...parts);
+}
+
 /** Suffix-matched families, checked after the exact-name table. */
 const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => BlockShape]> = [
   ["_slab", slab],
@@ -2963,7 +3051,7 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
    * confidently wrong shape looks deliberate -- assumes a cube is the harmless
    * answer. For these it is the harmful one, so a close box beats it.
    */
-  redstone_wire: () => boxes([0, 0, 0, 16, 1, 16]),
+  redstone_wire: redstoneWire,
   // `skeleton_skull` and `skeleton_wall_skull` used to be repeated here, with
   // the same two expressions the `_skull` and `_wall_skull` suffixes already
   // reach. Two copies of one shape is how one of them comes to be corrected

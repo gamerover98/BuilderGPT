@@ -3737,6 +3737,10 @@ knowing:
   approximations, and a close box beats a cube there. `tests/blocks.ts` states
   it both ways — the ones that are cubes must stay cubes, or a wall of them
   stops hiding its own interior.
+
+  An approximation is a *stage*, not a destination: redstone dust and the
+  skulls have since been transcribed properly, and what the box bought in the
+  meantime was the six neighbours it stopped deleting.
 - **A face with no area is not drawn**, decided from the box rather than from a
   hand-written `omit`. Vanilla writes a *plane* as an element whose `from` and
   `to` agree on one axis — a chain is two of them, and so is a cross — and the
@@ -3949,6 +3953,74 @@ knowing:
   and that is a different job; what changed is that the base colour is no
   longer a lump of wool. Shulker boxes keep the wool, because their sheet is
   still laid out for an animated lid.
+- **Redstone dust was three faults in one block, and each hid the others.**
+  Vanilla ships the texture **greyscale** -- the shipped pack's palette is
+  three greys and transparency, none darker than 217 -- and multiplies it by
+  `RedStoneWireBlock.getColorForPower`, so an untinted wire is a white line
+  rather than a dim red one: `4c0000` unpowered to `ff3300` at fifteen, with
+  the green and blue terms clamped away below power 9 and 11, so most of the
+  range is a pure red getting brighter. The shape was one full plate, so it
+  looked identical connected to anything. And the connections were derived
+  from `side.name.includes("redstone")`, which is wrong in both directions at
+  once -- it took `redstone_ore`, `deepslate_redstone_ore` and
+  `redstone_lamp`, and missed every source not spelled with the word: a
+  repeater, a comparator, a lever, a button, a pressure plate, an observer, a
+  tripwire hook, a daylight detector, a target, a trapped chest, a lectern, a
+  detector rail, a sculk sensor and a lightning rod.
+
+  `power` is **read from the file and never computed**. A schematic records
+  what the wire was carrying when it was cut, and a legacy `.schematic`
+  carries all sixteen levels in its data nibble; nothing here simulates
+  redstone.
+- **`"up"` was never produced by any code path in this repo**, so no wire
+  ever climbed a step and the geometry that draws one had nothing to draw it
+  from. `getConnectingSide` is transcribed now, in its own order: up the side
+  of a solid neighbour when there is dust on top of it *and* nothing on top
+  of this wire to stop it; then the neighbour itself; then `none` if the
+  neighbour is solid; then down onto whatever is under it.
+
+  That reads two cells that are not faces of the wire -- above and below each
+  horizontal neighbour -- so `Neighbours` gained eight keys and `connect.ts`
+  fills them. They are in the **same array** as the six rather than beside
+  it, and that is the load-bearing part: phase one uses that array to decide
+  which cells an edit made stale, and the set of cells a wire *reads* is
+  exactly the set that must be revisited when one of them moves. Two lists is
+  how one comes to be missing an offset, and the symptom is a wire that stops
+  climbing until something else near it is edited. `tests/session.ts` builds
+  a real step for that reason -- the block-level checks call `connectedState`
+  with a map built by hand and cannot see either half.
+
+  It costs about **6%**: a 120x20x120 fence fill goes from ~1.07 s to ~1.13 s.
+- **Dust is refused in mid-air and on a pond, and that is the only placement
+  this app refuses on physical grounds.** Minecraft refuses a great many -- a
+  torch on sand, a flower on stone -- and reproducing that would be faithful
+  and useless here, the same argument that lets an iron door open. What earns
+  a rule is a block whose *appearance* lies without one: dust floating in the
+  air or lying on water looks like a working circuit and is a state the game
+  cannot hold.
+
+  **Silently, and only from the hand.** Silently because that is already what
+  this arm does when a door's far half is blocked; only from the hand because
+  `applyEdit`'s `setBlock` arm is the hand -- a fill, a paste, a transform and
+  every agent tool go through `runTransaction` bodies that never reach it,
+  which is the same reach the slab merge and the two-part rule have. A fill of
+  dust across mixed ground should lay what it can rather than refuse the lot.
+
+  The support test is **`coversFace`, not `occludesNeighbours`**, and the pair
+  of slabs is why: a *top* slab reaches its cell's ceiling, so the cell above
+  it has a floor and vanilla's `isFaceSturdy(UP)` says yes, while a *bottom*
+  slab's surface is half way down its own cell. Asking whether the block is a
+  full opaque cube would refuse the top slab too, and a false refusal in an
+  editor is worse than a false allowance. `src/shared/block_support.ts` is the
+  rule, pure, with solidity passed in -- `NeighbourBlock.solid`'s split.
+
+  One consequence is inherited rather than introduced, and is worth knowing:
+  **a file keeps the connections it arrived with**, because loading is not a
+  transaction. A pre-Flattening `.schematic` spells every wire
+  `[east=none,north=none,south=none,west=none]` -- the format cannot carry
+  more -- so a 1.12 circuit opens as a row of dots until something near it is
+  edited. Legacy fences have had exactly that property since they were
+  drawn, for exactly the same reason.
 - **A cauldron was a solid block of iron, so its `level` was not merely
   unread -- it was unreadable.** The shape was a 16x16x16 box wearing the
   pot's own textures, with no bowl, no floor and no inside, so a liquid drawn

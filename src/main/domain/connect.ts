@@ -61,6 +61,7 @@ import {
   isNeighbourDependent,
   type Face,
   type NeighbourBlock,
+  type NeighbourKey,
   type Neighbours,
 } from "../../shared/block_connections.js";
 import { FACE_VECTOR } from "../../shared/block_orientation.js";
@@ -80,12 +81,38 @@ import type { TransactionScope } from "./history.js";
 /** Stands in for a palette slot that does not exist; every rule reads it as air. */
 const AIR_ENTRY: PaletteEntry = { namespacedName: "minecraft:air", properties: {} };
 
-const OFFSETS: ReadonlyArray<readonly [Face, number, number, number]> = (
+const OFFSETS: ReadonlyArray<readonly [NeighbourKey, number, number, number]> = (
   ["north", "south", "east", "west", "up", "down"] as const
 ).map((face) => {
   const step = FACE_VECTOR[face];
   return [face, step.x, step.y, step.z] as const;
 });
+
+/**
+ * The eight cells above and below the four horizontal neighbours.
+ *
+ * Redstone's alone: a wire runs up the side of the block next door and down
+ * onto a step, so its answer depends on two cells that are not faces of it.
+ * Nothing else here looks past a face.
+ *
+ * They are in the **same list** as the six rather than beside it, and that is
+ * the part that matters: phase one uses this array to decide which cells an
+ * edit made stale, and the set of cells a wire *reads* is exactly the set of
+ * cells that must be revisited when one of them moves. Two lists is how one
+ * of them comes to be missing an offset, and the symptom would be a wire that
+ * stops climbing a step until something else near it is edited.
+ */
+const DIAGONALS: ReadonlyArray<readonly [NeighbourKey, number, number, number]> = (
+  ["north", "south", "east", "west"] as const
+).flatMap((face) => {
+  const step = FACE_VECTOR[face];
+  return [
+    [`${face}_up`, step.x, 1, step.z] as const,
+    [`${face}_down`, step.x, -1, step.z] as const,
+  ];
+});
+
+const AROUND = [...OFFSETS, ...DIAGONALS];
 
 function bareName(entry: PaletteEntry): string {
   return entry.namespacedName.replace(/^minecraft:/, "");
@@ -222,7 +249,7 @@ export function deriveConnections(
     if (isDependent(index)) {
       work.add(index);
     }
-    for (const [, dx, dy, dz] of OFFSETS) {
+    for (const [, dx, dy, dz] of AROUND) {
       const nx = x + dx;
       const ny = y + dy;
       const nz = z + dz;
@@ -238,7 +265,7 @@ export function deriveConnections(
 
   // Reused across cells: `connectedState` reads it and keeps no reference, and
   // one object per work cell is a million allocations on a large fill.
-  const around: Partial<Record<Face, NeighbourBlock | null>> = {};
+  const around: Partial<Record<NeighbourKey, NeighbourBlock | null>> = {};
 
   for (const index of work) {
     const x = Math.floor(index / plane);
@@ -249,7 +276,7 @@ export function deriveConnections(
     if (self === null) {
       continue;
     }
-    for (const [face, dx, dy, dz] of OFFSETS) {
+    for (const [face, dx, dy, dz] of AROUND) {
       around[face] = blockAt(x + dx, y + dy, z + dz);
     }
     const derived = connectedState(self, around);

@@ -81,6 +81,8 @@ import { matchesBlockPattern, paletteEntryCacheKey } from "../pipeline/types.js"
 import { parsePaletteEntry } from "../pipeline/loader_formats.js";
 import { hasProperty, isOpenable } from "../../shared/block_states.js";
 import { FACE_VECTOR } from "../../shared/block_orientation.js";
+import { standsOn, type SupportBelow } from "../../shared/block_support.js";
+import { coversFace } from "../pipeline/block_shapes.js";
 import { normaliseVoidBlock, voidSources } from "../../shared/settings.js";
 import { mcVersion, refusalFor } from "../../shared/mc_versions.js";
 import {
@@ -496,6 +498,24 @@ export class DocumentTooLargeError extends Error {
  * because an oak slab does not merge into a stone one; complementary half,
  * because two bottom slabs are not a full block and never become one.
  */
+/**
+ * What is under the cell being placed into, in the shape `standsOn` reads.
+ *
+ * `null` at y=0, which is the floor of the document and is *not* a floor:
+ * there is nothing below it and the rule's answer is the same as for air.
+ * `covers` is `coversFace`'s, which is `isFaceSturdy`'s question -- so a
+ * bottom slab, a stair's flat half and a full block all carry a wire, and
+ * `occludesNeighbours` would have refused the first two.
+ */
+function floorUnder(
+  doc: SchematicDocument,
+  request: { readonly x: number; readonly y: number; readonly z: number },
+): SupportBelow | null {
+  if (request.y <= 0) return null;
+  const below = getBlock(doc, request.x, request.y - 1, request.z);
+  return { name: below.namespacedName, covers: coversFace(below, "up") };
+}
+
 function doubleSlabTarget(
   doc: SchematicDocument,
   request: { x: number; y: number; z: number; against?: string },
@@ -936,6 +956,25 @@ export function applyEdit(
      * than guessed: merging on a side click that meant "place beside it" would
      * destroy the slab already there.
      */
+    /*
+     * Redstone dust is refused in mid-air and on a pond.
+     *
+     * Silently, and only here. Silently because that is already what this
+     * arm does when a door's far half is blocked, and because a message would
+     * have to be worded for a person while this path is also `use`'s. Only
+     * here because `applyEdit`'s `setBlock` arm is the *hand* -- a fill, a
+     * paste, a transform and every agent tool go through `runTransaction`
+     * bodies that never reach it, which is the same reach the slab merge and
+     * the two-part rule have and is deliberate: a fill of redstone across
+     * mixed ground should lay what it can rather than refuse the lot.
+     *
+     * Before the growth below it, or a refused placement would still have
+     * resized the document.
+     */
+    if (!standsOn(entry.namespacedName, floorUnder(doc, request))) {
+      return 0;
+    }
+
     const merged = doubleSlabTarget(doc, request, entry);
     if (merged !== null) {
       return runTransaction(doc, history, `Place ${entry.namespacedName}`, (tx) =>

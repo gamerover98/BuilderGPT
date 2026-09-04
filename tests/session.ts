@@ -2706,6 +2706,114 @@ console.log("\n--- placing into water floods the block ---");
 // wrong for building *to a size*, so it is a setting -- and with it off the
 // edit is refused by name rather than clipped, which is the failure this
 // codebase already wrote down once.
+// --- redstone needs a floor -------------------------------------------------
+//
+// The only placement this app refuses on physical grounds, and the reason it is
+// the only one: Minecraft refuses a great many -- a torch on sand, a flower on
+// stone -- and reproducing that would be faithful and useless in an editor.
+// What earns a rule is a block whose *appearance* lies without one, and dust
+// floating in the air or lying on a pond looks like a working circuit.
+console.log("\n--- redstone needs a floor ---");
+{
+  const put = (
+    session: ReturnType<typeof newDocument>,
+    at: readonly [number, number, number],
+    name: string,
+    properties: Record<string, string> = {},
+  ) =>
+    applyEdit(session, {
+      kind: "setBlock",
+      x: at[0],
+      y: at[1],
+      z: at[2],
+      block: { namespacedName: `minecraft:${name}`, properties },
+    });
+  const nameAt = (session: ReturnType<typeof newDocument>, at: readonly [number, number, number]) =>
+    getBlock(session.doc, at[0], at[1], at[2]).namespacedName;
+
+  const session = newDocument({ width: 8, height: 4, length: 2 });
+  put(session, [0, 0, 0], "stone");
+  equal("dust goes down on stone", put(session, [0, 1, 0], "redstone_wire"), 1);
+  equal("...and is really there", nameAt(session, [0, 1, 0]), "minecraft:redstone_wire");
+
+  equal("dust does not go down in mid-air", put(session, [1, 2, 0], "redstone_wire"), 0);
+  equal("...and nothing was written", nameAt(session, [1, 2, 0]), "minecraft:air");
+
+  put(session, [2, 0, 0], "water", { level: "0" });
+  equal("dust does not float on water", put(session, [2, 1, 0], "redstone_wire"), 0);
+  put(session, [3, 0, 0], "lava", { level: "0" });
+  equal("...nor on lava", put(session, [3, 1, 0], "redstone_wire"), 0);
+
+  /*
+   * `coversFace`, not `occludesNeighbours`, and the pair of slabs is why. A
+   * **top** slab reaches the cell's own ceiling, so the cell above it has a
+   * floor and vanilla's `isFaceSturdy(UP)` says yes; a **bottom** slab's
+   * surface is half way down its cell, so the cell above has nothing under it
+   * and the wire would hang in the air over it.
+   *
+   * Asking `occludesNeighbours` instead -- is this a *full opaque cube* --
+   * would refuse the top slab as well, and a false refusal in an editor is
+   * worse than a false allowance.
+   */
+  put(session, [4, 0, 0], "oak_slab", { type: "top" });
+  equal("dust goes down on a top slab", put(session, [4, 1, 0], "redstone_wire"), 1);
+  put(session, [5, 0, 0], "oak_slab", { type: "bottom" });
+  equal("...and not over a bottom one, which reaches nothing", put(session, [5, 1, 0], "redstone_wire"), 0);
+
+  // The floor of the document is not a floor: there is nothing under it, which
+  // is the same answer as air.
+  equal("dust does not go down on the grid itself", put(session, [6, 0, 0], "redstone_wire"), 0);
+
+  // Narrow by design: everything else places exactly as it did.
+  equal("stone still goes down in mid-air", put(session, [7, 2, 0], "stone"), 1);
+
+  /*
+   * And only the hand. A fill, a paste, a transform and every agent tool go
+   * through `runTransaction` bodies that never reach this arm -- the same reach
+   * the slab merge and the two-part rule have. A fill of dust across mixed
+   * ground should lay what it can rather than refuse the lot.
+   */
+  /*
+   * And the step, end to end: the rule, the cells it reads, and the cells the
+   * pass decides are stale.
+   *
+   * A wire reads two cells that are not faces of it -- the ones above and
+   * below each horizontal neighbour -- so `connect.ts` gathers eight more, and
+   * `deriveConnections` has to consider them stale as well. It is the same
+   * list on both sides for that reason: the set a wire *reads* is exactly the
+   * set that must be revisited when one of them moves. Split into two lists,
+   * the symptom is a wire that stops climbing until something else near it is
+   * edited -- which is what the block-level checks alone cannot see.
+   */
+  const step = newDocument({ width: 3, height: 4, length: 1 });
+  put(step, [0, 0, 0], "stone");
+  put(step, [1, 0, 0], "stone");
+  put(step, [1, 1, 0], "stone");
+  put(step, [0, 1, 0], "redstone_wire");
+  put(step, [1, 2, 0], "redstone_wire");
+  equal(
+    "the wire below runs up the step beside it",
+    getBlock(step.doc, 0, 1, 0).properties.east,
+    "up",
+  );
+  equal(
+    "...and the one on top runs down onto it",
+    getBlock(step.doc, 1, 2, 0).properties.west,
+    "side",
+  );
+
+  const filled = newDocument({ width: 4, height: 3, length: 1 });
+  equal(
+    "a fill of dust in mid-air is not refused",
+    applyEdit(filled, {
+      kind: "fill",
+      region: { minX: 0, minY: 2, minZ: 0, maxX: 3, maxY: 2, maxZ: 0 },
+      block: { namespacedName: "minecraft:redstone_wire", properties: {} },
+    }),
+    4,
+  );
+}
+
 console.log("\n--- dimensions ---");
 {
   const at = (session: ReturnType<typeof newDocument>, x: number, y: number, z: number) =>

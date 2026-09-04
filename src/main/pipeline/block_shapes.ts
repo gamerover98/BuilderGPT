@@ -1000,6 +1000,130 @@ function rail(entry: PaletteEntry): BlockShape {
   );
 }
 
+// --- cauldrons ---------------------------------------------------------------
+//
+// Transcribed from `template_cauldron_full` and its two shorter siblings
+// (1.21.4). It was a solid 16x16x16 box wearing the pot's own textures, so
+// there was no inside for anything to be in -- which is why the `level` was
+// not merely unread, it was unreadable: a liquid drawn in there would have
+// been sealed inside a block of iron.
+
+const CAULDRON_WALL: Readonly<Record<string, string>> = {
+  up: "cauldron_top",
+  down: "cauldron_inner",
+};
+const CAULDRON_FLOOR: Readonly<Record<string, string>> = {
+  up: "cauldron_inner",
+  down: "cauldron_inner",
+};
+const CAULDRON_FOOT: Readonly<Record<string, string>> = { down: "cauldron_bottom" };
+
+/**
+ * The pot: four walls, the floor they stand on, and eight boxes of feet.
+ *
+ * Every `omit` here is a face vanilla's own model does not state, and each is
+ * a face another box of the same cauldron is standing against -- two
+ * coincident faces z-fight, which is what a seam down the middle of a leg
+ * looks like.
+ */
+const CAULDRON_POT: readonly ShapeBox[] = [
+  // The four walls, from 3 up. `cauldron_inner` on their undersides is the
+  // texture the pack has always shipped and nothing could name.
+  { box: [0, 3, 0, 2, 16, 16], texture: "cauldron_side", textures: CAULDRON_WALL },
+  { box: [14, 3, 0, 16, 16, 16], texture: "cauldron_side", textures: CAULDRON_WALL },
+  {
+    box: [2, 3, 0, 14, 16, 2],
+    texture: "cauldron_side",
+    textures: CAULDRON_WALL,
+    omit: ["east", "west"],
+  },
+  {
+    box: [2, 3, 14, 14, 16, 16],
+    texture: "cauldron_side",
+    textures: CAULDRON_WALL,
+    omit: ["east", "west"],
+  },
+  // The floor of the bowl, seen from above and from below.
+  {
+    box: [2, 3, 2, 14, 4, 14],
+    texture: "cauldron_inner",
+    textures: CAULDRON_FLOOR,
+    omit: ["north", "east", "south", "west"],
+  },
+  // Four feet, two boxes each, with nothing on top of any of them.
+  { box: [0, 0, 0, 4, 3, 2], texture: "cauldron_side", textures: CAULDRON_FOOT, omit: ["up"] },
+  {
+    box: [0, 0, 2, 2, 3, 4],
+    texture: "cauldron_side",
+    textures: CAULDRON_FOOT,
+    omit: ["up", "north"],
+  },
+  { box: [12, 0, 0, 16, 3, 2], texture: "cauldron_side", textures: CAULDRON_FOOT, omit: ["up"] },
+  {
+    box: [14, 0, 2, 16, 3, 4],
+    texture: "cauldron_side",
+    textures: CAULDRON_FOOT,
+    omit: ["up", "north"],
+  },
+  { box: [0, 0, 14, 4, 3, 16], texture: "cauldron_side", textures: CAULDRON_FOOT, omit: ["up"] },
+  {
+    box: [0, 0, 12, 2, 3, 14],
+    texture: "cauldron_side",
+    textures: CAULDRON_FOOT,
+    omit: ["up", "south"],
+  },
+  { box: [12, 0, 14, 16, 3, 16], texture: "cauldron_side", textures: CAULDRON_FOOT, omit: ["up"] },
+  {
+    box: [14, 0, 12, 16, 3, 14],
+    texture: "cauldron_side",
+    textures: CAULDRON_FOOT,
+    omit: ["up", "south"],
+  },
+];
+
+/** The three heights vanilla's `_level1`, `_level2` and `_full` put the top at. */
+const CAULDRON_LEVEL: readonly number[] = [0, 9, 12, 15];
+
+/**
+ * The surface of whatever is in the pot, or `null` for an empty one.
+ *
+ * **The two eras spell this differently and the difference is real**, which
+ * is worth saying because it looks like a bug in the table. 1.17 split the
+ * block: a modern `cauldron` has no properties at all and a modern
+ * `water_cauldron` carries `level=1..3`. Before the Flattening there was one
+ * `cauldron` with `level=0..3`, and `legacy_blocks.json` maps `118:2` to
+ * `minecraft:cauldron[level=2]` exactly -- so a 1.12 schematic arrives
+ * holding a state the modern registry says that block cannot have, and a
+ * cauldron of water arrives called `cauldron`. Reading `level` off both
+ * spellings is what makes one function serve both eras.
+ *
+ * A face and nothing else, as vanilla states it: the underside is against
+ * the bowl's floor and would z-fight with it.
+ */
+function cauldronContent(entry: PaletteEntry): ShapeBox | null {
+  const name = baseName(entry);
+  const surface = (height: number, texture: string): ShapeBox => ({
+    box: [2, height, 2, 14, height, 14],
+    texture,
+    omit: ["down"],
+  });
+  // Lava and powder snow have no level in any version: they are full or they
+  // are a different block.
+  if (name === "lava_cauldron") return surface(15, "lava_still");
+  if (name === "powder_snow_cauldron") return surface(15, "powder_snow");
+  const stated = Number(entry.properties.level);
+  // A `water_cauldron` with nothing said is the state the game places, which
+  // is one third full; a bare modern `cauldron` really is empty.
+  const level = Number.isFinite(stated) ? Math.trunc(stated) : name === "water_cauldron" ? 1 : 0;
+  if (level < 1) return null;
+  return surface(CAULDRON_LEVEL[Math.min(3, level)], "water_still");
+}
+
+function cauldron(entry: PaletteEntry): BlockShape {
+  const content = cauldronContent(entry);
+  return boxes(...CAULDRON_POT, ...(content === null ? [] : [content]));
+}
+
 /** Suffix-matched families, checked after the exact-name table. */
 const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => BlockShape]> = [
   ["_slab", slab],
@@ -1078,8 +1202,9 @@ const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => Bl
   ["_skull", skull],
   // A cake with a candle on it: the cake, and the candle standing on top.
   ["_candle_cake", candleCake],
-  // A cauldron with something in it is the same iron pot.
-  ["_cauldron", () => boxes([0, 0, 0, 16, 16, 16])],
+  // A cauldron with something in it is the same iron pot, with the something
+  // drawn in it.
+  ["_cauldron", cauldron],
   // The copper golem, stood still. A statue is not a cube and drawing it as one
   // walled off whatever it was standing next to.
   ["_golem_statue", (e) => transform([[4, 0, 4, 12, 14, 12]], facingSteps(e), false)],
@@ -2604,7 +2729,7 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
   flower_pot: () => boxes(...FLOWER_POT),
   campfire,
   soul_campfire: campfire,
-  cauldron: () => boxes([0, 0, 0, 16, 16, 16]),
+  cauldron,
   hopper,
   end_rod: endRod,
   chain,

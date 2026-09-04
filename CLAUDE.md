@@ -3892,6 +3892,42 @@ knowing:
   The finished ramp reaches a pixel **above** its own cell, exactly as
   vanilla's does. That is the first geometry in this file to leave the block
   it belongs to.
+- **A cauldron was a solid block of iron, so its `level` was not merely
+  unread -- it was unreadable.** The shape was a 16x16x16 box wearing the
+  pot's own textures, with no bowl, no floor and no inside, so a liquid drawn
+  in there would have been sealed inside it. Both halves had to be
+  transcribed together, from `template_cauldron_full` and its two shorter
+  siblings: four walls, the bowl's floor, eight boxes of feet, and one
+  upward-facing surface for the contents. `cauldron_inner` ships in the pack
+  and nothing could name it.
+
+  Every `omit` in it is a face vanilla's own model does not state, and each
+  is a face another box of the same cauldron stands against -- two coincident
+  faces z-fight, which is what a seam down the middle of a leg looks like.
+
+  It also stopped hiding what it stands on. A full box covers all six faces,
+  so `coversFace` said yes and a cauldron deleted the top of the block under
+  it -- through the gap between its own feet, which is where the game shows
+  you the floor.
+- **The two eras spell the water differently, and that is the finding rather
+  than a bug in the table.** 1.17 split the block: a modern `cauldron` has no
+  properties at all and the water moved to `water_cauldron[level=1..3]`.
+  Before the Flattening there was one `cauldron` with `level=0..3`, and
+  `legacy_blocks.json` maps `118:2` to `minecraft:cauldron[level=2]` exactly.
+  So a 1.12 schematic arrives holding a state the modern registry says that
+  block cannot have, and a cauldron of water arrives called `cauldron`.
+  Reading `level` off **both** spellings is what makes one function serve
+  both eras, and it costs nothing: a modern `cauldron` never carries one.
+
+  The three heights are vanilla's and are not thirds of anything -- 9, 12,
+  15. Lava and powder snow have no level in any version: full, or a different
+  block. Only water is tinted, which is vanilla too; the template writes
+  `tintindex: 0` on all three and only `water_cauldron` registers a colour.
+
+  A `water_cauldron` with nothing stated is drawn **one third full**, which
+  is the state the game places. That is not a nicety: the walk over every
+  offered id bakes with an empty property bag, so an empty pot there would
+  make the commonest cauldron in the app look like the bug this fixes.
 - **`signal_fire` has no geometry, and that is the finding rather than an
   omission.** It changes the height of the smoke column, which is a particle and
   part of no model. Giving it a shape would be inventing, which is the one thing

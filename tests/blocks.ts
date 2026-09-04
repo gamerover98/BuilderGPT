@@ -1951,6 +1951,114 @@ if (pack === null) {
 // side of a bed lying head-to-north, whichever way it is turned — and
 // `bedCandidates` undoes `facing` and nothing else. The geometry was half a turn
 // ahead of the lookup: the foot's sides came out mirrored and its ends swapped.
+// --- a cauldron with something in it ----------------------------------------
+//
+// It was a solid 16x16x16 box wearing the pot's own textures, so there was no
+// inside for anything to be in: `level` was not merely unread, a liquid drawn
+// against it would have been sealed inside a block of iron. Transcribed from
+// `template_cauldron_full` and its two shorter siblings (1.21.4).
+console.log("\n--- a cauldron with something in it ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const potFaces = async (name: string, props: Record<string, string> = {}): Promise<BakedFace[]> => {
+    const baked = await baker.bakeBlockstate(block(name, props));
+    return [...Object.values(baked.faces), ...baked.extraFaces];
+  };
+  /** The surface of whatever is in it: the one upward face that is not the pot. */
+  const liquid = async (
+    name: string,
+    props: Record<string, string> = {},
+  ): Promise<{ at: number; texture: string } | null> => {
+    const faces = await potFaces(name, props);
+    const up = faces.filter(
+      (f) => f.normal[1] > 0.9 && !f.textureKey.includes("cauldron_"),
+    );
+    if (up.length === 0) return null;
+    return {
+      at: Math.round(up[0].positions[1] * 16),
+      texture: up[0].textureKey.replace("minecraft:block/", ""),
+    };
+  };
+
+  /*
+   * The pot is hollow, and the proof is a face that a solid box cannot have:
+   * `cauldron_inner` looking *up* from the floor of the bowl. That texture ships
+   * in the pack and nothing in this app could name it.
+   */
+  const empty = await potFaces("cauldron");
+  check(
+    "a cauldron has a bowl with a floor in it",
+    empty.some(
+      (f) => f.normal[1] > 0.9 && f.textureKey === "minecraft:block/cauldron_inner" &&
+        Math.round(f.positions[1] * 16) === 4,
+    ),
+    [...new Set(empty.map((f) => f.textureKey))].join(" "),
+  );
+  check("...and it is not a cube any more", empty.length > 6, String(empty.length));
+
+  /*
+   * And it stopped hiding what it stands on. A full box covered all six faces,
+   * so a cauldron deleted the top of the block under it -- through the gap
+   * between its own feet, where the game shows you the floor.
+   */
+  check("a cauldron no longer covers the floor under it", !coversFace(block("cauldron"), "down"));
+  check("...nor the wall beside it", !coversFace(block("water_cauldron"), "north"));
+
+  // Empty is empty: nothing is drawn rather than a surface at zero.
+  equal("an empty cauldron holds nothing", await liquid("cauldron"), null);
+  equal("...and neither does one that says so", await liquid("cauldron", { level: "0" }), null);
+
+  /*
+   * The three heights are vanilla's `_level1`, `_level2` and `_full`, and they
+   * are not evenly spaced -- 9, 12, 15 rather than thirds of anything.
+   */
+  for (const [level, at] of [
+    ["1", 9],
+    ["2", 12],
+    ["3", 15],
+  ] as const) {
+    equal(`water_cauldron[level=${level}] stands at ${at}`, await liquid("water_cauldron", { level }), {
+      at,
+      texture: "water_still",
+    });
+  }
+
+  /*
+   * **The two eras spell it differently, and that is the finding rather than a
+   * bug in the table.** 1.17 split the block: a modern `cauldron` has no
+   * properties at all and the water moved to `water_cauldron[level=1..3]`.
+   * Before the Flattening there was one `cauldron` with `level=0..3`, and
+   * `legacy_blocks.json` maps `118:2` to `minecraft:cauldron[level=2]` exactly
+   * -- so a 1.12 schematic arrives holding a state the modern registry says
+   * that block cannot have, and a cauldron of water arrives called `cauldron`.
+   * Reading `level` off both spellings is what makes one function serve both.
+   */
+  equal("a pre-Flattening cauldron holds its water under the old name", await liquid("cauldron", { level: "2" }), {
+    at: 12,
+    texture: "water_still",
+  });
+
+  /*
+   * A `water_cauldron` with nothing said is the state the game places it in,
+   * which is one third full. It matters because the walk over every offered id
+   * bakes with an empty property bag, and an empty pot there would be the
+   * commonest cauldron in the app looking like the bug this fixes.
+   */
+  equal("...and a bare water cauldron is the state it is placed in", await liquid("water_cauldron"), {
+    at: 9,
+    texture: "water_still",
+  });
+
+  // Lava and powder snow have no level in any version: full, or a different
+  // block. Neither is tinted, which is vanilla -- only water registers a colour.
+  equal("lava fills the pot", await liquid("lava_cauldron"), { at: 15, texture: "lava_still" });
+  equal("...and so does powder snow", await liquid("powder_snow_cauldron"), {
+    at: 15,
+    texture: "powder_snow",
+  });
+}
+
 console.log("\n--- a bed's two halves meet without fighting ---");
 if (pack === null) {
   console.log("  SKIP: no bundled resource pack");

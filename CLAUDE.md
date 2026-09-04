@@ -2294,13 +2294,25 @@ The same fix carries the void block: `cutSelection` and `moveRegion` each wrote
 `RegionEditOptions.voidBlock` is `EditOptions.voidBlock`'s spelling for its
 reason -- a string the caller already holds, parsed once here.
 
-**Scale is the least useful of the four modes and the only one that asks before
-it acts.** Whole factors only, because anything else is a build with a different
+**Scale is the least useful of the four modes, and it reports rather than
+refuses.** Whole factors only, because anything else is a build with a different
 number of blocks in every row. Multiplying is exact -- one block becomes n^3 of
 itself -- and dividing keeps the cell at the **low corner** of each group, which
 is a rule that can be predicted, unlike "the commonest block" or "the first
-non-air one". It is counted and refused first with `ScaleWouldLoseBlocksError`,
-which is `resizeSession`'s shape for `resizeSession`'s reason.
+non-air one".
+
+A division is counted before the pass and the number comes back in
+`EditSuccess.notes`. It used to be counted and **refused**, with the caller
+asked to try again carrying `confirmLoss` -- `resizeSession`’s shape, and the
+wrong shape borrowed. A resize is a number typed blind into a panel that has a
+second button; a scale is a cube dragged with the destination drawn under the
+pointer and one CTRL+Z away. So the refusal named a confirmation that existed
+nowhere in the app -- «Confirm to go ahead», with nothing to press -- and the
+gesture was simply cancelled. Reported as exactly that.
+
+`runDocument` shows any `notes` an edit sends, at `warn`, rather than each call
+site wiring its own: an edit only fills that field when something happened the
+count cannot report, and so far that means something was lost.
 
 A block entity comes along only on the group's representative cell. Copying it to
 every cell of an enlarged block would turn one chest into eight, each holding the

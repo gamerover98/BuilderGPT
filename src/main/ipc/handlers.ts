@@ -104,7 +104,6 @@ import {
   setSessionVoidBlock,
   OutsideDocumentError,
   ResizeWouldLoseBlocksError,
-  ScaleWouldLoseBlocksError,
   resizeSession,
   closeDocument,
   copySelection,
@@ -1034,9 +1033,6 @@ ${report.stack}`),
     if (err instanceof NoSaveTargetError || err instanceof EditTooLargeError) {
       return { ok: false, kind: "invalid-input", message: err.message };
     }
-    if (err instanceof ScaleWouldLoseBlocksError) {
-      return { ok: false, kind: "needs-confirmation", message: err.message };
-    }
     if (err instanceof ResizeWouldLoseBlocksError) {
       // Its own kind, so the panel can offer to go ahead without reading the
       // sentence. The message already names the count.
@@ -1453,12 +1449,22 @@ ${report.stack}`),
     try {
       const session = requireSession();
       const options = await editOptionsFor(session);
-      const changed = scaleRegion(session, request.region, request.spec, {
+      const result = scaleRegion(session, request.region, request.spec, {
         ...options,
         to: request.to ?? null,
-        confirmLoss: request.confirmLoss === true,
       });
-      return { ok: true, changed, state: shellState(session) };
+      /*
+       * The sentence rides along rather than refusing the gesture. A division
+       * throws blocks away and the count of written cells cannot say so, but a
+       * scale is a handle dragged with the destination drawn under the pointer
+       * and one CTRL+Z away -- so what it needs is to be told, not stopped.
+       */
+      return {
+        ok: true,
+        changed: result.changed,
+        state: shellState(session),
+        ...(result.notes === "" ? {} : { notes: result.notes }),
+      };
     } catch (err) {
       return failure(err);
     }

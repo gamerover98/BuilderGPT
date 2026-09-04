@@ -2483,6 +2483,17 @@ import ConvertModal from "./lib/ConvertModal.svelte";
         return null;
       }
       docState = response.state;
+      /*
+       * What the edit did, when the count alone does not say it.
+       *
+       * `warn` rather than `info`, because an edit only sends one of these when
+       * something happened that `changed` cannot report -- and so far that means
+       * something was lost. Shown here rather than at each call site so an edit
+       * that starts producing one is heard without being wired up.
+       */
+      if (response.notes !== undefined && response.notes !== "") {
+        status = { tone: "warn", text: response.notes };
+      }
       await refreshDocument();
       // The inspected block may well have been one of the ones that changed --
       // a fill over it, or an undo of the edit that made it. Showing what it

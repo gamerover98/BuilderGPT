@@ -1855,21 +1855,28 @@ export function transformRegion(
 }
 
 /**
- * Thrown when a division would discard blocks, so it can be confirmed.
+ * What a scale did, when the count of written cells does not say it.
  *
- * `resizeSession`'s shape, and for its reason: counted and refused *before*
- * anything is written, because a warning shown after the blocks are gone is a
- * report. It maps to `needs-confirmation`, so the panel can offer the second
- * press without reading the sentence.
+ * `VersionChangeResult`'s shape, for its reason: multiplying writes n^3 cells
+ * per block and loses nothing, dividing writes far fewer and *discards* the
+ * rest, and one number would report the two identically.
+ *
+ * This used to be a refusal -- counted first and thrown as
+ * `ScaleWouldLoseBlocksError` unless the caller passed `confirmLoss`, which is
+ * `resizeSession`'s shape. It was the wrong shape borrowed: a resize is a
+ * number typed blind into a panel that has a second button, while a scale is a
+ * cube dragged with the destination drawn under the pointer and one Ctrl+Z
+ * away. So the refusal named a confirmation that did not exist anywhere in the
+ * app -- «Confirm to go ahead», with nothing to press -- and the gesture was
+ * simply cancelled. Reported as exactly that.
  */
-export class ScaleWouldLoseBlocksError extends Error {
-  constructor(public readonly blocks: number) {
-    super(
-      `Shrinking discards ${blocks.toLocaleString()} block${blocks === 1 ? "" : "s"}: only ` +
-        `one cell in each group survives. Confirm to go ahead.`,
-    );
-    this.name = "ScaleWouldLoseBlocksError";
-  }
+export interface ScaleResult {
+  /** Cells written. */
+  changed: number;
+  /** Non-air cells a division threw away. Always 0 for a multiplication. */
+  dropped: number;
+  /** A sentence, or `""` when nothing was lost. */
+  notes: string;
 }
 
 /**
@@ -1884,9 +1891,8 @@ export function scaleRegion(
   spec: ScaleSpec,
   options: RegionEditOptions & {
     to?: { x: number; y: number; z: number } | null;
-    confirmLoss?: boolean;
   } = {},
-): number {
+): ScaleResult {
   const { doc, history } = session;
   const region = normalizeRegion(doc, request);
   const size = {
@@ -1903,10 +1909,12 @@ export function scaleRegion(
   const volume = out.width * out.height * out.length;
   if (volume > MAX_EDIT_VOLUME) throw new EditTooLargeError(volume);
 
-  if (spec.kind === "divide" && options.confirmLoss !== true) {
-    const lost = scaleWouldDrop(doc, region, spec);
-    if (lost > 0) throw new ScaleWouldLoseBlocksError(lost);
-  }
+  /*
+   * Counted before the write, and reported rather than refused. Before the
+   * pass because after it the source cells have already been overwritten and
+   * there is nothing left to count.
+   */
+  const dropped = scaleWouldDrop(doc, region, spec);
 
   const to = options.to ?? { x: region.minX, y: region.minY, z: region.minZ };
   const landing: Region = {
@@ -1920,7 +1928,7 @@ export function scaleRegion(
   const growth = growthFor(doc, landing, options.autoGrow !== false);
   const label = spec.kind === "multiply" ? `Scale up ${spec.factor}x` : `Scale down ${spec.factor}x`;
 
-  return runTransaction(doc, history, label, (tx) => {
+  const changed = runTransaction(doc, history, label, (tx) => {
     if (growth !== null) tx.resize(growth.size, growth.shift);
     const shift = growth?.shift ?? ([0, 0, 0] as const);
     const source = growth === null ? region : shiftRegion(region, growth.shift);
@@ -1929,6 +1937,17 @@ export function scaleRegion(
       empty: emptyEntry(options.voidBlock),
     });
   });
+
+  return {
+    changed,
+    dropped,
+    notes:
+      dropped === 0
+        ? ""
+        : `Discarded ${dropped.toLocaleString()} block${dropped === 1 ? "" : "s"}: only the ` +
+          `cell at the low corner of each ${spec.factor}x${spec.factor}x${spec.factor} group ` +
+          `survives. CTRL+Z puts them back.`,
+  };
 }
 
 export class NoBlockEntityError extends Error {

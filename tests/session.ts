@@ -60,7 +60,6 @@ import {
   requireSession,
   saveSession,
   scaleRegion,
-  ScaleWouldLoseBlocksError,
   transformRegion,
   undoEdit,
 } from "../src/main/services/session.js";
@@ -1701,10 +1700,14 @@ console.log("\n--- resampling a region ---");
   setBlock(session.doc, 1, 0, 0, wood);
   session.history.undoStack.length = 0;
 
-  scaleRegion(session, { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 0 }, {
-    kind: "multiply",
-    factor: 2,
-  });
+  const doubled = scaleRegion(
+    session,
+    { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 0 },
+    { kind: "multiply", factor: 2 },
+  );
+  // Multiplying loses nothing, so it has nothing to say beyond the count.
+  equal("doubling throws nothing away", doubled.dropped, 0);
+  equal("...and so says nothing", doubled.notes, "");
   equal(
     "doubling makes one block into a cube of itself",
     getBlock(session.doc, 1, 1, 1).namespacedName,
@@ -1724,29 +1727,35 @@ console.log("\n--- resampling a region ---");
   );
 
   /*
-   * Halving discards seven cells in every eight, so it is counted and refused
-   * before anything is written -- `resizeSession`'s rule, because a warning
-   * shown after the blocks are gone is a report.
+   * Halving discards seven cells in every eight, and says so rather than
+   * refusing.
+   *
+   * It used to refuse and ask to be called again with `confirmLoss`, which is
+   * `resizeSession`'s shape -- and the wrong shape borrowed. A resize is a
+   * number typed blind into a panel that has a second button; a scale is a
+   * cube dragged with the destination drawn under the pointer and one CTRL+Z
+   * away. So the refusal named a confirmation that existed nowhere in the app
+   * and the gesture was simply cancelled. Reported as exactly that.
    */
   setBlock(session.doc, 0, 0, 0, rock);
   setBlock(session.doc, 1, 0, 0, rock);
   setBlock(session.doc, 0, 0, 1, rock);
   setBlock(session.doc, 1, 0, 1, rock);
   const half = { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 1, maxZ: 1 };
-  let raised: unknown = null;
-  try {
-    scaleRegion(session, half, { kind: "divide", factor: 2 });
-  } catch (err) {
-    raised = err;
-  }
-  check("halving counts what it would discard", raised instanceof ScaleWouldLoseBlocksError);
-  equal(
-    "...and refuses before writing anything",
-    getBlock(session.doc, 1, 0, 1).namespacedName,
-    "minecraft:stone",
+  const halved = scaleRegion(session, half, { kind: "divide", factor: 2 });
+  check("halving goes ahead rather than asking", halved.changed > 0, String(halved.changed));
+  // Four stone cells in, one out: three thrown away.
+  equal("...and counts what it threw away", halved.dropped, 3);
+  check(
+    "...in a sentence that names the number",
+    halved.notes.includes("3"),
+    halved.notes,
   );
-  const changed = scaleRegion(session, half, { kind: "divide", factor: 2 }, { confirmLoss: true });
-  check("...and goes ahead once confirmed", changed > 0, String(changed));
+  check(
+    "...and points at the way back",
+    halved.notes.includes("CTRL+Z"),
+    halved.notes,
+  );
   equal(
     "the cell at the low corner is the one that survives",
     getBlock(session.doc, 0, 0, 0).namespacedName,

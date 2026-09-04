@@ -1242,15 +1242,13 @@ export interface TransformRequest {
  * Resampling a region by a whole factor.
  *
  * Whole factors only, because anything else is a build with a different number
- * of blocks in every row. Multiplying is exact; dividing keeps one cell in each
- * group and is refused first with a count, like a shrink.
+ * of blocks in every row. Multiplying is exact; dividing keeps the cell at the
+ * low corner of each group and says in `notes` how many it threw away.
  */
 export interface ScaleRequest {
   region: RegionSpec;
   spec: { kind: "multiply"; factor: number } | { kind: "divide"; factor: number };
   to?: { x: number; y: number; z: number } | null;
-  /** Go ahead even though blocks will be discarded. */
-  confirmLoss?: boolean;
 }
 
 /**

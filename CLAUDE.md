@@ -3766,6 +3766,17 @@ knowing:
   sheet it had been used on and wrong the moment a 32-wide one arrived: a sign's
   board came out wearing a quarter of its own sheet blown up to fill the face,
   which reads as a plank and is why it nearly passed review.
+- **And it needs the sheet's *height*, which is not always the width.** One
+  scale for both axes is right exactly while the sheet is square, and the
+  three callers it had all are. A mob's is not: a skeleton, a wither skeleton
+  and a creeper are 64x32. Read at the width, a head's band lands at v 8..16
+  of a sheet only 32 tall, which is a rib.
+- **A head has no block model, and it had no unwrap either.** The box was
+  right -- `[4, 0, 4, 12, 8, 12]`, which is vanilla's -- and the texture was
+  right, `entityTextureAlias` having resolved the mob's own sheet for years.
+  What was missing between them was the `uv`, so every face took
+  coordinate-derived UVs and cropped an arbitrary quarter of a whole
+  skeleton. Reported as the heads being smeared, which is exactly what it is.
 - **Only a full opaque cube may cull — and "opaque" is a question about
   pixels.** `occludesFace` answered it from `isSeeThrough`, a list of names in
   `block_shapes.ts`, which is geometry and cannot open a PNG. So every block
@@ -4006,6 +4017,61 @@ knowing:
   centred on the pair; the sheets say so themselves, `normal_left` leaving its
   lock's west window blank and `normal_right` its east, which is the same face
   `inner` already names for the chest.
+- **`unwrapCube` has two answers about which way is up, and both are
+  measured.** A chest, a bell and a sign want the four side strips read
+  bottom-up and the first flat patch as the *underside*; a mob's head wants
+  the exact opposite on all six faces. That is not a preference, it is what
+  the two sheets say, and vanilla's block-entity renderers each pose their
+  `ModelPart` before drawing it rather than sharing one convention.
+
+  How each was measured, so the next person can redo it rather than trust it.
+  On `entity/chest/normal.png` the lock's notch sits two rows into the lid's
+  front strip and two rows short of the end of the body's, and those two rows
+  are byte-identical -- so they are the joint, and the strips run bottom-up.
+  On `entity/player/wide/steve.png` the front strip has hair in its first two
+  rows, eyes in its fifth and a mouth in its seventh -- so that one runs
+  top-down. Neither reading is arguable and they disagree, so `upright` says
+  which, defaulting to the chest's.
+
+  Turning the cube over is **one** operation and not two: the two flat
+  patches swap *and* the four strips reverse, because it is the same cube
+  seen from the other end of the Y axis. Doing half of it puts a head's face
+  on upside down while its scalp is still on top, which looks like a
+  different bug.
+- **The head cube's in-plane orientation on its two flat faces is not
+  determinable from any sheet the pack ships**, and is left where the
+  arithmetic puts it. The top of a head is a flat colour on every mob in the
+  game -- the seam test that settles it for a chest returns 5 out of 255 on
+  Steve and disagrees with itself between Steve, a zombie and a piglin. It is
+  not visible either, which is the same fact from the other side.
+- **A wall head was a quarter turn out, on every one of the fourteen.**
+  Vanilla states the shape as its `facing=north` case -- against the *south*
+  wall -- so it is north-authored, and it was being turned by `facingSteps +
+  2`, which is what an *east*-authored box needs and what `againstWall`
+  correctly does for a ladder. Nothing could see it: a skull is very nearly
+  symmetric in plan, and every check there was asked `orientPlacement` for
+  the property rather than the baker for the box. The unwrap is what made it
+  visible, because a face is not symmetric in plan at all.
+- **A head on the floor turns by sixteenths, not by quarters.** A standing
+  sign rounds `rotation` to the nearest quarter and says so, because its
+  board is square in plan and carries the same picture on both faces. A head
+  has a face, and eight of the sixteen values would be 22.5 degrees out. So
+  it is a `BoxRotation` -- which spins the positions and the normal and
+  leaves the windows alone, and that is exactly right, because the picture
+  has to turn with the geometry it is painted on.
+
+  The `180 -` in front of it is the offset between two conventions and is the
+  part that is easy to write down backwards: the cube is authored with the
+  face on its **north** side, which is what the wall variant needs at zero
+  steps, while vanilla's `RotationSegment` puts **south** at `rotation=0` --
+  the same convention `signRotation` already implements. A head turned
+  exactly half round still reads as a head, so nothing on screen would say.
+- **The dragon is deliberately not in the table.** Its head is not an 8x8x8
+  cube on a 64-wide sheet -- `entity/enderdragon/dragon.png` is 256 logical
+  texels wide and the head there has a jaw and horns as separate parts -- so
+  there is no window to write that would not be invented. It keeps the crop
+  it has always had, which is wrong in a way somebody can report rather than
+  wrong in a way that looks deliberate.
 - **The sign sheets are 32 wide and their parts are unwrapped on them**, which
   the comment there used to deny — the layout looked underivable because
   `unwrapCube` was reading it at the wrong scale. The hanging sign's board

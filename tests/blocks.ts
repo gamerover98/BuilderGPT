@@ -1954,6 +1954,227 @@ if (pack === null) {
 // `front_text`/`back_text`, and nothing migrates a schematic cut before that.
 // Each message is a JSON text component rather than a string, which is the part
 // that reads as "the sign is blank" when it is skipped.
+// --- a head wears its own face ----------------------------------------------
+//
+// The box was right and the texture was right; what was missing between them
+// was the unwrap. With no `uv` a face takes coordinate-derived UVs, and those
+// are correct for a shape cut out of a full-block tile and meaningless on a
+// *sheet*: the front of a skeleton's skull was the middle quarter of a whole
+// skeleton, stretched over eight pixels. Reported as the heads being smeared.
+console.log("\n--- a head wears its own face ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  /** A baked face's window, back in the sheet's own texels. */
+  const sheetRect = (face: BakedFace, w: number, h: number): number[] => {
+    const us = [0, 2, 4, 6].map((i) => face.uvs[i] * w);
+    const vs = [1, 3, 5, 7].map((i) => face.uvs[i] * h);
+    return [Math.min(...us), Math.min(...vs), Math.max(...us), Math.max(...vs)].map((n) =>
+      Math.round(n * 100) / 100,
+    );
+  };
+  const facesOf = async (name: string, props: Record<string, string>): Promise<BakedFace[]> => {
+    const baked = await baker.bakeBlockstate(block(name, props));
+    return [...Object.values(baked.faces), ...baked.extraFaces];
+  };
+  const towards = (face: BakedFace, axis: number, sign: number): boolean =>
+    Math.round(face.normal[axis]) === sign;
+
+  /*
+   * `rotation=8` is the one value that turns the model not at all -- vanilla's
+   * `RotationSegment` puts south at 0 and north half a turn later -- so the
+   * model's own axes and the world's coincide and the windows can be read off
+   * directly.
+   */
+  const steve = await facesOf("player_head", { rotation: "8" });
+  const front = steve.find((f) => towards(f, 2, -1));
+  const back = steve.find((f) => towards(f, 2, 1));
+  const top = steve.find((f) => towards(f, 1, 1));
+  const under = steve.find((f) => towards(f, 1, -1));
+  check("a head bakes all six faces", steve.length === 6, String(steve.length));
+  if (front && back && top && under) {
+    /*
+     * The head cube is `unwrapCube(0, 0, 8, 8, 8)`, which is the layout every
+     * mob sheet in the game has carried since skins existed: the four sides in
+     * a band at v 8..16 -- right, front, left, back -- with the two flat faces
+     * above them.
+     */
+    equal("the front of the head is the front of the sheet", sheetRect(front, 64, 64), [8, 8, 16, 16]);
+    equal("...and the back is the back", sheetRect(back, 64, 64), [24, 8, 32, 16]);
+    equal("the top is the patch above the face", sheetRect(top, 64, 64), [8, 0, 16, 8]);
+    equal("...and the underside is the one beside it", sheetRect(under, 64, 64), [16, 0, 24, 8]);
+
+    /*
+     * And those last two were the wrong way round, in `unwrapCube` itself,
+     * since it was written. Nothing could see it: a chest's top is under its
+     * lid, a bell's cap is a flat colour, and a sign's board is two texels of
+     * plank -- the three callers it had. A head is the first block where the
+     * two patches differ, and there they differ by a whole face: the top of the
+     * head is hair and the underside is the neck.
+     *
+     * Stated against the sheet's own structure rather than against a colour,
+     * so it holds for any pack: the top of the head adjoins the top of the
+     * face, whatever either happens to be painted.
+     */
+    const across = [0.3, 0.4, 0.5, 0.6, 0.7];
+    const band = (face: BakedFace, at: (n: number) => [number, number, number]): number =>
+      across.reduce((sum, n) => sum + texelOn(face, at(n)).luminance, 0) / across.length;
+    const hair = band(front, (x) => [x, 0.48, 0.25]);
+    const chin = band(front, (x) => [x, 0.02, 0.25]);
+    const crown = band(top, (z) => [0.5, 0.5, z]);
+    check(
+      "the top of the head is the same hair the top of the face is",
+      Math.abs(crown - hair) < Math.abs(crown - chin),
+      `crown ${crown.toFixed(0)}, hair ${hair.toFixed(0)}, chin ${chin.toFixed(0)}`,
+    );
+    /*
+     * Whole rows rather than one texel each, because a single sample down the
+     * middle of Steve's chin lands in the shadow under his mouth and reads as
+     * dark as his hair. The row average does not: the cheeks either side of it
+     * are skin.
+     */
+    check(
+      "...and the underside is not",
+      Math.abs(band(under, (z) => [0.5, 0, z]) - chin) <
+        Math.abs(band(under, (z) => [0.5, 0, z]) - hair),
+      `under ${band(under, (z) => [0.5, 0, z]).toFixed(0)}`,
+    );
+
+    /*
+     * And the strip itself is the right way up, which is a separate mistake
+     * and was the visible one: with the four sides reversed the head wears its
+     * own face upside down, hair on the chin.
+     *
+     * Stated geometrically so it owes the pack nothing. The reason it is
+     * *this* way up rather than the chest's is a measurement, and it is
+     * written out beside `upright` in `block_shapes.ts`.
+     */
+    const sheetRow = (face: BakedFace, highest: boolean): number => {
+      let best = 0;
+      for (let i = 1; i < 4; i += 1) {
+        const better = face.positions[i * 3 + 1] > face.positions[best * 3 + 1];
+        if (better === highest) best = i;
+      }
+      return face.uvs[best * 2 + 1];
+    };
+    check(
+      "the top of the head's face is the top of its patch",
+      sheetRow(front, true) < sheetRow(front, false),
+      `${sheetRow(front, true)} over ${sheetRow(front, false)}`,
+    );
+  }
+
+  /*
+   * A skeleton's sheet is 64x32 and a player's is 64x64, and `unwrapCube` used
+   * to take one number for both axes. Read at the width, the head's band lands
+   * at v 8..16 of *64* -- the top quarter of a sheet that is only half that
+   * tall, which is a rib.
+   */
+  const bone = await facesOf("skeleton_skull", { rotation: "8" });
+  const boneFront = bone.find((f) => towards(f, 2, -1));
+  if (boneFront) {
+    equal("a 64x32 sheet is read at its own height", sheetRect(boneFront, 64, 32), [8, 8, 16, 16]);
+    check(
+      "...which is half way down it, not a quarter",
+      boneFront.uvs[1] > 0.24 && boneFront.uvs[1] < 0.51,
+      String(boneFront.uvs[1]),
+    );
+  }
+
+  /*
+   * The dragon is deliberately not in the table. Its head is not an 8x8x8 cube
+   * on a 64-wide sheet, so there is no window to write that would not be
+   * invented -- it keeps the crop it has always had, which is wrong in a way
+   * somebody can report rather than wrong in a way that looks deliberate.
+   */
+  const dragon = await facesOf("dragon_head", {});
+  const dragonFront = dragon.find((f) => towards(f, 2, -1));
+  if (dragonFront) {
+    equal("the dragon keeps its derived crop", sheetRect(dragonFront, 16, 16), [4, 8, 12, 16]);
+  }
+
+  /*
+   * Sixteen positions, not four. A standing sign rounds `rotation` to the
+   * nearest quarter because its board is square in plan and says the same thing
+   * on both faces; a head has a face, and rounding would put half the values
+   * 22.5 degrees out.
+   */
+  const looksWhere = async (rotation: string): Promise<string> => {
+    const faces = await facesOf("player_head", { rotation });
+    const face = faces.find((f) => sheetRect(f, 64, 64).join() === "8,8,16,16");
+    if (face === undefined) return "?";
+    const [x, , z] = face.normal;
+    // A half turn is `Math.sin(Math.PI)`, which is 1.2e-16 rather than zero,
+    // and `(-1.2e-16).toFixed(2)` is `"-0.00"`.
+    const plain = (n: number): string => (Math.abs(n) < 1e-9 ? 0 : n).toFixed(2);
+    return `${plain(x)},${plain(z)}`;
+  };
+  equal("rotation 0 looks south", await looksWhere("0"), "0.00,1.00");
+  equal("rotation 4 looks west", await looksWhere("4"), "-1.00,0.00");
+  equal("rotation 8 looks north", await looksWhere("8"), "0.00,-1.00");
+  equal("rotation 12 looks east", await looksWhere("12"), "1.00,0.00");
+  const between = await looksWhere("2");
+  check("...and rotation 2 looks between two of them", between === "-0.71,0.71", between);
+
+  /*
+   * The wall variant was a quarter turn out, on every wall head in the game.
+   *
+   * Vanilla states the shape as its `facing=north` case -- against the *south*
+   * wall -- so it is north-authored, and it was being turned by `facingSteps +
+   * 2`, which is what an east-authored box needs and what `againstWall`
+   * correctly does for a ladder. Invisible until now for two reasons at once: a
+   * skull is very nearly symmetric in plan, and every check there was asked
+   * `orientPlacement` for the property rather than the baker for the box.
+   */
+  const wallAt = async (facing: string): Promise<string> => {
+    const faces = await facesOf("skeleton_wall_skull", { facing });
+    const at = faces.flatMap((f) => [0, 3, 6, 9].map((i) => [f.positions[i], f.positions[i + 2]]));
+    const xs = at.map((p) => p[0]);
+    const zs = at.map((p) => p[1]);
+    if (Math.min(...zs) >= 0.5) return "south wall";
+    if (Math.max(...zs) <= 0.5) return "north wall";
+    if (Math.min(...xs) >= 0.5) return "east wall";
+    return "west wall";
+  };
+  equal("a north-facing wall skull hangs on the south wall", await wallAt("north"), "south wall");
+  equal("...a south-facing one on the north wall", await wallAt("south"), "north wall");
+  equal("...an east-facing one on the west wall", await wallAt("east"), "west wall");
+  equal("...and a west-facing one on the east wall", await wallAt("west"), "east wall");
+
+  /*
+   * And the chest is stated here too, from the other side, so the pair reads as
+   * one decision rather than as an oversight in whichever was looked at second.
+   * Its strips run the other way -- measured off the lock, which straddles the
+   * joint and lands two rows into the lid's strip and two short of the end of
+   * the body's.
+   */
+  const lid = await facesOf("chest", { facing: "north", type: "single" });
+  const lidFront = lid.filter((f) => towards(f, 2, -1)).sort((a, b) => b.positions[1] - a.positions[1])[0];
+  if (lidFront) {
+    const highest = (f: BakedFace, top: boolean): number => {
+      let best = 0;
+      for (let i = 1; i < 4; i += 1) {
+        if (f.positions[i * 3 + 1] > f.positions[best * 3 + 1] === top) best = i;
+      }
+      return f.uvs[best * 2 + 1];
+    };
+    check(
+      "a chest is not read the same way up, and that is measured too",
+      highest(lidFront, true) > highest(lidFront, false),
+      `${highest(lidFront, true)} over ${highest(lidFront, false)}`,
+    );
+  }
+
+  // And it wears the same face the floor one does, on the side it looks out of.
+  const hung = await facesOf("creeper_wall_head", { facing: "north" });
+  const hungFront = hung.find((f) => towards(f, 2, -1));
+  check(
+    "a wall head looks out of the wall wearing its face",
+    hungFront !== undefined && sheetRect(hungFront, 64, 32).join() === "8,8,16,16",
+    hungFront === undefined ? "no north face" : sheetRect(hungFront, 64, 32).join(),
+  );
+}
+
 console.log("\n--- what a sign says ---");
 {
   const str = (value: string) => ({ type: "string", value });

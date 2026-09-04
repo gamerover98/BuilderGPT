@@ -473,13 +473,46 @@ function unwrapCube(
    * which reads as a plank and is why it nearly passed.
    */
   sheet = 64,
+  /**
+   * The sheet's own height, in its own texels. Defaults to its width,
+   * which is what every square sheet wants and what this used to assume.
+   *
+   * A window is normalised over the *whole* image on each axis independently
+   * -- the atlas stretches every tile to a square (`tileSizeFor` takes the
+   * larger side) -- so one scale for both is right only while the sheet is
+   * square. Chests, bells and signs all are. A mob's is not: a skeleton, a
+   * wither skeleton and a creeper are 64x32, and read at the width their
+   * head lands on the bottom half of the sheet, which is a leg.
+   */
+  sheetHeight = sheet,
+  /**
+   * Whether the sheet's V runs **with** the world's Y -- the top of the
+   * picture being the top of the box.
+   *
+   * It is `false` here because that is what the chest, the bell and the sign
+   * measurably want, and `true` for a mob's head, and both of those are
+   * measurements rather than opinions. Vanilla's block-entity renderers each
+   * pose their `ModelPart` before drawing it and they do not all pose it the
+   * same way up; what reaches `ShapeBox.uv` has to be the *world's* answer,
+   * so the difference has to be sayable here.
+   *
+   * How each was measured, so the next person can redo it rather than trust
+   * it. On `entity/chest/normal.png` the lock's notch sits two rows into the
+   * lid's front strip and two rows short of the end of the body's, and those
+   * two rows are byte-identical -- so they are the joint, and the strips run
+   * bottom-up. On `entity/player/wide/steve.png` the front strip has hair in
+   * its first two rows, eyes in its fifth and a mouth in its seventh -- so
+   * that strip runs top-down. Neither reading is arguable and they disagree.
+   */
+  upright = false,
 ): Record<string, UvWindow> {
   const scale = 16 / sheet;
+  const scaleV = 16 / sheetHeight;
   const w = (x: number, y: number, width: number, height: number): UvWindow => [
     x * scale,
-    y * scale,
+    y * scaleV,
     (x + width) * scale,
-    (y + height) * scale,
+    (y + height) * scaleV,
   ];
   /*
    * The four side strips run **bottom-up**, and the lock says so.
@@ -502,17 +535,24 @@ function unwrapCube(
    */
   const side = (x: number, y: number, width: number, height: number): UvWindow => [
     x * scale,
-    (y + height) * scale,
+    (y + height) * scaleV,
     (x + width) * scale,
-    y * scale,
+    y * scaleV,
   ];
+  /*
+   * Turning the cube over swaps the two flat patches and un-reverses the four
+   * strips, which is one operation rather than two: it is the same cube seen
+   * from the other end of the Y axis.
+   */
+  const strip = upright ? w : side;
+  const [top, bottom] = upright ? [u + dz, u + dz + dx] : [u + dz + dx, u + dz];
   return {
-    down: w(u + dz, v, dx, dz),
-    up: w(u + dz + dx, v, dx, dz),
-    west: side(u, v + dz, dz, dy),
-    north: side(u + dz, v + dz, dx, dy),
-    east: side(u + dz + dx, v + dz, dz, dy),
-    south: side(u + 2 * dz + dx, v + dz, dx, dy),
+    up: w(top, v, dx, dz),
+    down: w(bottom, v, dx, dz),
+    west: strip(u, v + dz, dz, dy),
+    north: strip(u + dz, v + dz, dx, dy),
+    east: strip(u + dz + dx, v + dz, dz, dy),
+    south: strip(u + 2 * dz + dx, v + dz, dx, dy),
   };
 }
 
@@ -751,6 +791,109 @@ const SNOW_LAYER = (entry: PaletteEntry): BlockShape => {
   return height >= 16 ? CUBE : boxes([0, 0, 0, 16, height, 16]);
 };
 
+// --- heads and skulls -------------------------------------------------------
+//
+// A head has no block model: `blockstates/skeleton_skull.json` names
+// `block/skull`, which holds a particle texture and nothing else. It is a
+// block entity drawn from the *mob's own sheet* -- which is what vanilla does
+// and what `entityTextureAlias` already resolves -- so the geometry is one
+// `ModelPart` cube and `unwrapCube` is its arithmetic.
+
+/** The cube every head is, in the model's own units. Vanilla's `SkullBlock`. */
+const HEAD_BOX: Box = [4, 0, 4, 12, 8, 12];
+
+/** The same cube on a wall, as vanilla's `facing=north` states it. */
+const WALL_HEAD_BOX: Box = [4, 4, 8, 12, 12, 16];
+
+/**
+ * How tall each head's sheet is, in its own texels.
+ *
+ * Not one number, because the mobs do not agree: a skeleton, a wither
+ * skeleton and a creeper are 64x32 and a zombie, a piglin and a player are
+ * 64x64. `unwrapCube` needs both sides or the three short sheets read their
+ * head windows at twice the height they occupy.
+ *
+ * **The dragon is deliberately absent.** Its head is not an 8x8x8 cube on a
+ * 64-wide sheet -- `entity/enderdragon/dragon.png` is 256 logical texels wide
+ * and the head there has a jaw and horns as separate parts -- so there is no
+ * window to write that would not be invented. It keeps the coordinate-derived
+ * UVs it has always had, which are wrong in a way somebody can see and report
+ * rather than wrong in a way that looks deliberate.
+ */
+const HEAD_SHEET_HEIGHT: Readonly<Record<string, number>> = {
+  skeleton: 32,
+  wither_skeleton: 32,
+  creeper: 32,
+  zombie: 64,
+  piglin: 64,
+  player: 64,
+};
+
+/** `creeper_wall_head` -> `creeper`, which is the key of the table above. */
+function headKind(entry: PaletteEntry): string {
+  return baseName(entry).replace(/_(?:wall_)?(?:skull|head)$/, "");
+}
+
+/**
+ * The head cube's windows on the mob's sheet, or `undefined` for a head whose
+ * sheet this does not claim to know.
+ */
+function headUv(entry: PaletteEntry): Readonly<Record<string, UvWindow>> | undefined {
+  const sheetHeight = HEAD_SHEET_HEIGHT[headKind(entry)];
+  return sheetHeight === undefined
+    ? undefined
+    : unwrapCube(0, 0, 8, 8, 8, 64, sheetHeight, true);
+}
+
+/**
+ * A head on the floor, turned by `rotation` -- sixteen positions, not four.
+ *
+ * A quarter-turn would be the cheaper answer and it is the wrong one here: a
+ * standing sign rounds to the nearest quarter because its board is square in
+ * plan and carries the same picture on both faces, while a head has a *face*,
+ * and half the sixteen values would put it 22.5 degrees out.
+ *
+ * So it is a `BoxRotation`, which spins the positions and the normal and
+ * leaves the windows alone -- and that is exactly right, because the picture
+ * has to turn with the geometry it is painted on.
+ *
+ * `180 -` is the offset between the two conventions in play, and it is the
+ * part that is easy to write down backwards. The cube is authored with the
+ * mob's face on its **north** side, which is what the wall variant needs at
+ * zero steps; vanilla's `RotationSegment` puts **south** at `rotation=0`,
+ * which is the same convention `signRotation` already implements. A head
+ * turned exactly half round still reads as a head, so nothing on screen would
+ * say it was wrong.
+ */
+function skull(entry: PaletteEntry): BlockShape {
+  const sixteenths = Number(entry.properties.rotation);
+  const turn = 180 - 22.5 * (Number.isFinite(sixteenths) ? sixteenths : 0);
+  return boxes({
+    box: HEAD_BOX,
+    uv: headUv(entry),
+    rotation: { origin: [8, 8, 8], axis: "y", angle: turn },
+  });
+}
+
+/**
+ * A head on a wall, hung on the face opposite the one it looks out of.
+ *
+ * `northFacingSteps`, not `facingSteps + 2`, and the difference is a quarter
+ * turn on every wall head in the game. The box above is vanilla's
+ * `facing=north` shape -- against the **south** wall -- so it is north-authored
+ * like a trapdoor, while `+ 2` is what an *east*-authored box needs and is
+ * what `againstWall` correctly does for a ladder. Nothing could see it: a
+ * skull is very nearly symmetric in plan, and every check there was asked
+ * `orientPlacement` for the property rather than the baker for the box.
+ */
+function wallSkull(entry: PaletteEntry): BlockShape {
+  return transform(
+    [{ box: WALL_HEAD_BOX, uv: headUv(entry) }],
+    northFacingSteps(entry),
+    false,
+  );
+}
+
 /** Suffix-matched families, checked after the exact-name table. */
 const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => BlockShape]> = [
   ["_slab", slab],
@@ -823,10 +966,10 @@ const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => Bl
   ["_coral", () => ({ kind: "cross" })],
   // A head or a skull sits in the middle of its cell; a wall one hangs on the
   // face opposite the one it looks out of.
-  ["_wall_head", (e) => transform([[4, 4, 8, 12, 12, 16]], facingSteps(e) + 2, false)],
-  ["_wall_skull", (e) => transform([[4, 4, 8, 12, 12, 16]], facingSteps(e) + 2, false)],
-  ["_head", () => boxes([4, 0, 4, 12, 8, 12])],
-  ["_skull", () => boxes([4, 0, 4, 12, 8, 12])],
+  ["_wall_head", wallSkull],
+  ["_wall_skull", wallSkull],
+  ["_head", skull],
+  ["_skull", skull],
   // A cake with a candle on it: the cake, and the candle standing on top.
   ["_candle_cake", candleCake],
   // A cauldron with something in it is the same iron pot.
@@ -2407,8 +2550,10 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
    * answer. For these it is the harmful one, so a close box beats it.
    */
   redstone_wire: () => boxes([0, 0, 0, 16, 1, 16]),
-  skeleton_skull: () => boxes([4, 0, 4, 12, 8, 12]),
-  skeleton_wall_skull: (e) => transform([[4, 4, 8, 12, 12, 16]], facingSteps(e) + 2, false),
+  // `skeleton_skull` and `skeleton_wall_skull` used to be repeated here, with
+  // the same two expressions the `_skull` and `_wall_skull` suffixes already
+  // reach. Two copies of one shape is how one of them comes to be corrected
+  // and the other not -- and this pair very nearly was.
   decorated_pot: () => boxes([1, 0, 1, 15, 16, 15]),
   sniffer_egg: () => boxes([1, 0, 1, 15, 16, 15]),
   // Tapered in vanilla, and a taper is a stack of boxes this does not build.

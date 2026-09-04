@@ -40,8 +40,35 @@ export interface HoverState {
    * that block would promise something the click does not do.
    */
   readonly overHandle: boolean;
-  /** Whether a face drag is in flight. The outline must not chase it. */
+  /**
+   * Whether the pointer is over one of the transform gizmo's handles.
+   *
+   * The same sentence as the one above, about a different thing drawn for the
+   * same purpose. It is a field of its own rather than folded into
+   * `overHandle` because the two come from different raycasts and a failure
+   * should name which one was forgotten.
+   */
+  readonly overGizmo: boolean;
+  /** Whether a drag is in flight. The outline must not chase it. */
   readonly dragging: boolean;
+}
+
+/**
+ * Whether the pointer is promising a handle rather than what is behind it.
+ *
+ * Two consumers, which is why it is a function rather than a condition inside
+ * `hoverSource`: the block outline, which must not draw around a block the
+ * click will not touch, and the build grid's patch, which must not draw a
+ * target on the floor behind an arrow. The second was missing -- hovering a
+ * gizmo arrow over open ground lit a cell at y=0 that the press had nothing to
+ * do with, which reads as the editor being about to place something there.
+ */
+export function pointerOnHandle(state: {
+  readonly overHandle: boolean;
+  readonly overGizmo: boolean;
+  readonly dragging: boolean;
+}): boolean {
+  return state.overHandle || state.overGizmo || state.dragging;
 }
 
 export function hoverSource(state: HoverState): HoverSource {
@@ -55,7 +82,7 @@ export function hoverSource(state: HoverState): HoverSource {
     return state.flying ? { kind: "crosshair" } : NONE;
   }
 
-  if (state.dragging || state.overHandle || state.pointer === null) return NONE;
+  if (pointerOnHandle(state) || state.pointer === null) return NONE;
   return { kind: "pointer", x: state.pointer.x, y: state.pointer.y };
 }
 

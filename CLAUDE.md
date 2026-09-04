@@ -2225,6 +2225,30 @@ Four things about it are load-bearing:
   the *selection* rather than the ghost, so a short drag on a big region is not
   lost waiting for a picture.
 
+**The gizmo's toolbar is along the bottom, and opened on top of the
+notifications.** `.status` and the bar had byte-identical positioning —
+`top: 12px`, centred, `z-index: 4` — so every message the app raised landed on
+the controls somebody was reaching for. It clears the hotbar now, from
+`--hotbar-inset` and `--hotbar-height` in `app.css`: a pair, because the second
+is measured off `Hotbar.svelte`'s own rules and changing the slot moves it.
+That failure is two bars overlapping, which is visible, rather than silent.
+
+Glyphs rather than words, with the name, the sentence and the key on `title`
+and the name on `aria-label` — not optional for a button with no text in it.
+The three mirrors are axis letters in `--axis-x/y/z` rather than a glyph each,
+because X and Z are both horizontal and any mirror glyph would draw them
+identically; the colour is the language the gizmo already teaches in the
+viewport.
+
+**The ground patch yields to a handle, and did not.** Hovering an arrow with
+the floor behind it lit a cell at `y = 0` that the press had nothing to do
+with — two indicators, one of them about to do nothing. `pointerOnHandle` in
+`block_hover.ts` is the one question now, asked by the block outline and by the
+build grid; `overGizmo` is a field of its own beside `overHandle` because the
+two come from different raycasts and a failure should name which was forgotten.
+`updateHover` moved ahead of both consumers in the loop, so neither decides
+from the previous frame's answer.
+
 **Rotation is offered on one axis, and that is the finding rather than an
 omission.** A quarter turn about X or Z tumbles the build, and Minecraft's block
 states cannot follow: `facing` on a staircase, a door, a bed or a chest names one
@@ -2296,6 +2320,45 @@ stack depth — is it. The rule is one sentence: **a selection is undone only wh
 no block edit has landed on top of it.** `selection_history.ts` holds it. A drag
 is one step rather than one per frame, which is why `Viewer.svelte` reports
 gesture boundaries at all: only it knows where the press was.
+
+**A gesture that moved the blocks *and* the box is one press, and was two.**
+The gizmo's commits write `selection` only after awaiting the edit, so by then
+`docState.undoDepth` has already advanced — and the catch-all recorder stamps
+whatever it finds. The step came out keyed to the depth it should have been
+*under*, `undoTarget` read it as the newest thing that happened, and Ctrl+Z put
+the box back while leaving the blocks moved.
+
+`SelectionStep.withEdit` is the pairing, keyed to the depth **before** the edit:
+at the new depth it no longer answers `undoTarget`, so the document is undone
+first and `takeEditUndo` hands the box back in the same press.
+`adoptEditedSelection` captures that depth before the await, and every gizmo
+commit goes through it.
+
+**The flag is load-bearing on `redoTarget` and deliberately absent from
+`undoTarget`**, which is the part that would be tidied into symmetry by
+somebody who had not checked. Undoing a pair leaves its step on the redo stack
+keyed at the depth the document has just come back to, so there the depths
+*do* meet and without the clause the press would move the box forward with the
+blocks left behind. On the undo side they never meet — except when the edit
+was undone by something that bypassed `undoAnything`, which the chat panel's
+per-message undo does, and there the arithmetic's answer is the right one: the
+blocks are already back, so the box should follow. The clause was written on
+both and removed from one when deleting it failed nothing.
+
+**`takeEditRedo` is asked before main is told, and its opposite number after.**
+A redo raises the depth exactly as a fresh edit does and the depth watcher
+cannot tell them apart, so it calls `recordDocumentEdit`, which empties the
+redo stack — the step would already be gone. Reassigning the timeline
+afterwards also puts the rest of that stack back, which is a fix rather than a
+side effect: nothing was branched away from.
+
+**There was a `restoringSelection` flag and it never did anything.** Set and
+cleared synchronously around three assignments, with a comment claiming the
+recorder ran synchronously off them; the recorder is a plain `$effect`, which
+flushes a microtask later with the flag already back to false. What actually
+suppresses a re-record is fast-forwarding `lastSelection`, so `sameSelection`
+finds nothing to record. It is gone, because it was the first thing the gizmo's
+commits reached for.
 
 **A wall-mounted block points *out* of the wall, and the sign of that is the
 whole bug.** Wall torches, wall signs, wall banners, mob heads and coral wall

@@ -301,10 +301,15 @@ export const en = {
   "selection.legend": "Selection",
   "gizmo.legend": "Transform",
   "gizmo.move": "Move",
+  "gizmo.move.hint": "Drag an arrow to slide the selection along one axis",
   "gizmo.rotate": "Turn",
+  "gizmo.rotate.hint":
+    "Drag the ring to turn the selection about the pivot, a quarter at a time",
   "gizmo.scale": "Scale",
+  "gizmo.scale.hint": "Drag a cube to resample the selection by a whole factor",
   "gizmo.pivot": "Pivot",
-  "gizmo.mirrorShort": "Mirror {axis}",
+  "gizmo.pivot.hint":
+    "Drag an arrow to move the point turns and mirrors happen about, leaving the blocks where they are",
   "gizmo.mirror.x": "Mirror east to west, through the pivot",
   "gizmo.mirror.y": "Flip top to bottom, through the pivot",
   "gizmo.mirror.z": "Mirror north to south, through the pivot",

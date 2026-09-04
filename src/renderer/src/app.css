@@ -63,6 +63,18 @@
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px;
 
+  /* Where the hotbar sits, and how much room it takes.
+
+     Not colours, so they are defined once here and never redefined per theme,
+     for `--mono`'s reason below. They are a *pair*: the hotbar reads the
+     first, and anything stacking above it -- today the gizmo's toolbar --
+     clears both. The height is measured off `Hotbar.svelte`'s own rules
+     (icon 26 + name 10 + gap 2 + slot padding 7 + slot borders 4 + bar
+     padding 8 + bar borders 2 = 59), so changing the slot moves it. That is a
+     failure you can see -- two bars overlapping -- rather than a silent one. */
+  --hotbar-inset: 16px;
+  --hotbar-height: 60px;
+
   /* Not a colour, so it is defined once here and never redefined per theme.
      `TraceView` has been asking for this token since it was written and always
      falling through to its own inline fallback. */

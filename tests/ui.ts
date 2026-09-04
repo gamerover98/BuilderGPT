@@ -26,7 +26,12 @@ import {
   placePopover,
 } from "../src/renderer/src/lib/floating.js";
 import { blocksInDocument, PANEL_SIZE, voidSources } from "../src/shared/settings.js";
-import { facingNormal, hoverSource, outlineCentre } from "../src/renderer/src/lib/block_hover.js";
+import {
+  facingNormal,
+  hoverSource,
+  outlineCentre,
+  pointerOnHandle,
+} from "../src/renderer/src/lib/block_hover.js";
 import {
   blockLabel,
   gridWindow,
@@ -38,8 +43,11 @@ import { buildLegacyIndex } from "../src/shared/legacy_ids.js";
 import {
   emptyTimeline,
   recordDocumentEdit,
+  recordEditSelection,
   recordSelection,
   redoTarget,
+  takeEditRedo,
+  takeEditUndo,
   takeRedo,
   takeUndo,
   undoTarget,
@@ -1119,6 +1127,30 @@ console.log("\n--- the gizmo takes the press, and gives the camera back ---");
     "only the vertical ring is built",
     viewer.includes('gizmoMode === "rotate" ? (["y"] as const)'),
     "a horizontal ring would write block states the game cannot hold",
+  );
+
+  /*
+   * The ground patch yields to a handle as well. Reported as an arrow with a
+   * lit cell on the floor behind it -- two indicators, one of which was about
+   * to do nothing.
+   */
+  check(
+    "the build grid asks whether the pointer is on a handle",
+    viewer.includes("pointerOnHandle({"),
+  );
+  /*
+   * And the hover is refreshed before the two things that read it. After
+   * them, each would be deciding from the previous frame's answer -- which
+   * on a 50ms throttle is a visible flicker as the pointer crosses a handle.
+   */
+  const order = (name: string) => viewer.indexOf(`${name}(performance.now())`);
+  check(
+    "the hover is refreshed before the outline that reads it",
+    order("updateHover") >= 0 && order("updateHover") < order("updateBlockHighlight"),
+  );
+  check(
+    "...and before the build grid",
+    order("updateHover") < order("updateBuildGrid"),
   );
 }
 
@@ -2295,6 +2327,94 @@ console.log("\n--- selection history ---");
 // visible slice has to be computed from a scroll offset -- and a scroll offset
 // is not something this harness can produce, so the arithmetic lives apart from
 // the component and only the scrolling stays unobservable.
+console.log("\n--- a gesture that moved both is one press ---");
+{
+  /*
+   * The gizmo's move, turn and scale change the blocks *and* the box. Recorded
+   * apart they cost two presses of Ctrl+Z: one to put the box back on the space
+   * the blocks had left, one to put the blocks back. Reported as exactly that.
+   *
+   * The pairing is a step keyed to the depth *before* the edit and flagged, so
+   * it does not answer `undoTarget` while the depth is up -- and `takeEditUndo`
+   * hands it back the moment the document comes down to meet it.
+   */
+  const box = (n: number) => ({ minX: n, minY: 0, minZ: 0, maxX: n, maxY: 0, maxZ: 0 });
+  const at = (n: number): SelectionState => ({ selection: box(n), anchor: { x: n, y: 0, z: 0 } });
+
+  // Depth was 4 before the edit and is 5 after it.
+  const paired = recordEditSelection(emptyTimeline(), 4, at(1), at(7));
+
+  equal(
+    "a step that rode in with an edit does not claim the press",
+    undoTarget(paired, 5, true),
+    "document",
+  );
+  equal(
+    "...and is handed back once the document has come back to it",
+    takeEditUndo(paired, 4)?.state.selection,
+    box(1),
+  );
+  equal(
+    "...but not at a depth it does not belong to",
+    takeEditUndo(paired, 5),
+    null,
+  );
+  /*
+   * And once the document is back down at it -- undone by something that did
+   * not go through `undoAnything`, which the chat panel's per-message undo does
+   * -- the box is the thing left to put back, so it claims the press after all.
+   * The undo side deliberately has no `withEdit` clause; the redo side does.
+   */
+  equal(
+    "...and once the blocks are back it is the box that is left",
+    undoTarget(paired, 4, true),
+    "selection",
+  );
+
+  /*
+   * The check that separates the pair from the ordinary case. Without it the
+   * flag could be ignored everywhere and every one of these would still pass:
+   * a selection somebody made on purpose has to go on claiming its own press,
+   * and must not be swallowed by an undo of the edit above it.
+   */
+  const ordinary = recordSelection(emptyTimeline(), 4, at(1), at(7));
+  equal(
+    "an ordinary step at the current depth still claims it",
+    undoTarget(ordinary, 4, true),
+    "selection",
+  );
+  equal(
+    "...and is not swallowed by a document undo",
+    takeEditUndo(ordinary, 4),
+    null,
+  );
+
+  /*
+   * The redo side, which has to be asked *before* main is told -- a redo raises
+   * the depth exactly as a fresh edit does, so the depth watcher clears the redo
+   * stack and the step would already be gone.
+   */
+  const undone = takeEditUndo(paired, 4);
+  equal("undoing the pair leaves it on the redo stack", undone?.timeline.redo.length, 1);
+  equal(
+    "...where the redo does not claim the press either",
+    redoTarget(undone?.timeline ?? emptyTimeline(), 4, true),
+    "document",
+  );
+  equal(
+    "...and it comes back pointing forwards",
+    takeEditRedo(undone?.timeline ?? emptyTimeline(), 4)?.state.selection,
+    box(7),
+  );
+  equal(
+    "a redo of nothing paired is nothing",
+    takeEditRedo(emptyTimeline(), 4),
+    null,
+  );
+
+  // A gesture that moved nothing is not a step, paired or otherwise.
+  equal("a pair that changed nothing records nothing", recordEditSelection(emptyTimeline(), 4, at(1), at(1)).undo.length, 0);
+}
 console.log("\n--- creative inventory ---");
 {
   const base = { count: 100, columns: 10, rowHeight: 50, viewportHeight: 200 };
@@ -2505,6 +2625,7 @@ console.log("\n--- the block under the pointer ---");
     loaded: true,
     pointer: { x: 120, y: 80 },
     overHandle: false,
+    overGizmo: false,
     dragging: false,
   } as const;
 
@@ -2559,16 +2680,37 @@ console.log("\n--- the block under the pointer ---");
     { kind: "none" },
   );
   equal("and a face drag keeps it", hoverSource({ ...base, dragging: true }), { kind: "none" });
+  /*
+   * A gizmo arrow says exactly the same thing, and it is a separate field
+   * because it comes from a separate raycast: outlining the block behind an
+   * arrow promises a click that will move the region instead.
+   */
+  equal(
+    "a gizmo handle takes it too",
+    hoverSource({ ...base, overGizmo: true }),
+    { kind: "none" },
+  );
+  check(
+    "the two handles and the drag are one question",
+    pointerOnHandle({ overHandle: false, overGizmo: true, dragging: false }) &&
+      pointerOnHandle({ overHandle: true, overGizmo: false, dragging: false }) &&
+      pointerOnHandle({ overHandle: false, overGizmo: false, dragging: true }),
+  );
+  check(
+    "...and an idle pointer is over none of them",
+    !pointerOnHandle({ overHandle: false, overGizmo: false, dragging: false }),
+  );
 
   // Neither of those is flight's business: there are no handles under a
   // crosshair, and a gesture in orbit must not reach across the mode switch.
   equal(
-    "flight ignores both",
+    "flight ignores all three",
     hoverSource({
       ...base,
       cameraMode: "fly",
       flying: true,
       overHandle: true,
+      overGizmo: true,
       dragging: true,
     }),
     { kind: "crosshair" },

@@ -27,7 +27,7 @@
   } from "../../../shared/ipc.js";
   import type { ResolvedTheme } from "../../../shared/settings.js";
   import { t } from "./i18n.svelte.js";
-  import { facingNormal, hoverSource, outlineCentre } from "./block_hover.js";
+  import { facingNormal, hoverSource, outlineCentre, pointerOnHandle } from "./block_hover.js";
   import {
   cellFade,
   cellRegion,
@@ -1116,10 +1116,13 @@ import { isTyping } from "./typing.js";
     const source = hoverSource({
       cameraMode,
       flying,
-      loaded: loaded !== undefined,
+      // `loaded` is declared `| null`, so the old `!== undefined` was always
+      // true and the empty-document guard in `hoverSource` never fired.
+      loaded: loaded !== null,
       pointer: pointerAt,
       overHandle: hovered !== null,
-      dragging: dragged !== null,
+      overGizmo: gizmoHover !== null,
+      dragging: dragged !== null || gizmoDrag !== null,
     });
     if (source.kind === "none") {
       box.visible = false;
@@ -1363,7 +1366,21 @@ import { isTyping } from "./typing.js";
      * the thing being clicked, because the grid is now the only way to put a
      * block into an empty schematic.
      */
-    if (!documentSize) {
+    /*
+     * The patch yields to a handle, for the block outline's reason one layer
+     * across: with the pointer on a gizmo arrow the press moves the region, so
+     * lighting a cell on the floor behind the arrow promises a placement that
+     * is not going to happen. In flight there are no handles to be over.
+     */
+    if (
+      !documentSize ||
+      (cameraMode === "orbit" &&
+        pointerOnHandle({
+          overHandle: hovered !== null,
+          overGizmo: gizmoHover !== null,
+          dragging: dragged !== null || gizmoDrag !== null,
+        }))
+    ) {
       if (gridCell !== null) gridCell = null;
       return;
     }
@@ -2582,12 +2599,14 @@ import { isTyping } from "./typing.js";
         } else {
           controls?.update();
         }
+        // Before the outline and the grid, both of which read what it writes:
+        // after them, each would be acting on the previous frame's hover.
+        updateHover(performance.now());
         updateBlockHighlight(performance.now());
         // Clocked on wall time, not on frames: the game states its animations
         // in ticks of 50ms, and a 144Hz display must not run the water four
         // times too fast.
         playAnimations(performance.now());
-        updateHover(performance.now());
         updateBuildGrid(performance.now());
         // Every frame rather than on the throttle: the gizmo is sized from the
         // distance to the camera, so it would visibly swell and shrink in steps

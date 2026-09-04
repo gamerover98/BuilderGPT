@@ -48,8 +48,11 @@ import VersionsModal from "./lib/VersionsModal.svelte";
     emptyTimeline,
     forgetTimeline,
     recordDocumentEdit,
+    recordEditSelection,
     recordSelection,
     redoTarget,
+    takeEditRedo,
+    takeEditUndo,
     takeRedo,
     takeUndo,
     undoTarget,
@@ -229,7 +232,6 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   /** The selection as it was when the timeline last agreed with the screen. */
   let lastSelection: SelectionState = { selection: null, anchor: null };
   /** True while a step is being put back, so restoring is not itself recorded. */
-  let restoringSelection = false;
   /**
    * Where a drag started, or `null` when no drag is in progress.
    *
@@ -834,14 +836,25 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     };
   }
 
+  /**
+   * Puts a remembered selection back without recording it as a new change.
+   *
+   * What suppresses the re-record is `lastSelection`, not a flag. There used
+   * to be a `restoringSelection` boolean here, set and cleared around these
+   * three lines, with a comment claiming the recorder ran synchronously off
+   * the writes. It does not: the recorder is a plain `$effect`, which flushes
+   * in a later microtask, by which time the flag was already back to false.
+   * It never suppressed anything, and it was the first thing the gizmo's
+   * commit handlers reached for.
+   *
+   * Fast-forwarding `lastSelection` works because it is a plain local read at
+   * flush time: `recordSelection` then finds `before` and `after` equal and
+   * returns the timeline untouched.
+   */
   function restoreSelection(state: SelectionState): void {
-    restoringSelection = true;
     selection = state.selection === null ? null : { ...state.selection };
     anchor = state.anchor === null ? null : { ...state.anchor };
     lastSelection = state;
-    // Cleared after the assignments rather than in an effect: the recorder
-    // below runs synchronously off these writes.
-    restoringSelection = false;
   }
 
   /**
@@ -877,7 +890,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   $effect(() => {
     const now = selectionNow();
     untrack(() => {
-      if (restoringSelection || gestureFrom !== null) {
+      if (gestureFrom !== null) {
         lastSelection = now;
         return;
       }
@@ -946,6 +959,17 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     const target = undoTarget(selectionTimeline, docState?.undoDepth ?? 0, docState?.canUndo === true);
     if (target === "document") {
       await runDocument(t("task.undoing"), () => api().undo());
+      /*
+       * A gizmo gesture moved the blocks *and* the box. Its selection step is
+       * keyed to the depth the document has just come back to, so asking here
+       * -- after the undo -- is what makes one press take back the whole
+       * gesture rather than half of it.
+       */
+      const paired = takeEditUndo(selectionTimeline, docState?.undoDepth ?? 0);
+      if (paired !== null) {
+        selectionTimeline = paired.timeline;
+        restoreSelection(paired.state);
+      }
       return;
     }
     if (target !== "selection") return;
@@ -959,7 +983,20 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     if (busy) return;
     const target = redoTarget(selectionTimeline, docState?.undoDepth ?? 0, docState?.canRedo === true);
     if (target === "document") {
+      /*
+       * Taken *before* the redo, unlike its opposite number. A redo raises the
+       * depth exactly as a fresh edit does and the watcher below cannot tell
+       * them apart, so it clears the redo stack and the step would be gone by
+       * the time we asked. Reassigning afterwards also puts back the rest of
+       * that stack, which is a fix rather than a side effect: nothing was
+       * branched away from.
+       */
+      const paired = takeEditRedo(selectionTimeline, docState?.undoDepth ?? 0);
       await runDocument(t("task.redoing"), () => api().redo());
+      if (paired !== null) {
+        selectionTimeline = paired.timeline;
+        restoreSelection(paired.state);
+      }
       return;
     }
     if (target !== "selection") return;
@@ -3183,6 +3220,40 @@ import ConvertModal from "./lib/ConvertModal.svelte";
    * empty space they came from would make the very next operation act on
    * nothing, and every editor that moves a thing leaves it selected.
    */
+  /**
+   * Moves the box because the blocks moved, as one undoable act.
+   *
+   * Every gizmo commit ends here. The catch-all recorder would otherwise stamp
+   * the step with the depth it finds at flush time -- which, because these
+   * handlers write `selection` only after awaiting the edit, is the depth
+   * *after* it. `undoTarget` then reads the step as the newest thing that
+   * happened and hands it the press, so Ctrl+Z put the box back and left the
+   * blocks where they were, and a second press was needed for the rest.
+   *
+   * So the depth is captured before the await and the step recorded here, with
+   * `lastSelection` fast-forwarded so the recorder finds nothing of its own to
+   * do -- see `restoreSelection` for why that, and not a flag.
+   *
+   * An edit that pushed no transaction leaves the depth where it was, and then
+   * there is nothing to pair with: it is recorded as an ordinary selection
+   * change, which is reachable, rather than as a paired one, which would not be.
+   */
+  function adoptEditedSelection(
+    before: SelectionState,
+    next: RegionSpec,
+    depthBefore: number,
+  ): void {
+    selection = { ...next };
+    anchor = { x: next.minX, y: next.minY, z: next.minZ };
+    const now = selectionNow();
+    lastSelection = now;
+    const depth = docState?.undoDepth ?? 0;
+    selectionTimeline =
+      depth > depthBefore
+        ? recordEditSelection(selectionTimeline, depthBefore, before, now)
+        : recordSelection(selectionTimeline, depth, before, now);
+  }
+
   async function commitMove(to: { x: number; y: number; z: number }): Promise<void> {
     /*
      * The region comes from the selection rather than from the ghost, because
@@ -3193,12 +3264,13 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     const region = moving?.region ?? selection;
     moving = null;
     if (!region) return;
+    const before = selectionNow();
+    const depthBefore = docState?.undoDepth ?? 0;
     const changed = await runDocument(t("task.moving"), () =>
       api().moveRegion({ region: forIpc(region), to }),
     );
     if (changed !== null) {
-      selection = movedRegion(region, to);
-      anchor = { x: to.x, y: to.y, z: to.z };
+      adoptEditedSelection(before, movedRegion(region, to), depthBefore);
       // The pivot moved with the blocks, or it would name a cell the region
       // has left -- and the next turn would swing it round empty space.
       if (pivot !== null) {
@@ -3233,6 +3305,8 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     if (transform.kind === "rotate" && transform.axis !== "y") return;
     const region = { ...selection };
     const to = transformedRegion(region, origin, transform);
+    const before = selectionNow();
+    const depthBefore = docState?.undoDepth ?? 0;
     const changed = await runDocument(t("task.transforming"), () =>
       api().transformRegion({
         region: forIpc(region),
@@ -3246,8 +3320,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     if (changed !== null) {
       // The box follows the blocks, exactly as it does after a move: leaving it
       // on the space they came from would make the next operation act on air.
-      selection = to;
-      anchor = { x: to.minX, y: to.minY, z: to.minZ };
+      adoptEditedSelection(before, to, depthBefore);
     }
     reportChange(changed);
   }
@@ -3273,12 +3346,13 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     if (!selection || busy) return;
     const region = { ...selection };
     const to = scaledRegion(region, origin, spec);
+    const before = selectionNow();
+    const depthBefore = docState?.undoDepth ?? 0;
     const changed = await runDocument(t("task.scaling"), () =>
       api().scaleRegion({ region: forIpc(region), spec, to: { x: to.minX, y: to.minY, z: to.minZ } }),
     );
     if (changed !== null) {
-      selection = to;
-      anchor = { x: to.minX, y: to.minY, z: to.minZ };
+      adoptEditedSelection(before, to, depthBefore);
     }
     reportChange(changed);
   }

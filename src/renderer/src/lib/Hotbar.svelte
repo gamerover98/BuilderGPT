@@ -171,7 +171,8 @@
 <style>
   .hotbar {
     position: absolute;
-    bottom: 16px;
+    /* Shared with whatever stacks above it. See `app.css`. */
+    bottom: var(--hotbar-inset);
     left: 50%;
     transform: translateX(-50%);
     z-index: 5;

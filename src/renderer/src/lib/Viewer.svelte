@@ -337,6 +337,14 @@ import { isTyping } from "./typing.js";
      * needs, and the destination is drawn in blocks rather than in outline.
      */
     ghost?: { chunks: ChunkGeometry[] } | null;
+    /**
+     * Where the ghost stands when no drag is moving it.
+     *
+     * The selection's corner, because that is where a paste lands -- so the
+     * stamp a copy leaves behind is a picture of what Ctrl+V will do, and it
+     * follows the box for as long as it is armed.
+     */
+    ghostAt?: { x: number; y: number; z: number } | null;
     /** The move was confirmed: put the region's corner here. */
     onghostcommit?: (to: { x: number; y: number; z: number }) => void;
     /**
@@ -431,6 +439,7 @@ import { isTyping } from "./typing.js";
     onpickmaterial,
     onselectiongesture,
     ghost = null,
+    ghostAt = null,
     onghostcommit,
     gizmoMode = "move",
     autoGrow = true,
@@ -1791,6 +1800,10 @@ import { isTyping } from "./typing.js";
     gizmoDrag = null;
     gizmoResult = null;
     showGizmoPreview(null);
+    // Whatever the drag decided, the ghost goes back to its home: a cancelled
+    // one belongs where it was standing, and a committed one is about to be
+    // given a new home by the app on the very next line.
+    ghostGroup?.position.set(ghostHome.x, ghostHome.y, ghostHome.z);
     if (controls) controls.enabled = cameraMode !== "fly";
     onselectiongesture?.("end");
     if (!commit || result === null || origin === null) return;
@@ -3819,8 +3832,25 @@ import { isTyping } from "./typing.js";
    */
   let ghostGroup: THREE.Group | null = null;
   let ghostMaterial: THREE.MeshBasicMaterial | undefined;
-  /** Where the ghost currently sits, in block coordinates. */
-  let ghostAt: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 };
+  /**
+   * Where the ghost stands when nothing is dragging it.
+   *
+   * A move drag writes the group's position outright, every frame; this is
+   * the rest of the time, which is the whole life of a stamp. It used to be a
+   * hardcoded origin that nothing ever assigned, so a ghost that arrived
+   * mid-drag stood at (0, 0, 0) until the next frame moved it -- invisible
+   * only because a drag has a next frame, and a stamp does not.
+   */
+  let ghostHome: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 };
+
+  $effect(() => {
+    ghostHome = ghostAt ?? { x: 0, y: 0, z: 0 };
+    // A drag owns the position while it lasts, and `endGizmoDrag` hands it
+    // back -- so a selection that moves under a drag cannot snap the ghost.
+    if (gizmoDrag === null) {
+      ghostGroup?.position.set(ghostHome.x, ghostHome.y, ghostHome.z);
+    }
+  });
 
   function disposeGhost(): void {
     if (!ghostGroup) return;
@@ -3856,7 +3886,9 @@ import { isTyping } from "./typing.js";
       mesh.renderOrder = 997;
       group.add(mesh);
     }
-    group.position.set(ghostAt.x, ghostAt.y, ghostAt.z);
+    const at = untrack(() => ghostAt);
+    if (at !== null && at !== undefined) ghostHome = at;
+    group.position.set(ghostHome.x, ghostHome.y, ghostHome.z);
     ghostGroup = group;
     scene.add(group);
   });

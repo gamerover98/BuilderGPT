@@ -159,6 +159,7 @@ const api: BgptApi = {
   moveRegion: (request: MoveRegionRequest) =>
     ipcRenderer.invoke(IPC.docMove, request) as Promise<EditResponse>,
   regionMesh: (region) => ipcRenderer.invoke(IPC.docRegionMesh, region) as Promise<RegionMeshResponse>,
+  clipboardMesh: () => ipcRenderer.invoke(IPC.docClipboardMesh) as Promise<RegionMeshResponse>,
   getSkyTextures: () => ipcRenderer.invoke(IPC.skyTextures) as Promise<SkyTextures>,
   getAnchorTexture: () => ipcRenderer.invoke(IPC.anchorTexture) as Promise<PackTexture | null>,
   setWorldEditAnchor: (anchor: [number, number, number] | null) =>

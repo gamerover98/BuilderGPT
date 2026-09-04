@@ -20,11 +20,13 @@
  * wants it — stamping a hollow room into solid rock — without storing a box of
  * nothing to get there.
  *
- * ## Out of bounds is clipped, not refused
+ * ## Out of bounds is clipped here, and decided one layer up
  *
- * Pasting near an edge writes the part that fits. Refusing outright would mean
- * a paste that is one block over the boundary does nothing at all and says so
- * in a dialog; clipping does the obvious thing and reports how much landed.
+ * `pasteClipboard` writes the part that fits and drops the rest, which is what
+ * lets `moveRegion` and friends compose it without bounds arithmetic of their
+ * own to get wrong. It is not what a user meets: `pasteSelection` grows the
+ * document to hold the whole thing, or refuses by name with automatic resizing
+ * off, so the clipping below is the floor rather than the policy.
  */
 
 import {

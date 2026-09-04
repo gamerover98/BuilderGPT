@@ -3138,6 +3138,8 @@ import ConvertModal from "./lib/ConvertModal.svelte";
           count: response.clipboard.blocks.toLocaleString(),
         }),
       };
+      // Not awaited: the copy is done, and the picture is only a picture.
+      void armStamp();
     } catch (err) {
       failed(err, cut ? t("task.cutting") : t("task.copying"));
     } finally {
@@ -3208,8 +3210,68 @@ import ConvertModal from "./lib/ConvertModal.svelte";
    */
   let pivot = $state<Cell | null>(null);
 
+  /**
+   * What Ctrl+C leaves behind: the clipboard, drawn where Ctrl+V would put it.
+   *
+   * A copy used to be invisible. The status line said how many blocks, and
+   * nothing on screen said what was held or where it would land -- so pasting
+   * somewhere else meant drawing a new selection by hand, guessing, and
+   * looking at the result. This is the move gesture's own ghost put to that
+   * job: the picture follows the box, Ctrl+V stamps at its corner, and the
+   * two repeat until the selection is dropped.
+   *
+   * The geometry is the **clipboard's**, not the selection's -- see
+   * `clipboardMesh` in main. A cut is what makes that difference visible.
+   *
+   * While it is armed the gizmo's arrows carry the box and touch no block.
+   * That is what makes «move it and paste again» a gesture rather than a
+   * request to redraw the selection each time, and it is why the mode is
+   * armed by the copy itself rather than by the picture arriving: a mesh that
+   * failed would otherwise change what the next drag did, silently.
+   */
+  let stamp = $state<{ chunks: ChunkGeometry[] } | null>(null);
+
+  /*
+   * What is aimed at the selection goes when the selection does.
+   *
+   * The pivot names a cell inside a particular box and the stamp is drawn at
+   * its corner, so neither means anything once that box is gone. A rule here
+   * rather than a line in `clearSelection`, because that is one of eight
+   * places the selection is dropped -- the other seven are documents opening,
+   * closing and being restored, and every one of them already forgot the
+   * pivot. Writing what it reads is safe: the second run finds both null.
+   */
+  $effect(() => {
+    if (selection !== null) return;
+    if (pivot !== null) pivot = null;
+    if (stamp !== null) stamp = null;
+  });
+
+  /**
+   * Arms the stamp, and fetches its picture without making the copy wait.
+   *
+   * Identity on the armed object is what keeps a second Ctrl+C from being
+   * overwritten by the first one's answer arriving late -- the same trick the
+   * chunked mesher uses to decide a chunk moved.
+   */
+  async function armStamp(): Promise<void> {
+    const armed: { chunks: ChunkGeometry[] } = { chunks: [] };
+    stamp = armed;
+    try {
+      const response = await api().clipboardMesh();
+      if (!response.ok || stamp !== armed) return;
+      stamp = { chunks: response.chunks };
+    } catch {
+      // A missing picture costs the preview and nothing else: the box is drawn
+      // either way, and Ctrl+V pastes at its corner either way.
+    }
+  }
+
   /** The gizmo grabbed a move handle: fetch the ghost it will drag. */
   async function armGhost(): Promise<void> {
+    // A stamp is already the ghost, and it is what the arrows drag: the move
+    // about to happen is the box's, so there is no region to fetch.
+    if (stamp !== null) return;
     if (!selection || moving !== null) return;
     const region = { ...selection };
     try {
@@ -3265,7 +3327,33 @@ import ConvertModal from "./lib/ConvertModal.svelte";
         : recordSelection(selectionTimeline, depth, before, now);
   }
 
+  /** Carries the pivot along with the box whose cell it names. */
+  function movePivot(from: RegionSpec, to: { x: number; y: number; z: number }): void {
+    if (pivot === null) return;
+    pivot = {
+      x: pivot.x + (to.x - from.minX),
+      y: pivot.y + (to.y - from.minY),
+      z: pivot.z + (to.z - from.minZ),
+    };
+  }
+
   async function commitMove(to: { x: number; y: number; z: number }): Promise<void> {
+    /*
+     * With a stamp armed the arrows carry the box and nothing else. That is
+     * the whole of «copy, move, paste, again»: the blocks arrive with Ctrl+V
+     * and the source stays where it was, so it can be stamped a second time.
+     * No transaction is pushed, so this is an ordinary selection step at the
+     * depth the document already had -- which `adoptEditedSelection` decides
+     * for itself by comparing the two.
+     */
+    if (stamp !== null) {
+      const held = selection;
+      if (!held) return;
+      const before = selectionNow();
+      adoptEditedSelection(before, movedRegion(held, to), docState?.undoDepth ?? 0);
+      movePivot(held, to);
+      return;
+    }
     /*
      * The region comes from the selection rather than from the ghost, because
      * the ghost is a preview that may never have arrived -- a short drag on a
@@ -3284,13 +3372,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
       adoptEditedSelection(before, movedRegion(region, to), depthBefore);
       // The pivot moved with the blocks, or it would name a cell the region
       // has left -- and the next turn would swing it round empty space.
-      if (pivot !== null) {
-        pivot = {
-          x: pivot.x + (to.x - region.minX),
-          y: pivot.y + (to.y - region.minY),
-          z: pivot.z + (to.z - region.minZ),
-        };
-      }
+      movePivot(region, to);
     }
     reportChange(changed);
   }
@@ -3368,11 +3450,16 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     reportChange(changed);
   }
 
-  /** Drops the selection without touching a block. */
+  /**
+   * Drops the selection without touching a block.
+   *
+   * The pivot and the stamp go with it, but not from here -- the effect
+   * beside them owns that, because this is only one of the ways a selection
+   * ends.
+   */
   function clearSelection(): void {
     selection = null;
     anchor = null;
-    pivot = null;
   }
 
   /**
@@ -4523,7 +4610,10 @@ import ConvertModal from "./lib/ConvertModal.svelte";
       onselectionchange={docState ? onSelectionDragged : undefined}
       onselectiongesture={docState ? onSelectionGesture : undefined}
       onpickmaterial={docState ? onPickMaterial : undefined}
-      ghost={moving}
+      ghost={moving ?? stamp}
+      ghostAt={selection
+        ? { x: selection.minX, y: selection.minY, z: selection.minZ }
+        : null}
       onghostcommit={(to) => void commitMove(to)}
       {gizmoMode}
       {pivot}

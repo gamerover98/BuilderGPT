@@ -205,6 +205,8 @@ export const IPC = {
   docScale: "bgpt:doc:scale",
   /** A region's contents as standalone geometry, for the move preview. */
   docRegionMesh: "bgpt:doc:region:mesh",
+  /** The clipboard's contents as standalone geometry, for the paste ghost. */
+  docClipboardMesh: "bgpt:doc:clipboard:mesh",
   /**
    * renderer → main: where the 3D canvas sits in the window.
    *
@@ -1857,6 +1859,14 @@ export interface BgptApi {
   getDocumentMesh(request: DocumentMeshRequest): Promise<DocumentMeshResponse>;
   moveRegion(request: MoveRegionRequest): Promise<EditResponse>;
   regionMesh(region: RegionSpec): Promise<RegionMeshResponse>;
+  /**
+   * The clipboard's contents as geometry, for the ghost a copy leaves behind.
+   *
+   * Deliberately not `regionMesh` of the selection: a cut has already emptied
+   * that region by the time the ghost is asked for, and even a copy's box moves
+   * away from the blocks -- which is the whole gesture this draws.
+   */
+  clipboardMesh(): Promise<RegionMeshResponse>;
   getSkyTextures(): Promise<SkyTextures>;
   applyEdit(request: EditRequest): Promise<EditResponse>;
   /** Set the schematic's size. Refuses a lossy shrink without `confirmLoss`. */

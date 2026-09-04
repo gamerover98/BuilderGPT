@@ -1579,6 +1579,50 @@ console.log("\n--- a region edit stays inside the schematic ---");
   closeDocument();
 }
 
+// --- and a paste is a region edit too -----------------------------------------
+//
+// The same hole, one verb further on, and the stamp is what made it a daily
+// gesture: Ctrl+C now leaves a ghost that is carried somewhere else *before*
+// Ctrl+V, so landing past the edge stopped being a thing you had to go out of
+// your way to do. `pasteClipboard` clips by letting `tx.setBlock` return
+// false, so the overhang used to vanish with a short count and no sentence.
+console.log("\n--- a paste stays inside the schematic ---");
+{
+  const session = newDocument({ width: 8, height: 4, length: 8 });
+  const rock = { namespacedName: "minecraft:stone", properties: {} };
+  setBlock(session.doc, 0, 0, 0, rock);
+  setBlock(session.doc, 1, 0, 0, rock);
+  copySelection(session, { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 0 });
+  session.history.undoStack.length = 0;
+
+  pasteSelection(session, { x: 7, y: 0, z: 0 }, { autoGrow: true });
+  equal("a paste past the edge grows the schematic", documentState(session).size, [9, 4, 8]);
+  equal(
+    "...and the overhanging block lands",
+    getBlock(session.doc, 8, 0, 0).namespacedName,
+    "minecraft:stone",
+  );
+  equal("...in one undo step", session.history.undoStack.length, 1);
+  undoEdit(session);
+  equal("...which takes the size back too", documentState(session).size, [8, 4, 8]);
+
+  let refused: unknown = null;
+  try {
+    pasteSelection(session, { x: 7, y: 0, z: 0 }, { autoGrow: false });
+  } catch (err) {
+    refused = err;
+  }
+  check("with resizing off it is refused by name", refused instanceof OutsideDocumentError);
+  // Nothing written, not even the half that fitted -- `moveRegion`'s rule.
+  equal(
+    "...and not even the part that fitted was written",
+    getBlock(session.doc, 7, 0, 0).namespacedName,
+    "minecraft:air",
+  );
+  equal("...and no step was pushed", session.history.undoStack.length, 0);
+  closeDocument();
+}
+
 console.log("\n--- turning a region somewhere else ---");
 {
   /*
@@ -1896,10 +1940,16 @@ console.log("\n--- cutting, clipping, and an empty clipboard ---");
   undoEdit(session);
   equal("undoing a cut puts the blocks back", getBlock(session.doc, 0, 0, 0).namespacedName, "minecraft:stone");
 
-  // Pasting over an edge writes the part that fits rather than refusing.
+  /*
+   * Pasting over an edge makes room for it. This used to write the half that
+   * fitted and drop the rest, which is what `pasteClipboard` still does when
+   * it is reached -- and it is still what a refusal relies on never reaching.
+   * What changed is that `pasteSelection` decides first.
+   */
   const changed = pasteSelection(session, { x: 5, y: 0, z: 0 });
-  equal("the half that fits lands", changed, 1);
+  equal("a paste over the edge lands whole", changed, 2);
   equal("...at the edge", getBlock(session.doc, 5, 0, 0).namespacedName, "minecraft:stone");
+  equal("...having made room for the rest", session.doc.width, 7);
 
   closeDocument();
 }

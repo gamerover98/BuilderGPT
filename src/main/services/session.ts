@@ -1617,20 +1617,49 @@ export class EmptyClipboardError extends Error {
   }
 }
 
-/** Pastes the clipboard with its corner at `at`, as one undoable step. */
+/**
+ * Pastes the clipboard with its corner at `at`, as one undoable step.
+ *
+ * It grows to hold what lands, or refuses by name -- `moveRegion`'s rule,
+ * which had not reached here. `pasteClipboard` clips by letting `tx.setBlock`
+ * return false, so a paste over the edge came back with a short count and
+ * nothing anywhere saying why, which is the silence this file records over and
+ * over. It was survivable while a paste landed at the corner of a box somebody
+ * had just drawn around the thing they were pasting; the stamp is what made
+ * carrying the box somewhere else first the ordinary gesture.
+ */
 export function pasteSelection(
   session: DocumentSession,
   at: { x: number; y: number; z: number },
-  options: PasteOptions = {},
+  options: PasteOptions & RegionEditOptions = {},
 ): number {
   if (clipboard === null) {
     throw new EmptyClipboardError();
   }
   const held = clipboard;
   const { doc, history } = session;
-  return runTransaction(doc, history, "Paste", (tx) =>
-    pasteClipboard(doc, tx, held, at, options),
-  );
+  const landing: Region = {
+    minX: at.x,
+    minY: at.y,
+    minZ: at.z,
+    maxX: at.x + held.width - 1,
+    maxY: at.y + held.height - 1,
+    maxZ: at.z + held.length - 1,
+  };
+  const growth = growthFor(doc, landing, options.autoGrow !== false);
+  return runTransaction(doc, history, "Paste", (tx) => {
+    // The resize first and alone in its command, for `moveRegion`'s reason: a
+    // block delta recorded before it would index the old shape.
+    if (growth !== null) tx.resize(growth.size, growth.shift);
+    const shift = growth?.shift ?? ([0, 0, 0] as const);
+    return pasteClipboard(
+      doc,
+      tx,
+      held,
+      { x: at.x + shift[0], y: at.y + shift[1], z: at.z + shift[2] },
+      options,
+    );
+  });
 }
 
 /**
@@ -1787,12 +1816,48 @@ export async function regionMesh(
   options: DocumentPreviewOptions,
 ): Promise<{ chunks: ChunkGeometry[]; atlasVersion: number }> {
   const region = normalizeRegion(session.doc, request);
-  const held = copyRegion(session.doc, region);
+  return meshDetached(copyRegion(session.doc, region), session.doc.format, options);
+}
+
+/**
+ * The clipboard's own contents as geometry, for the ghost a copy leaves behind.
+ *
+ * The clipboard and not the region it was taken from, and a **cut** is what
+ * makes the difference visible: by the time the ghost is asked for that region
+ * is empty, so a picture meshed from it would be nothing at all -- on the one
+ * gesture where seeing what you are holding matters most. It has to outlive the
+ * region in the ordinary case too, because the whole point of the ghost is that
+ * the box then moves away from where the blocks were copied.
+ *
+ * An empty clipboard is not a failure. It is the state before the first copy,
+ * and it answers the way an all-air region does: nothing to draw.
+ */
+export async function clipboardMesh(
+  session: DocumentSession,
+  options: DocumentPreviewOptions,
+): Promise<{ chunks: ChunkGeometry[]; atlasVersion: number }> {
+  if (clipboard === null) return { chunks: [], atlasVersion: -1 };
+  return meshDetached(clipboard, session.doc.format, options);
+}
+
+/**
+ * A detached snapshot meshed on its own, in coordinates from its own corner.
+ *
+ * A one-off document of exactly the snapshot's size, run through the same
+ * pipeline as everything else -- so a preview cannot disagree with what the
+ * edit produces, for the same reason a block icon cannot disagree with the
+ * viewport.
+ */
+async function meshDetached(
+  held: Clipboard,
+  format: SchematicDocument["format"],
+  options: DocumentPreviewOptions,
+): Promise<{ chunks: ChunkGeometry[]; atlasVersion: number }> {
   const scratch = createDocument({
     width: held.width,
     height: held.height,
     length: held.length,
-    format: session.doc.format,
+    format,
   });
   for (const cell of held.cells) {
     setBlock(scratch, cell.dx, cell.dy, cell.dz, cell.entry);

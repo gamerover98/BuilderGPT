@@ -67,6 +67,13 @@ import {
 } from "../src/main/services/output.js";
 import { labelFor, mergeCatalogue } from "../src/main/services/opencode.js";
 import {
+  clipboardMesh,
+  closeDocument,
+  cutSelection,
+  newDocument,
+  regionMesh,
+} from "../src/main/services/session.js";
+import {
   atlasBuildCount,
   buildDocumentPreview,
   buildPreview,
@@ -2612,6 +2619,44 @@ console.log("\n--- what the window says on its way down ---");
 // `AbortSignal` since it was written and was never handed one, and there was no
 // channel to ask for it. This walks the source rather than the module, because
 // `handlers.ts` imports Electron and cannot be loaded here.
+// --- the picture a copy leaves behind ------------------------------------------
+//
+// Ctrl+C arms a ghost of what is held, drawn where Ctrl+V would put it. It is
+// the *clipboard's* geometry and not the selection's, and a **cut** is the one
+// gesture that can tell those apart: by the time the ghost is asked for, the
+// region it came from is empty, so a picture meshed from the region would be
+// nothing at all -- on the gesture where seeing what you are holding matters
+// most.
+console.log("\n--- the picture a copy leaves behind ---");
+{
+  const pack = await findBundledResourcePack();
+  const options = { resourcePackPath: null, fallbackResourcePackPath: pack };
+  const session = newDocument({ width: 8, height: 4, length: 8 });
+
+  // Nothing has been copied in this suite, so this is genuinely the state
+  // before the first copy rather than a leftover -- which is the null arm.
+  const nothing = await clipboardMesh(session, options);
+  equal("nothing copied yet is nothing to draw", nothing.chunks.length, 0);
+
+  for (let x = 1; x <= 2; x += 1) {
+    for (let z = 1; z <= 2; z += 1) {
+      setBlock(session.doc, x, 0, z, { namespacedName: "minecraft:stone", properties: {} });
+    }
+  }
+  const region = { minX: 1, minY: 0, minZ: 1, maxX: 2, maxY: 0, maxZ: 2 };
+  cutSelection(session, region);
+
+  const fromRegion = await regionMesh(session, region, options);
+  equal("a cut region has nothing left to draw", fromRegion.chunks.length, 0);
+  const held = await clipboardMesh(session, options);
+  check(
+    "...and the clipboard still draws what was taken",
+    held.chunks.some((chunk) => chunk.positions.length > 0),
+    String(held.chunks.length),
+  );
+  closeDocument();
+}
+
 console.log("\n--- ipc channels ---");
 {
   /*

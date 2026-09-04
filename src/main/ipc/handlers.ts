@@ -112,6 +112,7 @@ import {
   documentMesh,
   documentState,
   moveRegion,
+  clipboardMesh,
   regionMesh,
   editBlockEntityValue,
   EditTooLargeError,
@@ -1505,6 +1506,22 @@ ${report.stack}`),
     },
   );
 
+  ipcMain.handle(IPC.docClipboardMesh, async (): Promise<RegionMeshResponse> => {
+    try {
+      const settings = await getSettings();
+      const result = await clipboardMesh(requireSession(), {
+        resourcePackPath: null,
+        fallbackResourcePackPath: await defaultResourcePackPath(),
+        biomeColor: settings.preview.biomeColor,
+        showMarkers: settings.preview.showMarkers,
+        waterColor: settings.preview.waterColor,
+      });
+      return { ok: true, ...result };
+    } catch (err) {
+      return failure(err);
+    }
+  });
+
   ipcMain.handle(IPC.skyTextures, async (): Promise<SkyTextures> => {
     try {
       return await loadSkyTextures(null, await defaultResourcePackPath());
@@ -1557,7 +1574,12 @@ ${report.stack}`),
   ipcMain.handle(IPC.docPaste, async (_event, request: PasteRequest): Promise<EditResponse> => {
     try {
       const session = requireSession();
-      const changed = pasteSelection(session, request, { includeAir: request.includeAir });
+      // The same options a move gets, and for the same reason: a paste that
+      // reached past the edge used to lose the overhang without a word.
+      const changed = pasteSelection(session, request, {
+        ...(await editOptionsFor(session)),
+        includeAir: request.includeAir,
+      });
       return { ok: true, changed, state: shellState(session) };
     } catch (err) {
       return failure(err);

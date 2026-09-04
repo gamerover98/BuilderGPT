@@ -3406,5 +3406,106 @@ console.log("\n--- the right button opens, and Shift places ---");
   );
 }
 
+// --- the picture a copy leaves behind ------------------------------------------
+//
+// Ctrl+C arms a translucent copy of what is held, drawn where Ctrl+V would put
+// it, and the gizmo's arrows then carry that box rather than the blocks -- so
+// «copy, move, paste, move, paste» is one gesture repeated until the selection
+// is dropped. None of this is drivable here: there is no canvas and no preload
+// bridge, so it is read out of the source the way the framing call site and the
+// flight-mode key gate already are.
+console.log("\n--- the picture a copy leaves behind ---");
+{
+  const app = readFileSync(path.join(RENDERER, "App.svelte"), "utf-8");
+  const viewer = readFileSync(path.join(RENDERER, "lib", "Viewer.svelte"), "utf-8");
+
+  /*
+   * The mode is armed by the copy; the picture arrives afterwards. Written the
+   * other way round -- mesh first, state after -- a mesh that failed would
+   * leave the arrows moving blocks with no ghost anywhere on screen, which is
+   * a different gesture happening in silence.
+   */
+  const arm = app.slice(
+    app.indexOf("async function armStamp"),
+    app.indexOf("async function armGhost"),
+  );
+  check("the stamp is armed at all", arm.length > 0);
+  check(
+    "the copy arms the mode before the picture is asked for",
+    arm.indexOf("stamp = armed") < arm.indexOf("await api()"),
+    "a mesh that failed would silently change what the next drag did",
+  );
+  check(
+    "...and the picture is the clipboard's, not a region's",
+    arm.includes("api().clipboardMesh()") && !arm.includes("regionMesh"),
+    "a cut has emptied that region by the time the ghost is asked for",
+  );
+  check(
+    "...and a late answer cannot overwrite a newer copy",
+    arm.includes("stamp !== armed"),
+  );
+
+  /*
+   * With a stamp armed the arrows carry the box. Both halves, because either
+   * alone is a working app doing the wrong thing: without the early return a
+   * second ghost is fetched and drawn over this one, and without the branch in
+   * `commitMove` the release moves the original -- which is precisely what
+   * copying it somewhere else must not do.
+   */
+  const ghost = app.slice(
+    app.indexOf("async function armGhost"),
+    app.indexOf("function movePivot"),
+  );
+  check(
+    "a stamp is already the ghost, so no region is fetched for it",
+    ghost.indexOf("if (stamp !== null) return;") >= 0 &&
+      ghost.indexOf("if (stamp !== null) return;") < ghost.indexOf("regionMesh"),
+  );
+  const commit = app.slice(
+    app.indexOf("async function commitMove"),
+    app.indexOf("async function gizmoTransform"),
+  );
+  check("the move commit is found at all", commit.length > 0);
+  check(
+    "a stamped move carries the box and asks main for nothing",
+    commit.indexOf("if (stamp !== null) {") >= 0 &&
+      commit.indexOf("if (stamp !== null) {") < commit.indexOf("api().moveRegion"),
+    "the original would move instead of being stamped somewhere else",
+  );
+
+  /*
+   * And what is aimed at the selection goes when the selection does, from one
+   * place. Seven of the eight sites that drop a selection had already
+   * forgotten the pivot, so an eighth line was never the answer.
+   */
+  const clearAt = app.indexOf("function clearSelection");
+  check(
+    "clearing the selection does not spell the rule out again",
+    clearAt >= 0 && !app.slice(clearAt, clearAt + 200).includes("pivot = null"),
+  );
+  check(
+    "...because one effect owns it",
+    /\$effect\(\(\) => \{\s*if \(selection !== null\) return;\s*if \(pivot !== null\) pivot = null;\s*if \(stamp !== null\) stamp = null;/.test(
+      app.replace(/\r/g, ""),
+    ),
+  );
+
+  /*
+   * The ghost stands at the corner a paste lands on, and a drag hands the
+   * position back when it ends -- without which a cancelled stamp drag would
+   * leave the picture wherever the pointer let go of it.
+   */
+  check("the stamp is drawn when no move ghost is up", app.includes("ghost={moving ?? stamp}"));
+  check("...at the selection's corner", app.includes("ghostAt={selection"));
+  const endDrag = viewer.slice(
+    viewer.indexOf("function endGizmoDrag"),
+    viewer.indexOf("function updateHover"),
+  );
+  check(
+    "a drag hands the ghost's position back when it ends",
+    endDrag.includes("ghostGroup?.position.set(ghostHome"),
+  );
+}
+
 console.log(`\n=== ${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`} ===`);
 process.exit(failures === 0 ? 0 : 1);

@@ -2294,6 +2294,62 @@ The same fix carries the void block: `cutSelection` and `moveRegion` each wrote
 `RegionEditOptions.voidBlock` is `EditOptions.voidBlock`'s spelling for its
 reason -- a string the caller already holds, parsed once here.
 
+**A copy leaves a ghost behind, and pasting became a gesture rather than a
+coordinate.** Ctrl+C used to be invisible: the status line said how many
+blocks, and nothing on screen said what was held or where it would land — so
+pasting anywhere but back into the box you had just drawn meant drawing another
+one by hand, guessing, and looking at the result. The stamp is the move
+gesture's own ghost put to that job. The picture stands at the selection's
+corner, which is where a paste writes; the gizmo's arrows carry the box; Ctrl+V
+stamps; and the two repeat until the selection is dropped, by Escape or by the
+deselect button.
+
+**The picture is the clipboard's, and a cut is what makes that difference
+visible.** `clipboardMesh` is a second entry point onto the scratch-document
+meshing `regionMesh` already did, and the split is not tidiness: by the time
+the ghost is asked for, the region a *cut* came from is empty, so a picture
+meshed from the region would be nothing at all — on the one gesture where
+seeing what you are holding matters most. It has to outlive the region in the
+ordinary case too, because the whole point is that the box then moves away from
+the blocks.
+
+**The mode is armed by the copy and filled in by the picture, in that order.**
+`armStamp` writes `stamp` before it awaits, because the arrows mean "move the
+box" while a stamp is armed and "move the blocks" otherwise — so a mesh that
+failed to arrive would silently change what the next drag did. A late answer
+cannot overwrite a newer copy either: the fill is guarded on the **identity**
+of the object the arming created, which is `chunked_mesh.ts`'s rule for
+deciding that a chunk moved.
+
+**A stamped move writes nothing**, and `commitMove` decides that before it
+calls main. The selection step it records is an ordinary one, because no
+transaction was pushed — `adoptEditedSelection` works that out by comparing the
+depth either side rather than being told. That is what leaves the original
+where it was, to be stamped a second time.
+
+`ghostAt` is where the ghost stands when no drag is moving it, and until this
+there was no such place: the position was a variable initialised to the origin
+that nothing ever assigned. Invisible, because a move drag writes the position
+every frame and so always had a next one. A stamp does not.
+
+**What is aimed at the selection goes when the selection does, from one
+place.** The pivot and the stamp both name a particular box, and
+`clearSelection` is one of **eight** sites that drop a selection — the other
+seven are documents opening, closing and being restored, and every one of them
+had already forgotten the pivot. So it is an effect on `selection === null`
+rather than an eighth line: this file's own rule about discipline at N call
+sites, applied to the one place where it had already failed at seven.
+
+**And a paste grows, which is `moveRegion`'s rule one verb further on.**
+`pasteClipboard` clips by letting `tx.setBlock` return `false`, so a paste over
+the edge came back with a short count and nothing anywhere saying why. That was
+survivable while a paste landed at the corner of a box somebody had just drawn
+around the thing being pasted; the stamp is what made carrying the box
+somewhere else *first* the ordinary gesture. The clipping stays exactly where
+it is — it is what lets `moveRegion` compose `pasteClipboard` with no bounds
+arithmetic of its own, and what a refusal relies on never reaching — and
+`pasteSelection` decides in front of it.
+
 **Scale is the least useful of the four modes, and it reports rather than
 refuses.** Whole factors only, because anything else is a build with a different
 number of blocks in every row. Multiplying is exact -- one block becomes n^3 of

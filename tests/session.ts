@@ -59,6 +59,8 @@ import {
   redoEdit,
   requireSession,
   saveSession,
+  scaleRegion,
+  ScaleWouldLoseBlocksError,
   transformRegion,
   undoEdit,
 } from "../src/main/services/session.js";
@@ -1516,6 +1518,243 @@ console.log("\n--- copying a region ---");
  * mean a move interrupted between them leaves a hole where the build used to
  * be.
  */
+console.log("\n--- a region edit stays inside the schematic ---");
+{
+  /*
+   * `autoGrow` reached `applyEdit` and nothing else, so a move that carried
+   * blocks past the edge lost them without a word: `pasteClipboard` clips by
+   * letting `tx.setBlock` return false, and `changed` came back short with
+   * nothing anywhere saying why. Turning and scaling had the same hole.
+   */
+  const session = newDocument({ width: 8, height: 4, length: 8 });
+  const rock = { namespacedName: "minecraft:stone", properties: {} };
+  const wood = { namespacedName: "minecraft:oak_planks", properties: {} };
+  setBlock(session.doc, 0, 0, 0, rock);
+  setBlock(session.doc, 1, 0, 0, rock);
+  session.history.undoStack.length = 0;
+
+  moveRegion(
+    session,
+    { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 0 },
+    { x: 7, y: 0, z: 0 },
+    { autoGrow: true },
+  );
+  equal("a move past the edge grows the schematic", documentState(session).size, [9, 4, 8]);
+  equal(
+    "...and carries the block that would have fallen off",
+    getBlock(session.doc, 8, 0, 0).namespacedName,
+    "minecraft:stone",
+  );
+  equal("...in one undo step", session.history.undoStack.length, 1);
+  undoEdit(session);
+  equal("...which takes the size back too", documentState(session).size, [8, 4, 8]);
+  equal(
+    "...and the blocks with it",
+    getBlock(session.doc, 0, 0, 0).namespacedName,
+    "minecraft:stone",
+  );
+
+  let raised: unknown = null;
+  try {
+    moveRegion(
+      session,
+      { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 0 },
+      { x: 7, y: 0, z: 0 },
+      { autoGrow: false },
+    );
+  } catch (err) {
+    raised = err;
+  }
+  check("with resizing off it is refused by name", raised instanceof OutsideDocumentError);
+  /*
+   * The half that matters: nothing was written, not even the block that fitted.
+   * A refusal that had already moved half the region would be worse than the
+   * silent clipping it replaces.
+   */
+  equal(
+    "...and nothing moved, not even the part that fitted",
+    getBlock(session.doc, 0, 0, 0).namespacedName,
+    "minecraft:stone",
+  );
+  equal("...and no step was pushed", session.history.undoStack.length, 0);
+  closeDocument();
+}
+
+console.log("\n--- turning a region somewhere else ---");
+{
+  /*
+   * In place, a quarter turn has to land back on its own footprint, so an
+   * oblong one cannot -- that is `NotSquareError`, and it is right. With a
+   * destination the same turn is simply a box of the other shape, which is what
+   * lets the gizmo turn a selection about a corner rather than about its middle.
+   */
+  const session = newDocument({ width: 8, height: 4, length: 8 });
+  const rock = { namespacedName: "minecraft:stone", properties: {} };
+  const wood = { namespacedName: "minecraft:oak_planks", properties: {} };
+  setBlock(session.doc, 0, 0, 0, rock);
+  setBlock(session.doc, 4, 0, 0, wood);
+  const oblong = { minX: 0, minY: 0, minZ: 0, maxX: 4, maxY: 0, maxZ: 2 };
+
+  let raised: unknown = null;
+  try {
+    transformRegion(session, oblong, { kind: "rotate", steps: 1 });
+  } catch (err) {
+    raised = err;
+  }
+  check("an oblong turned in place is still refused", raised instanceof NotSquareError);
+
+  session.history.undoStack.length = 0;
+  transformRegion(session, oblong, { kind: "rotate", steps: 1 }, { to: { x: 0, y: 0, z: 0 } });
+  equal(
+    "...and goes through when it is told where to land",
+    getBlock(session.doc, 2, 0, 0).namespacedName,
+    "minecraft:stone",
+  );
+  equal(
+    "...with the far end a quarter turn round",
+    getBlock(session.doc, 2, 0, 4).namespacedName,
+    "minecraft:oak_planks",
+  );
+  equal("a turn is one undo step", session.history.undoStack.length, 1);
+  undoEdit(session);
+  equal(
+    "...and one undo puts the row back",
+    getBlock(session.doc, 4, 0, 0).namespacedName,
+    "minecraft:oak_planks",
+  );
+  closeDocument();
+}
+
+console.log("\n--- flipping a region over ---");
+{
+  /*
+   * The vertical mirror, which is a different set of properties from the other
+   * two rather than the same rule with a letter changed. Stated one block at a
+   * time, because a failure has to name which family was forgotten -- and
+   * `face` and `attachment` are the two that get forgotten.
+   */
+  const session = newDocument({ width: 4, height: 4, length: 4 });
+  const rock = { namespacedName: "minecraft:stone", properties: {} };
+  const wood = { namespacedName: "minecraft:oak_planks", properties: {} };
+  const put = (y: number, name: string, properties: Record<string, string>) =>
+    setBlock(session.doc, 0, y, 0, { namespacedName: name, properties });
+
+  put(0, "minecraft:oak_stairs", { facing: "north", half: "bottom" });
+  put(1, "minecraft:oak_door", { facing: "north", half: "upper", hinge: "left" });
+  put(2, "minecraft:stone_slab", { type: "top" });
+  put(3, "minecraft:lever", { face: "floor", facing: "north" });
+
+  transformRegion(session, { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 3, maxZ: 0 }, {
+    kind: "mirror",
+    axis: "y",
+  });
+
+  // The column is turned over, so what was at y=0 is now at y=3.
+  equal("a stair's half turns over", getBlock(session.doc, 0, 3, 0).properties.half, "top");
+  equal(
+    "...and its facing does not",
+    getBlock(session.doc, 0, 3, 0).properties.facing,
+    "north",
+  );
+  equal("a door's upper half becomes its lower", getBlock(session.doc, 0, 2, 0).properties.half, "lower");
+  equal(
+    "...and a reflection swaps its hinge",
+    getBlock(session.doc, 0, 2, 0).properties.hinge,
+    "right",
+  );
+  equal("a slab's type turns over", getBlock(session.doc, 0, 1, 0).properties.type, "bottom");
+  equal(
+    "a lever on the floor ends up on the ceiling",
+    getBlock(session.doc, 0, 0, 0).properties.face,
+    "ceiling",
+  );
+
+  /*
+   * The one that cannot be reflected, and is therefore left exactly as it was.
+   * `ascending_north` upside down would be a rail going *down* to the north,
+   * and the game has no such state -- every rail that is not flat ascends. So
+   * the value stands rather than being turned into a neighbouring direction:
+   * inventing a state is the one thing this file may not do.
+   */
+  setBlock(session.doc, 1, 0, 0, {
+    namespacedName: "minecraft:rail",
+    properties: { shape: "ascending_north" },
+  });
+  transformRegion(session, { minX: 1, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 0 }, {
+    kind: "mirror",
+    axis: "y",
+  });
+  equal(
+    "an ascending rail has no reflection, and keeps its own",
+    getBlock(session.doc, 1, 0, 0).properties.shape,
+    "ascending_north",
+  );
+  closeDocument();
+}
+
+console.log("\n--- resampling a region ---");
+{
+  const session = newDocument({ width: 8, height: 8, length: 8 });
+  const rock = { namespacedName: "minecraft:stone", properties: {} };
+  const wood = { namespacedName: "minecraft:oak_planks", properties: {} };
+  setBlock(session.doc, 0, 0, 0, rock);
+  setBlock(session.doc, 1, 0, 0, wood);
+  session.history.undoStack.length = 0;
+
+  scaleRegion(session, { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 0, maxZ: 0 }, {
+    kind: "multiply",
+    factor: 2,
+  });
+  equal(
+    "doubling makes one block into a cube of itself",
+    getBlock(session.doc, 1, 1, 1).namespacedName,
+    "minecraft:stone",
+  );
+  equal(
+    "...and the block beside it follows",
+    getBlock(session.doc, 2, 0, 0).namespacedName,
+    "minecraft:oak_planks",
+  );
+  equal("a scale is one undo step", session.history.undoStack.length, 1);
+  undoEdit(session);
+  equal(
+    "...and one undo puts the row back",
+    getBlock(session.doc, 1, 0, 0).namespacedName,
+    "minecraft:oak_planks",
+  );
+
+  /*
+   * Halving discards seven cells in every eight, so it is counted and refused
+   * before anything is written -- `resizeSession`'s rule, because a warning
+   * shown after the blocks are gone is a report.
+   */
+  setBlock(session.doc, 0, 0, 0, rock);
+  setBlock(session.doc, 1, 0, 0, rock);
+  setBlock(session.doc, 0, 0, 1, rock);
+  setBlock(session.doc, 1, 0, 1, rock);
+  const half = { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 1, maxZ: 1 };
+  let raised: unknown = null;
+  try {
+    scaleRegion(session, half, { kind: "divide", factor: 2 });
+  } catch (err) {
+    raised = err;
+  }
+  check("halving counts what it would discard", raised instanceof ScaleWouldLoseBlocksError);
+  equal(
+    "...and refuses before writing anything",
+    getBlock(session.doc, 1, 0, 1).namespacedName,
+    "minecraft:stone",
+  );
+  const changed = scaleRegion(session, half, { kind: "divide", factor: 2 }, { confirmLoss: true });
+  check("...and goes ahead once confirmed", changed > 0, String(changed));
+  equal(
+    "the cell at the low corner is the one that survives",
+    getBlock(session.doc, 0, 0, 0).namespacedName,
+    "minecraft:stone",
+  );
+  closeDocument();
+}
+
 console.log("\n--- moving a region ---");
 {
   const session = newDocument({ width: 8, height: 4, length: 8 });

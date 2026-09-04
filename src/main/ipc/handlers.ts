@@ -55,6 +55,7 @@ import {
   type TraceItem,
   type RecentDocument,
   type RecoveryPeekResponse,
+  type ScaleRequest,
   type SaveRequest,
   type SaveResponse,
   type ClipboardResponse,
@@ -103,6 +104,7 @@ import {
   setSessionVoidBlock,
   OutsideDocumentError,
   ResizeWouldLoseBlocksError,
+  ScaleWouldLoseBlocksError,
   resizeSession,
   closeDocument,
   copySelection,
@@ -126,6 +128,7 @@ import {
   requireSession,
   saveSession,
   NotSquareError,
+  scaleRegion,
   transformRegion,
   undoEdit,
 } from "../services/session.js";
@@ -1031,6 +1034,9 @@ ${report.stack}`),
     if (err instanceof NoSaveTargetError || err instanceof EditTooLargeError) {
       return { ok: false, kind: "invalid-input", message: err.message };
     }
+    if (err instanceof ScaleWouldLoseBlocksError) {
+      return { ok: false, kind: "needs-confirmation", message: err.message };
+    }
     if (err instanceof ResizeWouldLoseBlocksError) {
       // Its own kind, so the panel can offer to go ahead without reading the
       // sentence. The message already names the count.
@@ -1443,10 +1449,31 @@ ${report.stack}`),
     },
   );
 
+  ipcMain.handle(IPC.docScale, async (_event, request: ScaleRequest): Promise<EditResponse> => {
+    try {
+      const session = requireSession();
+      const options = await editOptionsFor(session);
+      const changed = scaleRegion(session, request.region, request.spec, {
+        ...options,
+        to: request.to ?? null,
+        confirmLoss: request.confirmLoss === true,
+      });
+      return { ok: true, changed, state: shellState(session) };
+    } catch (err) {
+      return failure(err);
+    }
+  });
+
   ipcMain.handle(IPC.docMove, async (_event, request: MoveRegionRequest): Promise<EditResponse> => {
     try {
       const session = requireSession();
-      const changed = moveRegion(session, request.region, request.to);
+      /*
+       * The same options `docApply` gets, and it is the point of this change:
+       * a move that carried blocks past the edge used to lose them in silence,
+       * because `pasteClipboard` clips by letting `tx.setBlock` return false.
+       */
+      const options = await editOptionsFor(session);
+      const changed = moveRegion(session, request.region, request.to, options);
       return { ok: true, changed, state: shellState(session) };
     } catch (err) {
       return failure(err);
@@ -1485,7 +1512,11 @@ ${report.stack}`),
   ipcMain.handle(IPC.docTransform, async (_event, request: TransformRequest): Promise<EditResponse> => {
     try {
       const session = requireSession();
-      const changed = transformRegion(session, request.region, request.transform);
+      const options = await editOptionsFor(session);
+      const changed = transformRegion(session, request.region, request.transform, {
+        ...options,
+        to: request.to ?? null,
+      });
       return { ok: true, changed, state: shellState(session) };
     } catch (err) {
       return failure(err);

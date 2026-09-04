@@ -36,6 +36,7 @@ import {
   paletteHistogram,
   regionVolume,
   setBlock,
+  type Region,
   type SchematicDocument,
 } from "../domain/document.js";
 import {
@@ -63,10 +64,14 @@ import {
 } from "../domain/clipboard.js";
 import { flattenNbt, setNbtValue } from "../domain/nbt_edit.js";
 import {
+  applyRegionScale,
   applyRegionTransform,
   describeTransform,
   NotSquareError,
+  scaledExtent,
+  scaleWouldDrop,
   type RegionTransform,
+  type ScaleSpec,
 } from "../domain/transform.js";
 
 export { NotSquareError, type RegionTransform };
@@ -94,6 +99,7 @@ import {
   growthToInclude,
   orderRegion,
   shiftRegion,
+  type Extent,
 } from "../domain/grow.js";
 import { peelEmptyFaces } from "../domain/shrink.js";
 
@@ -1564,6 +1570,15 @@ export function inspect(session: DocumentSession, x: number, y: number, z: numbe
  */
 let clipboard: Clipboard | null = null;
 
+/**
+ * Empty space, when nothing else has been chosen.
+ *
+ * A constant rather than an object literal at each call site: `cutSelection`
+ * and `moveRegion` each wrote their own, which is how they came to ignore the
+ * document's void block while `applyEdit`'s break path honoured it -- an
+ * underwater build cut and pasted came back with air pockets in it.
+ */
+const AIR_ENTRY: PaletteEntry = { namespacedName: "minecraft:air", properties: {} };
 export function currentClipboard(): Clipboard | null {
   return clipboard;
 }
@@ -1574,13 +1589,23 @@ export function copySelection(session: DocumentSession, request: RegionSpec): Cl
   return clipboard;
 }
 
-/** Copies, then clears — one undoable step for the clearing half. */
-export function cutSelection(session: DocumentSession, request: RegionSpec): Clipboard {
+/**
+ * Copies, then clears — one undoable step for the clearing half.
+ *
+ * What is left behind is the document's empty space rather than the word air,
+ * for `applyEdit`'s reason: with water chosen as the void, a cut that wrote air
+ * would punch a dry hole in a pond.
+ */
+export function cutSelection(
+  session: DocumentSession,
+  request: RegionSpec,
+  options: RegionEditOptions = {},
+): Clipboard {
   const { doc, history } = session;
   const region = normalizeRegion(doc, request);
   clipboard = copyRegion(doc, region);
   runTransaction(doc, history, "Cut the selection", (tx) =>
-    tx.fill(region, { namespacedName: "minecraft:air", properties: {} }),
+    tx.fill(region, emptyEntry(options.voidBlock)),
   );
   return clipboard;
 }
@@ -1624,17 +1649,121 @@ export function pasteSelection(
  * destination keeps whatever was already standing inside the moved box, so
  * dragging a hollow room three blocks along would smear its walls.
  */
+/**
+ * What every region edit may be told, beyond the region itself.
+ *
+ * The three questions are the same for a move, a turn and a scale, and before
+ * this they were answered in three different places or not at all: `autoGrow`
+ * reached only `applyEdit`, so a move that carried blocks past the edge lost
+ * them silently -- `pasteClipboard` clips by letting `tx.setBlock` return
+ * false, and `changed` came back short with nothing to say why.
+ */
+export interface RegionEditOptions {
+  /** Whether the schematic grows to hold the result. Refuses by name when off. */
+  autoGrow?: boolean;
+  /**
+   * What the region leaves behind: the document's own empty space.
+   *
+   * A string, the way `EditOptions.voidBlock` is, and parsed here for the same
+   * reason -- so a caller passes what the session holds rather than converting
+   * it. Before this, `cutSelection` and `moveRegion` each wrote
+   * `minecraft:air` inline, so an underwater build cut and pasted came back
+   * with air pockets where the water had been.
+   */
+  voidBlock?: string;
+}
+
+/** The block a region leaves behind, from whatever the session was told. */
+function emptyEntry(voidBlock: string | undefined): PaletteEntry {
+  if (voidBlock === undefined || voidBlock === "") return AIR_ENTRY;
+  return parsePaletteEntry(voidBlock);
+}
+
+/**
+ * The growth a destination box needs, refusing rather than clipping.
+ *
+ * One place, because the alternative is this rule written out at three call
+ * sites and wrong at whichever is added next -- which is exactly how move,
+ * paste and transform came to ignore the setting while `applyEdit` honoured it.
+ */
+function growthFor(
+  doc: SchematicDocument,
+  box: Region,
+  mayGrow: boolean,
+): { size: Extent; shift: readonly [number, number, number] } | null {
+  const growth = growthToInclude(doc, orderRegion(box));
+  if (growth === null) return null;
+  if (!mayGrow) throw new OutsideDocumentError();
+  if (extentVolume(growth.size) > MAX_DOCUMENT_VOLUME) {
+    throw new DocumentTooLargeError(extentVolume(growth.size));
+  }
+  return growth;
+}
+
+/** The box a region occupies once a transform has been applied to it. */
+function transformedBox(
+  region: Region,
+  transform: RegionTransform,
+  to: { x: number; y: number; z: number } | null,
+): Region {
+  const width = region.maxX - region.minX + 1;
+  const height = region.maxY - region.minY + 1;
+  const length = region.maxZ - region.minZ + 1;
+  const quarter = transform.kind === "rotate" && (transform.steps === 1 || transform.steps === 3);
+  const size = quarter
+    ? { width: length, height, length: width }
+    : { width, height, length };
+  const corner = to ?? { x: region.minX, y: region.minY, z: region.minZ };
+  return {
+    minX: corner.x,
+    minY: corner.y,
+    minZ: corner.z,
+    maxX: corner.x + size.width - 1,
+    maxY: corner.y + size.height - 1,
+    maxZ: corner.z + size.length - 1,
+  };
+}
+
 export function moveRegion(
   session: DocumentSession,
   request: RegionSpec,
   to: { x: number; y: number; z: number },
+  options: RegionEditOptions = {},
 ): number {
   const { doc, history } = session;
   const region = normalizeRegion(doc, request);
+  const volume = regionVolume(region);
+  if (volume > MAX_EDIT_VOLUME) throw new EditTooLargeError(volume);
+
+  const landing: Region = {
+    minX: to.x,
+    minY: to.y,
+    minZ: to.z,
+    maxX: to.x + (region.maxX - region.minX),
+    maxY: to.y + (region.maxY - region.minY),
+    maxZ: to.z + (region.maxZ - region.minZ),
+  };
+  const growth = growthFor(doc, landing, options.autoGrow !== false);
   const held = copyRegion(doc, region);
+  const empty = emptyEntry(options.voidBlock);
+
   return runTransaction(doc, history, "Move the selection", (tx) => {
-    let changed = tx.fill(region, { namespacedName: "minecraft:air", properties: {} });
-    changed += pasteClipboard(doc, tx, held, to, { includeAir: true });
+    /*
+     * The resize comes first, and alone in its command: a voxel index means
+     * nothing except against the dimensions in force when it was recorded, so a
+     * block delta written before it would index the old shape.
+     */
+    if (growth !== null) tx.resize(growth.size, growth.shift);
+    const shift = growth?.shift ?? ([0, 0, 0] as const);
+    const source = growth === null ? region : shiftRegion(region, growth.shift);
+    let changed = tx.fill(source, empty);
+    changed += pasteClipboard(
+      doc,
+      tx,
+      held,
+      { x: to.x + shift[0], y: to.y + shift[1], z: to.z + shift[2] },
+      { includeAir: true },
+    );
     return changed;
   });
 }
@@ -1685,15 +1814,121 @@ export async function regionMesh(
  * The mechanics live in `domain/transform.ts` so the agent can drive the same
  * code inside its own transaction; this is only the UI's wrapper around them.
  */
+/**
+ * Turns or reflects a region, optionally landing it somewhere else.
+ *
+ * The destination is what makes the gizmo's pivot work: turning about a corner
+ * is turning in place and then moving, and doing that as two transactions would
+ * let Ctrl+Z take back half of one gesture. It is also what removes
+ * `NotSquareError` for callers that supply one -- an oblong quarter-turn is
+ * simply a box of the other shape, and only the demand that it land back on its
+ * own footprint ever made it impossible.
+ */
 export function transformRegion(
   session: DocumentSession,
   request: RegionSpec,
   transform: RegionTransform,
+  options: RegionEditOptions & { to?: { x: number; y: number; z: number } | null } = {},
 ): number {
   const { doc, history } = session;
-  return runTransaction(doc, history, describeTransform(transform), (tx) =>
-    applyRegionTransform(doc, tx, request, transform),
-  );
+  const region = normalizeRegion(doc, request);
+  const volume = regionVolume(region);
+  if (volume > MAX_EDIT_VOLUME) throw new EditTooLargeError(volume);
+
+  const to = options.to ?? null;
+  const landing = transformedBox(region, transform, to);
+  const growth = growthFor(doc, landing, options.autoGrow !== false);
+
+  return runTransaction(doc, history, describeTransform(transform), (tx) => {
+    if (growth !== null) tx.resize(growth.size, growth.shift);
+    const shift = growth?.shift ?? ([0, 0, 0] as const);
+    const source = growth === null ? region : shiftRegion(region, growth.shift);
+    const corner =
+      to === null
+        ? null
+        : { x: to.x + shift[0], y: to.y + shift[1], z: to.z + shift[2] };
+    return applyRegionTransform(doc, tx, source, transform, {
+      to: corner,
+      empty: emptyEntry(options.voidBlock),
+    });
+  });
+}
+
+/**
+ * Thrown when a division would discard blocks, so it can be confirmed.
+ *
+ * `resizeSession`'s shape, and for its reason: counted and refused *before*
+ * anything is written, because a warning shown after the blocks are gone is a
+ * report. It maps to `needs-confirmation`, so the panel can offer the second
+ * press without reading the sentence.
+ */
+export class ScaleWouldLoseBlocksError extends Error {
+  constructor(public readonly blocks: number) {
+    super(
+      `Shrinking discards ${blocks.toLocaleString()} block${blocks === 1 ? "" : "s"}: only ` +
+        `one cell in each group survives. Confirm to go ahead.`,
+    );
+    this.name = "ScaleWouldLoseBlocksError";
+  }
+}
+
+/**
+ * Resamples a region by a whole factor.
+ *
+ * The least useful of the gizmo's four modes and the one most able to destroy
+ * something, which is why it is the only one that ever asks first.
+ */
+export function scaleRegion(
+  session: DocumentSession,
+  request: RegionSpec,
+  spec: ScaleSpec,
+  options: RegionEditOptions & {
+    to?: { x: number; y: number; z: number } | null;
+    confirmLoss?: boolean;
+  } = {},
+): number {
+  const { doc, history } = session;
+  const region = normalizeRegion(doc, request);
+  const size = {
+    width: region.maxX - region.minX + 1,
+    height: region.maxY - region.minY + 1,
+    length: region.maxZ - region.minZ + 1,
+  };
+  const out = scaledExtent(size, spec);
+  /*
+   * The *destination* is what has to fit, not the source: multiplying by three
+   * turns a hundred blocks a side into twenty-seven million cells, which is
+   * past what one edit may touch and well past what the process survives.
+   */
+  const volume = out.width * out.height * out.length;
+  if (volume > MAX_EDIT_VOLUME) throw new EditTooLargeError(volume);
+
+  if (spec.kind === "divide" && options.confirmLoss !== true) {
+    const lost = scaleWouldDrop(doc, region, spec);
+    if (lost > 0) throw new ScaleWouldLoseBlocksError(lost);
+  }
+
+  const to = options.to ?? { x: region.minX, y: region.minY, z: region.minZ };
+  const landing: Region = {
+    minX: to.x,
+    minY: to.y,
+    minZ: to.z,
+    maxX: to.x + out.width - 1,
+    maxY: to.y + out.height - 1,
+    maxZ: to.z + out.length - 1,
+  };
+  const growth = growthFor(doc, landing, options.autoGrow !== false);
+  const label = spec.kind === "multiply" ? `Scale up ${spec.factor}x` : `Scale down ${spec.factor}x`;
+
+  return runTransaction(doc, history, label, (tx) => {
+    if (growth !== null) tx.resize(growth.size, growth.shift);
+    const shift = growth?.shift ?? ([0, 0, 0] as const);
+    const source = growth === null ? region : shiftRegion(region, growth.shift);
+    return applyRegionScale(doc, tx, source, spec, {
+      to: { x: to.x + shift[0], y: to.y + shift[1], z: to.z + shift[2] },
+      empty: emptyEntry(options.voidBlock),
+    });
+  });
 }
 
 export class NoBlockEntityError extends Error {

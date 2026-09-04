@@ -33,6 +33,7 @@ import {
 import NbtModal from "./lib/NbtModal.svelte";
   import SettingsModal from "./lib/SettingsModal.svelte";
   import SelectionTools from "./lib/SelectionTools.svelte";
+import GizmoBar from "./lib/GizmoBar.svelte";
     import ToolWindow from "./lib/ToolWindow.svelte";
   import { findOpenCodeModel, loadOpenCodeModels } from "./lib/models.svelte.js";
   import SidebarSplitter from "./lib/SidebarSplitter.svelte";
@@ -63,6 +64,16 @@ import VersionsModal from "./lib/VersionsModal.svelte";
   import { blocksIn } from "../../shared/block_versions.js";
   import { placementState, type PlacementLook } from "../../shared/block_orientation.js";
   import { movedRegion } from "./lib/selection_drag.js";
+import {
+  gizmoOrigin,
+  scaledRegion,
+  transformedRegion,
+  type Axis,
+  type Cell,
+  type GizmoMode,
+  type RegionTransform,
+  type ScaleSpec,
+} from "./lib/gizmo.js";
   import { t, tn, setLocale } from "./lib/i18n.svelte.js";
   import {
     openCodeModelRequiresKey,
@@ -969,7 +980,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     at: { x: number; y: number; z: number },
     look: PlacementLook,
   ): Promise<void> {
-    if (busy || cameraMode !== "orbit") return;
+    if (busy || cameraMode !== "fly") return;
     await onBuild("place", at, look);
   }
 
@@ -1524,18 +1535,43 @@ import ConvertModal from "./lib/ConvertModal.svelte";
       !inventoryOpen &&
       schematicDialog === null
     ) {
-      if (event.key === "Escape" && moving !== null) {
-        // A move in flight is what Escape means first: it is the thing on
-        // screen that is mid-gesture, and cancelling it must not also throw
-        // away the selection it was going to land on.
-        event.preventDefault();
-        cancelMove();
-        return;
-      }
       if (event.key === "Escape" && selection !== null) {
         event.preventDefault();
         clearSelection();
         return;
+      }
+      /*
+       * The gizmo's modes and its three mirrors.
+       *
+       * Unmodified letters, which is what every 3D editor uses and what this
+       * app has room for -- `E` is the inventory and `R` reframes the camera,
+       * and neither of those is reachable from here. They sit below the
+       * pointer-lock gate at the top of this function, so in flight they are
+       * the camera's: `G` and `Y` are nothing there, but the rule is about not
+       * having to re-judge each new shortcut against the movement keys.
+       */
+      if (selection !== null && !busy) {
+        const GIZMO_KEYS: Record<string, GizmoMode> = {
+          g: "move",
+          t: "rotate",
+          y: "scale",
+          p: "pivot",
+        };
+        const wanted = GIZMO_KEYS[event.key.toLowerCase()];
+        if (wanted !== undefined && !event.shiftKey) {
+          event.preventDefault();
+          gizmoMode = wanted;
+          return;
+        }
+        // Shift+X/Y/Z reflects. Shift because a bare X would be one keystroke
+        // away from a mode switch, and this one changes blocks.
+        const MIRROR_KEYS: Record<string, Axis> = { x: "x", y: "y", z: "z" };
+        const axis = MIRROR_KEYS[event.key.toLowerCase()];
+        if (axis !== undefined && event.shiftKey) {
+          event.preventDefault();
+          void mirrorSelection(axis);
+          return;
+        }
       }
       if (event.key === "Delete" && docState !== null && !busy && selection !== null) {
         event.preventDefault();
@@ -3092,35 +3128,52 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   }
 
   /**
-   * The region being moved, and its contents as geometry.
+   * The region being dragged by the gizmo, and its contents as geometry.
    *
-   * A mode rather than a drag, because the gesture does not start on the box:
-   * a press on the selection is already the camera's, and taking it would cost
-   * the one thing that made orbiting bearable. So Move arms it, the pointer
-   * places it, a click puts it down, and Escape puts it back.
+   * It used to be a *mode*: Move armed it, the pointer carried it, a click put
+   * it down. That shape existed because a press on the selection was already
+   * the camera's, so there was no drag to hang it on. There is now -- the
+   * gizmo's arrows are drawn for exactly this and a press on one can only mean
+   * this -- so the mode is gone and this is a drag like any other.
+   *
+   * Fetched at the press rather than held for every selection: meshing a region
+   * is real work and a face drag changes the selection many times a second. The
+   * gesture does not wait for it; until it lands the viewport draws the
+   * destination as a box.
    */
   let moving = $state<{ region: RegionSpec; chunks: ChunkGeometry[] } | null>(null);
 
-  async function startMove(): Promise<void> {
-    if (!selection || busy) return;
-    const region = selection;
-    busy = true;
+  /**
+   * Which handles the gizmo is showing.
+   *
+   * Not persisted, for `cameraMode`'s reason: it is what you are doing right
+   * now, not how you like the app set up.
+   */
+  let gizmoMode = $state<GizmoMode>("move");
+
+  /**
+   * The cell transforms turn and reflect about, or null for the region's middle.
+   *
+   * Kept while a selection exists and dropped with it: a pivot is a point
+   * chosen against a particular box, and carrying it onto the next selection
+   * would rotate that one about somewhere nobody pointed at.
+   */
+  let pivot = $state<Cell | null>(null);
+
+  /** The gizmo grabbed a move handle: fetch the ghost it will drag. */
+  async function armGhost(): Promise<void> {
+    if (!selection || moving !== null) return;
+    const region = { ...selection };
     try {
       const response = await api().regionMesh(forIpc(region));
-      if (!response.ok) {
-        status = { tone: "warn", text: response.message };
-        return;
-      }
-      moving = { region: { ...region }, chunks: response.chunks };
-    } catch (err) {
-      failed(err, t("task.moving"));
-    } finally {
-      busy = false;
+      // The drag may have ended while this was in flight, and a ghost that
+      // arrived after the release would sit on the build until the next one.
+      if (!response.ok || !selection) return;
+      moving = { region, chunks: response.chunks };
+    } catch {
+      // A missing ghost costs the preview, not the gesture: the destination
+      // box is drawn either way, and the move itself is main's.
     }
-  }
-
-  function cancelMove(): void {
-    moving = null;
   }
 
   /**
@@ -3131,15 +3184,101 @@ import ConvertModal from "./lib/ConvertModal.svelte";
    * nothing, and every editor that moves a thing leaves it selected.
    */
   async function commitMove(to: { x: number; y: number; z: number }): Promise<void> {
-    const held = moving;
-    if (held === null) return;
+    /*
+     * The region comes from the selection rather than from the ghost, because
+     * the ghost is a preview that may never have arrived -- a short drag on a
+     * big region commits before its mesh does. Losing the picture is fine;
+     * losing the move because the picture was slow is not.
+     */
+    const region = moving?.region ?? selection;
     moving = null;
+    if (!region) return;
     const changed = await runDocument(t("task.moving"), () =>
-      api().moveRegion({ region: forIpc(held.region), to }),
+      api().moveRegion({ region: forIpc(region), to }),
     );
     if (changed !== null) {
-      selection = movedRegion(held.region, to);
+      selection = movedRegion(region, to);
       anchor = { x: to.x, y: to.y, z: to.z };
+      // The pivot moved with the blocks, or it would name a cell the region
+      // has left -- and the next turn would swing it round empty space.
+      if (pivot !== null) {
+        pivot = {
+          x: pivot.x + (to.x - region.minX),
+          y: pivot.y + (to.y - region.minY),
+          z: pivot.z + (to.z - region.minZ),
+        };
+      }
+    }
+    reportChange(changed);
+  }
+
+  /**
+   * A ring or a mirror button was released: turn or reflect the region.
+   *
+   * The origin comes from the viewport because the pivot lives there as a
+   * point; main is told the *destination box*, which is what lets a turn about
+   * a corner be one transaction rather than a turn followed by a move.
+   */
+  async function gizmoTransform(
+    transform: RegionTransform,
+    origin: { x: number; y: number; z: number },
+  ): Promise<void> {
+    if (!selection || busy) return;
+    /*
+     * Only the vertical axis turns, and the viewport draws only that ring --
+     * this is the second half of that rule, kept here so a caller that grew a
+     * third ring would fail loudly rather than write states the game has no
+     * spelling for. A staircase turned about X would have to face up.
+     */
+    if (transform.kind === "rotate" && transform.axis !== "y") return;
+    const region = { ...selection };
+    const to = transformedRegion(region, origin, transform);
+    const changed = await runDocument(t("task.transforming"), () =>
+      api().transformRegion({
+        region: forIpc(region),
+        transform:
+          transform.kind === "mirror"
+            ? { kind: "mirror", axis: transform.axis }
+            : { kind: "rotate", steps: transform.steps },
+        to: { x: to.minX, y: to.minY, z: to.minZ },
+      }),
+    );
+    if (changed !== null) {
+      // The box follows the blocks, exactly as it does after a move: leaving it
+      // on the space they came from would make the next operation act on air.
+      selection = to;
+      anchor = { x: to.minX, y: to.minY, z: to.minZ };
+    }
+    reportChange(changed);
+  }
+
+  /**
+   * Reflects the selection through the pivot, on one axis.
+   *
+   * A button rather than a handle because a reflection has no continuous
+   * gesture: there is nothing to drag, only an axis to name. The origin is
+   * computed here rather than reported by the viewport, because a mirror is
+   * not a drag and so never passed through one.
+   */
+  async function mirrorSelection(axis: Axis): Promise<void> {
+    if (!selection || busy) return;
+    await gizmoTransform({ kind: "mirror", axis }, gizmoOrigin(selection, pivot));
+  }
+
+  /** A scale handle was released. */
+  async function gizmoScale(
+    spec: ScaleSpec,
+    origin: { x: number; y: number; z: number },
+  ): Promise<void> {
+    if (!selection || busy) return;
+    const region = { ...selection };
+    const to = scaledRegion(region, origin, spec);
+    const changed = await runDocument(t("task.scaling"), () =>
+      api().scaleRegion({ region: forIpc(region), spec, to: { x: to.minX, y: to.minY, z: to.minZ } }),
+    );
+    if (changed !== null) {
+      selection = to;
+      anchor = { x: to.minX, y: to.minY, z: to.minZ };
     }
     reportChange(changed);
   }
@@ -3148,6 +3287,7 @@ import ConvertModal from "./lib/ConvertModal.svelte";
   function clearSelection(): void {
     selection = null;
     anchor = null;
+    pivot = null;
   }
 
   /**
@@ -4146,6 +4286,22 @@ import ConvertModal from "./lib/ConvertModal.svelte";
     {/if}
 
     <!--
+      The gizmo's own controls. Only with a selection, because every one of
+      them acts on one -- and only in orbit, because in flight the pointer is
+      locked and there is nothing to press them with.
+    -->
+    {#if docState && selection !== null && cameraMode === "orbit"}
+      <GizmoBar
+        mode={gizmoMode}
+        onmode={(next) => (gizmoMode = next)}
+        moved={pivot !== null}
+        onresetpivot={() => (pivot = null)}
+        onmirror={(axis) => void mirrorSelection(axis)}
+        {busy}
+      />
+    {/if}
+
+    <!--
       The way back to the tools, and the reason "close" can mean close.
       Top-left, which is where the window itself opens, so the panel appears
       more or less from under the button that summoned it -- but below the
@@ -4209,16 +4365,9 @@ import ConvertModal from "./lib/ConvertModal.svelte";
           onreplacefromchange={(next) => (replaceBlock = next)}
           onbrowse={browseBlocks}
           palette={docState?.palette ?? []}
-          {clipboard}
           onfill={fillSelection}
           onreplace={replaceInSelection}
-          ontransform={transformSelection}
-          oncopy={() => void copySelection(false)}
-          oncut={() => void copySelection(true)}
-          onpaste={pasteHere}
           ondelete={() => void deleteSelection()}
-          moving={moving !== null}
-          onmove={() => (moving === null ? void startMove() : cancelMove())}
           onclearselection={clearSelection}
           onselectall={selectAll}
         />
@@ -4291,6 +4440,13 @@ import ConvertModal from "./lib/ConvertModal.svelte";
       onpickmaterial={docState ? onPickMaterial : undefined}
       ghost={moving}
       onghostcommit={(to) => void commitMove(to)}
+      {gizmoMode}
+      {pivot}
+      autoGrow={settings.editing.autoGrow}
+      onpivotchange={(next) => (pivot = next)}
+      ongizmograb={() => void armGhost()}
+      ontransform={(transform, origin) => void gizmoTransform(transform, origin)}
+      onscale={(spec, origin) => void gizmoScale(spec, origin)}
       documentSize={docState?.size ?? null}
       ongridselect={docState ? onGridSelect : undefined}
       ongridplace={docState ? (at, look) => void onGridPlace(at, look) : undefined}

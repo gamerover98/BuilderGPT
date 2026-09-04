@@ -201,6 +201,8 @@ export const IPC = {
   docPaste: "bgpt:doc:paste",
   /** Pick a region up and put it down elsewhere, as one step. */
   docMove: "bgpt:doc:move",
+  /** Resample the selection by a whole factor. */
+  docScale: "bgpt:doc:scale",
   /** A region's contents as standalone geometry, for the move preview. */
   docRegionMesh: "bgpt:doc:region:mesh",
   /**
@@ -1216,12 +1218,39 @@ export interface BlockInspection {
 }
 
 /**
- * Turning or reflecting a region. A quarter turn needs a square footprint and
- * is refused otherwise rather than cropped.
+ * Turning or reflecting a region.
+ *
+ * `to` is where the result's minimum corner lands, and it is what makes the
+ * gizmo's pivot mean something: turning about a corner is turning in place and
+ * then moving, and as two requests Ctrl+Z would take back half a gesture.
+ * Without it the region turns on its own footprint, which a quarter turn can
+ * only do when that footprint is square.
+ *
+ * The mirror axis includes `y`, which is the flip. It is not the other two with
+ * a letter changed -- a vertical reflection turns over `half`, `type`, `face`
+ * and `attachment` and touches none of the horizontal properties.
  */
 export interface TransformRequest {
   region: RegionSpec;
-  transform: { kind: "rotate"; steps: 0 | 1 | 2 | 3 } | { kind: "mirror"; axis: "x" | "z" };
+  transform:
+    | { kind: "rotate"; steps: 0 | 1 | 2 | 3 }
+    | { kind: "mirror"; axis: "x" | "y" | "z" };
+  to?: { x: number; y: number; z: number } | null;
+}
+
+/**
+ * Resampling a region by a whole factor.
+ *
+ * Whole factors only, because anything else is a build with a different number
+ * of blocks in every row. Multiplying is exact; dividing keeps one cell in each
+ * group and is refused first with a count, like a shrink.
+ */
+export interface ScaleRequest {
+  region: RegionSpec;
+  spec: { kind: "multiply"; factor: number } | { kind: "divide"; factor: number };
+  to?: { x: number; y: number; z: number } | null;
+  /** Go ahead even though blocks will be discarded. */
+  confirmLoss?: boolean;
 }
 
 /**
@@ -1865,6 +1894,7 @@ export interface BgptApi {
   getAnchorTexture(): Promise<PackTexture | null>;
   /** Turn or reflect the selection. Undoable as one step. */
   transformRegion(request: TransformRequest): Promise<EditResponse>;
+  scaleRegion(request: ScaleRequest): Promise<EditResponse>;
   /**
    * Copy the selection out, or cut it. The clipboard lives in main and
    * deliberately outlives the open document, so it can carry between two.

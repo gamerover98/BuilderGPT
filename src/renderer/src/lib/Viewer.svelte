@@ -46,6 +46,25 @@ import {
   type Axis,
   type Side,
 } from "./selection_drag.js";
+  import {
+    axisPointAt,
+    defaultPivot,
+    dragAlongAxis,
+    gizmoOrigin,
+    regionFits,
+    quartersBetween,
+    regionCentre,
+    ringAngleAt,
+    scaleFromRatio,
+    scaledRegion,
+    transformedRegion,
+    type Cell,
+    type GizmoHandle,
+    type GizmoMode,
+    type RegionTransform,
+    type ScaleSpec,
+    type Vec3,
+  } from "./gizmo.js";
   import { isSpuriousLook } from "./look_filter.js";
   import { api } from "./bridge.svelte.js";
   import { COPLANAR_OFFSET, GRID_DIVISIONS, GRID_SIZE } from "./depth.js";
@@ -321,6 +340,51 @@ import { isTyping } from "./typing.js";
     /** The move was confirmed: put the region's corner here. */
     onghostcommit?: (to: { x: number; y: number; z: number }) => void;
     /**
+     * What the transform gizmo is doing, and what it therefore draws.
+     *
+     * Owned by the app rather than here, because the floating bar and the
+     * keyboard both set it and neither of them is inside this component.
+     */
+    gizmoMode?: GizmoMode;
+    /**
+     * Whether an edit outside the schematic grows it.
+     *
+     * Read here only to *draw* the refusal: with it off, a destination that
+     * leaves the box is outlined in the danger colour while the drag is still
+     * happening. Main decides the actual refusal -- this is the warning, and a
+     * warning shown after the release would be a report.
+     */
+    autoGrow?: boolean;
+    /**
+     * The cell transforms turn and reflect about, or null for the region's
+     * own middle.
+     *
+     * A cell rather than a point so it reads off the same coordinates as
+     * everything else; `gizmoOrigin` puts the gizmo at that cell's centre,
+     * which is what keeps a mirror landing on cell boundaries.
+     */
+    pivot?: Cell | null;
+    /** The pivot was dragged somewhere else. */
+    onpivotchange?: (pivot: Cell) => void;
+    /**
+     * A ring or a mirror button was released: turn or reflect the region.
+     *
+     * The origin travels with it because the pivot is this component's to
+     * report -- main knows regions, not where a gizmo was standing.
+     */
+    ontransform?: (transform: RegionTransform, origin: { x: number; y: number; z: number }) => void;
+    /** A scale handle was released. */
+    onscale?: (spec: ScaleSpec, origin: { x: number; y: number; z: number }) => void;
+    /**
+     * A gizmo drag began, so the app can fetch the region's own geometry.
+     *
+     * Asked for at the press rather than held for every selection: meshing a
+     * region is real work, and a face-handle drag changes the selection many
+     * times a second. Until it arrives the destination is drawn as a box,
+     * which is why the gesture does not wait for it.
+     */
+    ongizmograb?: () => void;
+    /**
      * The palette in force, already resolved against the OS preference.
      *
      * The viewer never reads this value -- the colours come from the same CSS
@@ -368,6 +432,13 @@ import { isTyping } from "./typing.js";
     onselectiongesture,
     ghost = null,
     onghostcommit,
+    gizmoMode = "move",
+    autoGrow = true,
+    pivot = null,
+    onpivotchange,
+    ontransform,
+    onscale,
+    ongizmograb,
   }: Props = $props();
 
   /**
@@ -831,15 +902,6 @@ import { isTyping } from "./typing.js";
   /** Where a grid drag began, or null when no drag is in progress. */
   let gridAnchor: GridCell | null = null;
   /**
-   * The grid cell a plain press landed on, kept until the release decides.
-   *
-   * A placement cannot be committed on the press: the same press might be the
-   * start of an orbit, and the camera keeps the drag. So the cell is
-   * remembered and only used if the pointer never moved.
-   */
-  let placeCandidate: GridCell | null = null;
-
-  /**
    * Where a Shift-drag across the structure began, and where it has reached.
    *
    * Selecting a region used to need the build grid: on the blocks themselves a
@@ -1273,6 +1335,19 @@ import { isTyping } from "./typing.js";
   }
 
   /**
+   * The grid cell the crosshair is over, which is what flight points with.
+   *
+   * `pickAtCrosshair`'s arrangement, for its reason: the crosshair is drawn
+   * at the centre of the canvas, so the centre of the canvas is where the
+   * ray has to be cast from.
+   */
+  function gridCellAtCrosshair(): GridCell | null {
+    if (!container) return null;
+    const rect = container.getBoundingClientRect();
+    return gridCellAt(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  }
+
+  /**
    * Follows the pointer across the grid, throttled like the other raycasts.
    *
    * Shares `HIGHLIGHT_INTERVAL_MS` deliberately: this is one more target in the
@@ -1281,14 +1356,26 @@ import { isTyping } from "./typing.js";
    * different answers to "where is the pointer" drawn on top of each other.
    */
   function updateBuildGrid(now: number): void {
-    if (cameraMode !== "orbit" || pointerAt === null || !documentSize) {
+    /*
+     * Drawn in both cameras, and centred on whatever "where am I pointing"
+     * means in each: the pointer in orbit, the crosshair in flight. In orbit
+     * it is an aid for reading where a selection would land; in flight it is
+     * the thing being clicked, because the grid is now the only way to put a
+     * block into an empty schematic.
+     */
+    if (!documentSize) {
       if (gridCell !== null) gridCell = null;
       return;
     }
     if (now - lastGridAt < HIGHLIGHT_INTERVAL_MS) return;
     lastGridAt = now;
 
-    const cell = gridCellAt(pointerAt.x, pointerAt.y);
+    const cell =
+      cameraMode === "fly"
+        ? gridCellAtCrosshair()
+        : pointerAt === null
+          ? null
+          : gridCellAt(pointerAt.x, pointerAt.y);
     const same =
       cell === gridCell ||
       (cell !== null && gridCell !== null && cell.x === gridCell.x && cell.z === gridCell.z);
@@ -1316,7 +1403,7 @@ import { isTyping } from "./typing.js";
       (cellGrid.material as THREE.Material).dispose();
       cellGrid = undefined;
     }
-    if (gridCell === null || cameraMode !== "orbit") return;
+    if (gridCell === null) return;
 
     const centre = gridCell;
     const inside = themeColor("--selection", 0x6ea8fe);
@@ -1365,15 +1452,366 @@ import { isTyping } from "./typing.js";
     updateBuildGridMesh();
   });
 
+  // ---------------------------------------------------------------------------
+  // The transform gizmo
+  // ---------------------------------------------------------------------------
+
+  /**
+   * How big the gizmo is, as a fraction of the distance to the camera.
+   *
+   * Constant on screen rather than in the world, and that is not decoration: in
+   * world units it is unreachable on a selection two hundred blocks across and
+   * covers everything on a selection of two. The arithmetic is in `gizmo.ts`'s
+   * spirit but has to live here, because only this component has the camera.
+   */
+  const GIZMO_REACH = 0.17;
+
+  /** Built at unit reach and scaled per frame, so one geometry serves every size. */
+  let gizmoGroup: THREE.Group | null = null;
+  let gizmoHover = $state<GizmoHandle | null>(null);
+  const gizmoOrigin3 = new THREE.Vector3();
+
+  /**
+   * The handle being dragged, and what the press knew.
+   *
+   * `grab` is a scalar in the units the mode reads -- a world coordinate along
+   * the axis for an arrow, an angle for a ring -- so every mode's move handler
+   * is the same subtraction. `region` is frozen at the press because the
+   * preview is a function of where the drag started, not of what the last frame
+   * decided; recomputing from the live selection would compound.
+   */
+  let gizmoDrag: {
+    handle: GizmoHandle;
+    origin: THREE.Vector3;
+    grab: number;
+    region: Region;
+  } | null = null;
+
+  /** What the drag has decided so far: drawn, not yet written. */
+  let gizmoResult:
+    | { kind: "move"; to: { x: number; y: number; z: number }; region: Region }
+    | { kind: "pivot"; cell: Cell }
+    | { kind: "transform"; transform: RegionTransform; region: Region }
+    | { kind: "scale"; spec: ScaleSpec; region: Region }
+    | null = null;
+
+  let gizmoPreviewBox: THREE.LineSegments | null = null;
+
+  function axisColour(axis: Axis): THREE.Color {
+    const fallback = axis === "x" ? 0xe05260 : axis === "y" ? 0x6fbf5f : 0x5b8dd9;
+    return themeColor(`--axis-${axis}`, fallback);
+  }
+
+  /**
+   * One arrow, ring or cube, pointing down `axis`.
+   *
+   * The shapes are authored along +Y because that is what three's cylinder and
+   * cone do, and turned into place -- the same trick `ensureHandles` uses for
+   * the face plates, and for the same reason: one geometry, three orientations.
+   */
+  function gizmoPart(kind: GizmoHandle["kind"], axis: Axis): THREE.Object3D {
+    const material = new THREE.MeshBasicMaterial({
+      color: axisColour(axis),
+      depthTest: false,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const part = new THREE.Group();
+
+    if (kind === "ring") {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.022, 8, 56), material);
+      // A torus is authored in XY with its axis on +Z; turn that axis onto ours.
+      if (axis === "x") ring.rotation.y = Math.PI / 2;
+      else if (axis === "y") ring.rotation.x = Math.PI / 2;
+      ring.userData.handle = { kind, axis } satisfies GizmoHandle;
+      part.add(ring);
+    } else {
+      const shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.018, 0.018, 0.78, 8),
+        material,
+      );
+      shaft.position.y = 0.39;
+      shaft.userData.handle = { kind, axis } satisfies GizmoHandle;
+      part.add(shaft);
+
+      const tip =
+        kind === "cube"
+          ? new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.13, 0.13), material)
+          : new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.2, 10), material);
+      tip.position.y = kind === "cube" ? 0.85 : 0.88;
+      tip.userData.handle = { kind, axis } satisfies GizmoHandle;
+      part.add(tip);
+
+      if (axis === "x") part.rotation.z = -Math.PI / 2;
+      else if (axis === "z") part.rotation.x = Math.PI / 2;
+    }
+    return part;
+  }
+
+  function disposeGizmo(): void {
+    if (gizmoGroup === null) return;
+    scene?.remove(gizmoGroup);
+    disposeObject(gizmoGroup);
+    gizmoGroup = null;
+  }
+
+  /**
+   * Builds the handles the current mode uses.
+   *
+   * `pivot` draws the same arrows as `move` on purpose: it is the mode where
+   * they carry the gizmo instead of the blocks, and giving it a different shape
+   * would suggest a different gesture when it is the same one.
+   */
+  function buildGizmo(): void {
+    disposeGizmo();
+    if (!scene || selection === null) return;
+    const group = new THREE.Group();
+    group.renderOrder = 1000;
+    const kind: GizmoHandle["kind"] =
+      gizmoMode === "rotate" ? "ring" : gizmoMode === "scale" ? "cube" : "arrow";
+    /*
+     * Three handles, except for rotation, which gets one.
+     *
+     * A quarter turn about X or Z tumbles the build, and Minecraft's block
+     * states cannot follow it: `facing` on a staircase, a door, a bed or a
+     * chest names one of four horizontal directions and has no spelling for
+     * up or down. Turning them would mean writing a state no version of the
+     * game has -- which saves, loads, and misbehaves -- or silently leaving
+     * a fraction of the build facing the wrong way. WorldEdit's own `//rotate`
+     * takes one angle, about the vertical, for the same reason.
+     *
+     * So the ring that is not offered is the one that would be a lie. Mirroring
+     * *is* offered on all three axes, because a vertical reflection has a
+     * spelling for everything it touches: `half`, `type`, `face`, `attachment`.
+     */
+    const axes = gizmoMode === "rotate" ? (["y"] as const) : (["x", "y", "z"] as const);
+    for (const axis of axes) group.add(gizmoPart(kind, axis));
+    gizmoGroup = group;
+    scene.add(group);
+  }
+
+  /**
+   * Where the gizmo stands and how big it is, per frame.
+   *
+   * In flight it is not drawn at all: the pointer is locked, so there is
+   * nothing to grab a handle with, and a widget that cannot be used is worse
+   * than one that is not there.
+   */
+  function updateGizmo(): void {
+    if (gizmoGroup === null) return;
+    if (selection === null || cameraMode !== "orbit" || !camera) {
+      gizmoGroup.visible = false;
+      return;
+    }
+    gizmoGroup.visible = true;
+    const origin = gizmoOrigin(selection, pivot);
+    gizmoOrigin3.set(origin.x, origin.y, origin.z);
+    gizmoGroup.position.copy(gizmoOrigin3);
+
+    const reach =
+      camera instanceof THREE.OrthographicCamera
+        ? ((camera.top - camera.bottom) / camera.zoom) * GIZMO_REACH
+        : camera.position.distanceTo(gizmoOrigin3) * GIZMO_REACH;
+    gizmoGroup.scale.setScalar(Math.max(0.4, reach));
+  }
+
+  /** The handle under the pointer, or null. */
+  function gizmoAt(clientX: number, clientY: number): GizmoHandle | null {
+    if (gizmoGroup === null || !gizmoGroup.visible || !camera || !container) return null;
+    const rect = container.getBoundingClientRect();
+    raycaster.setFromCamera(
+      new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1,
+      ),
+      camera,
+    );
+    const hit = raycaster.intersectObjects(gizmoGroup.children, true)[0];
+    const handle = hit?.object.userData.handle as GizmoHandle | undefined;
+    return handle ?? null;
+  }
+
+  /** The scalar a press on this handle reads: a position, or an angle. */
+  function gizmoGrabAt(handle: GizmoHandle, origin: Vec3, ray: Ray): number | null {
+    if (handle.kind === "ring") return ringAngleAt({ origin, axis: handle.axis, ray });
+    camera?.getWorldDirection(heading);
+    return axisPointAt({
+      origin,
+      axis: handle.axis,
+      ray,
+      view: { x: heading.x, y: heading.y, z: heading.z },
+    });
+  }
+
+  /** Draws the box a drag would land on, in the warning colour when it cannot. */
+  function showGizmoPreview(region: Region | null): void {
+    if (gizmoPreviewBox !== null) {
+      scene?.remove(gizmoPreviewBox);
+      gizmoPreviewBox.geometry.dispose();
+      (gizmoPreviewBox.material as THREE.Material).dispose();
+      gizmoPreviewBox = null;
+    }
+    if (region === null || !scene) return;
+    const size = new THREE.Vector3(
+      region.maxX - region.minX + 1,
+      region.maxY - region.minY + 1,
+      region.maxZ - region.minZ + 1,
+    );
+    /*
+     * Red when the destination leaves the schematic and automatic resizing is
+     * off, because then the release will be refused -- said during the gesture
+     * rather than after it, which is the whole difference between a warning
+     * and a report.
+     */
+    const beyond =
+      !autoGrow &&
+      documentSize !== null &&
+      !regionFits(region, {
+        width: documentSize[0],
+        height: documentSize[1],
+        length: documentSize[2],
+      });
+    const box = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x, size.y, size.z)),
+      new THREE.LineBasicMaterial({
+        color: beyond ? themeColor("--danger", 0xe05260) : themeColor("--selection", 0x6ea8fe),
+        depthTest: false,
+      }),
+    );
+    box.position.set(
+      region.minX + size.x / 2,
+      region.minY + size.y / 2,
+      region.minZ + size.z / 2,
+    );
+    box.renderOrder = 999;
+    gizmoPreviewBox = box;
+    scene.add(box);
+  }
+
+  /** One frame of a gizmo drag: decide, and draw what was decided. */
+  function gizmoDragTo(clientX: number, clientY: number): void {
+    if (gizmoDrag === null) return;
+    const ray = rayThrough(clientX, clientY);
+    if (ray === null) return;
+    const { handle, region } = gizmoDrag;
+    const origin = {
+      x: gizmoDrag.origin.x,
+      y: gizmoDrag.origin.y,
+      z: gizmoDrag.origin.z,
+    };
+    camera?.getWorldDirection(heading);
+    const view = { x: heading.x, y: heading.y, z: heading.z };
+
+    if (handle.kind === "ring") {
+      const angle = ringAngleAt({ origin, axis: handle.axis, ray });
+      if (angle === null) return;
+      const steps = quartersBetween(gizmoDrag.grab, angle);
+      const transform: RegionTransform = { kind: "rotate", axis: handle.axis, steps };
+      gizmoResult = steps === 0 ? null : { kind: "transform", transform, region };
+      showGizmoPreview(steps === 0 ? region : transformedRegion(region, origin, transform));
+      return;
+    }
+
+    if (handle.kind === "cube") {
+      const along = axisPointAt({ origin, axis: handle.axis, ray, view });
+      if (along === null || gizmoDrag.grab === 0) return;
+      const start = gizmoDrag.grab - originComponent(origin, handle.axis);
+      if (Math.abs(start) < 1e-6) return;
+      const spec = scaleFromRatio((along - originComponent(origin, handle.axis)) / start);
+      gizmoResult = spec === null ? null : { kind: "scale", spec, region };
+      showGizmoPreview(spec === null ? region : scaledRegion(region, origin, spec));
+      return;
+    }
+
+    const delta = dragAlongAxis({ origin, axis: handle.axis, ray, view, grab: gizmoDrag.grab });
+    if (delta === null) return;
+    const step = { x: 0, y: 0, z: 0 };
+    step[handle.axis] = delta;
+
+    if (gizmoMode === "pivot") {
+      /*
+       * The one mode that moves nothing. It writes the pivot cell and leaves
+       * the region alone, which is why it draws no destination box -- there is
+       * no destination, and drawing the region where it already is would read
+       * as a move that had not taken.
+       */
+      const base = pivot ?? defaultPivot(region);
+      gizmoResult = {
+        kind: "pivot",
+        cell: { x: base.x + step.x, y: base.y + step.y, z: base.z + step.z },
+      };
+      gizmoOrigin3.set(
+        gizmoDrag.origin.x + step.x,
+        gizmoDrag.origin.y + step.y,
+        gizmoDrag.origin.z + step.z,
+      );
+      gizmoGroup?.position.copy(gizmoOrigin3);
+      return;
+    }
+
+    const to = { x: region.minX + step.x, y: region.minY + step.y, z: region.minZ + step.z };
+    gizmoResult = delta === 0 ? null : { kind: "move", to, region };
+    const moved: Region = {
+      minX: to.x,
+      minY: to.y,
+      minZ: to.z,
+      maxX: to.x + (region.maxX - region.minX),
+      maxY: to.y + (region.maxY - region.minY),
+      maxZ: to.z + (region.maxZ - region.minZ),
+    };
+    showGizmoPreview(moved);
+    ghostGroup?.position.set(to.x, to.y, to.z);
+  }
+
+  function originComponent(origin: Vec3, axis: Axis): number {
+    return axis === "x" ? origin.x : axis === "y" ? origin.y : origin.z;
+  }
+
+  /** Ends the drag, whatever it decided, and puts the camera back. */
+  function endGizmoDrag(commit: boolean): void {
+    const result = gizmoResult;
+    const origin = gizmoDrag === null ? null : { ...gizmoDrag.origin };
+    gizmoDrag = null;
+    gizmoResult = null;
+    showGizmoPreview(null);
+    if (controls) controls.enabled = cameraMode !== "fly";
+    onselectiongesture?.("end");
+    if (!commit || result === null || origin === null) return;
+    if (result.kind === "move") onghostcommit?.(result.to);
+    else if (result.kind === "pivot") onpivotchange?.(result.cell);
+    else if (result.kind === "transform") ontransform?.(result.transform, origin);
+    else onscale?.(result.spec, origin);
+  }
+
   /** Refreshes the hovered face, throttled like the crosshair highlight. */
   function updateHover(now: number): void {
-    if (dragged !== null) return;
-    if (cameraMode !== "orbit" || pointerAt === null || !handles?.visible) {
+    if (dragged !== null || gizmoDrag !== null) return;
+    if (cameraMode !== "orbit" || pointerAt === null) {
       if (hovered !== null) hovered = null;
+      if (gizmoHover !== null) gizmoHover = null;
       return;
     }
     if (now - lastHoverAt < HIGHLIGHT_INTERVAL_MS) return;
     lastHoverAt = now;
+
+    /*
+     * The gizmo is asked first and wins, because it is drawn on top of the
+     * plates and a press decides the same way -- two answers to "what is under
+     * the pointer" that disagreed would put a resize cursor over a handle that
+     * moves the region.
+     */
+    const handle = gizmoAt(pointerAt.x, pointerAt.y);
+    if (handle?.axis !== gizmoHover?.axis || handle?.kind !== gizmoHover?.kind) {
+      gizmoHover = handle;
+    }
+    if (handle !== null) {
+      if (hovered !== null) hovered = null;
+      return;
+    }
+    if (!handles?.visible) {
+      if (hovered !== null) hovered = null;
+      return;
+    }
 
     const face = faceAt(pointerAt.x, pointerAt.y);
     const same =
@@ -2151,6 +2589,10 @@ import { isTyping } from "./typing.js";
         playAnimations(performance.now());
         updateHover(performance.now());
         updateBuildGrid(performance.now());
+        // Every frame rather than on the throttle: the gizmo is sized from the
+        // distance to the camera, so it would visibly swell and shrink in steps
+        // during an orbit if it only kept up twenty times a second.
+        updateGizmo();
         if (renderer && scene && camera) {
           /*
            * The sky first, then the depth buffer cleared, then the world.
@@ -2246,8 +2688,47 @@ import { isTyping } from "./typing.js";
          * gesture alive if the pointer leaves the canvas mid-drag.
          */
         // A move owns the pointer while it lasts; the camera keeps the drag.
-        if (ghost !== null) return;
         if (event.button !== 0 || cameraMode !== "orbit") return;
+
+        /*
+         * A gizmo handle takes the press, and takes it **without Shift**.
+         *
+         * Every other selection gesture here needs Shift because it starts on
+         * empty space or on the build, where a plain press is already the
+         * camera's -- `LEFT` is `THREE.MOUSE.PAN`. A handle is not: it is a
+         * thing drawn for exactly this, so pressing it can only mean this, and
+         * the same argument the compass's own button makes.
+         *
+         * `draggedThisGesture` is what stops a press that never moved from
+         * falling through to `clickIntent` and collapsing the selection to
+         * whatever block is behind the handle.
+         */
+        const handle = selection === null ? null : gizmoAt(event.clientX, event.clientY);
+        if (handle !== null) {
+          const origin = gizmoOrigin(selection as Region, pivot);
+          const ray = rayThrough(event.clientX, event.clientY);
+          const grab = ray === null ? null : gizmoGrabAt(handle, origin, ray);
+          if (grab !== null) {
+            gizmoDrag = {
+              handle,
+              origin: new THREE.Vector3(origin.x, origin.y, origin.z),
+              grab,
+              region: selection as Region,
+            };
+            gizmoResult = null;
+            draggedThisGesture = true;
+            if (controls) controls.enabled = false;
+            try {
+              (event.target as Element).setPointerCapture(event.pointerId);
+            } catch {
+              // Capture is a nicety; the drag still works without it.
+            }
+            if (gizmoMode === "move") ongizmograb?.();
+            onselectiongesture?.("start");
+            event.preventDefault();
+          }
+          return;
+        }
 
         /*
          * Selecting takes Shift; a plain drag belongs to the camera.
@@ -2259,19 +2740,18 @@ import { isTyping } from "./typing.js";
          * the button away from OrbitControls — which is exactly why they cannot
          * also be the default.
          */
-        if (!event.shiftKey) {
-          /*
-           * One thing survives without Shift: a stationary click on the build
-           * grid still places a block. That gesture is how an empty schematic
-           * gets its first block, and it cannot be confused with an orbit —
-           * an orbit moves the pointer, and this only fires when it did not.
-           * The camera keeps the drag either way, so nothing is taken.
-           */
-          const cell = gridCellAt(event.clientX, event.clientY);
-          placeCandidate =
-            cell !== null && pickBlockAt(event.clientX, event.clientY) === null ? cell : null;
-          return;
-        }
+        /*
+         * A plain press is the camera's, and nothing else.
+         *
+         * It used to place a block: a stationary click on the build grid, which
+         * was the only way an empty schematic got its first one. That cost more
+         * than it bought -- the grid reaches hundreds of blocks past the edge
+         * and every framing click that happened not to move landed a block in
+         * it. Placing is the flight camera's job now, where the crosshair says
+         * exactly which cell is meant, and starting an empty schematic is a
+         * selection and a fill.
+         */
+        if (!event.shiftKey) return;
 
         const face = faceAt(event.clientX, event.clientY);
         if (face === null) {
@@ -2326,30 +2806,13 @@ import { isTyping } from "./typing.js";
         event.preventDefault();
       };
 
-      /**
-       * Where a move would put the region, from whatever is under the pointer.
-       *
-       * A block's *outside* face rather than the block itself, so hovering the
-       * top of a wall lands the ghost on top of it rather than inside it —
-       * the same cell `onbuild` places into. The build grid answers when
-       * nothing solid is under the pointer, which is how a region gets moved
-       * across open ground.
-       */
-      const ghostTarget = (clientX: number, clientY: number) => {
-        const hit = pickBlockAt(clientX, clientY);
-        if (hit?.place) return moveDestination(hit.place);
-        const cell = gridCellAt(clientX, clientY);
-        return cell === null ? null : moveDestination(cell);
-      };
-
       const onPointerMove = (event: PointerEvent) => {
         pointerAt = { x: event.clientX, y: event.clientY };
-        if (ghost !== null) {
-          const to = ghostTarget(event.clientX, event.clientY);
-          if (to !== null) {
-            ghostAt = to;
-            ghostGroup?.position.set(to.x, to.y, to.z);
-          }
+        // The gizmo owns the pointer for the whole of its drag. Not throttled,
+        // for `dragTo`'s reason: a handle that lags the cursor by 50ms reads as
+        // a handle that is not attached to anything.
+        if (gizmoDrag !== null) {
+          gizmoDragTo(event.clientX, event.clientY);
           return;
         }
         if (dragged !== null) {
@@ -2388,8 +2851,17 @@ import { isTyping } from "./typing.js";
       const onPointerUp = (event: PointerEvent) => {
         const start = downAt;
         downAt = null;
-        const candidate = placeCandidate;
-        placeCandidate = null;
+
+        if (gizmoDrag !== null) {
+          try {
+            (event.target as Element).releasePointerCapture(event.pointerId);
+          } catch {
+            // Nothing captured; nothing to release.
+          }
+          endGizmoDrag(event.button === 0);
+          draggedThisGesture = false;
+          return;
+        }
         const stayed =
           start !== null && Math.hypot(event.clientX - start.x, event.clientY - start.y) <= 4;
 
@@ -2429,14 +2901,6 @@ import { isTyping } from "./typing.js";
             draggedThisGesture = false;
             return;
           }
-        }
-
-        // A plain, stationary click on the build grid: put a block there.
-        if (candidate !== null && gridAnchor === null) {
-          if (stayed) {
-            ongridplace?.({ x: candidate.x, y: candidate.y, z: candidate.z }, lookAtGrid());
-          }
-          return;
         }
 
         if (gridAnchor !== null) {
@@ -2496,7 +2960,22 @@ import { isTyping } from "./typing.js";
           }
           if (!onbuild) return;
           const target = pickAtCrosshair();
-          if (!target) return;
+          if (!target) {
+            /*
+             * Nothing under the crosshair, so the build grid answers instead.
+             * This is the whole of how an empty schematic gets its first block,
+             * now that a plain orbit click no longer places one -- and it is the
+             * right camera for it, because the crosshair names one cell rather
+             * than wherever the pointer happened to be resting.
+             *
+             * The right button only. Breaking air is nothing, and `use` on an
+             * empty cell is nothing either.
+             */
+            if (event.button !== 2) return;
+            const cell = gridCellAtCrosshair();
+            if (cell !== null) ongridplace?.({ x: cell.x, y: cell.y, z: cell.z }, lookAtGrid());
+            return;
+          }
           if (event.button === 0) {
             onbuild("break", { x: target.x, y: target.y, z: target.z }, lookAt(target));
           } else if (event.button === 2 && target.place) {
@@ -2511,16 +2990,6 @@ import { isTyping } from "./typing.js";
              */
             onbuild(event.shiftKey ? "place" : "use", target.place, lookAt(target));
           }
-          return;
-        }
-        /*
-         * A stationary click puts the region down, and nothing else here runs
-         * while a move is in flight: the panel and Escape are the two ways out
-         * of it, and a click that also re-selected would end the gesture by
-         * throwing away the thing being moved.
-         */
-        if (ghost !== null) {
-          if (stayed && event.button === 0) onghostcommit?.({ ...ghostAt });
           return;
         }
         if (!start || !onpick || !stayed) return;
@@ -2761,6 +3230,24 @@ import { isTyping } from "./typing.js";
   });
 
   /**
+   * Rebuilds the gizmo when the mode or the palette changes.
+   *
+   * Rebuilt rather than re-shaped, unlike the plates below: the three modes
+   * are different geometry, and switching mode is a keystroke rather than
+   * something that happens twenty times a second. It reads whether there *is*
+   * a selection and not the selection itself -- where the gizmo stands is the
+   * render loop's business, and depending on the box here would rebuild three
+   * meshes on every frame of a face drag.
+   */
+  $effect(() => {
+    void gizmoMode;
+    void scene;
+    void theme;
+    void (selection === null);
+    buildGizmo();
+  });
+
+  /**
    * Re-shapes the six drag handles onto the current box.
    *
    * Separate from the wire box above because it does not rebuild anything:
@@ -2784,7 +3271,12 @@ import { isTyping } from "./typing.js";
    * on `.viewer` still applies when nothing is hovered.
    */
   $effect(() => {
-    if (container) container.style.cursor = cursorFor(hovered);
+    // A gizmo handle says "grab" rather than a resize arrow: it moves the
+    // region, it does not change the box's size.
+    if (container) {
+      container.style.cursor =
+        gizmoHover !== null ? (gizmoDrag === null ? "grab" : "grabbing") : cursorFor(hovered);
+    }
   });
 
   /**

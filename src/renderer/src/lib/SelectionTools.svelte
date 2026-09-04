@@ -59,32 +59,17 @@
      * tiles behind a different scrollbar.
      */
     onbrowse: (purpose: "fill" | "replace") => void;
-    clipboard: ClipboardInfo | null;
     onfill: (block: string) => void;
     onreplace: (from: string, to: string) => void;
-    ontransform: (transform: TransformRequest["transform"]) => void;
-    oncopy: () => void;
-    oncut: () => void;
-    onpaste: () => void;
     /**
      * Empties the selection, which is a fill with air.
      *
-     * Beside Copy and Cut rather than beside Fill, because that is the group it
-     * belongs to by *gesture*: these four are what the keyboard does to a
-     * region, and Delete is the one of them with no other way in.
+     * It stays here where Copy and Cut left, because it is the one of that
+     * group with no other way in: the rest are on the keyboard and in the
+     * palette, and Delete is too, but this is also the only destructive verb a
+     * person is likely to look for rather than remember.
      */
     ondelete: () => void;
-    /** Whether a move is in flight, so the button can offer to call it off. */
-    moving: boolean;
-    /**
-     * Arms the move, or cancels it.
-     *
-     * A mode rather than a drag on the box, because a press on the selection
-     * already belongs to the camera -- taking it back is what made orbiting a
-     * build nearly impossible the first time, and this gesture is not worth
-     * paying that again.
-     */
-    onmove: () => void;
     onclearselection: () => void;
     onselectall: () => void;
   }
@@ -101,16 +86,9 @@
     replaceFrom,
     onreplacefromchange,
     onbrowse,
-    clipboard,
     onfill,
     onreplace,
-    ontransform,
-    oncopy,
-    oncut,
-    onpaste,
     ondelete,
-    moving,
-    onmove,
     onclearselection,
     onselectall,
   }: Props = $props();
@@ -238,85 +216,18 @@
     </button>
   </div>
 
-  <div class="row">
-    <button onclick={oncopy} disabled={busy || none} title={t("selection.copy")}>
-      {t("selection.copy")}
-    </button>
-    <button onclick={oncut} disabled={busy || none} title={t("selection.cut")}>
-      {t("selection.cut")}
-    </button>
-    <button
-      onclick={onpaste}
-      disabled={busy || clipboard === null || none}
-      title={clipboard === null
-        ? t("selection.pasteNoClipboard")
-        : none
-          ? t("selection.pasteNoSelection")
-          : t("selection.pasteHint", {
-              width: clipboard.width,
-              height: clipboard.height,
-              length: clipboard.length,
-            })}
-    >
-      {t("selection.paste")}
-    </button>
-  </div>
+  <!--
+    Cut, copy, paste, move, turn and mirror used to be nine buttons here.
 
-  {#if clipboard}
-    <p class="hint">
-      {t("selection.clipboard", {
-        width: clipboard.width,
-        height: clipboard.height,
-        length: clipboard.length,
-        blocks: clipboard.blocks.toLocaleString(),
-      })}
-    </p>
-  {/if}
+    They are handles on the gizmo in the viewport now, which is where the
+    thing they act on actually is -- a button that turns a region you are
+    looking at somewhere else is a worse version of grabbing it. What stays
+    is what has no handle to hang on: the block operations, and the three
+    that are about the selection rather than about its contents.
 
-  <div class="row">
-    <button
-      class:active={moving}
-      onclick={onmove}
-      disabled={busy || none}
-      title={moving ? t("selection.moveCancelHint") : t("selection.moveHint")}
-    >
-      {moving ? t("selection.moveCancel") : t("selection.move")}
-    </button>
-  </div>
-
-  <div class="row">
-    <button
-      onclick={() => ontransform({ kind: "rotate", steps: 1 })}
-      disabled={busy || none}
-      title={t("selection.rotate90Hint")}
-    >
-      {t("selection.rotate90")}
-    </button>
-    <button
-      onclick={() => ontransform({ kind: "rotate", steps: 2 })}
-      disabled={busy || none}
-      title={t("selection.rotate180Hint")}
-    >
-      {t("selection.rotate180")}
-    </button>
-  </div>
-  <div class="row">
-    <button
-      onclick={() => ontransform({ kind: "mirror", axis: "x" })}
-      disabled={busy || none}
-      title={t("selection.flipXHint")}
-    >
-      {t("selection.flipX")}
-    </button>
-    <button
-      onclick={() => ontransform({ kind: "mirror", axis: "z" })}
-      disabled={busy || none}
-      title={t("selection.flipZHint")}
-    >
-      {t("selection.flipZ")}
-    </button>
-  </div>
-
+    The keyboard kept all of them: Ctrl+C, Ctrl+X, Ctrl+V and Delete are in
+    `App.svelte`, and the command palette lists the rest.
+  -->
   <div class="row">
     <button onclick={onselectall} disabled={busy}>{t("selection.all")}</button>
     <button onclick={onclearselection} disabled={busy || none} title={t("selection.clearHint")}>
@@ -375,13 +286,6 @@
     min-width: 0;
     padding: 5px 6px;
     font-size: 12px;
-  }
-
-  /* Armed, so the button says the app is waiting for a click in the viewport
-     rather than for another press on itself. */
-  .row button.active {
-    border-color: var(--accent);
-    color: var(--accent);
   }
 
   /* The one button here that destroys blocks rather than moving or copying

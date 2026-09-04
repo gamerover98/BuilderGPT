@@ -66,6 +66,18 @@ import {
   plateScale,
   type Ray,
 } from "../src/renderer/src/lib/selection_drag.js";
+import {
+  defaultPivot,
+  dragAlongAxis,
+  gizmoOrigin,
+  quartersBetween,
+  regionCentre,
+  regionFits,
+  ringAngleAt,
+  scaleFromRatio,
+  scaledRegion,
+  transformedRegion,
+} from "../src/renderer/src/lib/gizmo.js";
 import createDOMPurify from "dompurify";
 import { JSDOM } from "jsdom";
 
@@ -834,6 +846,279 @@ console.log("\n--- moving a region ---");
     "...and a move to where it already is changes nothing",
     movedRegion(region, { x: region.minX, y: region.minY, z: region.minZ }),
     region,
+  );
+}
+
+console.log("\n--- the transform gizmo ---");
+{
+  /*
+   * The arithmetic behind the handles. Everything that draws runs from
+   * `requestAnimationFrame`, which this harness does not turn, so what is
+   * checked here is what a drag *decides* -- and in particular the two signs
+   * that no screenshot can catch: which way a ring turns, and which way a
+   * mirror reflects.
+   */
+  const cell = (x: number, y: number, z: number) => ({
+    minX: x,
+    minY: y,
+    minZ: z,
+    maxX: x,
+    maxY: y,
+    maxZ: z,
+  });
+  const down = (x: number, z: number) => ({
+    origin: { x, y: 10, z },
+    direction: { x: 0, y: -1, z: 0 },
+  });
+
+  // Where it stands.
+  equal("a single cell's middle is at its own centre", regionCentre(cell(0, 0, 0)), {
+    x: 0.5,
+    y: 0.5,
+    z: 0.5,
+  });
+  equal(
+    "with no pivot the gizmo stands in the middle of the region",
+    gizmoOrigin({ minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 1, maxZ: 3 }, null),
+    { x: 2, y: 1, z: 2 },
+  );
+  equal(
+    "...and on the pivot's own cell once one is placed",
+    gizmoOrigin({ minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 1, maxZ: 3 }, { x: 7, y: 2, z: 9 }),
+    { x: 7.5, y: 2.5, z: 9.5 },
+  );
+  equal(
+    "a fresh pivot lands on the cell the middle falls in",
+    defaultPivot({ minX: 0, minY: 0, minZ: 0, maxX: 2, maxY: 2, maxZ: 2 }),
+    { x: 1, y: 1, z: 1 },
+  );
+
+  /*
+   * Dragging an arrow. The answer is a difference from where the press
+   * landed, which is what lets an arrow be grabbed anywhere along its length
+   * without the region jumping to sit under the cursor.
+   */
+  const origin = { x: 0.5, y: 0.5, z: 0.5 };
+  equal(
+    "an arrow drag answers in whole cells",
+    dragAlongAxis({ origin, axis: "x", ray: down(4.4, 0.5), view: { x: 0, y: -1, z: 0 }, grab: 0.5 }),
+    4,
+  );
+  equal(
+    "...and a drag back to where it was grabbed is zero, not a jump",
+    dragAlongAxis({ origin, axis: "x", ray: down(0.5, 0.5), view: { x: 0, y: -1, z: 0 }, grab: 0.5 }),
+    0,
+  );
+  /*
+   * An axis pointed straight at the camera has no usable drag plane: the
+   * region would travel the length of the schematic for one pixel. `null` is
+   * "leave it alone", and the caller must not read it as zero -- doing so
+   * would snap the region back to the start the moment a drag grazed that
+   * angle.
+   */
+  equal(
+    "an axis pointed at the camera refuses rather than guessing",
+    dragAlongAxis({ origin, axis: "z", ray: down(0, 0), view: { x: 0, y: 0, z: 1 }, grab: 0 }),
+    null,
+  );
+
+  /*
+   * The ring, and the sign that matters. Main turns a region by
+   * `(x, z) -> (length - 1 - z, x)`, which sends **east to south**; the ring
+   * has to read the same way round or dragging clockwise would turn the build
+   * anticlockwise. Stated as the four compass points rather than as one
+   * predicate, so a failure names which one went wrong.
+   */
+  const angle = (x: number, z: number) => ringAngleAt({ origin, axis: "y", ray: down(x, z) });
+  equal("the Y ring reads east as its zero", angle(4.5, 0.5), 0);
+  equal("...south as a quarter turn on", angle(0.5, 4.5), Math.PI / 2);
+  equal("...and west as a half turn", Math.abs(angle(-3.5, 0.5) ?? 0), Math.PI);
+  check(
+    "...with north on the other side of zero",
+    (angle(0.5, -3.5) ?? 0) < 0,
+    String(angle(0.5, -3.5)),
+  );
+  equal("a ring grabbed exactly at its centre has no angle", angle(0.5, 0.5), null);
+
+  equal("east to south is one quarter turn", quartersBetween(0, Math.PI / 2), 1);
+  equal("...and it wraps rather than counting past four", quartersBetween(0, 2 * Math.PI), 0);
+  equal("...backwards is three, not minus one", quartersBetween(0, -Math.PI / 2), 3);
+  equal("a twitch is no turn at all", quartersBetween(0, 0.2), 0);
+
+  /*
+   * Where a turn puts the region. The pivot is the whole point of this one:
+   * a square turned about its own middle must not move, and a cell turned
+   * about a *different* cell must swing round it. Without the second check a
+   * pivot that was quietly ignored would pass.
+   */
+  const square = { minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 0, maxZ: 3 };
+  equal(
+    "a square turned about its own middle stays where it is",
+    transformedRegion(square, gizmoOrigin(square, null), { kind: "rotate", axis: "y", steps: 1 }),
+    square,
+  );
+  equal(
+    "a cell two east of the pivot lands two south of it",
+    transformedRegion(cell(2, 0, 0), origin, { kind: "rotate", axis: "y", steps: 1 }),
+    cell(0, 0, 2),
+  );
+  equal(
+    "...and four steps is where it started",
+    transformedRegion(cell(2, 0, 0), origin, { kind: "rotate", axis: "y", steps: 0 }),
+    cell(2, 0, 0),
+  );
+  /*
+   * An oblong is the case a turn in place cannot do at all -- main refuses it
+   * with `NotSquareError`, because the destination is the source. With a
+   * destination it is simply a box of the other shape.
+   */
+  equal(
+    "an oblong turns into its own transpose",
+    transformedRegion(
+      { minX: 0, minY: 0, minZ: 0, maxX: 4, maxY: 0, maxZ: 2 },
+      gizmoOrigin({ minX: 0, minY: 0, minZ: 0, maxX: 4, maxY: 0, maxZ: 2 }, null),
+      { kind: "rotate", axis: "y", steps: 1 },
+    ),
+    { minX: 1, minY: 0, minZ: -1, maxX: 3, maxY: 0, maxZ: 3 },
+  );
+
+  /*
+   * Mirroring, in continuous coordinates rather than on the inclusive index.
+   * Cell 2 spans [2, 3); reflected about 0.5 that is (-2, -1], which is cell
+   * -2. Doing it on `maxX` directly is off by one, and only on regions of
+   * even width -- the half of the cases a hand-picked example misses.
+   */
+  equal(
+    "a mirror reflects the cell, not its index",
+    transformedRegion(cell(2, 0, 0), origin, { kind: "mirror", axis: "x" }),
+    cell(-2, 0, 0),
+  );
+  equal(
+    "...and an even-width region keeps its width",
+    transformedRegion({ minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 0, maxZ: 0 }, origin, {
+      kind: "mirror",
+      axis: "x",
+    }),
+    { minX: -3, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 },
+  );
+  equal(
+    "mirroring twice is where it started",
+    transformedRegion(
+      transformedRegion(cell(2, 0, 0), origin, { kind: "mirror", axis: "y" }),
+      origin,
+      { kind: "mirror", axis: "y" },
+    ),
+    cell(2, 0, 0),
+  );
+
+  /*
+   * Scaling. The dead band is deliberately wide: every ratio between 0.75 and
+   * 1.5 means "I have not decided", and snapping to x2 on a twitch would make
+   * a destructive edit out of a nudge.
+   */
+  equal("a nudge is not a scale", scaleFromRatio(1.2), null);
+  equal("...nor is a small shrink", scaleFromRatio(0.9), null);
+  equal("doubling is a whole factor", scaleFromRatio(2.1), { kind: "multiply", factor: 2 });
+  equal("halving is its own shape", scaleFromRatio(0.5), { kind: "divide", factor: 2 });
+  equal("...and never a factor of one", scaleFromRatio(0.75), { kind: "divide", factor: 2 });
+  equal("a runaway ratio is capped", scaleFromRatio(500), { kind: "multiply", factor: 8 });
+  equal("a ratio of nothing is refused", scaleFromRatio(0), null);
+
+  equal(
+    "doubling about the low corner grows away from it",
+    scaledRegion({ minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 1, maxZ: 1 }, { x: 0, y: 0, z: 0 }, {
+      kind: "multiply",
+      factor: 2,
+    }),
+    { minX: 0, minY: 0, minZ: 0, maxX: 3, maxY: 3, maxZ: 3 },
+  );
+  /*
+   * A thin axis divided away would leave an empty region, which nothing else
+   * in the editor has an answer for. One cell is kept instead -- worse
+   * arithmetic, and the only option that produces a region at all.
+   */
+  equal(
+    "halving never divides an axis out of existence",
+    scaledRegion(cell(0, 0, 0), { x: 0, y: 0, z: 0 }, { kind: "divide", factor: 2 }),
+    cell(0, 0, 0),
+  );
+
+  const size = { width: 8, height: 8, length: 8 };
+  check("a region inside the document fits", regionFits(cell(0, 0, 0), size));
+  check("...one past the far face does not", !regionFits(cell(8, 0, 0), size));
+  check("...and neither does one below the origin", !regionFits(cell(0, -1, 0), size));
+}
+console.log("\n--- the gizmo takes the press, and gives the camera back ---");
+{
+  /*
+   * Pointer choreography, which this harness cannot drive: there is no canvas,
+   * no camera and no render loop. Read out of the source instead, the way the
+   * framing call site and the flight-mode key gate already are.
+   */
+  const viewer = readFileSync(path.join(RENDERER, "lib", "Viewer.svelte"), "utf8");
+
+  /*
+   * Placing a block in orbit is gone, and with it the only thing that ever
+   * happened without Shift. That is what frees the plain left press for the
+   * gizmo's handles -- the two halves are one change, so the absence is checked
+   * rather than assumed.
+   */
+  check(
+    "a plain orbit press no longer places a block",
+    !viewer.includes("placeCandidate"),
+    "placeCandidate is still in Viewer.svelte",
+  );
+  check(
+    "...and the build grid is drawn in flight, where placing went",
+    viewer.includes("gridCellAtCrosshair"),
+  );
+
+  /*
+   * The one that would be silently wrong. A press on a handle that never moved
+   * still ends as a click, and without `draggedThisGesture` it falls through to
+   * `clickIntent` -- which picks whatever block is behind the gizmo and
+   * collapses the selection the user was about to transform.
+   */
+  const grabAt = viewer.indexOf("const handle = selection === null ? null : gizmoAt(");
+  const shiftGate = viewer.indexOf("if (!event.shiftKey) return;");
+  const grab = viewer.slice(grabAt, shiftGate);
+  check("the gizmo grab is found at all", grab.length > 0);
+  check(
+    "a handle press marks the gesture as a drag",
+    grab.includes("draggedThisGesture = true"),
+    "a stationary press on a handle would fall through to clickIntent",
+  );
+  check(
+    "...and takes the left button from the camera",
+    grab.includes("controls.enabled = false"),
+    "LEFT is THREE.MOUSE.PAN, so the camera would pan instead",
+  );
+  check(
+    "...without asking for Shift",
+    grabAt >= 0 && shiftGate > grabAt,
+    "a handle is drawn for this gesture; behind the Shift gate it would need one",
+  );
+
+  /*
+   * And the release puts the camera back. Written as `cameraMode !== "fly"`
+   * rather than `true`, because re-enabling OrbitControls while the pointer is
+   * locked would give the flight camera a second controller.
+   */
+  check(
+    "the release hands the button back",
+    viewer.includes('if (controls) controls.enabled = cameraMode !== "fly";'),
+  );
+
+  /*
+   * Rotation is offered on one axis, and that is a decision rather than an
+   * omission: a quarter turn about X or Z would have to write `facing=up` on a
+   * staircase, which is a state no version of the game has. Checked so that
+   * "completing" the set is a deliberate act.
+   */
+  check(
+    "only the vertical ring is built",
+    viewer.includes('gizmoMode === "rotate" ? (["y"] as const)'),
+    "a horizontal ring would write block states the game cannot hold",
   );
 }
 

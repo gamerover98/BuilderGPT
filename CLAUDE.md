@@ -2131,12 +2131,25 @@ never moves. The same gesture also has to suppress the click-to-select path on
 and the 4px tolerance does not help, so it would collapse the selection the
 user was about to resize.
 
-**Which is why selecting takes Shift, and a plain drag belongs to the camera.**
-Every selection gesture has to take the button away from OrbitControls, so none
-of them can be the default: orbiting a build was close to impossible, because
-the press that started the orbit landed on it and collapsed the selection to the
-block underneath. Shift-click a block, Shift-drag the grid, Shift-drag a face.
-**Ctrl** took over "grow the selection from the anchor", the job Shift gave up.
+**Which is why selecting from *nothing* takes Shift, and a plain drag belongs
+to the camera.** Every gesture that starts on empty space or on the build has
+to take the button away from OrbitControls, so none of those can be the
+default: orbiting was close to impossible, because the press that started the
+orbit landed on the structure and collapsed the selection to the block
+underneath. Shift-drag the grid, Shift-drag across the blocks. **Ctrl** took
+over "grow the selection from the anchor", the job Shift gave up.
+
+**A press that starts on a *handle* is exempt, and that is the same rule rather
+than an exception to it.** A face plate and a gizmo arrow are drawn for one
+purpose, so a press on one can only mean that purpose -- it never enters the
+argument about what a plain press in the viewport means. It is the reasoning
+the compass's own `<button>` uses, one layer down.
+
+That exemption was unavailable until placing left orbit. The `!event.shiftKey`
+branch in `onPointerDown` held exactly one thing -- the build-grid placement --
+so a handle drag without Shift would have had to share the press with it.
+Removing the placement emptied the branch, and the gizmo is what moved into the
+space.
 
 Shift-dragging *across the structure* sweeps out a region, which is what anyone
 tries first: before it, a Shift-press on the blocks could only ever produce the
@@ -2147,13 +2160,23 @@ two towers — and a region that collapsed every time the ray missed would be
 unusable. A sweep that never moved still falls through to the single-block pick,
 so the click keeps its inspector and its Ctrl-extend.
 
-Two things survive without Shift, and both for the same reason: an orbit moves
-the pointer, so a gesture that only fires when it *did not* takes nothing from
-the camera. A stationary click on the build grid places a block — that is how an
-empty schematic gets its first one. A stationary click on a block asks what it
-is, which is the inspector.
+**Placing a block is the flight camera's, and used to be orbit's too.** A
+stationary click on the build grid placed one -- justified because an orbit
+moves the pointer, so a gesture that fires only when it did *not* takes nothing
+from the camera. The justification was sound and the feature was still wrong:
+the grid reaches hundreds of blocks past the schematic (`MAX_GRID_REACH`), and
+every framing click that happened not to move left a block somewhere in it.
+Reported as blocks appearing by accident, which is exactly what it was.
 
-That second one is a rule that was already broken once. Selecting was made a
+So placing is the crosshair's now. In flight, a right-click with nothing under
+the crosshair falls through to the build grid -- which is why the grid is drawn
+in both cameras, centred on the pointer in orbit and on the crosshair in
+flight. **That is the only way an empty schematic gets its first block by
+hand**, and the other way is a selection and a fill, which needs no placement at
+all.
+
+A stationary click on a block still asks what it is, which is the inspector.
+That one is a rule that was already broken once. Selecting was made a
 Shift gesture to keep the *drag* for the camera, and the click went along with
 it — silently taking the block inspector, because asking what a block is had
 never been anything but a click. So the rule lives in `clickIntent` in
@@ -2165,6 +2188,106 @@ Its asymmetry on a **miss** is deliberate. Shift-clicking past the structure
 clears the selection; a plain click past it does nothing. Clearing is right when
 the click meant something, and clicking past the build while framing a shot is
 the most ordinary accident there is.
+
+**The selection is transformed by a gizmo in the viewport, not by buttons in a
+panel.** Nine controls left `SelectionTools.svelte` -- cut, copy, paste, move,
+two turns and two mirrors -- and became handles on the thing they act on. The
+argument is the one the Move button itself made: it was a *mode*, armed from the
+panel and committed by a click in the viewport, because "a press on the selection
+is already the camera's". A press on a handle is not, so the mode became a drag.
+
+`renderer/lib/gizmo.ts` is the arithmetic, plain for `selection_drag.ts`'s reason,
+and it *imports* that module rather than sitting beside it: dragging one arrow is
+`dragFace`'s problem with the whole region moving instead of one face, so
+`dragPlaneNormal` and `intersectPlane` are reused. Two copies of that is how one
+of them comes to disagree about which way is up.
+
+Four things about it are load-bearing:
+
+- **The gizmo is sized from the distance to the camera, every frame.** In world
+  units it is unreachable on a selection two hundred blocks across and covers
+  everything on a selection of two. It is the one part that cannot live in the
+  pure module, because only the component has a camera.
+- **`RING_PLANE` orders each pair so one positive step sends `first` to
+  `second`**, which for the Y ring has to be **east to south** -- `transform.ts`'s
+  convention, `(x, z) -> (length - 1 - z, x)`. Written `z, x` instead it turns
+  the other way, lands on cells, breaks nothing, and is wrong; `tests/ui.ts`
+  states it as four compass points rather than one predicate, so a failure names
+  which one moved.
+- **`null` from a drag means "leave it alone" and must not be read as zero.** An
+  axis pointed at the camera has no usable drag plane; treated as zero, a drag
+  that grazed that angle would snap the region back to where it started.
+- **A drag decides but does not write.** The destination is drawn as a box, and
+  as the region's own geometry when `regionMesh` has arrived; one edit is sent on
+  release, so the whole gesture is one Ctrl+Z. The ghost is fetched at the press
+  rather than held for every selection, because meshing a region is real work and
+  a face drag changes the selection many times a second -- and the commit reads
+  the *selection* rather than the ghost, so a short drag on a big region is not
+  lost waiting for a picture.
+
+**Rotation is offered on one axis, and that is the finding rather than an
+omission.** A quarter turn about X or Z tumbles the build, and Minecraft's block
+states cannot follow: `facing` on a staircase, a door, a bed or a chest names one
+of four horizontal directions and has no spelling for up or down. The options
+were to write a state no version of the game has -- which saves, loads, and
+misbehaves -- or to leave a fraction of the build facing the wrong way. WorldEdit's
+own `//rotate` takes one angle, about the vertical, for the same reason. So the
+two rings that are not drawn are the two that would be a lie, and `tests/ui.ts`
+checks their absence so that completing the set is a deliberate act.
+
+**Mirroring is offered on all three, because a vertical reflection has a spelling
+for everything it touches.** It is not the horizontal rule with a letter changed:
+`MirrorAxis` gaining `"y"` needed a mapping of its own, because a flip turns over
+`half`, `type`, `face`, `attachment` and `vertical_direction` and touches none of
+the horizontal properties. `face` and `attachment` are the two that get
+forgotten -- leave them out and every lever and every bell comes back embedded in
+a block.
+
+One value has no reflection and is therefore left exactly as it was: an
+`ascending_north` rail upside down would be a rail going *down* to the north, and
+every rail that is not flat ascends. `tests/session.ts` states that as a check,
+because it looks like an omission and is the opposite -- inventing a state is the
+one thing that file may not do.
+
+**`TransformRequest.to` is what makes the pivot mean anything.** Turning about a
+corner is turning in place and then moving, and as two requests Ctrl+Z would take
+back half a gesture. With a destination it is one transaction -- and, as a side
+effect worth knowing, `NotSquareError` stops applying: a quarter turn of a 5x3
+footprint is simply a 3x5 box somewhere, and only the demand that it land back on
+its own coordinates ever made it impossible. In place, the refusal stands.
+
+**`autoGrow` reached `applyEdit` and nothing else, and the gizmo made that
+reachable every day.** A move that carried blocks past the edge lost them in
+silence: `pasteClipboard` clips by letting `tx.setBlock` return `false`, so
+`changed` came back short with nothing anywhere saying why -- which contradicts
+this file's own rule that an edit outside the box is refused by name, never
+clipped. `growthFor` in `session.ts` is the one copy now, and move, turn and scale
+all ask it. `docMove`, `docTransform` and `docScale` call `editOptionsFor`, which
+only `docApply` did.
+
+The same fix carries the void block: `cutSelection` and `moveRegion` each wrote
+`minecraft:air` inline, so an underwater cut left a dry hole in a pond.
+`RegionEditOptions.voidBlock` is `EditOptions.voidBlock`'s spelling for its
+reason -- a string the caller already holds, parsed once here.
+
+**Scale is the least useful of the four modes and the only one that asks before
+it acts.** Whole factors only, because anything else is a build with a different
+number of blocks in every row. Multiplying is exact -- one block becomes n^3 of
+itself -- and dividing keeps the cell at the **low corner** of each group, which
+is a rule that can be predicted, unlike "the commonest block" or "the first
+non-air one". It is counted and refused first with `ScaleWouldLoseBlocksError`,
+which is `resizeSession`'s shape for `resizeSession`'s reason.
+
+A block entity comes along only on the group's representative cell. Copying it to
+every cell of an enlarged block would turn one chest into eight, each holding the
+original's items -- the kind of duplication somebody takes into a world and does
+not notice until it has been shared.
+
+**With automatic resizing off, the destination box is drawn in `--danger` while
+the drag is still happening**, and the release is refused by main. Said during the
+gesture rather than after it, which is the difference between a warning and a
+report; the refusal itself stays main's, because the renderer holds no schematic
+and a viewport that decided this would be a second opinion.
 
 **Ctrl+Z reaches the selection, and `undoDepth` is what makes that answerable.**
 The block edits live in main and the selection lives in the renderer;
@@ -3037,10 +3160,15 @@ behind a "but".
 around the whole build, handed to the raycaster, swallows every click meant for
 a block inside it — and the click still does *something*, so it reads as the
 inspector picking the wrong block rather than as the cage being in the way.
-`tests/ui.ts` requires every `intersectObject` call in the viewer to name
-`loaded` and nothing else, which is what keeps the next decorative object out of
-it by default. It is `BackSide` so the near faces are not in the way from
-inside, which is where anyone building will be.
+`tests/ui.ts` walks every `intersectObject` call in the viewer and requires that
+none of them names the cage or the void layer, and that the block pick still
+names `loaded` -- which is what keeps the next decorative object out of the
+picker by default. Stated that way rather than as "only `loaded`", because that
+was never true: the face plates have had a raycast of their own since they
+existed, and the gizmo's handles have one now. What must stay out is anything
+**decorative** -- a thing drawn to be looked at rather than pressed. It is
+`BackSide` so the near faces are not in the way from inside, which is where
+anyone building will be.
 
 **Empty space can be made of something other than air, and that is three
 mechanisms wearing one name.** `editing.voidBlock` is **written** when a block

@@ -2636,6 +2636,61 @@ console.log("\n--- placement orientation ---");
   equal("a standing torch is left alone", orientPlacement("minecraft:torch", north), {});
 
   /*
+   * A trapdoor is the wall-mounted rule with a second property, and for a
+   * long time it was neither half of that: `orientPlacement` answered `half`
+   * alone, so every trapdoor ever placed by hand came out `facing=north`.
+   *
+   * The two branches are the two ways of putting one down. Clicked on a side
+   * face it takes that face -- the side it swings out over, which is the side
+   * you were standing on. Clicked on a floor or a ceiling there is no face to
+   * take, so it faces back down the look direction, exactly as a wall torch
+   * does with no wall.
+   */
+  for (const face of ["north", "south", "east", "west"] as const) {
+    equal(
+      `a trapdoor clicked on a ${face} face swings out over it`,
+      orientPlacement("minecraft:oak_trapdoor", looking(0, 0, 1, face, 0.2)),
+      { facing: face, half: "bottom" },
+    );
+  }
+  equal(
+    "on a floor it faces back at you, like a wall torch with no wall",
+    orientPlacement("minecraft:iron_trapdoor", looking(1, 0, 0, "up")),
+    { facing: "west", half: "bottom" },
+  );
+  equal(
+    "...and under a ceiling it is a top trapdoor facing the same way",
+    orientPlacement("minecraft:iron_trapdoor", looking(1, 0, 0, "down")),
+    { facing: "west", half: "top" },
+  );
+  /*
+   * `half` is the half that already worked, and it has to go on working: a
+   * fix to `facing` that quietly pinned every trapdoor to the floor would
+   * trade one report for another.
+   */
+  equal(
+    "the upper half of a side face still gives a top trapdoor",
+    orientPlacement("minecraft:oak_trapdoor", looking(0, 0, 1, "north", 0.8)).half,
+    "top",
+  );
+  /*
+   * Stated as the *opposite* of the staircase rather than as "not the same":
+   * with `facing` missing entirely -- which is what this arm used to answer --
+   * an inequality passes, and a check that survives the bug it was written for
+   * is worse than no check.
+   */
+  equal(
+    "...and a trapdoor points the opposite way to a staircase",
+    orientPlacement("minecraft:oak_trapdoor", looking(1, 0, 0, "up")).facing,
+    "west",
+  );
+  equal(
+    "...which is the way the staircase does not",
+    orientPlacement("minecraft:oak_stairs", looking(1, 0, 0, "up")).facing,
+    "east",
+  );
+
+  /*
    * A standing sign is **not** left alone, and this check used to say it was.
    *
    * It carries a sixteenth-turn `rotation` rather than a `facing`, and nothing

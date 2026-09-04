@@ -4082,6 +4082,32 @@ mid-air beside whatever it was meant to feed. `facing` is the clicked face
 reversed, with the one exception the game states outright: there is no
 upward-facing hopper, so a click on a floor gives `down`.
 
+**A trapdoor is the wall-mounted rule with a second property, and answered
+neither half of it.** `orientPlacement` returned `half` alone, so every
+trapdoor ever placed by hand landed on `facing=north` -- right a quarter of
+the time and looking deliberate the rest of it.
+
+The reason written beside it was that a trapdoor's `facing` is decided by the
+edge it hinges on, which this does not model, and that a confidently wrong
+hinge is worse than the default. That is the *door*'s property under the
+trapdoor's name -- a trapdoor has no `hinge` at all, which the suite two
+sections down already said -- and vanilla's rule is the two things
+`PlacementLook` was already carrying: the clicked face on a side click, the
+opposite of the look direction otherwise. Both were written out four arms
+further down, in `WALL_MOUNTED`, and that is not a coincidence: `facing` names
+the side the trapdoor swings out over, which is the side you were standing on.
+
+`half` was already right on both branches and is untouched.
+`placedInUpperHalf` is vanilla's rule for it exactly -- the floor for a click
+on a top face, the ceiling for one underneath, and which half of the face was
+hit otherwise -- so the risk in this change was never the new property but the
+old one, and `tests/blocks.ts` states the side-face case at both heights.
+
+The contrast with a staircase is stated as an **equality against `west`**
+rather than as "not what the staircase says". The inequality was written
+first and it passes with `facing` absent, which is precisely the state the
+check exists to refuse.
+
 **A sign says what is written on it, and that is the one thing in the pipeline
 that is a function of a *position*.** Two signs of the same block state say
 different things, so it cannot be baked — `bakeBlockstate` is memoised on the

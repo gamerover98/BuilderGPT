@@ -362,10 +362,30 @@ export function orientPlacement(id: string, look: PlacementLook): Record<string,
   }
 
   if (name.endsWith("_trapdoor")) {
-    // `half` only. A trapdoor's `facing` is decided by the edge it hinges on,
-    // which this does not model, and a confidently wrong hinge is worse than
-    // the default one.
-    return { half: upper ? "top" : "bottom" };
+    /*
+     * The same two branches as the wall-mounted family below, and that is not
+     * a coincidence: a trapdoor's `facing` names the side it swings out over,
+     * so vanilla takes it from the clicked face where there is one and from
+     * the opposite of the look direction where there is not.
+     *
+     * This used to answer `half` alone, on the reasoning that a trapdoor's
+     * `facing` is decided by the edge it hinges on and that a confidently
+     * wrong hinge is worse than the default. The premise is the wrong
+     * property: `hinge` is a *door*'s, and a trapdoor has none. What decides
+     * `facing` is exactly the two things `PlacementLook` already carries, and
+     * both were already written out four arms further down. So every trapdoor
+     * ever placed by hand landed on `facing=north` -- the one value that is
+     * right a quarter of the time and looks deliberate every time.
+     *
+     * `half` is untouched. `placedInUpperHalf` is already vanilla's rule for
+     * it, on both branches: the floor for a click on a top face, the ceiling
+     * for one underneath, and which half of the face was hit otherwise.
+     */
+    const half = upper ? "top" : "bottom";
+    if (look.against !== null && look.against !== "up" && look.against !== "down") {
+      return { facing: look.against, half };
+    }
+    return { facing: OPPOSITE[horizontalFacing(look.direction)], half };
   }
 
   // A door is walked through in the direction you were looking when you hung

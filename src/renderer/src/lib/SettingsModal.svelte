@@ -20,16 +20,19 @@
    * is instant and another spins for a second could not tell from the old list.
    */
   import {
+    AA_LEVELS,
     DEFAULT_BIOME_COLOR,
     DEFAULT_WATER_COLOR,
     LANGUAGES,
     MCP_PORT,
     PREVIEW_SETTING_RANGES,
+    SHADER_MODES,
     SHADOW_QUALITIES,
     THEMES,
     type KeyStorageStatus,
     type Language,
     type PreviewSettings,
+    type ShaderMode,
     type Provider,
     type Settings,
     type Theme,
@@ -515,6 +518,29 @@ import {
           {/if}
 
           <!--
+            Disabled rather than hidden where the sky is off, and it says which
+            of the two it needs. The environment *is* the sky dome, so there is
+            genuinely nothing to gather light from -- and a control that came
+            and went with a checkbox above it would be one nobody ever learns
+            is there. Same reason the impossible versions are shown disabled.
+          -->
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={preview.globalIllumination}
+              disabled={!preview.sky}
+              onchange={(event) =>
+                onpreviewchange({ globalIllumination: event.currentTarget.checked })}
+            />
+            {t("preview.globalIllumination")}
+          </label>
+          <p class="hint">
+            {preview.sky
+              ? t("preview.globalIlluminationHint")
+              : t("preview.globalIlluminationNeedsSky")}
+          </p>
+
+          <!--
             The floor. Nothing to do with the schematic -- it is not a block and
             is never saved -- but a build with nothing under it floats, and
             every shadow it casts falls into nothing and is invisible.
@@ -593,6 +619,27 @@ import {
           <p class="hint">{t("preview.ambientOcclusionHint")}</p>
         {:else if category === "viewport"}
           <!--
+            Presets rather than shader packs: the renderer opens no connection
+            of any kind, so there is nothing to download and no safe way to run
+            GLSL somebody sent you. Each one is a bundle of renderer and light
+            state, and `vanilla` is the identity.
+          -->
+          <div class="field">
+            <label for="shader-mode">{t("preview.shaderMode")}</label>
+            <select
+              id="shader-mode"
+              value={preview.shaderMode}
+              onchange={(event) =>
+                onpreviewchange({ shaderMode: event.currentTarget.value as ShaderMode })}
+            >
+              {#each SHADER_MODES as mode (mode)}
+                <option value={mode}>{t(`preview.shaderMode.${mode}`)}</option>
+              {/each}
+            </select>
+            <p class="hint">{t(`preview.shaderMode.${preview.shaderMode}.hint`)}</p>
+          </div>
+
+          <!--
             No sun here. Where the light is belongs to Sky & light, which is the
             only place that can also say what it is a function of: with the sky
             on that is the hour, and these two sliders would be a second answer
@@ -636,6 +683,28 @@ import {
             </label>
           </div>
         {:else if category === "quality"}
+          <!--
+            Live, which is the whole reason it is not the context's own
+            `antialias` flag: that one is fixed for the life of the WebGL
+            context, so a setting built on it would do nothing until the app
+            was restarted.
+          -->
+          <div class="field">
+            <label for="antialias">{t("preview.antialias")}</label>
+            <select
+              id="antialias"
+              value={String(preview.antialias)}
+              onchange={(event) =>
+                onpreviewchange({ antialias: Number(event.currentTarget.value) })}
+            >
+              {#each AA_LEVELS as level (level)}
+                <option value={String(level)}>
+                  {level === 0 ? t("preview.antialias.off") : `${level}\u00d7 MSAA`}
+                </option>
+              {/each}
+            </select>
+            <p class="hint">{t("preview.antialiasHint")}</p>
+          </div>
           <div class="field">
             <label for="max-dpr">{t("preview.maxDpr", { value: preview.maxDpr.toFixed(1) })}</label>
             <input
@@ -676,6 +745,15 @@ import {
               oninput={(event) => onpreviewchange({ maxDrawDistance: num(event) })}
             />
           </div>
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={preview.showFps}
+              onchange={(event) => onpreviewchange({ showFps: event.currentTarget.checked })}
+            />
+            {t("preview.showFps")}
+          </label>
+          <p class="hint">{t("preview.showFpsHint")}</p>
           <p class="hint">{t("settings.qualityHint")}</p>
         {:else if category === "textures"}
           <p class="hint rebuilds">{t("settings.rebuildsHint")}</p>

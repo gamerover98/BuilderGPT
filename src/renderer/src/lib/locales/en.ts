@@ -518,6 +518,13 @@ export const en = {
     "preview.",
   "preview.sunAzimuth": "Sun azimuth — {value}°",
   "preview.sunElevation": "Sun elevation — {value}°",
+  "preview.antialias": "Anti-aliasing",
+  "preview.antialias.off": "Off",
+  "preview.antialiasHint":
+    "Smooths the edges of blocks. Applies straight away: the scene is drawn into a multisampled buffer rather than asking the browser for it, which cannot be changed once a window is open.",
+  "preview.showFps": "Show the frame counter",
+  "preview.showFpsHint":
+    "Frames per second and frame time, with the triangles and draw calls behind them.",
   "preview.maxDpr": "Max device pixel ratio — {value}",
   "preview.renderScale": "Render scale — {value}",
   "preview.maxDrawDistance": "Max draw distance — {value}",
@@ -538,6 +545,20 @@ export const en = {
   "preview.shadowsHint":
     "The most expensive thing in the viewport: a second pass over the geometry from the light’s point of view.",
   "preview.shadowQuality": "Shadow detail",
+  "preview.globalIllumination": "Light the build from the sky",
+  "preview.globalIlluminationHint":
+    "Every surface takes the colour of the sky it faces — blue from above, orange at sunset. It only reaches where the sky already did, so a sealed room stays dark.",
+  "preview.globalIlluminationNeedsSky":
+    "Needs the sky: the light comes from the sky itself, so with it off there is nothing to gather.",
+  "preview.shaderMode": "Look",
+  "preview.shaderMode.vanilla": "Vanilla",
+  "preview.shaderMode.vanilla.hint": "The viewport as it has always been drawn.",
+  "preview.shaderMode.cinematic": "Cinematic",
+  "preview.shaderMode.cinematic.hint":
+    "Filmic tone mapping and a stronger sun: bright skies keep their detail instead of clipping to white.",
+  "preview.shaderMode.flat": "Flat",
+  "preview.shaderMode.flat.hint":
+    "No sun at all, so nothing is shaded by where the light is. For looking at the blocks rather than at the building.",
   "preview.ground": "Virtual floor",
   "preview.groundHint":
     "A plane at height zero for the build to stand on and cast shadows onto. Not part of the schematic and never saved.",

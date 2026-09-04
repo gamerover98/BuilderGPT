@@ -25,7 +25,17 @@ import {
   isWithinBounds,
   placePopover,
 } from "../src/renderer/src/lib/floating.js";
-import { blocksInDocument, PANEL_SIZE, voidSources } from "../src/shared/settings.js";
+import {
+  AA_LEVELS,
+  blocksInDocument,
+  PANEL_SIZE,
+  SHADER_MODES,
+  voidSources,
+} from "../src/shared/settings.js";
+import {
+  antialiasSamples,
+  shaderPreset,
+} from "../src/renderer/src/lib/shader_modes.js";
 import {
   facingNormal,
   hoverSource,
@@ -2140,6 +2150,103 @@ console.log("\n--- compass ---");
     1,
   );
   check("...it is a scissored pass over the one there is", viewerSource.includes("setScissorTest(true)"));
+}
+
+// --- how the viewport is drawn ----------------------------------------------
+//
+// Four graphics settings, and the two halves that can be stated here: the
+// preset table, which is a pure module for exactly that reason, and the shape
+// of the renderer code that consumes it, read out of the source the way every
+// other fact about `Viewer.svelte` is.
+console.log("\n--- how the viewport is drawn ---");
+{
+  /*
+   * `vanilla` is the identity, and has to be spelled out rather than asserted
+   * loosely: a preset called neutral that moved *anything* would change the
+   * look for everyone who never opens the pane, which is a change nobody
+   * asked for arriving in an upgrade.
+   */
+  const vanilla = shaderPreset("vanilla");
+  check("vanilla changes nothing about the renderer", vanilla.toneMapping === "none" && vanilla.exposure === 1);
+  check("...nor about either light", vanilla.sun === 1 && vanilla.ambient === 1);
+  check("...nor about the environment", vanilla.environment === 1);
+
+  /*
+   * Total, for `Projection`'s reason: `coerceSettings` spreads `preview` over
+   * the defaults without validating it, and that is only safe while a junk
+   * value is indistinguishable from an absent one.
+   */
+  check("an unknown mode is vanilla", shaderPreset("banana") === vanilla);
+  check("...and so is nothing at all", shaderPreset("") === vanilla);
+
+  /*
+   * And every offered mode does something. A mode in the picker that resolved
+   * to the same numbers as another would be a name with nothing behind it --
+   * which is what a preset list quietly rots into.
+   */
+  const shapes = SHADER_MODES.map((mode) => JSON.stringify(shaderPreset(mode)));
+  check("every offered mode is a different look", new Set(shapes).size === SHADER_MODES.length, shapes.join(" | "));
+  check("flat has no directional light at all", shaderPreset("flat").sun === 0);
+
+  /*
+   * The multisampling level is read the same way, and its fallback is the
+   * *default* rather than zero: a value this build does not recognise -- one
+   * a newer build wrote, or a hand-edited file -- must not turn anti-aliasing
+   * off in silence.
+   */
+  for (const level of AA_LEVELS) {
+    check(`${level} samples is offered and kept`, antialiasSamples(level) === level);
+  }
+  check("a level nobody offers falls back", antialiasSamples(16) === DEFAULT_PREVIEW_SETTINGS.antialias);
+  check("...and so does a string", antialiasSamples("4") === DEFAULT_PREVIEW_SETTINGS.antialias);
+  check("...and the fallback is not off", antialiasSamples(undefined) !== 0);
+
+  const viewer = readFileSync(path.join(RENDERER, "lib", "Viewer.svelte"), "utf8");
+
+  /*
+   * The context is created without its own anti-aliasing, and the scene is
+   * drawn into a multisampled target instead. That flag is fixed for the life
+   * of the context, so a setting built on it could only apply at the next
+   * launch -- a live control that does nothing, which is the Stop button's
+   * fault in another pane.
+   */
+  check("the context asks for no anti-aliasing of its own", viewer.includes("antialias: false"));
+  check("...and the samples go on a render target", viewer.includes("new THREE.WebGLRenderTarget("));
+
+  /*
+   * The copy to the canvas happens after the compass, so the compass is inside
+   * the multisampled picture. Drawn after it, it would be the one unaliased
+   * thing on screen.
+   */
+  check("the frame is copied out after the compass is in it", viewer.indexOf("renderer.render(aaScene") > viewer.indexOf("drawCompass();"));
+
+  /*
+   * The counter reports a whole frame, and a frame is three or four renders.
+   * `info` resets itself at the start of each one unless told not to, so
+   * without this the triangle count is the compass's.
+   */
+  check("the counter is told not to reset itself per render", viewer.includes("renderer.info.autoReset = false"));
+
+  /*
+   * The two lights are written in exactly one place. `applySky` decides what
+   * the hour asks for and the preset scales it; a second site writing an
+   * intensity outright is how the mode comes to be silently overruled by
+   * whichever ran last.
+   */
+  const writes = (what: string) => (viewer.match(new RegExp(`${what}\\.intensity =`, "g")) ?? []).length;
+  equal("the sun's intensity is written once", writes("sun"), 1);
+  equal("...and the ambient's once", writes("ambient"), 1);
+
+  /*
+   * And global illumination needs the sky, because the environment *is* the
+   * sky dome. Turning the sky off has to take it down with it, or the last one
+   * built stays on the scene lighting the build from a sky nobody is drawing.
+   */
+  const usingEnv = viewer.slice(
+    viewer.indexOf("function usingEnvironment"),
+    viewer.indexOf("function usingEnvironment") + 200,
+  );
+  check("the environment needs the sky as well as the setting", usingEnv.includes("globalIllumination && sky"));
 }
 
 // --- invisible from the inside ----------------------------------------------

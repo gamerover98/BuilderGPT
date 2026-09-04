@@ -4287,6 +4287,83 @@ of the cell, but the two faces that would claim it are the degenerate ones
 `boxFaces` already drops. The guard is what will be right the day somebody
 transcribes a leaning box flush to a wall.
 
+**Four graphics settings, and every one of them is the viewer's.** Nothing
+here reaches the mesher, so none of them rebuilds a mesh -- which is the whole
+reason they could be added at all without touching the chunk cache. Two are
+not numbers or booleans, so both are read *totally*, `projection`'s rule for
+`projection`'s reason: `coerceSettings` spreads `preview` over the defaults
+without validating it, and that is safe only while a junk value is
+indistinguishable from an absent one.
+
+**Anti-aliasing is multisampling on a render target, not the context's own
+flag.** `antialias` is fixed for the life of a WebGL context, so a setting
+built on it could only ever take effect at the next launch -- a live control
+that does nothing, which is the Stop button's fault in another pane. The
+context is created with it **off** and the three passes draw into a
+`WebGLRenderTarget` with `samples`, which three resolves on its own when the
+target is unbound; a fullscreen quad then copies it to the canvas. At `0`
+there is no target and the scene goes straight to the canvas exactly as
+before.
+
+Two details decide whether it is the same picture. The target is sized in
+**drawing-buffer** pixels, because `maxDpr` and `renderScale` are already
+folded into the renderer's pixel ratio and a target at CSS size would quietly
+undo both. And the copy's material leaves `toneMapped` at its default, which
+is *on*: three applies tone mapping only when it is drawing to the canvas, so
+with a target bound the scene pass emits linear colour and the copy is where
+the curve belongs. Either way it happens exactly once, which is the property
+that has to hold -- turning anti-aliasing on must not change how the picture
+is graded. **The compass is drawn before the copy**, so it is inside the
+multisampled picture rather than the one unaliased thing on screen.
+
+The default is **4**, not 0. The context used to be created with `antialias:
+true` and no way to say otherwise, so off has to be a choice somebody makes
+rather than what an upgrade does to them.
+
+**Global illumination is the sky dome as an environment map, and it works
+because `shadeWithBakedLight` already dims the albedo.** The injection
+multiplies `diffuseColor` by the baked sky-light channel *before* three
+computes the indirect contribution, so a sealed room takes none of it: the
+flood fill still decides what the sky can reach and this decides what colour
+it is when it gets there. That is not an arrangement, it falls out of the
+order the shader already had.
+
+It **needs the sky**, because the environment *is* the sky -- with the dome
+off there is nothing to gather light from, and the checkbox is shown disabled
+saying so rather than vanishing, the same rule as the impossible versions and
+the empty-space toggle. `usingEnvironment()` asks both questions in one place,
+so turning the sky off takes the environment down with it instead of leaving
+the last one built lighting the build from a sky nobody is drawing.
+
+The PMREM is rebuilt on a **one-second floor**, in the frame rather than in an
+effect: `fromScene` binds render targets of its own, which is not something to
+do in the middle of drawing into one. And the hemisphere light gives way to
+`GI_AMBIENT` while it is on, because a hemisphere light is a cheap stand-in
+for exactly the sky bounce the environment then supplies for real -- at full
+strength the sky would be counted twice.
+
+**The frame counter is written twice a second, not per frame.** A `$state`
+assigned at 60Hz would run Svelte's effects at 60Hz to move a number nobody
+can read that fast. It carries the triangles and the draw calls beside the
+rate, which is free and is what makes it a diagnosis rather than a number --
+and `renderer.info.autoReset` goes **off**, because `info` resets itself at
+the start of every render and a frame here is three or four of them: left
+alone it would report the compass.
+
+**A shader mode is a preset, and `vanilla` is the identity.** There are no
+shader packs and there must not appear to be: the renderer opens no connection
+of any kind and there is no safe way to run GLSL somebody sent you. What is
+offered is tone mapping, exposure and how much of the scene's light is
+directional -- `flat` has no sun at all, which is the mode for looking at the
+blocks rather than at the building.
+
+`renderer/src/lib/shader_modes.ts` is the table, a plain module for
+`selection_drag.ts`'s reason, and its two light values are **multipliers**.
+That is what makes it compose: `applySky` already writes both lights from the
+hour, so a preset that set intensities outright would be a second opinion
+about what time it is and whichever ran last would win. `tests/ui.ts` requires
+each light to be written in exactly **one** place for that reason.
+
 **A fluid stands as tall as its `level`, and used to fill its cell.** Vanilla's
 rule is `(8 - level) / 9` for 0..7 and a full cell for 8 and above, which is
 *falling* — so a source with air over it sits at 8/9, the small step down that

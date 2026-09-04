@@ -83,8 +83,62 @@ export const DEFAULT_WATER_COLOR = "#3f76e4";
  */
 export type Projection = "perspective" | "orthographic";
 
+/**
+ * How the viewport looks, as a handful of presets.
+ *
+ * Not shader *packs*: the renderer opens no connection of any kind and there
+ * is no safe way to run GLSL somebody sent you, so what is offered is what
+ * this app can be sure of. Each one is a bundle of renderer and light state --
+ * tone mapping, exposure, and how much of the scene's light is directional.
+ *
+ * `"vanilla"` is the identity, and has to be: a preset called neutral that
+ * moved anything would silently change the look for everyone who never opened
+ * this setting. The read is *total*, `Projection`'s rule for `Projection`'s
+ * reason -- `coerceSettings` spreads `preview` without validating it.
+ */
+export const SHADER_MODES = ["vanilla", "cinematic", "flat"] as const;
+
+export type ShaderMode = (typeof SHADER_MODES)[number];
+
+/**
+ * The multisampling levels offered, in samples per pixel. `0` is off.
+ *
+ * A number rather than a boolean because the cost is real and the right answer
+ * differs per machine. It is not the context's `antialias` flag -- that cannot
+ * be changed once the context exists, so the scene is drawn into a
+ * multisampled render target and copied to the canvas, which can be turned on
+ * and off while the app runs.
+ */
+export const AA_LEVELS = [0, 2, 4, 8] as const;
+
 export interface PreviewSettings {
   projection: Projection;
+  /**
+   * Multisampling, in samples per pixel; `0` is off. See `AA_LEVELS`.
+   *
+   * The default is 4 rather than 0 because the context used to be created
+   * with `antialias: true` and no way to say otherwise: off has to be a
+   * choice somebody makes, not what an upgrade quietly does to them.
+   */
+  antialias: number;
+  /**
+   * Whether the sky lights the build.
+   *
+   * The sky dome becomes an environment map, so a surface takes the colour of
+   * the sky in the direction it faces -- blue from above, orange at sunset.
+   * It multiplies into the baked sky light rather than replacing it, so a
+   * sealed room stays dark: the flood fill still decides what the sky can
+   * reach, and this decides what colour it is when it gets there.
+   *
+   * It needs `sky`, because the environment *is* the sky. With the sky off
+   * there is nothing to gather light from and the control says so rather than
+   * disappearing.
+   */
+  globalIllumination: boolean;
+  /** Frames per second, frame time, triangles and draw calls, in a corner. */
+  showFps: boolean;
+  /** Which look the viewport is drawn with. See `SHADER_MODES`. */
+  shaderMode: ShaderMode;
   sunAzimuthDeg: number;
   sunElevationDeg: number;
   maxDpr: number;
@@ -214,6 +268,10 @@ export interface PreviewSettings {
 /** component.py:319-328 slider/checkbox defaults, verbatim. */
 export const DEFAULT_PREVIEW_SETTINGS: PreviewSettings = {
   projection: "perspective",
+  antialias: 4,
+  globalIllumination: false,
+  showFps: false,
+  shaderMode: "vanilla",
   sunAzimuthDeg: 60,
   sunElevationDeg: 35,
   maxDpr: 1.6,

@@ -4650,6 +4650,10 @@ import ConvertModal from "./lib/ConvertModal.svelte";
       renderScale={settings.preview.renderScale}
       maxDrawDistance={settings.preview.maxDrawDistance}
       projection={settings.preview.projection}
+      antialias={settings.preview.antialias}
+      globalIllumination={settings.preview.globalIllumination}
+      showFps={settings.preview.showFps}
+      shaderMode={settings.preview.shaderMode}
       showGrid={settings.preview.showGrid}
       showBounds={settings.preview.showBounds}
       voidOpacity={settings.editing.voidOpacity}

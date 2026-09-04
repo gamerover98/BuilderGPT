@@ -27,6 +27,7 @@
   } from "../../../shared/ipc.js";
   import type { ResolvedTheme } from "../../../shared/settings.js";
   import { t } from "./i18n.svelte.js";
+import { antialiasSamples, shaderPreset } from "./shader_modes.js";
   import { facingNormal, hoverSource, outlineCentre, pointerOnHandle } from "./block_hover.js";
   import {
   cellFade,
@@ -202,6 +203,27 @@ import { isTyping } from "./typing.js";
      * projection does not have one -- flying inside it means nothing.
      */
     projection?: Projection;
+    /**
+     * Multisampling, in samples per pixel; `0` draws straight to the canvas.
+     *
+     * The context is created with `antialias: false` and the scene is drawn
+     * into a multisampled render target instead, because the context flag
+     * cannot be changed once the context exists -- an anti-aliasing setting
+     * that only took effect at the next launch would be a control that does
+     * nothing, which is the Stop button's fault in another pane.
+     */
+    antialias?: number;
+    /**
+     * Whether the sky lights the build, as an environment map.
+     *
+     * Needs `sky`: the environment *is* the sky dome, so with it off there is
+     * nothing to gather light from.
+     */
+    globalIllumination?: boolean;
+    /** Frames per second, frame time, triangles and draw calls, in a corner. */
+    showFps?: boolean;
+    /** Which look to draw with. `shader_modes.ts` says what each one means. */
+    shaderMode?: string;
     /**
      * Draw the schematic's own box as a transparent cage.
      *
@@ -411,6 +433,10 @@ import { isTyping } from "./typing.js";
     renderScale,
     maxDrawDistance,
     projection = "perspective",
+    antialias = 4,
+    globalIllumination = false,
+    showFps = false,
+    shaderMode = "vanilla",
     showBounds = false,
     voidOpacity = 0.4,
     showGrid,
@@ -2168,18 +2194,31 @@ import { isTyping } from "./typing.js";
    * the light is, and how much of the sky-light channel counts. Splitting
    * them into separate effects would be four chances for them to disagree.
    */
+  /**
+   * What the hour asked for, before the shader mode has its say.
+   *
+   * Kept apart because the two are different questions and both write the
+   * same two lights: `applySky` decides how bright the sun is at this time of
+   * day, and the preset decides how much of the scene's light is directional
+   * at all. A preset that wrote intensities outright would be a second
+   * opinion about what time it is, and whichever ran last would win.
+   */
+  let sunBase = 1;
+  let ambientBase = 0.9;
+
   function applySky(): void {
     const state = skyAt(timeOfDay, (sunAzimuth * 180) / Math.PI);
     daylight.value = sky ? state.daylight : 1;
+    // The sky moved, so the environment built from it is out of date.
+    environmentStale = true;
 
     if (!sky) {
       // The manual light, which is what the two angle sliders are for.
       setSunFromAngles(sunAzimuth, sunElevation);
-      if (sun) {
-        sun.color.setRGB(1, 1, 1);
-        sun.intensity = 1;
-      }
-      if (ambient) ambient.intensity = 0.9;
+      if (sun) sun.color.setRGB(1, 1, 1);
+      sunBase = 1;
+      ambientBase = 0.9;
+      applyLook();
       if (scene) scene.background = themeColor("--viewport-bg", 0x0b0f14);
       placeShadow();
       return;
@@ -2193,10 +2232,10 @@ import { isTyping } from "./typing.js";
       const from = state.night ? state.moonDirection : state.sunDirection;
       sun.position.set(from[0] * 2000, from[1] * 2000, from[2] * 2000);
       sun.color.setRGB(state.lightColor[0], state.lightColor[1], state.lightColor[2]);
-      sun.intensity = state.lightIntensity;
+      sunBase = state.lightIntensity;
     }
     if (ambient) {
-      ambient.intensity = 0.35 + 0.55 * state.daylight;
+      ambientBase = 0.35 + 0.55 * state.daylight;
       ambient.color.setRGB(state.zenith[0], state.zenith[1], state.zenith[2]);
       ambient.groundColor.setRGB(0.1, 0.11, 0.14);
     }
@@ -2230,8 +2269,49 @@ import { isTyping } from "./typing.js";
     // set would paint over nothing but would be a second answer to the same
     // question, and the first one to be wrong after a theme change.
     if (scene) scene.background = null;
+    applyLook();
     // Last, because it reads where the light ended up.
     placeShadow();
+  }
+
+  /**
+   * How far the hemisphere light gives way when the sky is lighting the
+   * build for real. Not zero: the environment reaches only what the baked sky
+   * light lets it, and a cell the flood never reached would go black.
+   */
+  const GI_AMBIENT = 0.45;
+
+  /**
+   * The shader mode, applied to the renderer and to the two lights.
+   *
+   * The lights are *scaled*, not set: `applySky` owns what the hour asks for
+   * and this owns how much of it is directional.
+   *
+   * The hemisphere light also gives way to global illumination when that is
+   * on, and that is not a taste: a hemisphere light is a cheap stand-in for
+   * exactly the sky bounce the environment map then supplies for real, so
+   * leaving it at full strength counts the sky twice.
+   */
+  function applyLook(): void {
+    const preset = shaderPreset(shaderMode);
+    if (sun) sun.intensity = sunBase * preset.sun;
+    if (ambient) {
+      ambient.intensity = ambientBase * preset.ambient * (usingEnvironment() ? GI_AMBIENT : 1);
+    }
+    if (renderer) {
+      renderer.toneMapping =
+        preset.toneMapping === "aces" ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+      renderer.toneMappingExposure = preset.exposure;
+    }
+    for (const target of [material, blended, voidMaterial]) {
+      // A uniform, so no recompile: `envMapIntensity` is read per fragment.
+      if (target) target.envMapIntensity = preset.environment;
+    }
+  }
+
+  /** Whether the sky is actually lighting the build right now. */
+  function usingEnvironment(): boolean {
+    return globalIllumination && sky;
   }
 
   /**
@@ -2415,8 +2495,147 @@ import { isTyping } from "./typing.js";
     const height = container.clientHeight || 1;
     applyProjection(width / height);
     renderer.setSize(width, height, false);
+    sizeAaTarget();
     reportRect();
   }
+
+  /**
+   * The multisampled target the scene is drawn into, when there is one.
+   *
+   * A context's `antialias` flag cannot be changed once the context exists,
+   * so a setting built on it could only take effect at the next launch --
+   * a control that does nothing while you look at it. WebGL2 can resolve a
+   * multisampled *render target* instead, which three does on its own when
+   * the target is unbound, so this is a live setting at the cost of one
+   * fullscreen copy per frame.
+   *
+   * `null` at zero samples, and then the scene is drawn straight to the
+   * canvas exactly as it always was.
+   */
+  let aaTarget: THREE.WebGLRenderTarget | null = null;
+  let aaScene: THREE.Scene | null = null;
+  let aaCamera: THREE.OrthographicCamera | null = null;
+  let aaQuad: THREE.Mesh | null = null;
+
+  /**
+   * Sized in *drawing buffer* pixels, not CSS ones.
+   *
+   * `maxDpr` and `renderScale` are already folded into the renderer's pixel
+   * ratio, and a target at CSS size would quietly undo both.
+   */
+  function sizeAaTarget(): void {
+    if (!renderer || aaTarget === null) return;
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    aaTarget.setSize(Math.max(1, size.x), Math.max(1, size.y));
+  }
+
+  function disposeAaTarget(): void {
+    aaTarget?.dispose();
+    aaTarget = null;
+  }
+
+  /**
+   * Builds or drops the target when the level changes.
+   *
+   * The quad and its camera are built once and kept: they cost nothing, and
+   * rebuilding them on every change is one more thing to get wrong.
+   */
+  function applyAntialias(samples: number): void {
+    if (!renderer) return;
+    if (samples <= 0) {
+      disposeAaTarget();
+      return;
+    }
+    if (aaTarget !== null && aaTarget.samples === samples) return;
+    disposeAaTarget();
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    aaTarget = new THREE.WebGLRenderTarget(Math.max(1, size.x), Math.max(1, size.y), {
+      samples,
+      depthBuffer: true,
+      stencilBuffer: false,
+    });
+    if (aaScene === null) {
+      aaScene = new THREE.Scene();
+      aaCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+      /*
+       * `toneMapped` is deliberately left at its default, which is on.
+       *
+       * three applies tone mapping only when it is drawing to the *canvas*,
+       * so with a target bound the scene pass emits linear colour and this
+       * copy is where the curve belongs. With no target the scene pass does
+       * it itself. Either way it happens exactly once, which is the property
+       * that has to hold: turning anti-aliasing on must not change how the
+       * picture is graded.
+       */
+      aaQuad = new THREE.Mesh(
+        new THREE.PlaneGeometry(2, 2),
+        new THREE.MeshBasicMaterial({ depthTest: false, depthWrite: false }),
+      );
+      aaScene.add(aaQuad);
+    }
+    if (aaQuad) (aaQuad.material as THREE.MeshBasicMaterial).map = aaTarget.texture;
+  }
+
+  /**
+   * The sky, convolved into an environment map, so a surface takes the
+   * colour of the sky it faces.
+   *
+   * It multiplies into the baked sky light rather than replacing it, and that
+   * falls out of `shadeWithBakedLight` rather than being arranged: the
+   * injection dims `diffuseColor` by the sky-light channel *before* three
+   * computes the indirect contribution from the environment, so a sealed room
+   * takes none of it. The flood fill still decides what the sky can reach and
+   * this decides what colour it is when it gets there.
+   */
+  let pmrem: THREE.PMREMGenerator | null = null;
+  let environment: THREE.WebGLRenderTarget | null = null;
+  let environmentStale = true;
+  let environmentAt = 0;
+
+  /**
+   * How often the environment may be rebuilt, in milliseconds.
+   *
+   * The sky moves continuously with the daylight cycle and a cube render plus
+   * a PMREM convolution is not a per-frame cost. A second is far below what
+   * the eye reads as a step in a sky that takes twenty minutes to cross.
+   */
+  const ENVIRONMENT_MS = 1000;
+
+  function dropEnvironment(): void {
+    environment?.dispose();
+    environment = null;
+    if (scene) scene.environment = null;
+  }
+
+  function buildEnvironment(): void {
+    if (!renderer || !scene || !skyScene || !skyGroup) return;
+    if (pmrem === null) pmrem = new THREE.PMREMGenerator(renderer);
+    /*
+     * The dome rides with the camera and is scaled to the far plane, both of
+     * which are written every frame. `fromScene` renders from the origin, so
+     * it is put back there at a size that comfortably contains it first; the
+     * next frame moves it again.
+     */
+    skyGroup.position.set(0, 0, 0);
+    skyGroup.scale.setScalar(10);
+    const built = pmrem.fromScene(skyScene, 0, 0.1, 100);
+    environment?.dispose();
+    environment = built;
+    scene.environment = built.texture;
+    environmentStale = false;
+    environmentAt = performance.now();
+  }
+
+  /**
+   * What the counter shows, rewritten twice a second rather than per frame.
+   *
+   * A `$state` written at 60Hz would run Svelte's effects at 60Hz to move a
+   * number nobody can read that fast.
+   */
+  let fps = $state<{ fps: number; ms: number; triangles: number; calls: number } | null>(null);
+  const FPS_MS = 500;
+  let fpsFrames = 0;
+  let fpsAt = 0;
 
   /**
    * Gives the active camera the frustum this viewport's shape asks for.
@@ -2501,7 +2720,18 @@ import { isTyping } from "./typing.js";
 
   onMount(() => {
     try {
-      renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      /*
+       * `antialias: false`, deliberately, and the multisampling is done on a
+       * render target instead. The flag is fixed for the life of the context,
+       * so a setting built on it could only ever apply at the next launch.
+       */
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+      /*
+       * The counter reports a whole frame, and a frame is three or four
+       * renders. `info` resets itself at the start of every one of them
+       * unless told not to, so it would otherwise report the compass.
+       */
+      renderer.info.autoReset = false;
       scene = new THREE.Scene();
       scene.background = themeColor("--viewport-bg", 0x0b0f14);
 
@@ -2626,6 +2856,18 @@ import { isTyping } from "./typing.js";
         // during an orbit if it only kept up twenty times a second.
         updateGizmo();
         if (renderer && scene && camera) {
+          renderer.info.reset();
+          /*
+           * Rebuilt here rather than in an effect, and before anything is
+           * drawn: `fromScene` binds render targets of its own, which is not
+           * something to do in the middle of drawing into one.
+           */
+          if (globalIllumination && sky && skyScene) {
+            if (environmentStale && performance.now() - environmentAt > ENVIRONMENT_MS) {
+              buildEnvironment();
+            }
+          }
+          if (aaTarget !== null) renderer.setRenderTarget(aaTarget);
           /*
            * The sky first, then the depth buffer cleared, then the world.
            *
@@ -2667,6 +2909,36 @@ import { isTyping } from "./typing.js";
             renderer.render(scene, camera);
           }
           drawCompass();
+          /*
+           * ...and the whole frame, resolved, onto the canvas. The compass is
+           * inside it: it is part of the picture, and a pass that landed on
+           * the canvas after the copy would be the one unaliased thing on
+           * screen.
+           */
+          if (aaTarget !== null && aaScene && aaCamera) {
+            renderer.setRenderTarget(null);
+            const wasAutoClear = renderer.autoClear;
+            renderer.autoClear = false;
+            renderer.render(aaScene, aaCamera);
+            renderer.autoClear = wasAutoClear;
+          }
+          fpsFrames += 1;
+          const now = performance.now();
+          if (fpsAt === 0) fpsAt = now;
+          if (showFps && now - fpsAt >= FPS_MS) {
+            const seconds = (now - fpsAt) / 1000;
+            fps = {
+              fps: Math.round(fpsFrames / seconds),
+              ms: Math.round(((now - fpsAt) / fpsFrames) * 10) / 10,
+              triangles: renderer.info.render.triangles,
+              calls: renderer.info.render.calls,
+            };
+            fpsFrames = 0;
+            fpsAt = now;
+          } else if (!showFps) {
+            fpsFrames = 0;
+            fpsAt = now;
+          }
         }
       };
       animate();
@@ -3095,6 +3367,13 @@ import { isTyping } from "./typing.js";
         }
         fly?.dispose();
         controls?.dispose();
+        disposeAaTarget();
+        if (aaQuad) {
+          aaQuad.geometry.dispose();
+          (aaQuad.material as THREE.Material).dispose();
+        }
+        environment?.dispose();
+        pmrem?.dispose();
         renderer?.dispose();
       };
     } catch (err) {
@@ -3104,6 +3383,32 @@ import { isTyping } from "./typing.js";
   });
 
   // --- reactive prop application -------------------------------------------
+
+  $effect(() => {
+    if (!renderer) return;
+    applyAntialias(antialiasSamples(antialias));
+  });
+
+  /*
+   * Global illumination, and the two ways it can be off: the setting, and the
+   * sky it is built from. Reading both here is what makes turning the sky off
+   * take the environment down with it -- otherwise the last one built would
+   * stay on the scene, lighting the build from a sky that is no longer drawn.
+   */
+  $effect(() => {
+    if (!renderer || !scene) return;
+    if (usingEnvironment()) {
+      environmentStale = true;
+    } else {
+      dropEnvironment();
+    }
+    applyLook();
+  });
+
+  $effect(() => {
+    void shaderMode;
+    applyLook();
+  });
 
   $effect(() => {
     if (!renderer) return;
@@ -3462,6 +3767,7 @@ import { isTyping } from "./typing.js";
         // done with it is the injection below, because three's own use of
         // vertex colour is a plain multiply and these are not colours.
         vertexColors: true,
+        envMapIntensity: shaderPreset(shaderMode).environment,
       });
       shadeWithBakedLight(material);
     } else if (material.map !== texture) {
@@ -3507,6 +3813,7 @@ import { isTyping } from "./typing.js";
         depthWrite: true,
         side: THREE.DoubleSide,
         vertexColors: true,
+        envMapIntensity: shaderPreset(shaderMode).environment,
       });
       shadeWithBakedLight(blended);
     } else if (blended.map !== texture) {
@@ -3548,6 +3855,7 @@ import { isTyping } from "./typing.js";
         depthWrite: false,
         side: THREE.DoubleSide,
         vertexColors: true,
+        envMapIntensity: shaderPreset(shaderMode).environment,
       });
       shadeWithBakedLight(voidMaterial);
     } else if (voidMaterial.map !== texture) {
@@ -4032,6 +4340,17 @@ import { isTyping } from "./typing.js";
 
 <div class="viewer" bind:this={container}>
   <canvas bind:this={canvas}></canvas>
+  <!--
+    Not only frames per second: the triangle count is what makes this a
+    diagnosis rather than a number, and it is free -- `renderer.info` is
+    counting either way.
+  -->
+  {#if showFps && fps}
+    <div class="fps" aria-hidden="true">
+      <strong>{fps.fps}</strong> fps &middot; {fps.ms} ms<br />
+      {fps.triangles.toLocaleString()} tris &middot; {fps.calls} draws
+    </div>
+  {/if}
   {#if error}
     <div class="error">
       {t("viewport.unavailable")}<br />
@@ -4095,6 +4414,25 @@ import { isTyping } from "./typing.js";
     display: block;
     width: 100%;
     height: 100%;
+  }
+
+  /*
+   * Top right, where the overlay is not: the two would otherwise sit on each
+   * other, which is the fault the gizmo bar had against the notifications.
+   */
+  .fps {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    padding: 6px 10px;
+    background: var(--overlay-bg);
+    border-radius: 6px;
+    backdrop-filter: blur(6px);
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.5;
+    text-align: right;
+    pointer-events: none;
   }
 
   .overlay {

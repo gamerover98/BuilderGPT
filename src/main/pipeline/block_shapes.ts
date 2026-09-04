@@ -894,6 +894,112 @@ function wallSkull(entry: PaletteEntry): BlockShape {
   );
 }
 
+// --- rails ------------------------------------------------------------------
+//
+// Transcribed from `blockstates/rail.json` and the three models it names,
+// `rail_flat`, `rail_curved` and `template_rail_raised_ne` (1.21.4). The
+// `shape` property was decoded on the way in, derived from the neighbours by
+// `block_connections.ts`, rotated with the schematic by `domain/transform.ts`
+// -- and read by nobody here, so every rail in the game was the same flat
+// plate whichever way the track ran.
+
+/**
+ * A rail is a **plane**, at y=1, not a box one unit thick.
+ *
+ * That is what vanilla writes and it is also cheaper: `boxFaces` drops a face
+ * with no area, so six quads become two. What it gives up is the `cullFace`
+ * the old box's underside earned by sitting on the cell boundary -- which
+ * vanilla does not claim either, its rail models carrying no `cullface` at
+ * all.
+ */
+const RAIL_BOX: Box = [0, 1, 0, 16, 1, 16];
+
+/**
+ * Half the block's diagonal, which is how far a 45-degree ramp has to reach
+ * before it is turned.
+ *
+ * Vanilla states the raised plane as the full 0..16 with `rescale: true`,
+ * which grows it back out to the diagonal after the turn. There is no rescale
+ * here, so the plane is written at its rescaled width instead -- the chain's
+ * idiom, for the chain's reason.
+ */
+const RAIL_SLOPE = 8 * Math.SQRT2;
+const RAIL_RAMP: Box = [0, 9, 8 - RAIL_SLOPE, 16, 9, 8 + RAIL_SLOPE];
+
+/**
+ * Both faces stated, which the ramp cannot do without.
+ *
+ * Its box reaches from -3.3 to 19.3 along z, so coordinate-derived UVs would
+ * run well outside the tile and the atlas would smear the edge pixels across
+ * the whole ramp. `tests/blocks.ts` walks every id for exactly that.
+ *
+ * `up` is the identity and says nothing the derivation would not; `down` is
+ * vanilla's own vertical mirror of it, which is a real choice rather than a
+ * restatement -- the derived underside would come out the other way up.
+ */
+const RAIL_UV: Readonly<Record<string, UvWindow>> = {
+  up: [0, 0, 16, 16],
+  down: [0, 16, 16, 0],
+};
+
+/**
+ * What each `shape` draws, straight from `blockstates/rail.json`.
+ *
+ * `steps` is that file's `y` in quarter turns -- one step is 90 degrees, east
+ * to south, which is `rotateBoxY`'s own direction. `rise` is the ramp's angle
+ * about x, positive lifting the north edge.
+ */
+const RAIL_SHAPES: Readonly<
+  Record<string, { readonly corner?: true; readonly rise?: number; readonly steps: number }>
+> = {
+  north_south: { steps: 0 },
+  east_west: { steps: 1 },
+  south_east: { corner: true, steps: 0 },
+  south_west: { corner: true, steps: 1 },
+  north_west: { corner: true, steps: 2 },
+  north_east: { corner: true, steps: 3 },
+  ascending_north: { rise: 45, steps: 0 },
+  ascending_east: { rise: 45, steps: 1 },
+  ascending_south: { rise: -45, steps: 0 },
+  ascending_west: { rise: -45, steps: 1 },
+};
+
+/**
+ * A rail, the way its `shape` and its `powered` say.
+ *
+ * The texture is named **here** rather than in `SPECIAL_FACE_RULES` for the
+ * campfire's reason: a candidate list cannot see a property, and both halves
+ * of this depend on one. `rail_corner`, `powered_rail_on`, `detector_rail_on`
+ * and `activator_rail_on` are all in the shipped pack and were all reachable
+ * from nothing.
+ *
+ * Only the bare `rail` curves, which is the game's rule and already
+ * `railShape`'s in `block_connections.ts`. A file naming a corner on a
+ * powered rail gets the straight plate rather than a texture that does not
+ * exist.
+ */
+function rail(entry: PaletteEntry): BlockShape {
+  const name = baseName(entry);
+  const spec = RAIL_SHAPES[entry.properties.shape ?? ""] ?? RAIL_SHAPES.north_south;
+  const corner = spec.corner === true && name === "rail";
+  const texture = corner ? "rail_corner" : entry.properties.powered === "true" ? `${name}_on` : name;
+  return transform(
+    [
+      {
+        box: spec.rise === undefined ? RAIL_BOX : RAIL_RAMP,
+        texture,
+        uv: RAIL_UV,
+        rotation:
+          spec.rise === undefined
+            ? undefined
+            : { origin: [8, 9, 8], axis: "x", angle: spec.rise },
+      },
+    ],
+    spec.steps,
+    false,
+  );
+}
+
 /** Suffix-matched families, checked after the exact-name table. */
 const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => BlockShape]> = [
   ["_slab", slab],
@@ -925,7 +1031,7 @@ const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => Bl
   ["_wall_sign", wallSign],
   ["_sign", standingSign],
   ["_torch", torchShape],
-  ["_rail", () => boxes([0, 0, 0, 16, 1, 16])],
+  ["_rail", rail],
   ["_candle", candleShape],
   ["_sapling", () => ({ kind: "cross" })],
   /*
@@ -2449,7 +2555,7 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
 
   // Flat against the face they sit on. As cubes they hid the block underneath,
   // which for a rail means the track is invisible and the ground is too.
-  rail: () => boxes([0, 0, 0, 16, 1, 16]),
+  rail,
   lever: (e) => againstWall(e, 3),
   tripwire_hook: (e) => againstWall(e, 3),
   glow_lichen: (e) => againstWall(e, 1),

@@ -3861,6 +3861,37 @@ knowing:
   and the funnel's underside rather than to a side of the block. The hopper is
   also the one of the five whose UVs were right and whose *geometry* was the
   whole fault: the rim as a solid lump, with no bowl, funnel or spout.
+- **A rail's `shape` was decoded, derived and rotated -- and drawn by
+  nobody.** It comes out of `legacy_blocks.json` and out of a `.schem`, it is
+  derived from the neighbours by `block_connections.ts`, and it turns with
+  the schematic in `domain/transform.ts`; the only place it was missing was
+  the one that decides what a rail looks like, so every track in the game
+  drew the same flat plate whichever way it ran. `powered` was the same story
+  one property over: `rail_corner`, `powered_rail_on`, `detector_rail_on` and
+  `activator_rail_on` are all in the shipped pack and were reachable from
+  nothing.
+
+  Both are named in the **shape function** rather than in
+  `SPECIAL_FACE_RULES`, for the campfire's reason: a candidate list cannot
+  see a property, and both halves of this depend on one.
+- **A rail is a plane, and was a box.** Vanilla writes the element with
+  `from` and `to` equal on y, so `boxFaces` drops the four faces with no
+  area: six quads become two. What it gives up is the `cullFace` the old
+  box's underside earned by lying on the cell boundary -- which vanilla does
+  not claim either, its rail models carrying no `cullface` at all.
+- **An ascending rail's UVs have to be stated, and that is a consequence of
+  having no `rescale`.** Vanilla writes the raised plane as the full 0..16
+  and lets `rescale: true` grow it back out to the block's diagonal after the
+  45-degree turn; written out as coordinates instead -- the chain's idiom --
+  the box runs from -3.3 to 19.3 along its axis, and coordinate-derived UVs
+  would then run a fifth of the way outside the tile. The atlas clamps rather
+  than refusing, so that is a ramp wearing one smeared row of its own
+  texture. `up` is the identity and says nothing the derivation would not;
+  `down` is vanilla's own vertical mirror of it, which is a real choice.
+
+  The finished ramp reaches a pixel **above** its own cell, exactly as
+  vanilla's does. That is the first geometry in this file to leave the block
+  it belongs to.
 - **`signal_fire` has no geometry, and that is the finding rather than an
   omission.** It changes the height of the smoke column, which is a particle and
   part of no model. Giving it a shape would be inventing, which is the one thing

@@ -1441,6 +1441,132 @@ console.log("\n--- planes ---");
 // carpeted the cell; and a plate that spans the square *at* y=0 covers the face
 // below it, so the grass underneath lost its top face and the gaps in the
 // petals became a hole through the floor.
+// --- a rail knows which way it runs -----------------------------------------
+//
+// `shape` was decoded out of the file, derived from the neighbours, and rotated
+// with the schematic -- and read by nobody in the pipeline, so every rail in
+// the game drew the same flat plate whichever way the track went. `powered` was
+// the same story one property over: four textures shipped in the pack that
+// nothing could name.
+console.log("\n--- a rail knows which way it runs ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const railFaces = async (name: string, props: Record<string, string>): Promise<BakedFace[]> => {
+    const baked = await baker.bakeBlockstate(block(name, props));
+    return [...Object.values(baked.faces), ...baked.extraFaces];
+  };
+  const railTop = async (name: string, props: Record<string, string>): Promise<BakedFace> => {
+    const faces = await railFaces(name, props);
+    return faces.filter((f) => f.normal[1] > 0)[0];
+  };
+
+  /*
+   * Two quads, because vanilla writes a rail as a plane and `boxFaces` drops a
+   * face with no area. It used to be a box one unit thick: six.
+   */
+  const flat = await railFaces("rail", { shape: "north_south" });
+  equal("a rail is a plane, not a box", flat.length, 2);
+  equal("...lying one unit off the floor", Math.round(flat[0].positions[1] * 16), 1);
+
+  /*
+   * The picture turns with the track. Both straight shapes draw the same box
+   * out of the same texture, so the only thing that can tell them apart is the
+   * quarter-turn `turnFlatFaces` puts on the two flat faces.
+   */
+  const straight = await railTop("rail", { shape: "north_south" });
+  const across = await railTop("rail", { shape: "east_west" });
+  equal("both straight rails wear the same texture", straight.textureKey, across.textureKey);
+  check(
+    "...and an east-west one is turned a quarter",
+    [...straight.uvs].join() !== [...across.uvs].join(),
+    [...across.uvs].join(),
+  );
+
+  /*
+   * The four curves take `rail_corner`, which is in the pack and was reachable
+   * from nothing, and each takes it a different way round.
+   */
+  const corners = new Map<string, string>();
+  for (const shape of ["south_east", "south_west", "north_west", "north_east"]) {
+    const face = await railTop("rail", { shape });
+    equal(`a ${shape} rail is a corner`, face.textureKey, "minecraft:block/rail_corner");
+    corners.set(shape, [...face.uvs].map((n) => n.toFixed(3)).join());
+  }
+  equal("...and no two corners face the same way", new Set(corners.values()).size, 4);
+
+  /*
+   * Only the bare rail curves, which is the game's rule and `railShape`'s in
+   * `block_connections.ts` already. A file naming a corner on a powered rail
+   * gets the straight plate rather than a texture that does not exist.
+   */
+  equal(
+    "a powered rail cannot curve",
+    (await railTop("powered_rail", { shape: "south_east", powered: "false" })).textureKey,
+    "minecraft:block/powered_rail",
+  );
+
+  /*
+   * `powered` chooses the texture, and it has to be chosen here rather than in
+   * `SPECIAL_FACE_RULES`: a candidate list cannot see a property, which is the
+   * campfire's lesson paid once already.
+   */
+  for (const name of ["powered_rail", "detector_rail", "activator_rail"]) {
+    equal(
+      `an unpowered ${name} is dark`,
+      (await railTop(name, { shape: "north_south", powered: "false" })).textureKey,
+      `minecraft:block/${name}`,
+    );
+    equal(
+      `...and a powered one is lit`,
+      (await railTop(name, { shape: "north_south", powered: "true" })).textureKey,
+      `minecraft:block/${name}_on`,
+    );
+  }
+
+  /*
+   * A ramp rises towards the side its shape names. The sign of the tilt is the
+   * part that is easy to get backwards, and a rail sloping the wrong way still
+   * looks exactly like a rail sloping.
+   */
+  const risesAt = async (shape: string): Promise<string> => {
+    const face = await railTop("rail", { shape });
+    // The two highest, not the highest: a ramp's top *edge* has two vertices at
+    // the same height, and either of them on its own is a corner of the cell.
+    const at = [0, 1, 2, 3]
+      .map((i) => [face.positions[i * 3], face.positions[i * 3 + 1], face.positions[i * 3 + 2]])
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2);
+    const x = (at[0][0] + at[1][0]) / 2;
+    const z = (at[0][2] + at[1][2]) / 2;
+    return Math.abs(z - 0.5) > Math.abs(x - 0.5) ? (z < 0.5 ? "north" : "south") : x < 0.5 ? "west" : "east";
+  };
+  for (const side of ["north", "south", "east", "west"]) {
+    equal(`an ascending_${side} rail is highest at its ${side} edge`, await risesAt(`ascending_${side}`), side);
+  }
+
+  /*
+   * And the ramp's box reaches from -3.3 to 19.3 along its axis, because
+   * vanilla's `rescale: true` has to be written out as coordinates here. Its
+   * UVs are stated for that reason, and this is the check that says so: derived
+   * ones would run a fifth of the way outside the tile, where the atlas clamps
+   * and smears the edge pixel across the whole ramp.
+   */
+  const ramp = await railFaces("rail", { shape: "ascending_east" });
+  const uvs = ramp.flatMap((f) => [...f.uvs]);
+  check(
+    "a ramp still samples inside its own tile",
+    Math.min(...uvs) >= -1e-6 && Math.max(...uvs) <= 1 + 1e-6,
+    `${Math.min(...uvs)}..${Math.max(...uvs)}`,
+  );
+  const ys = ramp.flatMap((f) => [0, 3, 6, 9].map((i) => f.positions[i + 1]));
+  check(
+    "...and reaches a pixel above its own cell, as vanilla's does",
+    Math.max(...ys) > 1 && Math.max(...ys) < 1.1,
+    String(Math.max(...ys)),
+  );
+}
+
 console.log("\n--- what is scattered on the floor ---");
 {
   const platesOf = (name: string, props: Record<string, string>): number => {

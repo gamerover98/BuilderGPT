@@ -93,6 +93,21 @@ const OPPOSITE_FACE: Readonly<Record<string, CellFace>> = {
 };
 
 /**
+ * The six sides in a fixed order, so a per-entry answer about them can be an
+ * array rather than a lookup by name.
+ */
+const FACE_NAMES: readonly CellFace[] = ["north", "south", "east", "west", "up", "down"];
+
+const FACE_SLOT: Readonly<Record<CellFace, number>> = {
+  north: 0,
+  south: 1,
+  east: 2,
+  west: 3,
+  up: 4,
+  down: 5,
+};
+
+/**
  * How tall the fluid in a cell stands, as a fraction of the block.
  *
  * Vanilla's rule: `level` 0 is a source and 1..7 are the flowing steps, each
@@ -266,6 +281,25 @@ export async function culledFaces(
     (entry) => !paletteEntryIsAir(entry) && occludesNeighbours(entry),
   );
 
+  /**
+   * Which of its six sides each palette entry covers, and which of them it
+   * covers *opaquely* -- six booleans per entry rather than a question asked
+   * per face per cell.
+   *
+   * These were called live, in the innermost loop, and every call walked
+   * `shapeFor`: a regex over the name and three tables, for an answer that
+   * cannot differ between two cells holding the same entry. It is the cost
+   * `connect.ts` records having paid once already, and it is what makes
+   * `coversFace` affordable now that it takes the boxes of a shape together
+   * rather than one at a time.
+   */
+  const coversSide = struct.palette.map((entry) =>
+    FACE_NAMES.map((face) => coversFace(entry, face)),
+  );
+  const occludesSide = struct.palette.map((entry) =>
+    FACE_NAMES.map((face) => occludesFace(entry, face)),
+  );
+
   const inside = (x: number, y: number, z: number): boolean =>
     x >= 0 && y >= 0 && z >= 0 && x < sizeX && y < sizeY && z < sizeZ;
 
@@ -326,6 +360,23 @@ export async function culledFaces(
    * for any vertex of any shape; a diagonal normal (a cross quad) has no such
    * axes, and those faces are left unoccluded rather than guessed at.
    */
+  /**
+   * Whether the cell on that side of this one hides what is flush against it.
+   *
+   * The same question the six faces of a full cube are asked, in the one place
+   * that never used to ask it. Out of bounds is open air and hides nothing,
+   * which is what keeps the outer shell of a structure drawn.
+   */
+  const coveredBeyond = (x: number, y: number, z: number, side: CellFace): boolean => {
+    const [dx, dy, dz] = DIRECTIONS[side];
+    const nx = x + dx;
+    const ny = y + dy;
+    const nz = z + dz;
+    if (!inside(nx, ny, nz)) return false;
+    const at = voxels[flatIndex(nx, ny, nz)];
+    return occludesSide[at][FACE_SLOT[OPPOSITE_FACE[side]]] && opaqueTexture[at];
+  };
+
   const shadeFace = (face: BakedFace, x: number, y: number, z: number): Float32Array | undefined => {
     if (!shading) return undefined;
     const [nx, ny, nz] = face.normal;
@@ -521,11 +572,24 @@ export async function culledFaces(
         };
         const bakedBlock: BakedBlock = await baker.bakeBlockstate(entry);
 
-        // Geometry that never participates in culling: every box of a
-        // multi-box shape (a staircase's step, a fence's rails) and the two
-        // quads of a cross. Their surfaces sit inside the block, where a
-        // neighbour cannot cover them.
+        /*
+         * The surfaces of a multi-box shape, each dropped if it lies on a side
+         * of the cell that the neighbour there covers opaquely.
+         *
+         * None of them was, and a staircase is what that cost: pushed against
+         * a wall it went on drawing its whole back, and the wall went on
+         * drawing the face behind it. Culling was asked in one direction only
+         * -- a slab could take the face off the block below it and never lost
+         * anything of its own.
+         *
+         * A face with no `cullFace` is a surface *inside* the block, which no
+         * neighbour can cover: a step's riser, a fence's rails, the quads of a
+         * cross, a candle's flame. Those are emitted exactly as before.
+         */
         for (const face of bakedBlock.extraFaces) {
+          if (face.cullFace !== undefined && coveredBeyond(x, y, z, face.cullFace)) {
+            continue;
+          }
           emit(bakedFaceOffset(face, x, y, z, shadeFace(face, x, y, z)));
         }
 
@@ -567,7 +631,7 @@ export async function culledFaces(
             // come before the lookup rather than beside it.
             if (inside(x + dx, y + dy, z + dz)) {
               const at = voxels[flatIndex(x + dx, y + dy, z + dz)];
-              if (occludesFace(paletteEntry(at), OPPOSITE_FACE[faceName]) && opaqueTexture[at]) {
+              if (occludesSide[at][FACE_SLOT[OPPOSITE_FACE[faceName]]] && opaqueTexture[at]) {
                 continue;
               }
             }
@@ -591,7 +655,8 @@ export async function culledFaces(
           const ny = y + dy;
           const nz = z + dz;
           if (nx >= 0 && nx < sizeX && ny >= 0 && ny < sizeY && nz >= 0 && nz < sizeZ) {
-            const neighbor = paletteEntry(voxels[flatIndex(nx, ny, nz)]);
+            const neighborIndex = voxels[flatIndex(nx, ny, nz)];
+            const neighbor = paletteEntry(neighborIndex);
             /*
              * mesher.py asked `is_transparent`, a hardcoded name list. The real
              * question is whether the neighbour *covers* this face, which a
@@ -620,7 +685,7 @@ export async function culledFaces(
              * Asked of the neighbour's decoded textures instead. It can only
              * ever cull less than the name list did, never more.
              */
-            if (occludesFace(neighbor, facing) && opaqueTexture[voxels[flatIndex(nx, ny, nz)]]) {
+            if (occludesSide[neighborIndex][FACE_SLOT[facing]] && opaqueTexture[neighborIndex]) {
               continue;
             }
             /*
@@ -637,7 +702,7 @@ export async function culledFaces(
              */
             if (
               neighbor.namespacedName === entry.namespacedName &&
-              coversFace(neighbor, facing)
+              coversSide[neighborIndex][FACE_SLOT[facing]]
             ) {
               continue;
             }

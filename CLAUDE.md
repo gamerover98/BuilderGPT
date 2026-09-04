@@ -4233,6 +4233,60 @@ missing from in front of every sign in the world and come back mirrored from
 behind it. `sign_faces.ts` built its corners from the bottom up, which reads
 more naturally and is the wrong way round.
 
+**Culling ran one way only, and a staircase is what that cost.** A slab could
+take the face off the block beneath it -- `coversFace` has answered that since
+it existed -- and never lost anything of its own: a `boxes` shape leaves the
+six-direction path entirely, because `isFullCube` is false, and its faces are
+`extraFaces`, emitted unconditionally. So a staircase pushed against a wall
+drew its whole back, and the wall drew the face behind it, and neither was
+ever visible.
+
+**`BakedFace.cullFace` is vanilla's `cullface`, derived rather than
+transcribed:** a box's face carries one when its own plane is exactly the cell
+boundary it points at. Vanilla writes that out per face in its JSON, and it
+writes it on exactly the faces this arithmetic names. `culledFaces` then drops
+such a face when the neighbour on that side covers its whole face opaquely --
+the same question the six faces of a full cube have always been asked.
+
+**A face with no `cullFace` is a surface inside the block, and that is what
+keeps the 2D textures out of this.** A step's riser, a fence's rails, the
+quads of a cross, a candle's flame: no neighbour can cover any of them, and
+none of them lies on a side of the cell. Fire is a cross, so it has no axial
+face at all; a candle's and a campfire's flames are boxes in mid-air. Walled
+in on all six sides all three come out identical, which `tests/blocks.ts`
+states as counts. A plane laid *against* a wall -- a ladder, a vine -- loses
+the one face that looks into the wall and keeps the one that does not, which
+is the rule working rather than an exception to it.
+
+**And `coversFace` takes the boxes of a shape together, where one box used to
+have to cover the square alone.** That is vanilla's `faceShapeOccludes`, and
+the staircase is the case: its back is covered by two boxes, the lower slab
+from 0 to 8 and the step from 8 to 16, and by neither alone. Coordinate
+compression rather than a 16x16 grid of booleans, because a few transcribed
+models carry fractional coordinates and a grid would round them into the wrong
+answer.
+
+**The two answers are precomputed per palette entry, and that is what makes
+the union affordable.** `occludesFace` was called live in the innermost loop --
+per face, per cell -- and every call walked `shapeFor`: a regex over the name
+and three tables, for an answer that cannot differ between two cells holding
+the same entry. It is the cost `connect.ts` records having paid once already.
+Six booleans per entry, twice.
+
+Measured on a deliberately dense 24x24x24 of alternating stairs, slabs and
+stone -- the worst case rather than a typical one: **106,176 faces in 261 ms
+becomes 70,848 in 203 ms.** Across the 1197 offered ids, 606 more of them now
+drop something when walled in; a staircase goes from 12 faces to 3, a slab
+from 6 to 1, a trapdoor and a carpet and a rail from 6 to 1.
+
+One guard in it is **defensive and cannot fail today**, which is worth saying
+rather than leaving to be discovered: a tilted box gets no `cullFace`, and
+deleting that test fails nothing anywhere. Over all 1197 ids no tilted box has
+a *surviving* face on a cell boundary -- a chain's planes run the full height
+of the cell, but the two faces that would claim it are the degenerate ones
+`boxFaces` already drops. The guard is what will be right the day somebody
+transcribes a leaning box flush to a wall.
+
 **A fluid stands as tall as its `level`, and used to fill its cell.** Vanilla's
 rule is `(8 - level) / 9` for 0..7 and a full cell for 8 and above, which is
 *falling* — so a source with air over it sits at 8/9, the small step down that

@@ -16,7 +16,7 @@
 // This is a deliberate approximation, not a model loader. Blocks with no entry
 // stay full cubes, which is the same answer as before for anything not listed.
 
-import { paletteEntryIsAir, type PaletteEntry } from "./types.js";
+import { paletteEntryIsAir, type CellFace, type PaletteEntry } from "./types.js";
 
 /** A box in Minecraft's 1/16 units: `[x0, y0, z0, x1, y1, z1]`, each 0..16. */
 export type Box = readonly [number, number, number, number, number, number];
@@ -2539,8 +2539,13 @@ export function shapeFor(entry: PaletteEntry): BlockShape {
   return CUBE;
 }
 
-/** The six sides of a cell, as the mesher names them. */
-export type CellFace = "north" | "south" | "east" | "west" | "up" | "down";
+/**
+ * The six sides of a cell, as the mesher names them.
+ *
+ * Defined in `types.ts`, because `BakedFace` carries one, and re-exported here
+ * because this is where everything that asks about a face already looks.
+ */
+export type { CellFace };
 
 const FACE_AXIS: Readonly<Record<CellFace, 0 | 1 | 2>> = {
   west: 0,
@@ -2574,6 +2579,13 @@ const FACE_AT_MIN: Readonly<Record<CellFace, boolean>> = {
  * without covering it, and the arithmetic that would tell the two apart is
  * worth less than the one block it would win -- nothing in this file tilts a
  * box that also reaches a boundary.
+ *
+ * **The boxes are taken together, and one box used to have to do it alone.**
+ * That is vanilla's `faceShapeOccludes`, and the difference is a staircase:
+ * its back is covered by two boxes, the lower slab from 0 to 8 and the step
+ * from 8 to 16, and by neither alone. So a wall behind a staircase kept a face
+ * nobody could see, and -- read from the other side, which is the same
+ * sentence -- a staircase's own back was never a candidate for being dropped.
  */
 export function coversFace(entry: PaletteEntry, face: CellFace): boolean {
   const shape = shapeFor(entry);
@@ -2582,15 +2594,62 @@ export function coversFace(entry: PaletteEntry, face: CellFace): boolean {
 
   const axis = FACE_AXIS[face];
   const atMin = FACE_AT_MIN[face];
-  const others: Array<0 | 1 | 2> = [0, 1, 2].filter((a) => a !== axis) as Array<0 | 1 | 2>;
+  const [u, v] = [0, 1, 2].filter((a) => a !== axis) as [0 | 1 | 2, 0 | 1 | 2];
 
-  return shape.boxes.some(({ box, rotation }) => {
-    if (rotation !== undefined) return false;
+  const rects: Array<[number, number, number, number]> = [];
+  for (const { box, rotation } of shape.boxes) {
+    if (rotation !== undefined) continue;
     // The box has to touch the boundary this face sits on...
-    if (atMin ? box[axis] > 0 : box[axis + 3] < 16) return false;
-    // ...and span the whole square on the other two axes.
-    return others.every((a) => box[a] <= 0 && box[a + 3] >= 16);
-  });
+    if (atMin ? box[axis] > 0 : box[axis + 3] < 16) continue;
+    // ...and what it covers of the square is clipped to the square: a potted
+    // plant's crossed planes run to y = 22, six units above the block.
+    rects.push([
+      Math.max(0, box[u]),
+      Math.max(0, box[v]),
+      Math.min(16, box[u + 3]),
+      Math.min(16, box[v + 3]),
+    ]);
+  }
+  return coversSquare(rects);
+}
+
+/**
+ * Whether a set of rectangles covers the whole 16x16 square between them.
+ *
+ * Coordinate compression rather than a grid: the cuts the rectangles make on
+ * each axis divide the square into cells that are either wholly covered or
+ * wholly not, so testing one point per cell is exact -- including for the
+ * fractional coordinates a few transcribed models carry, which a 16x16 grid of
+ * booleans would round into the wrong answer.
+ *
+ * A dozen boxes is the most any shape here has, so this is a few hundred
+ * comparisons at worst, and `culledFaces` asks it once per palette entry.
+ */
+function coversSquare(
+  rects: ReadonlyArray<readonly [number, number, number, number]>,
+): boolean {
+  if (rects.length === 0) return false;
+  const cuts = (lo: 0 | 1): number[] => {
+    const set = new Set<number>([0, 16]);
+    for (const rect of rects) {
+      for (const n of [rect[lo], rect[lo + 2]]) {
+        if (n > 0 && n < 16) set.add(n);
+      }
+    }
+    return [...set].sort((a, b) => a - b);
+  };
+  const us = cuts(0);
+  const vs = cuts(1);
+  for (let i = 0; i + 1 < us.length; i += 1) {
+    for (let j = 0; j + 1 < vs.length; j += 1) {
+      const u = (us[i] + us[i + 1]) / 2;
+      const v = (vs[j] + vs[j + 1]) / 2;
+      if (!rects.some((r) => r[0] <= u && u <= r[2] && r[1] <= v && v <= r[3])) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 /**

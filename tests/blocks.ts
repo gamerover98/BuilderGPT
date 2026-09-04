@@ -3004,6 +3004,150 @@ if (pack === null) {
   // tilted plane can pass through a face without covering it.
   check("a cross covers nothing", !coversFace(block("dandelion"), "down"));
   check("nor does a chain, whose planes are tilted", !coversFace(block("chain"), "down"));
+
+  /*
+   * ...and the boxes of a shape are taken **together**, which is vanilla's
+   * `faceShapeOccludes` and was `.some(box)` here: one box had to cover the
+   * whole square by itself. A staircase's back is covered by two, the lower
+   * slab from 0 to 8 and the step from 8 to 16, and by neither alone.
+   *
+   * The straight model is authored facing east with its tall half at x 8..16,
+   * so `facing=east` is the one whose *back* is the east face.
+   */
+  const eastStair = block("oak_stairs", { facing: "east", half: "bottom", shape: "straight" });
+  check("a staircase covers the back two boxes make", coversFace(eastStair, "east"));
+  check("...and not the side it opens onto", !coversFace(eastStair, "west"));
+  check("...nor its own profile", !coversFace(eastStair, "north"));
+}
+
+// --- a shape's own faces are culled too --------------------------------------
+//
+// Culling used to run one way only. A slab could take the face off the block
+// beneath it, and never lost anything of its own: a `boxes` shape leaves the
+// six-direction path entirely -- `isFullCube` is false -- and its faces were
+// emitted unconditionally. So a staircase pushed against a wall drew its whole
+// back, and the wall drew the face behind it, and neither was ever visible.
+//
+// `BakedFace.cullFace` is vanilla's `cullface`, derived: a box's face carries
+// one when its plane is exactly the cell boundary it points at.
+console.log("\n--- a shape's own faces are culled too ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  /**
+   * The faces of the middle cell of a 3x3x3, alone or walled in on all six
+   * sides.
+   *
+   * The `region` argument restricts which voxels are *visited* and not which
+   * are read, so this is exactly the middle cell's own geometry with every
+   * neighbour lookup intact -- which is the only way to count one block's
+   * faces without its neighbours' faces in the total.
+   */
+  const middleFaces = async (subject: PaletteEntry, walled: boolean): Promise<BakedFace[]> => {
+    const air = block("air");
+    const stone = block("stone");
+    const struct = structureOf(3, 3, 3, [air, subject, stone], (x, y, z) => {
+      if (x === 1 && y === 1 && z === 1) return 1;
+      if (!walled) return 0;
+      const off = Math.abs(x - 1) + Math.abs(y - 1) + Math.abs(z - 1);
+      return off === 1 ? 2 : 0;
+    });
+    return culledFaces(struct, baker, { minX: 1, minY: 1, minZ: 1, maxX: 1, maxY: 1, maxZ: 1 });
+  };
+
+  const stair = block("oak_stairs", { facing: "east", half: "bottom", shape: "straight" });
+  equal("a staircase in the open draws both its boxes whole", (await middleFaces(stair, false)).length, 12);
+  /*
+   * Walled in, what is left is the three surfaces that are *inside* the block:
+   * the tread, the riser, and the underside of the step. Every other face of
+   * both boxes lies on a side of the cell.
+   */
+  equal("...and walled in, only the three surfaces inside it", (await middleFaces(stair, true)).length, 3);
+
+  /*
+   * And the same in the other direction, which is the half `coversFace` had to
+   * learn: the wall behind a staircase loses the face it is hiding.
+   */
+  const beside = async (facing: string): Promise<number> => {
+    const air = block("air");
+    const stone = block("stone");
+    const stairs = block("oak_stairs", { facing, half: "bottom", shape: "straight" });
+    const struct = structureOf(2, 1, 1, [air, stairs, stone], (x) => (x === 0 ? 1 : 2));
+    const faces = await culledFaces(struct, baker, {
+      minX: 1,
+      minY: 0,
+      minZ: 0,
+      maxX: 1,
+      maxY: 0,
+      maxZ: 0,
+    });
+    return faces.filter((f) => f.normal[0] === -1).length;
+  };
+  equal("a wall behind a staircase loses the face it hides", await beside("east"), 0);
+  equal("...and keeps it where the staircase opens away", await beside("west"), 1);
+
+  /*
+   * **A flame is not culled, whatever it is standing against.** This is the
+   * whole reason the rule is vanilla's and not "the face is thin, drop it":
+   * a candle's flame and a campfire's are boxes in mid-air, and fire is a
+   * cross, so none of them lies on a side of the cell and none of them can
+   * carry a `cullFace`. Walled in on all six sides they come out identical.
+   */
+  const flamesOf = async (subject: PaletteEntry, walled: boolean): Promise<number> =>
+    (await middleFaces(subject, walled)).filter((f) =>
+      /flame|campfire_fire|fire_0/.test(f.textureKey),
+    ).length;
+  const litCandle = block("candle", { lit: "true", candles: "1" });
+  equal("a lit candle has a flame", await flamesOf(litCandle, false), 4);
+  equal("...and still has it walled in", await flamesOf(litCandle, true), 4);
+  const campfire = block("campfire", { lit: "true" });
+  equal("a campfire has its two crossed sheets", await flamesOf(campfire, false), 4);
+  equal("...and still has them walled in", await flamesOf(campfire, true), 4);
+  equal(
+    "and fire, being a cross, loses nothing at all",
+    (await middleFaces(block("fire"), true)).length,
+    (await middleFaces(block("fire"), false)).length,
+  );
+
+  /*
+   * The derivation itself, stated on the two faces of one slab: the underside
+   * lies on the cell's floor and the top does not lie on anything, so only one
+   * of them is ever a candidate.
+   */
+  const slabFaces = (await baker.bakeBlockstate(block("oak_slab", { type: "bottom" }))).extraFaces;
+  equal(
+    "a slab's underside is on the cell's own floor",
+    slabFaces.find((f) => f.normal[1] === -1)?.cullFace,
+    "down",
+  );
+  equal(
+    "...and its top is on nothing, being half way up",
+    slabFaces.find((f) => f.normal[1] === 1)?.cullFace,
+    undefined,
+  );
+  check(
+    "a cross quad lies on no side of its cell",
+    (await baker.bakeBlockstate(block("dandelion"))).extraFaces.every(
+      (f) => f.cullFace === undefined,
+    ),
+  );
+  /*
+   * And a tilted box gets none, because it lies on no plane at all.
+   *
+   * Said plainly: **this one cannot fail today**, and deleting the `rotation`
+   * guard in `bakeShape` fails nothing anywhere. Measured over all 1197 ids,
+   * no tilted box has a surviving face on a cell boundary -- a chain's planes
+   * run the full height of the cell but the two faces that would claim it are
+   * the degenerate ones `boxFaces` already drops. So the guard is what will be
+   * right the day somebody transcribes a leaning box flush to a wall, and this
+   * is a statement of the rule rather than a tripwire that has ever bitten.
+   */
+  check(
+    "nor does a tilted box, which lies on no plane at all",
+    (await baker.bakeBlockstate(block("wall_torch", { facing: "north" }))).extraFaces.every(
+      (f) => f.cullFace === undefined,
+    ),
+  );
 }
 
 // --- the blocks that were reported wrong ------------------------------------

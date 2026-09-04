@@ -202,6 +202,16 @@ export interface StructureData {
  * (same weak-typing gap as the source's numpy usage — accepted per the
  * StructureData.voxels TODO above, same underlying gap).
  */
+/**
+ * The six sides of a cell, as the mesher names them.
+ *
+ * Here rather than in `block_shapes.ts`, where it was, because `BakedFace`
+ * carries one: this file is the layer that file already imports, and a second
+ * copy of six names is how one of them comes to mean the other thing.
+ * `block_shapes.ts` re-exports it, so nothing that asked it there had to move.
+ */
+export type CellFace = "north" | "south" | "east" | "west" | "up" | "down";
+
 export interface BakedFace {
   /** Float32Array, length 12 (4 verts * 3 comps), row-major (x,y,z per vertex). */
   readonly positions: Float32Array;
@@ -235,6 +245,22 @@ export interface BakedFace {
    * chooses a void block.
    */
   readonly voidFill?: boolean;
+  /**
+   * The side of the cell this face lies on, when it lies on one.
+   *
+   * Vanilla's `cullface`, derived rather than transcribed: a box's face gets
+   * one when the face's own plane is exactly the cell boundary it points at.
+   * `culledFaces` then drops it if the neighbour on that side covers its whole
+   * face opaquely, which is the same question the six faces of a full cube
+   * have always been asked.
+   *
+   * Absent means "emit it whatever is next door", which is right for every
+   * surface *inside* a block -- a staircase's step, a fence's rails, the two
+   * quads of a cross, a candle's flame. A neighbour cannot cover those, and a
+   * rule that guessed would take the flame off a candle standing against a
+   * wall.
+   */
+  readonly cullFace?: CellFace;
 }
 
 /** Ported from `BakedFace.offset` (`types.py:83-89`). */
@@ -257,6 +283,10 @@ export function bakedFaceOffset(
     normal: face.normal,
     textureKey: face.textureKey,
     shade,
+    // Carried, though `culledFaces` has already asked it by the time a face
+    // is placed: a field that meant something on one side of this function
+    // and nothing on the other is a trap for whoever reads it next.
+    cullFace: face.cullFace,
   };
 }
 

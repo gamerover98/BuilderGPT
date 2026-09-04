@@ -32,7 +32,7 @@ import { PNG } from "pngjs";
 
 import { DEFAULT_BIOME_COLOR, DEFAULT_WATER_COLOR } from "../../shared/settings.js";
 import { shapeFor, type BlockShape, type BoxRotation, type UvWindow } from "./block_shapes.js";
-import type { BakedFace, PaletteEntry, RgbaImage } from "./types.js";
+import type { BakedFace, CellFace, PaletteEntry, RgbaImage } from "./types.js";
 import { paletteEntryCacheKey } from "./types.js";
 
 /**
@@ -549,6 +549,25 @@ function boxFaceGeometry(
 }
 
 const UNIT_BOX = [0, 0, 0, 1, 1, 1] as const;
+
+/**
+ * Where a box face has to lie for it to *be* the cell's face: which of the six
+ * scaled coordinates to read, and what it has to hold.
+ *
+ * This is vanilla's rule for when a model face carries `cullface`, derived
+ * rather than transcribed -- vanilla writes it out per face in the JSON, and
+ * it writes it on exactly the faces this arithmetic names. A box in the middle
+ * of the cell gets none, which is what keeps a candle's flame and a fence's
+ * rails on screen however they are surrounded.
+ */
+const CULL_BOUNDARY: Readonly<Record<CellFace, readonly [number, number]>> = {
+  west: [0, 0],
+  down: [1, 0],
+  north: [2, 0],
+  east: [3, 1],
+  up: [4, 1],
+  south: [5, 1],
+};
 
 /**
  * Textures Minecraft ships **greyscale** and tints at render time with the
@@ -1409,6 +1428,20 @@ export class ModelBaker {
       const all = ModelBaker.boxFaces(scaled, boxKey, boxFaceKeys, part.uv, part.uvRotation);
       for (const name of part.omit ?? []) {
         delete all[name];
+      }
+      /*
+       * A face lying on the cell's own boundary can be covered by whatever is
+       * next door, and says so. A tilted box gets nothing: a wall torch leans
+       * 22.5 degrees off the wall, so none of its faces is on any plane, and
+       * asking whether it is *nearly* there is a question with no right answer.
+       */
+      if (part.rotation === undefined) {
+        for (const [name, face] of Object.entries(all)) {
+          const at = CULL_BOUNDARY[name as CellFace];
+          if (at !== undefined && scaled[at[0]] === at[1]) {
+            all[name] = { ...face, cullFace: name as CellFace };
+          }
+        }
       }
       const built = Object.values(all);
       extraFaces.push(

@@ -84,17 +84,29 @@ function quad(
     (plane.origin[1] + plane.right[1] * u + plane.up[1] * v) / 16,
     (plane.origin[2] + plane.right[2] * u + plane.up[2] * v) / 16,
   ];
+  /*
+   * Top-left, top-right, bottom-right, bottom-left -- and the order is the
+   * whole of what decides which side of this quad is its front.
+   *
+   * It ran the other way round, from the bottom, which reads more naturally
+   * and is wrong: `buildMesh` winds a quad `[0, 2, 1, 0, 3, 2]`, so that order
+   * put the front of every line of text *behind* the board it is written on.
+   * Nothing showed it while the block material was double-sided, and nothing
+   * would have: the text was drawn, the right way up, in the right place.
+   * Single-sided it would have vanished from in front of the sign and come
+   * back mirrored from behind it.
+   */
   const corners = [
-    at(left, bottom),
-    at(left + size, bottom),
-    at(left + size, bottom + size),
     at(left, bottom + size),
+    at(left + size, bottom + size),
+    at(left + size, bottom),
+    at(left, bottom),
   ];
   return {
     positions: new Float32Array(corners.flat()),
     // The image's left at the reader's left and its top at the top, which is
     // what the corner order above already says; V=0 is the top of a tile.
-    uvs: new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]),
+    uvs: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]),
     normal: plane.normal as [number, number, number],
     textureKey,
     shade: glowing ? GLOWING : undefined,

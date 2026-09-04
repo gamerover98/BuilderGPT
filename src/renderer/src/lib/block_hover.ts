@@ -106,11 +106,17 @@ export function outlineCentre(cell: {
  * The hit normal, turned to face the ray that found it.
  *
  * `pickBlockAt` steps a hair *inwards* from the surface along `-normal`, and
- * that is right only for a face the ray struck from the front. The block
- * material is `DoubleSide` — it has to be, because a cross and every other
- * paper-thin element in the game is one quad seen from both sides — so a ray
- * can perfectly well arrive at a face's back, and there `-normal` points back
- * out along the line of sight instead of into the block.
+ * that is right only for a face the ray struck from the front. It was written
+ * when the block material was `DoubleSide`, where a ray could perfectly well
+ * arrive at a face's back and `-normal` then pointed back out along the line
+ * of sight instead of into the block.
+ *
+ * That material is `FrontSide` now, and `Mesh.raycast` honours it, so the
+ * hit this repairs can no longer be produced by the opaque layer. It stays,
+ * because the two layers that are still double-sided -- the water and the
+ * block standing in for empty space -- are raycast by nothing today and that
+ * is a fact about the call sites rather than about this rule. It costs one
+ * dot product and cannot change an answer that was already right.
  *
  * The azalea is where that shows. Vanilla's `template_azalea` states its lid as
  * a zero-thickness element at `y = 16` carrying **both** an `up` and a `down`

@@ -3426,10 +3426,28 @@ import { isTyping } from "./typing.js";
    * One instance rather than one per chunk: they are identical, and three.js
    * compiles a shader program per material.
    *
-   * `MASK`/0.5 and double-sided, matching what the glTF this replaced declared
-   * — cross-quads (flowers, grass) are single planes that must be lit and drawn
-   * from both faces, and cutout foliage needs a hard alpha test rather than
+   * `MASK`/0.5 because cutout foliage needs a hard alpha test rather than
    * blending, or leaves sort against each other.
+   *
+   * **`FrontSide`, so the build is invisible from inside it.** It was
+   * double-sided, on the reasoning that a cross-quad is a single plane that has
+   * to be seen from both directions -- which was true of the geometry and not
+   * of the material: `crossFaces` emits four quads now, two per plane, which is
+   * what vanilla's `cross.json` states anyway. Every other paper-thin element
+   * in the game is a box with two coincident faces and always had both.
+   *
+   * What it buys is fill rate. The back of every wall in a build is behind the
+   * front of it, so the fragments were shaded and then thrown away by the depth
+   * test; a single-sided material rejects them at the raster stage instead.
+   * It also reaches the picker for free -- `Mesh.raycast` honours
+   * `material.side`, so a ray can no longer come back holding the *back* of a
+   * face, which is the fault `facingNormal` exists to repair.
+   *
+   * The rule underneath it is `tests/blocks.ts`'s: every face's declared normal
+   * agrees with the winding `buildMesh` gives it. Single-sided, a face that
+   * disagrees is simply not drawn, and two of them disagreed.
+   *
+   * The other two materials below stay double-sided, each for its own reason.
    */
   function ensureMaterial(texture: THREE.Texture): THREE.MeshStandardMaterial {
     if (!material) {
@@ -3438,7 +3456,7 @@ import { isTyping } from "./typing.js";
         metalness: 0,
         roughness: 1,
         alphaTest: 0.5,
-        side: THREE.DoubleSide,
+        side: THREE.FrontSide,
         // The three channels main baked into every vertex: block light, sky
         // light, occlusion. Declared here so the attribute is bound; what is
         // done with it is the injection below, because three's own use of
@@ -3466,6 +3484,9 @@ import { isTyping } from "./typing.js";
    * So main splits each chunk's indices, this draws the tail of them, and the
    * two share one geometry. Three things about it are deliberate:
    *
+   * - **It stays `DoubleSide`, where the opaque material no longer is.** The
+   *   surface of a pond is seen from underneath in the game, and this is the
+   *   layer somebody swims in: a single-sided pond would have no ceiling.
    * - **`depthWrite` stays on.** Minecraft's water is a surface, not a fog;
    *   with depth writes a pond hides the sand under its far side exactly as it
    *   should, and the ordering artefacts left are between one water surface and
@@ -3513,6 +3534,9 @@ import { isTyping } from "./typing.js";
    *
    * Same `shadeWithBakedLight` as the other two, or the void would be the
    * one surface in the viewport that ignored the sun.
+   *
+   * `DoubleSide` for the reason the opaque material is not: the void is the
+   * medium the work happens *inside*, so its inside is the ordinary view.
    */
   function ensureVoidMaterial(texture: THREE.Texture): THREE.MeshStandardMaterial {
     if (!voidMaterial) {

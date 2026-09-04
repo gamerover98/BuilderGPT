@@ -113,6 +113,48 @@ function allVertices(baked: BakedBlock): Array<[number, number, number]> {
 
 console.log("=== Schematic AI Studio block geometry ===\n");
 
+/**
+ * The normal a face's winding produces, which is the one the GPU decides
+ * front from.
+ *
+ * `buildMesh` emits `[0, 2, 1, 0, 3, 2]`, so the first triangle is
+ * `(v0, v2, v1)` and its right-hand normal is `cross(v2 - v0, v1 - v0)`. The
+ * `normal` *attribute* beside it is a separate statement about the same quad,
+ * and nothing anywhere made the two agree.
+ */
+function windingNormal(face: BakedFace): [number, number, number] {
+  const at = (i: number) => [
+    face.positions[i * 3],
+    face.positions[i * 3 + 1],
+    face.positions[i * 3 + 2],
+  ];
+  const [a, b, c] = [at(0), at(1), at(2)];
+  const e1 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+  const e2 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  return [
+    e1[1] * e2[2] - e1[2] * e2[1],
+    e1[2] * e2[0] - e1[0] * e2[2],
+    e1[0] * e2[1] - e1[1] * e2[0],
+  ];
+}
+
+/**
+ * Whether a face's two normals point the same way.
+ *
+ * A dot product rather than an equality: a cross-quad's normal is diagonal and
+ * `tiltFace` turns a wall torch by 22.5 degrees, so neither is ever an axis
+ * vector. What is being refused is a face pointing the *other* way, which is a
+ * dot of -1 and cannot be mistaken for rounding.
+ */
+function windingAgrees(face: BakedFace): boolean {
+  const w = windingNormal(face);
+  const n = face.normal;
+  const lw = Math.hypot(w[0], w[1], w[2]);
+  const ln = Math.hypot(n[0], n[1], n[2]);
+  if (lw < 1e-9 || ln < 1e-9) return false;
+  return (w[0] * n[0] + w[1] * n[1] + w[2] * n[2]) / (lw * ln) > 0.99;
+}
+
 const pack = await findBundledResourcePack();
 const baker = await ModelBaker.create(null, pack);
 
@@ -629,8 +671,29 @@ console.log("\n--- shapes ---");
 }
 
 {
+  /*
+   * Four quads, not two: two crossed planes, each drawn from both sides.
+   *
+   * It was two, and read correctly only because the material was double-sided.
+   * `cross.json` states each element with a `north` face and a `south` face,
+   * which is the same four, and it is the spelling that survives the material
+   * becoming single-sided. Stated as opposite pairs rather than as a count,
+   * because four quads all facing the same way is also four.
+   */
   const flower = await baker.bakeBlockstate(block("peony", { half: "upper" }));
-  equal("a flower is two crossed quads", flower.extraFaces.length, 2);
+  equal("a flower is two crossed planes drawn from both sides", flower.extraFaces.length, 4);
+  const normals = flower.extraFaces.map((f) => f.normal);
+  check(
+    "...so every one of its quads has its opposite among them",
+    normals.every((n) =>
+      normals.some(
+        (other) =>
+          Math.abs(other[0] + n[0]) < 1e-6 &&
+          Math.abs(other[1] + n[1]) < 1e-6 &&
+          Math.abs(other[2] + n[2]) < 1e-6,
+      ),
+    ),
+  );
   check("a flower is never a full cube", !flower.isFullCube);
 }
 
@@ -1035,6 +1098,7 @@ if (pack === null) {
   const unresolved: string[] = [];
   const offTile: string[] = [];
   const invisible: string[] = [];
+  const backwards: string[] = [];
   for (const id of ids) {
     const entry: PaletteEntry = { namespacedName: id, properties: {} };
     // Air is every empty cell in the document and is never drawn; it has no
@@ -1050,6 +1114,9 @@ if (pack === null) {
     }
     if (all.length > 0 && !all.some(facePaintsSomething)) {
       invisible.push(id.replace("minecraft:", ""));
+    }
+    if (!all.every(windingAgrees)) {
+      backwards.push(id.replace("minecraft:", ""));
     }
   }
   check(
@@ -1093,6 +1160,27 @@ if (pack === null) {
     invisible.length === 0
       ? undefined
       : `${invisible.length} are invisible: ${invisible.join(" ")}`,
+  );
+  /*
+   * ...and every face agrees with itself about which way it points.
+   *
+   * This is what makes the block material safe to be `FrontSide`, and it is
+   * the only thing that does: single-sided, a face whose winding disagrees
+   * with its declared normal is simply not drawn, and no other check in this
+   * file can see the difference -- the geometry is in the right place, the
+   * texture resolves, the uvs are inside the tile.
+   *
+   * It was false for 85 of the 1197 when it was written: every `cross` shape,
+   * because `crossFaces` declared the opposite of what it wound. Double-sided
+   * that was invisible twice over -- the quad was drawn either way, and the
+   * shader flips the normal per side, so even the lighting came out right.
+   */
+  check(
+    "...and every face's winding agrees with the normal it declares",
+    backwards.length === 0,
+    backwards.length === 0
+      ? undefined
+      : `${backwards.length} are wound backwards: ${backwards.join(" ")}`,
   );
 }
 
@@ -2002,6 +2090,24 @@ if (pack === null) {
   const plain = await meshSign("oak_sign", { rotation: "0" }, textOf(["Ciao"]));
   check("a sign with nothing on it still draws its board", plain.board.length > 0);
   equal("...and one quad per letter", plain.glyphs.length, 4);
+  /*
+   * ...and every one of them is wound the way it says it is.
+   *
+   * The 1197-id walk above cannot reach these: `bakeBlockstate` never
+   * produces them, because what a sign says is a fact about a *position*.
+   * So the one place in the pipeline the general check does not cover is
+   * stated here, and it is the place that was wrong -- `sign_faces.ts` built
+   * its corners from the bottom up, which put the front of every line of text
+   * behind the board. Double-sided nothing showed it; single-sided the words
+   * would have gone missing from in front of every sign in the world.
+   */
+  check(
+    "...each wound the way its normal says",
+    plain.glyphs.every(windingAgrees),
+    plain.glyphs
+      .map((f) => `${f.normal.join()} vs ${windingNormal(f).join()}`)
+      .join(" | "),
+  );
 
   // A space takes room and draws nothing, exactly as the font has it: an empty
   // glyph with an advance. Counting quads is what tells the two apart.

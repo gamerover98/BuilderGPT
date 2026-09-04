@@ -3865,13 +3865,17 @@ knowing:
   way the ray came.** Vanilla's `template_azalea` states its lid as a
   zero-thickness element at `y = 16` carrying **both** an `up` and a `down`
   face, so half of the block's top surface points into the cell above. The block
-  material is `DoubleSide` — it has to be, for crosses — so the raycaster can
+  material **was** `DoubleSide` — for crosses, it was thought, and it is
+  `FrontSide` now — so the raycaster could
   return either, and on the `down` one `pickBlockAt`'s step along `-normal`
   landed one cell up: the outline drew around air, breaking it did nothing, and
   placing went a cell too high. Reported as "placing an azalea leaves an air
   block above it that cannot be removed". `facingNormal` in `block_hover.ts`
   turns the normal to face the ray first; a front hit is returned unchanged, so
-  it cannot alter an answer that was already right.
+  it cannot alter an answer that was already right. It stays after the material
+  went single-sided, because the two layers that are still double-sided are
+  raycast by nothing *today*, which is a fact about the call sites rather than
+  about the rule.
 - **Which way round a texture goes is vanilla's rule, not this app's, and it
   was the mirror of it on all six faces.** `boxFaceGeometry` now reproduces
   `BlockElement.uvsByFace` — `u = 16 - x` on north, `x` on south, `z` on west,
@@ -4185,6 +4189,49 @@ not a fog, so a pond hides the sand under its far side), drops **`alphaTest`**
 (a blended pass that discarded at 0.5 would throw away the pixels it exists to
 draw), and gets **the same `shadeWithBakedLight` injection**, or water would be
 the one surface in the build that ignored the sun and the torches.
+
+**The build is invisible from inside it, and the block material was**
+**`DoubleSide` for a reason that was never true of the material.** The comment
+said what everyone would say: a cross-quad is a single plane and has to be seen
+from both directions. That is a fact about *geometry*, and the answer to it is
+geometry -- vanilla's `cross.json` states each of its two elements with a
+`north` face **and** a `south` face, which is four quads, where `crossFaces`
+emitted two. Every other paper-thin element in the game is a box with `from`
+and `to` equal on one axis, and `boxFaces` has always given one of those the
+two real faces out of the six.
+
+So the opaque material is `FrontSide` and the geometry says what it always
+should have. What it buys is fill rate rather than triangles: the far face of
+every wall in a build was shaded and then thrown away by the depth test, and
+single-sided it is rejected at the raster stage instead. It reaches the picker
+for free -- `Mesh.raycast` honours `material.side`, so a ray can no longer come
+back holding the *back* of a face, which is the whole of what `facingNormal`
+exists to repair.
+
+**Two of the three materials stay double-sided, and neither is timidity.**
+Water is a surface seen from underneath -- a pond you swim in has a ceiling,
+and vanilla draws it -- and the void block is the medium the work happens
+*inside*, so its inside is the ordinary view. `tests/ui.ts` states all three,
+because "the one that changed" and "the two that did not" are the same
+decision and a later reader would otherwise read the pair as an oversight.
+
+**What makes it safe is one check: a face's winding agrees with the normal it
+declares.** `buildMesh` winds `[0, 2, 1, 0, 3, 2]` and the `normal` attribute
+is a *separate* statement about the same quad; nothing anywhere made the two
+agree, and double-sided nothing ever had to -- the quad is drawn either way,
+and three flips the normal per side in the shader, so even the lighting came
+out right. Single-sided, a face that disagrees is simply **not drawn**, and no
+other check in `tests/blocks.ts` can see the difference: the geometry is in the
+right place, the texture resolves, the uvs are inside the tile.
+
+It was false in exactly two places, and the walk over all 1197 ids found the
+first: **85 of them**, which is every `cross` shape, because `crossFaces`
+declared the opposite of what it wound. The second the walk cannot reach --
+`bakeBlockstate` never produces it -- and it is the one that would have been
+reported: **a sign's text was wound backwards**, so the words would have gone
+missing from in front of every sign in the world and come back mirrored from
+behind it. `sign_faces.ts` built its corners from the bottom up, which reads
+more naturally and is the wrong way round.
 
 **A fluid stands as tall as its `level`, and used to fill its cell.** Vanilla's
 rule is `(8 - level) / 9` for 0..7 and a full cell for 8 and above, which is

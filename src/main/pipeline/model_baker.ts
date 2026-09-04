@@ -690,6 +690,38 @@ function firstAnimationFrame(image: RgbaImage): RgbaImage {
  * box bounds — it has to move the vertices. Normals are rotated with them, or
  * a leaning wall torch would be lit as though it stood upright.
  */
+/**
+ * The same quad seen from behind: the four vertices in reverse order, and the
+ * normal negated to match.
+ *
+ * Reversing the order is what reverses the winding, and `buildMesh` decides
+ * which side of a triangle is its front from the winding alone. Each uv pair
+ * travels with its own vertex, so the picture is the same picture -- mirrored,
+ * because that is what looking at it from the other side does.
+ *
+ * Only the cross needs it. Every other paper-thin element in the game is a box
+ * with `from` and `to` equal on one axis, and `boxFaces` already gives one of
+ * those the two real faces of the six.
+ */
+function reversedFace(face: BakedFace): BakedFace {
+  const positions = new Float32Array(12);
+  const uvs = new Float32Array(8);
+  for (let v = 0; v < 4; v += 1) {
+    const from = 3 - v;
+    positions[v * 3] = face.positions[from * 3];
+    positions[v * 3 + 1] = face.positions[from * 3 + 1];
+    positions[v * 3 + 2] = face.positions[from * 3 + 2];
+    uvs[v * 2] = face.uvs[from * 2];
+    uvs[v * 2 + 1] = face.uvs[from * 2 + 1];
+  }
+  return {
+    ...face,
+    positions,
+    uvs,
+    normal: [-face.normal[0], -face.normal[1], -face.normal[2]],
+  };
+}
+
 function tiltFace(face: BakedFace, rotation: BoxRotation): BakedFace {
   const radians = (rotation.angle * Math.PI) / 180;
   const cos = Math.cos(radians);
@@ -1387,27 +1419,45 @@ export class ModelBaker {
   }
 
   /**
-   * Two diagonal quads, vanilla's shape for flowers, grass and saplings. They
-   * are drawn from both sides — the glTF material is `doubleSided` — so a
-   * flower is not invisible from half the compass.
+   * Two diagonal planes, vanilla's shape for flowers, grass and saplings --
+   * and **four** quads, because each plane is drawn from both sides.
+   *
+   * It used to be two, on the strength of the material being double-sided.
+   * That is not what vanilla says: `cross.json` states each element with a
+   * `north` face *and* a `south` face, which is two quads per plane, and it is
+   * the only spelling that survives the block material becoming single-sided.
+   * Written the other way a flower is invisible from half the compass, which
+   * is exactly what the old comment was afraid of.
+   *
+   * The back is the front with its vertices reversed, so the picture comes out
+   * mirrored -- which is again vanilla's answer, since its `north` and `south`
+   * faces of one element wear the same window read from opposite corners.
    */
   private static crossFaces(textureKey: string): BakedFace[] {
     const s = Math.SQRT1_2;
     const uvs = new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]);
-    return [
+    /*
+     * The normals are the ones the winding actually produces, not their
+     * opposites, and they were their opposites for as long as nothing looked.
+     * A double-sided material flips the normal per side in the shader, so the
+     * sign never showed; single-sided, a quad whose declared normal points
+     * away from its visible face is lit by the sun that is behind it.
+     */
+    const front: BakedFace[] = [
       {
         positions: new Float32Array([0, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0]),
         uvs: uvs.slice(),
-        normal: [-s, 0, s],
+        normal: [s, 0, -s],
         textureKey,
       },
       {
         positions: new Float32Array([1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 0]),
         uvs: uvs.slice(),
-        normal: [-s, 0, -s],
+        normal: [s, 0, s],
         textureKey,
       },
     ];
+    return [...front, ...front.map(reversedFace)];
   }
 
   private async hashedColorCube(entry: PaletteEntry, shape: BlockShape): Promise<BakedBlock> {

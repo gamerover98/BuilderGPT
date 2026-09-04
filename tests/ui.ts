@@ -2142,6 +2142,39 @@ console.log("\n--- compass ---");
   check("...it is a scissored pass over the one there is", viewerSource.includes("setScissorTest(true)"));
 }
 
+// --- invisible from the inside ----------------------------------------------
+//
+// The block mesh is drawn front-side only, so a wall's far face is rejected at
+// the raster stage instead of being shaded and then thrown away by the depth
+// test. What makes that safe is `tests/blocks.ts`: every face's winding agrees
+// with the normal it declares. What makes it *narrow* is here -- the other two
+// layers stay double-sided, and each has a reason a screenshot would not give
+// back.
+//
+// Source, because a material is a fact about a renderer this harness has no
+// frames from.
+console.log("\n--- invisible from the inside ---");
+{
+  const viewer = readFileSync(path.join(RENDERER, "lib", "Viewer.svelte"), "utf8");
+  const between = (from: string, to: string): string =>
+    viewer.slice(viewer.indexOf(from), viewer.indexOf(to));
+
+  const opaque = between("function ensureMaterial", "function ensureBlendedMaterial");
+  check("there is an opaque block material to check", opaque.length > 0);
+  check("the block mesh is drawn front-side only", opaque.includes("side: THREE.FrontSide"));
+
+  /*
+   * Water is the surface of a pond seen from underneath, which is a place a
+   * person in this app actually stands: single-sided it would have no ceiling.
+   * The void block is the medium the work happens *inside*, so its inside is
+   * the ordinary view. Neither is an oversight, so both are stated.
+   */
+  const water = between("function ensureBlendedMaterial", "function ensureVoidMaterial");
+  const empty = between("function ensureVoidMaterial", "function shadeWithBakedLight");
+  check("...the water is not, because a pond has an underside", water.includes("side: THREE.DoubleSide"));
+  check("...nor is the void, which is stood inside", empty.includes("side: THREE.DoubleSide"));
+}
+
 // --- the schematic's own box -------------------------------------------------
 //
 // The build inside a document is not its edge: empty room at the top of a box

@@ -3757,9 +3757,9 @@ knowing:
   by reading the `.mcmeta`.
 - **Chests have no block model at all**, and are drawn from
   `textures/entity/…` with a `ModelPart` cube unwrap; `unwrapCube` in
-  `block_shapes.ts` reproduces that layout. Banners and shulker boxes stay on
-  a dyed-wool stand-in — their sheets need layer composition this code does not
-  do.
+  `block_shapes.ts` reproduces that layout. Shulker boxes stay on a dyed-wool
+  stand-in — their sheet is laid out for an animated lid — and a banner's
+  *patterns* stay uncomposed, though its cloth is no longer wool.
 - **`unwrapCube` needs the sheet's width, and it used to assume 64.** Its
   windows are stated in the *sheet's* texels while `UvWindow` is in sixteenths
   of the tile, so the two only agree once the size is known. Right for every
@@ -3892,6 +3892,63 @@ knowing:
   The finished ramp reaches a pixel **above** its own cell, exactly as
   vanilla's does. That is the first geometry in this file to leave the block
   it belongs to.
+- **A colour that varies with the *state* needs a texture key of its own.**
+  The tint in `ensureTextureCached` is keyed on the texture path and its
+  colour is a constant of the baker, which is exactly right for grass and
+  water -- every leaf in a document takes the same biome -- and cannot
+  express a banner's cloth in sixteen colours or redstone dust at sixteen
+  powers. Neither is a second `BIOME_TINTED` row.
+
+  The way round it already existed, for the glyphs: mint a synthetic key and
+  write the multiplied pixels into the cache under it. `resolveBoxTexture`
+  spells it `<path>#rrggbb`, so a shape function can ask for one and nothing
+  else has to know -- the atlas packs whatever is in `textures`.
+
+  An **animated** source is handed back untinted rather than half-done:
+  `animationCache` is keyed on the texture too, so a tinted copy would need
+  its frames tinted as well, and today nothing asks. `tests/blocks.ts` checks
+  the suffix is a colour `parseHexColor` accepts, because a malformed one is
+  refused nowhere -- it falls back to the biome green, so a typo in a dye
+  would come out the colour of grass with nothing saying why.
+- **A banner is a block entity with three parts, and it was a slab of dyed
+  wool.** `entity/banner/banner_base.png` measurably carries all three: the
+  flag's unwrap runs u 0..42 by v 0..41, the pole's u 44..52 by v 0..44 and
+  the bar's u 0..44 by v 42..46, which is `unwrapCube` evaluated for a
+  20x40x1 at (0,0), a 2x42x2 at (44,0) and a 20x2x2 at (0,42). Nothing else
+  produces that layout, which is the bell's argument.
+
+  A banner *standing* has no `facing` at all, so `facingSteps` fell back to
+  east and all sixteen rotations came out flat against the west wall. It
+  turns by sixteenths now, through a `BoxRotation`, for the head's reason.
+
+  Vanilla renders the model at **two thirds**, which is what makes a banner
+  two blocks tall out of a 42-unit pole, and its two translations happen
+  *before* that scale -- so they are whole blocks and the scale does not
+  touch them. Getting that wrong moves the cloth by a fifth of a block and
+  looks like nothing in particular.
+- **The cloth hangs out of its own cell, and that is the block rather than a
+  liberty.** A standing banner reaches three quarters of a block *above* its
+  cell; a wall banner's cloth ends thirteen units *below* the floor of its
+  own. That is what makes one read as two blocks tall while its hitbox is
+  one.
+
+  It has a consequence worth knowing before it is reported: `pickBlockAt`
+  derives the cell from where the ray hit, so **a click on the lower half of
+  a wall banner's cloth selects the empty cell underneath it**. Minecraft
+  behaves the same way -- there is no hitbox down there either -- but the
+  outline this app draws round that cell is its own, and it is the same class
+  as the azalea's `down` face above.
+- **The pole's south face is omitted, and the bar's costs nothing.** Vanilla
+  puts the flag's back and the pole's front on the same plane, and two
+  coincident faces z-fight -- here that would be a flickering stripe up the
+  back of every banner in the build. What omitting it costs is the couple of
+  units below the cloth's hem, seen from due south. The bar's south face is
+  *entirely* behind the cloth, so that one is free.
+- **The patterns are still not composed, and a plain banner is not a
+  stand-in for one.** They are a stack of layers in the block entity's NBT
+  and that is a different job; what changed is that the base colour is no
+  longer a lump of wool. Shulker boxes keep the wool, because their sheet is
+  still laid out for an animated lid.
 - **A cauldron was a solid block of iron, so its `level` was not merely
   unread -- it was unreadable.** The shape was a 16x16x16 box wearing the
   pot's own textures, with no bowl, no floor and no inside, so a liquid drawn

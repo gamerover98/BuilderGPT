@@ -1058,9 +1058,15 @@ if (pack === null) {
     // app still offers both spellings.
     [block("chain", {}), "minecraft:block/iron_chain"],
     [block("iron_chain", {}), "minecraft:block/iron_chain"],
-    // No usable sheet: a banner is a base plus pattern layers this code cannot
-    // compose, so the dyed wool is the deliberate stand-in.
-    [block("red_wall_banner", { facing: "north" }), "minecraft:block/red_wool"],
+    /*
+     * A banner's pole and crossbar are the two parts of it that are not dyed,
+     * so the block's own texture is the sheet they are on; the cloth names
+     * its own, tinted, per box. Only the *patterns* are still not composed.
+     */
+    [block("red_wall_banner", { facing: "north" }), "minecraft:entity/banner/banner_base"],
+    // A shulker box's sheet is still laid out for an animated lid, so the
+    // dyed wool stays the stand-in there.
+    [block("red_shulker_box"), "minecraft:block/red_wool"],
   ];
   for (const [entry, expected] of expectations) {
     const baked = await baker.bakeBlockstate(entry);
@@ -1312,7 +1318,20 @@ if (pack === null) {
       if (entry.texture !== undefined) overrides.add(entry.texture);
     }
   }
-  const missingOverrides = [...overrides].filter((name) => !inPack(name));
+  /*
+   * A `#rrggbb` suffix is `resolveBoxTexture`'s spelling for "this texture
+   * multiplied by this colour", so the file to look for is the half in front
+   * of it. The colour is checked too, and separately: a malformed one is not
+   * refused anywhere -- `parseHexColor` falls back to the biome green -- so a
+   * banner with a typo in its dye would come out the colour of grass with
+   * nothing anywhere saying why.
+   */
+  const badTint = [...overrides].filter((name) => {
+    const hex = name.split("#")[1];
+    return hex !== undefined && !/^[0-9a-f]{6}$/.test(hex);
+  });
+  equal("every box tint is a colour parseHexColor accepts", badTint, []);
+  const missingOverrides = [...overrides].filter((name) => !inPack(name.split("#")[0]));
   check(
     `every box texture override is shipped (${overrides.size} checked)`,
     missingOverrides.length === 0,
@@ -2406,6 +2425,143 @@ if (pack === null) {
     "a wall head looks out of the wall wearing its face",
     hungFront !== undefined && sheetRect(hungFront, 64, 32).join() === "8,8,16,16",
     hungFront === undefined ? "no north face" : sheetRect(hungFront, 64, 32).join(),
+  );
+}
+
+// --- a banner is two blocks of cloth ----------------------------------------
+//
+// It was a 2-thick slab of dyed wool filling the whole cell. A banner standing
+// on the ground has no `facing` at all, so `facingSteps` fell back to east and
+// every one of the sixteen rotations came out flat against the west wall.
+console.log("\n--- a banner is two blocks of cloth ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const bannerFaces = async (name: string, props: Record<string, string>): Promise<BakedFace[]> => {
+    const baked = await baker.bakeBlockstate(block(name, props));
+    return [...Object.values(baked.faces), ...baked.extraFaces];
+  };
+  const span = (faces: BakedFace[], axis: number): [number, number] => {
+    const at = faces.flatMap((f) => [0, 3, 6, 9].map((i) => f.positions[i + axis]));
+    return [Math.min(...at), Math.max(...at)];
+  };
+
+  /*
+   * Three parts, and the sheet says so: the flag's unwrap runs u 0..42 by
+   * v 0..41, the pole's u 44..52 by v 0..44 and the bar's u 0..44 by v 42..46,
+   * which is `unwrapCube` evaluated for a 20x40x1 at (0,0), a 2x42x2 at (44,0)
+   * and a 20x2x2 at (0,42). Nothing else produces that layout.
+   */
+  const standing = await bannerFaces("white_banner", { rotation: "0" });
+  check("a standing banner is a pole, a bar and cloth", standing.length === 16, String(standing.length));
+
+  /*
+   * And it is taller than its own cell, by three quarters of a block. That is
+   * the block rather than a liberty: vanilla's pole is 42 units rendered at two
+   * thirds, which is 28, with the bar on top of it.
+   */
+  const tall = span(standing, 1);
+  equal("...standing on the floor of its cell", Math.round(tall[0] * 16), 0);
+  check("...and reaching well above it", tall[1] > 1.8 && tall[1] < 1.9, String(tall[1]));
+
+  /*
+   * Sixteen positions, like a head and for the same reason: a banner has a
+   * front. Before this every one of them was the same slab.
+   */
+  const turns = new Set<string>();
+  for (let rotation = 0; rotation < 16; rotation += 1) {
+    const faces = await bannerFaces("white_banner", { rotation: String(rotation) });
+    turns.add(faces.map((f) => f.positions.join()).join("|"));
+  }
+  equal("all sixteen rotations are different", turns.size, 16);
+
+  /*
+   * A wall banner has no pole -- vanilla hides it -- and **hangs into the cell
+   * below**, which is the whole of what makes it read as two blocks tall while
+   * its hitbox is one.
+   *
+   * It has a consequence worth stating rather than discovering: `pickBlockAt`
+   * derives the cell from where the ray hit, so a click on the lower half of
+   * the cloth selects the empty cell underneath. Minecraft does the same --
+   * there is no hitbox down there either -- but the outline round that cell is
+   * this app's own.
+   */
+  const hung = await bannerFaces("red_wall_banner", { facing: "south" });
+  check("a wall banner drops its pole", hung.length === 11, String(hung.length));
+  const hangs = span(hung, 1);
+  check("...and hangs into the cell below it", hangs[0] < -0.8 && hangs[0] > -0.9, String(hangs[0]));
+  check("...from just under the top of its own", hangs[1] > 0.8 && hangs[1] < 0.9, String(hangs[1]));
+
+  /*
+   * On the face opposite the one it looks out of, which is `againstWall`'s rule
+   * arrived at from vanilla's own `facing=south` shape.
+   */
+  const wallOf = async (facing: string): Promise<string> => {
+    const faces = await bannerFaces("red_wall_banner", { facing });
+    const [minX, maxX] = span(faces, 0);
+    const [minZ, maxZ] = span(faces, 2);
+    if (maxZ < 0.5) return "north wall";
+    if (minZ > 0.5) return "south wall";
+    return maxX < 0.5 ? "west wall" : "east wall";
+  };
+  equal("a south-facing wall banner is on the north wall", await wallOf("south"), "north wall");
+  equal("...a north-facing one on the south wall", await wallOf("north"), "south wall");
+  equal("...an east-facing one on the west wall", await wallOf("east"), "west wall");
+  equal("...and a west-facing one on the east wall", await wallOf("west"), "east wall");
+
+  /*
+   * The colour. The baker's own tint is keyed on the texture path and is one
+   * constant per document, so it cannot express a colour that varies with the
+   * *state*; the cloth names a synthetic key instead, which is the mechanism
+   * the glyphs already used.
+   */
+  const clothKey = async (name: string): Promise<string> => {
+    const faces = await bannerFaces(name, { rotation: "0" });
+    return faces.map((f) => f.textureKey).find((k) => k.includes("banner/base")) ?? "none";
+  };
+  equal("a red banner's cloth is the base tinted red", await clothKey("red_banner"), "minecraft:entity/banner/base#b02e26");
+  const dyes = new Set<string>();
+  for (const colour of [
+    "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
+    "light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black",
+  ]) {
+    dyes.add(await clothKey(`${colour}_banner`));
+  }
+  equal("...and all sixteen are different colours", dyes.size, 16);
+
+  /*
+   * And the tint is real pixels rather than a name: the base sheet is white, so
+   * a red banner's tile has to come out red. Without this the key could be
+   * minted, put in the atlas and never multiplied by anything.
+   */
+  const white = baker.textures["minecraft:entity/banner/base"];
+  const red = baker.textures["minecraft:entity/banner/base#b02e26"];
+  check("the tinted tile is in the atlas at all", red !== undefined);
+  if (white !== undefined && red !== undefined) {
+    const mean = (image: { data: Uint8Array }, channel: number): number => {
+      let total = 0;
+      let n = 0;
+      for (let i = 0; i < image.data.length; i += 4) {
+        if (image.data[i + 3] === 0) continue;
+        total += image.data[i + channel];
+        n += 1;
+      }
+      return n === 0 ? 0 : total / n;
+    };
+    check("the base sheet is white", mean(white, 0) > 200 && mean(white, 2) > 200);
+    check(
+      "...and the red one is red",
+      mean(red, 0) > 2 * mean(red, 1) && mean(red, 0) > 2 * mean(red, 2),
+      `${mean(red, 0).toFixed(0)},${mean(red, 1).toFixed(0)},${mean(red, 2).toFixed(0)}`,
+    );
+  }
+
+  // The pole and the bar are the two parts a banner does not dye, so they wear
+  // the sheet they are on, untinted.
+  check(
+    "the pole and the bar are not dyed",
+    standing.some((f) => f.textureKey === "minecraft:entity/banner/banner_base"),
+    [...new Set(standing.map((f) => f.textureKey))].join(" "),
   );
 }
 

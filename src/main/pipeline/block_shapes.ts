@@ -1124,6 +1124,188 @@ function cauldron(entry: PaletteEntry): BlockShape {
   return boxes(...CAULDRON_POT, ...(content === null ? [] : [content]));
 }
 
+// --- banners ------------------------------------------------------------------
+//
+// A banner has no block model: `blockstates/white_wall_banner.json` names
+// `block/banner`, which holds a particle texture and nothing else. It is a
+// block entity with three parts, and `entity/banner/banner_base.png`
+// measurably carries all three -- the flag's unwrap runs u 0..42 by v 0..41,
+// the pole's u 44..52 by v 0..44 and the bar's u 0..44 by v 42..46, which is
+// `unwrapCube` evaluated for a 20x40x1 at (0,0), a 2x42x2 at (44,0) and a
+// 20x2x2 at (0,42). Nothing else produces that layout, which is the bell's
+// argument.
+//
+// It was a 2-thick slab of dyed wool filling the whole cell -- and a banner
+// *standing* has no `facing`, so `facingSteps` fell back to east and every
+// one of the sixteen rotations came out flat against the west wall.
+
+/**
+ * Vanilla renders the model at **two thirds**, which is what makes a banner
+ * two blocks tall out of a 42-unit pole. Every coordinate below is a model
+ * unit already multiplied by it, so they are thirds rather than integers.
+ */
+const BANNER_SCALE = 2 / 3;
+const bannerUnits = (n: number): number => n * BANNER_SCALE;
+
+/** The three parts' windows on the sheet, in the sheet's own texels. */
+const BANNER_CLOTH_UV = unwrapCube(0, 0, 20, 40, 1);
+const BANNER_POLE_UV = unwrapCube(44, 0, 2, 42, 2);
+const BANNER_BAR_UV = unwrapCube(0, 42, 20, 2, 2);
+
+/**
+ * Vanilla's `DyeColor.textureDiffuseColor`, which is what the base layer is
+ * multiplied by.
+ *
+ * Corroborated against the pack rather than trusted: every one of the sixteen
+ * is within 35 of the mean of its own `<colour>_wool` texture, and every one
+ * of those means is the same hue a shade darker -- which is what a wool
+ * texture is. A transposed pair would show up as two colours swapping places,
+ * not as a uniform offset.
+ */
+const DYE_COLOURS: Readonly<Record<string, string>> = {
+  white: "f9fffe",
+  orange: "f9801d",
+  magenta: "c74ebd",
+  light_blue: "3ab3da",
+  yellow: "fed83d",
+  lime: "80c71f",
+  pink: "f38baa",
+  gray: "474f52",
+  light_gray: "9d9d97",
+  cyan: "169c9c",
+  purple: "8932b8",
+  blue: "3c44aa",
+  brown: "835432",
+  green: "5e7c16",
+  red: "b02e26",
+  black: "1d1d21",
+};
+
+/**
+ * The cloth's texture: the base layer, tinted by the block's own dye.
+ *
+ * `#rrggbb` is `resolveBoxTexture`'s spelling for "this texture multiplied by
+ * this colour", which is how a colour that varies with the **state** is
+ * expressed at all -- the baker's own tint is keyed on the texture path and
+ * is one constant per document.
+ *
+ * A colour the table does not know falls back to the untinted base, which is
+ * white: the same answer as before the tint existed, rather than a guess.
+ */
+function bannerCloth(entry: PaletteEntry): string {
+  const dye = DYE_COLOURS[baseName(entry).replace(/_(?:wall_)?banner$/, "")];
+  return dye === undefined ? "entity/banner/base" : `entity/banner/base#${dye}`;
+}
+
+const BANNER_CLOTH_HEIGHT = bannerUnits(40);
+
+/**
+ * A banner on the ground: a pole from the floor, a crossbar across its top,
+ * and the cloth hanging from the bar.
+ *
+ * **It is taller than its own cell**, by three quarters of a block, and that
+ * is the block rather than this file: vanilla's pole is 42 units at two
+ * thirds, which is 28, and the bar sits on top of that. The first geometry
+ * here to leave its cell upwards.
+ *
+ * Sixteen positions through `rotation`, as a `BoxRotation` and for the head's
+ * reason: a banner has a front. `-22.5` and no offset, because the cloth is
+ * authored on the **south** side of the pole and vanilla's `RotationSegment`
+ * puts south at `rotation=0` -- the same convention `signRotation` writes.
+ */
+function standingBanner(entry: PaletteEntry): BlockShape {
+  const sixteenths = Number(entry.properties.rotation);
+  const angle = -22.5 * (Number.isFinite(sixteenths) ? sixteenths : 0);
+  const poleTop = bannerUnits(42);
+  const barTop = poleTop + bannerUnits(2);
+  const spin: BoxRotation = { origin: [8, 8, 8], axis: "y", angle };
+  const half = bannerUnits(1);
+  const wide = bannerUnits(10);
+  return boxes(
+    /*
+     * The pole's south face is coplanar with the cloth's north face, in
+     * vanilla as here -- the flag runs to z = -1 in model space and the pole
+     * starts there. Two coincident faces z-fight, and this pair would do it
+     * up the whole back of every banner in the build. What omitting it costs
+     * is the strip below the cloth's hem, a couple of units at the foot of
+     * the pole seen from due south; that is the cheaper of the two.
+     */
+    {
+      box: [8 - half, 0, 8 - half, 8 + half, poleTop, 8 + half],
+      uv: BANNER_POLE_UV,
+      rotation: spin,
+      omit: ["south"],
+    },
+    // The bar's south face is *entirely* behind the cloth, so this one costs
+    // nothing at all.
+    {
+      box: [8 - wide, poleTop, 8 - half, 8 + wide, barTop, 8 + half],
+      uv: BANNER_BAR_UV,
+      rotation: spin,
+      omit: ["south"],
+    },
+    {
+      box: [8 - wide, barTop - BANNER_CLOTH_HEIGHT, 8 + half, 8 + wide, barTop, 8 + half + bannerUnits(1)],
+      texture: bannerCloth(entry),
+      uv: BANNER_CLOTH_UV,
+      rotation: spin,
+    },
+  );
+}
+
+/**
+ * A banner on a wall: no pole, and the cloth **hangs into the cell below**.
+ *
+ * That is the block, not a liberty taken here. Vanilla drops the whole model
+ * by 0.479 of a block before drawing it, so the cloth ends 13 units under the
+ * floor of its own cell -- which is why a wall banner reads as two blocks
+ * tall while its hitbox is one, and it is what somebody asking for a wall
+ * banner is asking for.
+ *
+ * It has a consequence worth knowing before it is reported: `pickBlockAt`
+ * derives the cell from the point the ray hit, so **a click on the lower half
+ * of the cloth selects the empty cell underneath it**. Minecraft does the
+ * same -- there is no hitbox down there either -- but the outline drawn round
+ * that cell is this app's own.
+ *
+ * `southFacingSteps`, because the box below is vanilla's `facing=south` case:
+ * the cloth against the *north* wall, on the face opposite the one it looks
+ * out of.
+ */
+function wallBanner(entry: PaletteEntry): BlockShape {
+  const half = bannerUnits(1);
+  const wide = bannerUnits(10);
+  // The model's origin after vanilla's two translations, in model units.
+  // Vanilla's two translations happen *before* the scale, so they are whole
+  // blocks rather than model units and `BANNER_SCALE` does not touch them.
+  const originY = -(1 / 6 + 0.3125) * 16;
+  const originZ = 16 * (0.5 - 0.4375);
+  const barTop = originY + bannerUnits(32);
+  return transform(
+    [
+      {
+        box: [8 - wide, barTop - bannerUnits(2), originZ - half, 8 + wide, barTop, originZ + half],
+        uv: BANNER_BAR_UV,
+        omit: ["south"],
+      },
+      {
+        box: [
+          8 - wide,
+          barTop - BANNER_CLOTH_HEIGHT,
+          originZ + half,
+          8 + wide,
+          barTop,
+          originZ + half + bannerUnits(1),
+        ],
+        texture: bannerCloth(entry),
+        uv: BANNER_CLOTH_UV,
+      },
+    ],
+    southFacingSteps(entry),
+    false,
+  );
+}
+
 /** Suffix-matched families, checked after the exact-name table. */
 const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => BlockShape]> = [
   ["_slab", slab],
@@ -1147,7 +1329,8 @@ const SUFFIX_SHAPES: ReadonlyArray<readonly [string, (entry: PaletteEntry) => Bl
    * same shape and only differ in which sheet they wear.
    */
   ["_chest", chest],
-  ["_banner", (e) => againstWall(e, 2)],
+  ["_wall_banner", wallBanner],
+  ["_banner", standingBanner],
   // Order matters: a wall hanging sign ends in `_hanging_sign` too, and a wall
   // sign ends in `_sign`.
   ["_wall_hanging_sign", hangingSign],

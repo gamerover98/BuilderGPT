@@ -1359,8 +1359,43 @@ export class ModelBaker {
     if (name === undefined) {
       return fallback;
     }
-    const key = ModelBaker.normalizeTextureKey(name);
-    return (await this.ensureTextureCached(key)) ? key : fallback;
+    const [path, hex] = name.split("#");
+    const key = ModelBaker.normalizeTextureKey(path);
+    if (!(await this.ensureTextureCached(key))) {
+      return fallback;
+    }
+    return hex === undefined ? key : this.tintedTexture(key, hex);
+  }
+
+  /**
+   * A copy of one texture multiplied by a colour, under a key of its own.
+   *
+   * The tint in `ensureTextureCached` is keyed on the *texture path* and its
+   * colour is a constant of the baker, which is right for grass and water --
+   * every leaf in a document takes the same biome -- and cannot express a
+   * colour that varies with the block's **state**. A banner's cloth is one
+   * sheet in sixteen colours; redstone dust is one texture at sixteen
+   * powers. Neither can be a second `BIOME_TINTED` row.
+   *
+   * The way round it already existed, for the glyphs: mint a synthetic key
+   * and write the multiplied pixels into the cache under it. The atlas packs
+   * whatever is in `textures`, so nothing else has to know.
+   *
+   * An **animated** source is handed back untinted rather than half-done.
+   * `animationCache` is keyed on the texture as well, so a tinted copy would
+   * need its frames tinted too, and today nothing asks: the banner base and
+   * the redstone dust are both still images.
+   */
+  private tintedTexture(key: string, hex: string): string {
+    const source = this.textureCache[key];
+    if (source === undefined || this.animationCache[key] !== undefined) {
+      return key;
+    }
+    const tinted = `${key}#${hex}`;
+    if (!(tinted in this.textureCache)) {
+      this.textureCache[tinted] = applyTint(source, parseHexColor(hex));
+    }
+    return tinted;
   }
 
   /** Turns a `BlockShape` into geometry, once its textures are known. */
@@ -1731,11 +1766,19 @@ export class ModelBaker {
     };
     if (HEADS[name] !== undefined) return HEADS[name];
 
-    // No sheet is usable for these: a banner's art is a base plus a stack of
-    // pattern layers this code cannot compose, and a shulker box's sheet is
-    // laid out for an animated lid. The dyed wool is the honest stand-in.
-    const banner = /^([a-z_]+?)_(?:wall_)?banner$/.exec(name);
-    if (banner) return `${banner[1]}_wool`;
+    /*
+     * A banner's pole and crossbar are on `entity/banner/banner_base`, and
+     * they are the only two parts of it that are not dyed -- so that sheet is
+     * the block's texture and `block_shapes.ts` names the cloth's separately,
+     * tinted. What is still not done is the **patterns**: they are a stack of
+     * layers in the block entity's NBT, and composing them is a different
+     * job. A plain banner of the right colour is not a stand-in for one.
+     */
+    if (/_(?:wall_)?banner$/.test(name)) return "entity/banner/banner_base";
+    /*
+     * A shulker box's sheet is laid out for an animated lid, so the dyed wool
+     * stays the honest stand-in there.
+     */
     const shulker = /^([a-z_]+)_shulker_box$/.exec(name);
     if (shulker) return `${shulker[1]}_wool`;
     return null;

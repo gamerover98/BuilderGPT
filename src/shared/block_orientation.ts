@@ -290,6 +290,27 @@ const WALL_MOUNTED_SUFFIXES = [
 ] as const;
 
 /**
+ * Blocks that grow out of the face they were clicked onto, in **six**
+ * directions rather than four.
+ *
+ * `WALL_MOUNTED` above is this rule with four, and it refuses `up` and `down`
+ * deliberately -- there is no ladder on a ceiling and no wall torch on a
+ * floor. An amethyst bud has both: they line a geode's floor, its walls and
+ * its roof, and `facing` is simply which way the crystal points.
+ *
+ * This arrived with the geometry rather than before it, and that is the
+ * argument for it. While all six facings drew the same cube, deriving `facing`
+ * bought exactly nothing; the moment the model turns, not deriving it is half
+ * the block coming out wrong.
+ */
+const GROWS_FROM_CLICKED: ReadonlySet<string> = new Set([
+  "small_amethyst_bud",
+  "medium_amethyst_bud",
+  "large_amethyst_bud",
+  "amethyst_cluster",
+]);
+
+/**
  * Blocks carrying `face` (floor/wall/ceiling) alongside a horizontal `facing`.
  *
  * Worth stating even though `block_shapes.ts` draws a button lying on the
@@ -436,6 +457,17 @@ export function orientPlacement(id: string, look: PlacementLook): Record<string,
     return { facing: OPPOSITE[horizontalFacing(look.direction)] };
   }
 
+  if (GROWS_FROM_CLICKED.has(name)) {
+    /*
+     * The clicked face, exactly as `WALL_MOUNTED` has it, and the fallback is
+     * that rule's own extended to six: with no face to go on -- the build grid,
+     * or a cell in mid-air -- the surface is taken to be the one being looked
+     * at, which puts the crystal pointing back at the camera.
+     */
+    if (look.against !== null) return { facing: look.against };
+    return { facing: OPPOSITE[nearestFace(look.direction)] };
+  }
+
   /*
    * Still below the wall-mounted arm, and no longer *because* of it: the
    * registry keeps every wall variant out of here on its own. It stays here
@@ -537,5 +569,6 @@ export const ORIENTED_BLOCK_NAMES: readonly string[] = [
   ...WALL_MOUNTED,
   ...FACE_AND_FACING,
   ...POINTS_INTO_CLICKED,
+  ...GROWS_FROM_CLICKED,
   ...SPUN_LEGACY,
 ];

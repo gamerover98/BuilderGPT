@@ -4109,6 +4109,57 @@ knowing:
   omission.** It changes the height of the smoke column, which is a particle and
   part of no model. Giving it a shape would be inventing, which is the one thing
   this file is not allowed to do.
+- **An amethyst bud was a cube, and the cube sealed the geode.** All four --
+  the three buds and the cluster -- fell through every table to `CUBE`, so a
+  pointed crystal was drawn as a solid block wearing its own sprite on six
+  sides. That is the half that was reported. The half that was not:
+  `occludesNeighbours` answered **true**, and `lighting.ts` floods from that
+  predicate, so a bud **sealed its own cell** and a geode with buds lining its
+  walls put itself in the dark. `connect.ts` read the same predicate and let a
+  fence connect to one as if it were stone; `session.ts` read `coversFace` and
+  reported it as sturdy ground.
+
+  That it did not *also* delete its neighbours' faces was luck rather than
+  design: the mesher gates culling on `isTextureOpaque`, which asks the decoded
+  alpha, and a bud's sprite has plenty of it. A wrong geometric answer saved by
+  a later texture guard is exactly the arrangement worth writing down, because
+  it is the kind that stops saving you.
+
+  Vanilla is `parent: block/cross` for all four, and the four models are
+  **identical** -- the size difference is entirely in the art. Counted off the
+  bundled pack on a 64x64 tile: 354 opaque texels for the small bud, 690 for
+  the medium, 1114 for the large, 2104 for the cluster. Not one coordinate
+  between them, which is why one shape function serves all four.
+
+  The blockstate turns the whole model by `facing` in **six** directions, and
+  `rotateShapeBox` does only the `y`. So the `x` is applied by hand, once, as
+  `(x, y, z) -> (x, z, 16 - y)` about the centre; three parts are written and
+  three derived. Which way that sends the model's top is not a guess -- `south`
+  is `north` plus `y: 180`, so `x: 90` alone has to point north.
+
+  **No `uv` window is stated and that is deliberate**, which is the opposite of
+  the usual advice in this file: every plane spans 0..16 on both of its own
+  axes, so the derived UVs already *are* vanilla's `[0, 0, 16, 16]`. What each
+  facing needs is a per-face `uvRotation`, because the sprite tapers to a point
+  at the top of its tile and that point has to come out along `facing`. Strip
+  them and five of the six facings fail -- which is how they were checked, in
+  pixels, off `large_amethyst_bud.png` having nothing at all above row 26 of
+  64.
+
+  The **sign** of the 45-degree roll is immaterial for a cross and says so
+  beside itself, because it looks exactly like the thing to get backwards:
+  `{0, 90}` rolled by +45 is `{45, 135}` and by -45 is `{-45, 45}`, the same
+  pair. All it decides is which plane takes which diagonal, and they wear the
+  same texture through the same window. So "the planes came out swapped" is
+  not evidence of anything.
+
+  **And `facing` is derived at the click now, in the same commit as the
+  geometry.** `WALL_MOUNTED` is that rule with four directions and refuses `up`
+  and `down` on purpose -- there is no ladder on a ceiling. A bud has both:
+  they line a geode's floor, walls and roof. It belongs with the model rather
+  than after it, because while all six facings drew the same cube deriving the
+  property bought precisely nothing, and the moment the model turns, not
+  deriving it is half the block coming out wrong.
 - **A flowerbed is one quarter-plate per segment, and they sit above the
   floor.** Pink petals, wildflowers and leaf litter were a full 16×16 plate at
   `y = 0` whatever the count: one petal carpeted the cell, and a plate that

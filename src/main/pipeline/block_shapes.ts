@@ -2259,6 +2259,85 @@ function pottedPlant(): BlockShape {
 }
 
 /**
+ * An amethyst bud or cluster: `block/cross`, turned by `facing`.
+ *
+ * All four -- the three buds and the cluster -- are the identical model with a
+ * different texture, so the whole size difference lives in the art. Counted
+ * off the bundled pack, on a 64x64 tile: 354 opaque texels for the small bud,
+ * 690 for the medium, 1114 for the large and 2104 for the cluster. There is
+ * not one coordinate between them.
+ *
+ * They were **cubes**, which is two faults and not one. The silhouette was
+ * wrong -- a pointed crystal drawn as a solid block wearing its own sprite on
+ * all six sides -- and `occludesNeighbours` answered `true`, so a bud **sealed
+ * its cell**: `lighting.ts` floods from that predicate, and a geode with buds
+ * lining its walls put itself in the dark. That it did not also delete its
+ * neighbours' faces was luck rather than design -- `isTextureOpaque` refuses
+ * on the decoded alpha, for a reason with nothing to do with this block.
+ *
+ * ## Three parts written, three derived
+ *
+ * The blockstate applies `x: 180` for `down`, `x: 90` for `north`, and `x: 90`
+ * plus a `y` for the other three horizontals. `rotateShapeBox` carries a box's
+ * own rotation correctly through a `y` but knows nothing about `x`, so the
+ * `x: 90` is applied here, once, as `(x, y, z) -> (x, z, 16 - y)` about the
+ * centre. Which way that sends the model's top is not a guess: `south` is
+ * `north` plus `y: 180`, so `x: 90` alone has to point north.
+ *
+ * **No `uv` window is stated below**, and that is deliberate rather than an
+ * omission. Every plane spans 0..16 on both of its own axes, so the UVs
+ * derived from the coordinates already *are* vanilla's `[0, 0, 16, 16]`;
+ * writing them out would be a no-op to keep correct through four rotations.
+ * What each facing needs is a per-face `uvRotation`, because the sprite's tip
+ * is at the top of its tile and has to come out pointing along `facing`.
+ *
+ * The **sign** of the 45-degree roll is immaterial for a cross, which is worth
+ * saying because it looks exactly like the thing to get backwards: the pair
+ * {0, 90} rolled by +45 is {45, 135} and rolled by -45 is {-45, 45}, the same
+ * pair. All it decides is which of the two planes takes which diagonal, and
+ * they wear the same texture through the same window. The corollary is worth
+ * having too -- "the planes came out swapped" is not evidence the sign is
+ * wrong, because nothing on screen can tell.
+ *
+ * Written at their **already-rescaled** width, `pottedPlant`'s idiom: vanilla
+ * states 0.8..15.2 with `rescale: true`, there is no rescale here, and 0..16
+ * turned 45 degrees reaches 8 +/- 8/sqrt(2), which is what `kind: "cross"`
+ * builds and what the rescale arrives at.
+ */
+const BUD_SPIN: BoxRotation = { origin: [8, 8, 8], axis: "y", angle: 45 };
+const BUD_ROLL: BoxRotation = { origin: [8, 8, 8], axis: "z", angle: -45 };
+
+const BUD_UP: readonly ShapeBox[] = [
+  { box: [0, 0, 8, 16, 16, 8], rotation: BUD_SPIN },
+  { box: [8, 0, 0, 8, 16, 16], rotation: BUD_SPIN },
+];
+
+/** `x: 180`, which for a cross is the same two planes with the picture over. */
+const BUD_DOWN: readonly ShapeBox[] = [
+  { box: [0, 0, 8, 16, 16, 8], rotation: BUD_SPIN, uvRotation: { north: 180, south: 180 } },
+  { box: [8, 0, 0, 8, 16, 16], rotation: BUD_SPIN, uvRotation: { east: 180, west: 180 } },
+];
+
+/** `x: 90`. The first plane comes out horizontal; the second stays where it was. */
+const BUD_NORTH: readonly ShapeBox[] = [
+  { box: [0, 8, 0, 16, 8, 16], rotation: BUD_ROLL, uvRotation: { down: 180 } },
+  { box: [8, 0, 0, 8, 16, 16], rotation: BUD_ROLL, uvRotation: { west: 90, east: 270 } },
+];
+
+function amethystBud(entry: PaletteEntry): BlockShape {
+  /*
+   * `up`, not `facingSteps`' `east`. The registry gives all four `facing: up`,
+   * and the walk over every offered id bakes with an empty property bag -- so
+   * the wrong default here would put the commonest case on the wrong branch
+   * and every whole-registry check would be judging the wrong picture.
+   */
+  const facing = entry.properties.facing ?? "up";
+  if (facing === "up") return boxes(...BUD_UP);
+  if (facing === "down") return boxes(...BUD_DOWN);
+  return transform(BUD_NORTH, northFacingSteps(entry), false);
+}
+
+/**
  * A brewing stand: the rod and its three-lobed base, from `brewing_stand.json`.
  *
  * The base plates carry explicit UVs because `brewing_stand_base.png` is a
@@ -3080,6 +3159,11 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
   end_gateway: () => boxes([0, 11, 0, 16, 12, 16]),
   // The same plate and rod as `moving_piston`, which is what a piston head is.
   piston_head: pistonHead,
+
+  small_amethyst_bud: amethystBud,
+  medium_amethyst_bud: amethystBud,
+  large_amethyst_bud: amethystBud,
+  amethyst_cluster: amethystBud,
 };
 
 /** Blocks drawn as two crossed quads rather than boxes. */

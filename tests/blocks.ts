@@ -1708,6 +1708,150 @@ if (pack === null) {
   );
 }
 
+// --- an amethyst bud is a cross ----------------------------------------------
+//
+// All four -- the three buds and the cluster -- were `{ kind: "cube" }`, which
+// is two faults. The silhouette was wrong, and `occludesNeighbours` answered
+// `true`, so a bud sealed its own cell and a geode with buds on its walls put
+// itself in the dark.
+//
+// Vanilla is `block/cross` for all four, turned by `facing` in six directions.
+// The four models are identical and the size difference is entirely in the
+// art: 354 opaque texels for the small bud, 690 for the medium, 1114 for the
+// large, 2104 for the cluster, all on a 64x64 tile.
+console.log("\n--- an amethyst bud is a cross ---");
+const AMETHYST = [
+  "small_amethyst_bud",
+  "medium_amethyst_bud",
+  "large_amethyst_bud",
+  "amethyst_cluster",
+] as const;
+for (const name of AMETHYST) {
+  check(`${name} is not a cube`, shapeFor(block(name)).kind !== "cube");
+  check(`...and does not occlude its neighbours`, !occludesNeighbours(block(name)));
+  for (const face of ["up", "down", "north"] as const) {
+    check(`...nor cover their ${face} face`, !coversFace(block(name), face));
+  }
+}
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  /*
+   * Which way the crystal points, read **in pixels**.
+   *
+   * It works because the sprite is rooted at the bottom of its tile and
+   * tapers upward: `large_amethyst_bud.png` has nothing at all above row 26
+   * of 64. So "the outer fifth of the block along `facing` is empty, and the
+   * other end is not" is a sentence about the picture, while "which end that
+   * is" is a sentence about the world -- and the `uvRotation`s are the only
+   * thing joining them. Stripped out, five of the six facings fail this.
+   */
+  const ALONG: Readonly<Record<string, readonly [number, number]>> = {
+    east: [0, 1],
+    west: [0, -1],
+    up: [1, 1],
+    down: [1, -1],
+    south: [2, 1],
+    north: [2, -1],
+  };
+  const pointsAlong = async (name: string, facing: string): Promise<string> => {
+    const [axis, sign] = ALONG[facing];
+    const baked = await baker.bakeBlockstate(block(name, { facing }));
+    let atPoint = 0;
+    let atRoot = 0;
+    for (const face of baked.extraFaces) {
+      const corner = (i: number) => [0, 1, 2].map((a) => face.positions[i * 3 + a]);
+      const [o, u, w] = [corner(0), corner(1), corner(3)];
+      for (let a = 1; a < 8; a += 1) {
+        for (let b = 1; b < 8; b += 1) {
+          const at = [0, 1, 2].map(
+            (k) => o[k] + ((u[k] - o[k]) * a) / 8 + ((w[k] - o[k]) * b) / 8,
+          ) as [number, number, number];
+          if (texelOn(face, at).alpha <= 128) continue;
+          const along = (at[axis] - 0.5) * sign;
+          if (along > 0.3) atPoint += 1;
+          if (along < -0.3) atRoot += 1;
+        }
+      }
+    }
+    return `${atPoint} at the point, ${atRoot > 0 ? "rooted" : "bare"}`;
+  };
+
+  for (const facing of ["up", "down", "north", "south", "east", "west"]) {
+    equal(
+      `a bud facing ${facing} tapers to its point that way`,
+      await pointsAlong("large_amethyst_bud", facing),
+      "0 at the point, rooted",
+    );
+  }
+
+  /*
+   * Two crossed planes is four quads, not six. A cube passes every geometric
+   * check in this file and only the count says which shape it is.
+   */
+  for (const name of AMETHYST) {
+    const baked = await baker.bakeBlockstate(block(name));
+    equal(`${name} is four quads`, baked.extraFaces.length, 4);
+    equal(
+      `...wearing its own texture, which is where its size lives`,
+      baked.textureKey,
+      `minecraft:block/${name}`,
+    );
+  }
+
+  /*
+   * The registry gives all four `facing: up`, and the walk over every offered
+   * id bakes with an empty bag -- so a shape function defaulting to
+   * `facingSteps`' `east` would put the commonest case on the horizontal
+   * branch and every whole-registry check would judge the wrong picture.
+   */
+  equal(
+    "a bud with nothing stated stands up",
+    (await baker.bakeBlockstate(block("large_amethyst_bud"))).extraFaces
+      .map((f) => f.positions.join())
+      .join("|"),
+    (await baker.bakeBlockstate(block("large_amethyst_bud", { facing: "up" }))).extraFaces
+      .map((f) => f.positions.join())
+      .join("|"),
+  );
+}
+
+/*
+ * And the `facing` has to be derived at the click, which is the half that
+ * arrived with the geometry. While all six drew the same cube it bought
+ * nothing; now it is the difference between a crystal growing out of the wall
+ * you clicked and one standing on the floor.
+ */
+for (const name of AMETHYST) {
+  equal(
+    `${name} grows out of the face you clicked`,
+    orientPlacement(`minecraft:${name}`, {
+      direction: { x: 0, y: -1, z: 0 },
+      against: "down",
+      cursorY: 0,
+    }).facing,
+    "down",
+  );
+  equal(
+    `...including a wall, where a ladder would agree`,
+    orientPlacement(`minecraft:${name}`, {
+      direction: { x: 0, y: 0, z: 1 },
+      against: "north",
+      cursorY: 0,
+    }).facing,
+    "north",
+  );
+  equal(
+    `...and with no face at all points back at the camera`,
+    orientPlacement(`minecraft:${name}`, {
+      direction: { x: 0, y: -1, z: 0 },
+      against: null,
+      cursorY: 0,
+    }).facing,
+    "up",
+  );
+}
+
 console.log("\n--- what is scattered on the floor ---");
 {
   const platesOf = (name: string, props: Record<string, string>): number => {

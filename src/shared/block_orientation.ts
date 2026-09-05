@@ -31,7 +31,7 @@
  * and not about the click. It belongs to whoever holds the voxels.
  */
 
-import { defaultStateFor } from "./block_states.js";
+import { defaultStateFor, hasProperty } from "./block_states.js";
 
 /** A face of a cell, named as Minecraft names its directions. */
 export type Face = "up" | "down" | "north" | "south" | "east" | "west";
@@ -185,40 +185,59 @@ const FRONT_TO_PLAYER_ANY_AXIS: ReadonlySet<string> = new Set([
 const POINTS_INTO_CLICKED: ReadonlySet<string> = new Set(["hopper"]);
 
 /**
- * Signs that carry a sixteenth-turn `rotation` rather than a `facing`.
+ * The one block carrying a sixteenth-turn `rotation` that the registry cannot
+ * be asked about.
  *
- * The bare `sign` is the pre-Flattening spelling, whose sixteen values
- * `legacy_blocks.json` enumerates as `63:0`..`63:15`; `_sign` catches every
- * modern standing one, and `_hanging_sign` the ones hung from a ceiling. The
- * two *wall* families carry `facing` and no `rotation` at all, and are
- * kept out by two different mechanisms -- which is worth saying, because one
- * of them is not obvious and the suite caught it:
+ * **Everything else asks the registry.** `hasProperty(name, "rotation")` is
+ * `isOpenable`'s move one file over, for `isOpenable`'s reason: the blocks
+ * that carry the property are twelve standing signs, twelve hanging ones,
+ * sixteen banners and seven heads, and a list of families is a list to keep
+ * up to date. It was one -- `["_sign", "_hanging_sign"]` -- so **every head
+ * and every standing banner** fell through to the end of this function and
+ * took the registry default, and no camera was ever consulted for either.
  *
- * - a **wall sign** is answered by `WALL_MOUNTED` above, before this is asked;
- * - a **wall hanging sign** is not, because it is deliberately absent from
- *   that table -- and `oak_wall_hanging_sign` ends in `_hanging_sign`, so it
- *   matches here. It is excluded by name.
+ * Three things fall out of asking the registry instead, and all three look
+ * like omissions:
+ *
+ * - **the wall families exclude themselves.** `oak_wall_sign`,
+ *   `white_wall_banner`, `skeleton_wall_skull` and `oak_wall_hanging_sign`
+ *   carry a `facing` and no `rotation`, so the rule no longer depends on
+ *   being written below `WALL_MOUNTED`, and the wall hanging sign no longer
+ *   needs excluding by name. Both of those were real and both are gone.
+ * - **`piston_head` excludes itself.** It ends in `_head` and carries no
+ *   `rotation`, so a hand-written `_head` suffix -- the obvious way to write
+ *   this -- would have put a property on a block that has none. That is the
+ *   failure this file exists to avoid, arriving in the fix for another one.
+ * - **the pre-Flattening `sign` does not**, and is why this set survives with
+ *   one member. It is deliberately outside the modern registry, which holds
+ *   the flat era only, while `legacy_blocks.json` enumerates its sixteen
+ *   values as `63:0`..`63:15`. `ORIENTED_BLOCK_NAMES` publishes it to the
+ *   check that reads every named id back out of `block_id_list.txt`.
  */
-const SPUN_SIGNS: ReadonlySet<string> = new Set(["sign"]);
-
-const SPUN_SIGN_SUFFIXES = ["_sign", "_hanging_sign"] as const;
-
-/** The one member of both suffixes that must reach neither rule. */
-const WALL_HUNG_SIGN = "_wall_hanging_sign";
+const SPUN_LEGACY: ReadonlySet<string> = new Set(["sign"]);
 
 /**
  * Vanilla's own sixteenth of a turn, from the direction the camera was facing.
  *
  * `RotationSegment.convertToSegment(yaw + 180)`, which is
- * `floor(degrees * 16 / 360 + 0.5) & 15`. The `+ 180` is what turns the sign
+ * `floor(degrees * 16 / 360 + 0.5) & 15`. The `+ 180` is what turns the block
  * round to face the person who placed it, and it is the half that cannot be
  * checked by looking at a screenshot: a sign facing exactly the wrong way still
  * reads as a sign, and the mistake only shows when somebody walks round it.
+ * minecraft.wiki states it outright for the two families where it is
+ * observable from outside -- a standing sign "face[s] toward the player who
+ * placed it", and a head on a **wall** pointedly does not, "but forward".
+ *
+ * Named for vanilla's class rather than for signs, because signs turned out to
+ * be one of four families that reach it and the only one that ever did.
  *
  * Minecraft's yaw is zero at south and increases towards west, which is
  * `atan2(-x, z)` in this app's axes.
  */
-export function signRotation(direction: { readonly x: number; readonly z: number }): number {
+export function rotationSegment(direction: {
+  readonly x: number;
+  readonly z: number;
+}): number {
   const yaw = (Math.atan2(-direction.x, direction.z) * 180) / Math.PI;
   return Math.floor(((yaw + 180) * 16) / 360 + 0.5) & 15;
 }
@@ -418,16 +437,14 @@ export function orientPlacement(id: string, look: PlacementLook): Record<string,
   }
 
   /*
-   * Below the wall-mounted arm on purpose: `oak_wall_sign` ends in `_sign`
-   * too, and it is the arm above that has its answer. Asking here first would
-   * write a `rotation` onto a block that has none and take away the `facing`
-   * that puts it on the wall.
+   * Still below the wall-mounted arm, and no longer *because* of it: the
+   * registry keeps every wall variant out of here on its own. It stays here
+   * because the three names in that table are the ones with an answer up
+   * there, and because moving it would make the order matter again the day a
+   * wall-mounted block turns up carrying a `rotation`.
    */
-  if (
-    !name.endsWith(WALL_HUNG_SIGN) &&
-    (SPUN_SIGNS.has(name) || SPUN_SIGN_SUFFIXES.some((suffix) => name.endsWith(suffix)))
-  ) {
-    return { rotation: String(signRotation(look.direction)) };
+  if (SPUN_LEGACY.has(name) || hasProperty(name, "rotation")) {
+    return { rotation: String(rotationSegment(look.direction)) };
   }
 
   if (POINTS_INTO_CLICKED.has(name)) {
@@ -520,5 +537,5 @@ export const ORIENTED_BLOCK_NAMES: readonly string[] = [
   ...WALL_MOUNTED,
   ...FACE_AND_FACING,
   ...POINTS_INTO_CLICKED,
-  ...SPUN_SIGNS,
+  ...SPUN_LEGACY,
 ];

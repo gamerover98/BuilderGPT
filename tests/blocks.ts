@@ -3316,6 +3316,13 @@ console.log("\n--- placement orientation ---");
    * exactly the wrong way still reads as a sign -- so it is checked here
    * against the four cardinal answers the wiki names: rotation 0 faces south,
    * 4 west, 8 north, 12 east.
+   *
+   * **All four families are checked, and three of them used to get nothing.**
+   * The rule was a suffix list -- `_sign` and `_hanging_sign` -- so a head and
+   * a standing banner fell past it to the end of the function, took the
+   * registry default, and were never shown the camera at all. It asks
+   * `hasProperty(name, "rotation")` now, which is the same 47 blocks the
+   * registry knows and cannot drift from them.
    */
   for (const [name, direction, expected] of [
     ["looking north", [0, 0, -1], "0"],
@@ -3334,16 +3341,75 @@ console.log("\n--- placement orientation ---");
       orientPlacement("minecraft:sign", look).rotation,
       expected,
     );
+    equal(
+      `...and a skull, which used to face south whatever you did`,
+      orientPlacement("minecraft:skeleton_skull", look).rotation,
+      expected,
+    );
+    equal(
+      `...and a player head, whose family is seven blocks wide`,
+      orientPlacement("minecraft:player_head", look).rotation,
+      expected,
+    );
+    equal(
+      `...and a standing banner, which used to face north`,
+      orientPlacement("minecraft:red_banner", look).rotation,
+      expected,
+    );
   }
   /*
    * A ceiling-hung sign is the same property and the same rule. A wall-hung
-   * one is neither, and is the name both suffixes catch by accident.
+   * one is neither, and used to be the name both suffixes caught by accident.
    */
   equal(
     "a hanging sign is spun too",
     orientPlacement("minecraft:oak_hanging_sign", looking(0, 0, 1, "down")).rotation,
     "8",
   );
+
+  /*
+   * A sixteenth is not a quarter, and the four cardinal checks above cannot
+   * tell the two apart: every answer they name is a multiple of four, which
+   * is exactly what a quarter-turn rule would also produce.
+   *
+   * So, 22.5 degrees east of north -- the middle of `rotation=1`'s own bin,
+   * and a value no quarter-turn rule can reach.
+   */
+  for (const id of [
+    "minecraft:oak_sign",
+    "minecraft:red_banner",
+    "minecraft:skeleton_skull",
+  ]) {
+    equal(
+      `${id} turns by a sixteenth, not by a quarter`,
+      orientPlacement(
+        id,
+        looking(Math.sin(Math.PI / 8), 0, -Math.cos(Math.PI / 8), "up"),
+      ).rotation,
+      "1",
+    );
+  }
+
+  /*
+   * And the blocks that must **not** get one, which is the half asking the
+   * registry buys. `piston_head` ends in `_head` and carries no `rotation`,
+   * so the obvious hand-written suffix would have put a property on a block
+   * that has none; and the wall families end in `_banner`, `_head`, `_skull`
+   * and `_sign` while wanting the `facing` the arm above them gives.
+   */
+  equal("a piston head is left alone", orientPlacement("minecraft:piston_head", north), {});
+  for (const id of [
+    "minecraft:red_wall_banner",
+    "minecraft:skeleton_wall_skull",
+    "minecraft:creeper_wall_head",
+    "minecraft:oak_wall_sign",
+  ]) {
+    equal(
+      `${id} takes a facing and no rotation`,
+      orientPlacement(id, looking(0, 0, 1, "north")),
+      { facing: "north" },
+    );
+  }
   equal(
     "a button on a wall knows it is on a wall",
     orientPlacement("minecraft:stone_button", looking(0, 0, -1, "south")),

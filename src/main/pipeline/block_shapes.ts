@@ -861,7 +861,7 @@ function headUv(entry: PaletteEntry): Readonly<Record<string, UvWindow>> | undef
  * part that is easy to write down backwards. The cube is authored with the
  * mob's face on its **north** side, which is what the wall variant needs at
  * zero steps; vanilla's `RotationSegment` puts **south** at `rotation=0`,
- * which is the same convention `signRotation` already implements. A head
+ * which is the same convention `rotationSegment` already implements. A head
  * turned exactly half round still reads as a head, so nothing on screen would
  * say it was wrong.
  */
@@ -1211,7 +1211,7 @@ const BANNER_CLOTH_HEIGHT = bannerUnits(40);
  * Sixteen positions through `rotation`, as a `BoxRotation` and for the head's
  * reason: a banner has a front. `-22.5` and no offset, because the cloth is
  * authored on the **south** side of the pole and vanilla's `RotationSegment`
- * puts south at `rotation=0` -- the same convention `signRotation` writes.
+ * puts south at `rotation=0` -- the same convention `rotationSegment` writes.
  */
 function standingBanner(entry: PaletteEntry): BlockShape {
   const sixteenths = Number(entry.properties.rotation);

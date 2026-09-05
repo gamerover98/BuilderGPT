@@ -4260,7 +4260,7 @@ knowing:
   part that is easy to write down backwards: the cube is authored with the
   face on its **north** side, which is what the wall variant needs at zero
   steps, while vanilla's `RotationSegment` puts **south** at `rotation=0` --
-  the same convention `signRotation` already implements. A head turned
+  the same convention `rotationSegment` already implements. A head turned
   exactly half round still reads as a head, so nothing on screen would say.
 - **The dragon is deliberately not in the table.** Its head is not an 8x8x8
   cube on a 64-wide sheet -- `entity/enderdragon/dragon.png` is 256 logical
@@ -4331,11 +4331,52 @@ is vanilla's own `floor((yaw + 180) * 16 / 360 + 0.5) & 15`, and the `+ 180` is
 the half no screenshot can check: a sign facing exactly the wrong way still
 reads as a sign. `tests/blocks.ts` states it against the four cardinal answers.
 
-`_wall_hanging_sign` is excluded **by name**, and the suite caught that it had
-to be: a wall sign is answered by `WALL_MOUNTED` before the rotation arm is
-reached, but a wall *hanging* sign is deliberately absent from that table and
-ends in `_hanging_sign`, so it matched. Two exclusions by two mechanisms, one
-of them not obvious.
+**A sign was one of four families carrying that property, and the other three
+got nothing.** The rule was a suffix list — `_sign` and `_hanging_sign` — and
+the registry names **47** blocks with a `rotation`: twelve standing signs,
+twelve hanging ones, sixteen banners and seven heads. Twenty-two of them, every
+head and every standing banner, fell past that arm to the end of the function
+and took the registry default. The camera was never consulted, so a head always
+faced south and a banner always north, and it looked deliberate.
+
+It is one rule for all four, which is what the wiki says as well: a sign «face[s]
+toward the player who placed it», a head is oriented «similar to signs», and a
+head on a **wall** pointedly does not, «but forward» — that last being the
+contrast that settles what the floor ones do. The vendored
+`block_properties.json` carries the same sentence from the other side: `0 is
+south` and the value increases clockwise, which is the convention
+`block_shapes.ts` was already *drawing*. Both halves were separately right while
+every head came out facing south.
+
+**The membership is asked of the registry, not of a suffix list**, which is
+`isOpenable`'s move and buys three things that each look like an omission. The
+wall families exclude themselves, because they carry a `facing` and no
+`rotation` — so the exclusion of `_wall_hanging_sign` **by name** is gone, and
+so is the arm's dependence on sitting below `WALL_MOUNTED`. `piston_head`
+excludes itself, and it is the reason a hand-written `_head` suffix would have
+been wrong: it ends in `_head` and has no `rotation`, so the obvious edit would
+have written a property onto a block that has none. And the pre-Flattening
+`sign` does **not** exclude itself in the other direction — it is deliberately
+outside the flat-era registry — so it stays as the one member of a set, where
+`ORIENTED_BLOCK_NAMES` publishes it to the check that reads every named id back
+out of `block_id_list.txt`.
+
+`signRotation` is `rotationSegment` now, after vanilla's own
+`RotationSegment.convertToSegment`. Naming it for signs was accurate for as
+long as signs were the only callers, which is the whole of the bug.
+
+Two checks carry the part the four cardinal answers cannot. **A sixteenth is
+not a quarter**: every one of `0, 4, 8, 12` is also what a quarter-turn rule
+would produce, so a look 22.5° east of north has to come back `1`. And the four
+blocks that must get **no** rotation are stated by name, because that is the
+half asking the registry buys and deleting the question leaves nothing failing.
+
+One consequence is the format's rather than the code's, and is worth knowing
+before it is reported: a 1.12.2 document can hold **four** of a head's sixteen
+rotations. `legacy_blocks.json` maps `144:0/1/8/9` to `rotation=0/4/8/12` and
+the rest lived in the tile entity, so twelve of them come back `degraded` from
+the MCEdit writer. Signs and the white banner carry all sixteen — `63:0..15`
+and `176:0..15`.
 
 **A hopper points into the block it was clicked onto**, which is the whole of
 what makes one feed a chest. It was in none of `orientPlacement`'s tables, so

@@ -1345,6 +1345,128 @@ if (pack === null) {
 // lantern.png is 3 frames tall. Treated as one image the atlas squashes it,
 // and every UV window then addresses the wrong pixels — which is exactly how a
 // lantern ends up wearing a smear of its own chain.
+// --- lit chooses a texture, not only a light level ---------------------------
+//
+// `lit` was honoured by `lighting.ts` and by nothing else, so a redstone torch
+// switched off emitted zero light and was drawn burning -- the two halves of
+// one block contradicting each other on screen. `block/redstone_torch_off.png`
+// is in the pack and was reachable from no code path in the repo.
+//
+// The walk is the point rather than the torch. Thirteen of the 52 blocks that
+// carry the property baked identically at both values; eleven of those were
+// wrong and two were right, and only a walk tells you which is which.
+console.log("\n--- lit chooses a texture ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const keysOf = async (name: string, properties: Record<string, string>): Promise<string> => {
+    // Deliberately **not** merged with the block's default state: a schematic
+    // may legally carry a partial one, and the walk over every offered id bakes
+    // with nothing at all. Which of the two textures a bare block gets is the
+    // question `flagOf` exists to answer, so it has to be asked here.
+    const baked = await baker.bakeBlockstate(block(name, properties));
+    const faces = [...Object.values(baked.faces), ...baked.extraFaces];
+    return [...new Set(faces.map((f) => f.textureKey))].sort().join(",");
+  };
+
+  /*
+   * The two that are *supposed* to look the same at both values: vanilla ships
+   * one texture for each and `lit` there moves the light and nothing else.
+   * Named rather than skipped, because a walk that quietly excluded whatever
+   * failed would prove nothing -- and because if one of them ever gains a
+   * second texture, this is where that should be noticed.
+   */
+  const SAME_EITHER_WAY = new Set(["redstone_ore", "deepslate_redstone_ore"]);
+
+  const unchanged: string[] = [];
+  const changedButShouldNot: string[] = [];
+  let walked = 0;
+  for (const name of knownBlockNames()) {
+    if ((legalValuesFor(name, "lit") ?? []).length === 0) continue;
+    walked += 1;
+    /*
+     * The rest of the state comes from the registry, and the furnace family is
+     * why: its lit texture is `furnace_front_on`, which lives on the face the
+     * block points at, so a furnace with no `facing` has no front and cannot
+     * show `lit` however correct the rule is. Only the property under test is
+     * stated by hand.
+     */
+    const rest = defaultStateFor(`minecraft:${name}`);
+    const off = await keysOf(name, { ...rest, lit: "false" });
+    const on = await keysOf(name, { ...rest, lit: "true" });
+    if (SAME_EITHER_WAY.has(name)) {
+      if (off !== on) changedButShouldNot.push(name);
+    } else if (off === on) {
+      unchanged.push(name);
+    }
+  }
+  check("there are blocks with `lit` to walk", walked > 40, String(walked));
+  equal("every one of them draws the property", unchanged, []);
+  equal("...and the two redstone ores still do not, by name", changedButShouldNot, []);
+
+  /*
+   * The one that was reported, stated on its own so a failure names it -- and
+   * the wall torch beside it, which reaches the same texture only through the
+   * `_wall_` alias, on a second pass where a `facing` is still set.
+   */
+  equal(
+    "a redstone torch switched off wears the dark texture",
+    await keysOf("redstone_torch", { lit: "false" }),
+    "minecraft:block/redstone_torch_off",
+  );
+  equal(
+    "...and a wall torch does too, through the alias",
+    await keysOf("redstone_wall_torch", { lit: "false" }),
+    "minecraft:block/redstone_torch_off",
+  );
+
+  /*
+   * The naming runs in three directions and that is why this is a table. The
+   * torch's bare name is the *lit* one; the lamp's bare name is the dark one.
+   * Reading the block's own default is what keeps the two apart -- a bare
+   * `redstone_torch` is lit and a bare `redstone_lamp` is not.
+   */
+  equal(
+    "a redstone lamp runs the other way round",
+    await keysOf("redstone_lamp", { lit: "true" }),
+    "minecraft:block/redstone_lamp_on",
+  );
+  equal(
+    "a bare redstone torch is lit",
+    await keysOf("redstone_torch", {}),
+    "minecraft:block/redstone_torch",
+  );
+  equal(
+    "...and a bare redstone lamp is not",
+    await keysOf("redstone_lamp", {}),
+    "minecraft:block/redstone_lamp",
+  );
+
+  /*
+   * A bulb is two booleans and four textures, and the waxed copy has none of
+   * its own -- it borrows the unwaxed ones through `NAME_ALIASES`, which is
+   * why the oxidised waxed one is worth stating: it exercises the alias and
+   * the two flags at once.
+   */
+  for (const [lit, powered, expected] of [
+    ["false", "false", "copper_bulb"],
+    ["false", "true", "copper_bulb_powered"],
+    ["true", "false", "copper_bulb_lit"],
+    ["true", "true", "copper_bulb_lit_powered"],
+  ] as const) {
+    equal(
+      `a copper bulb at lit=${lit} powered=${powered}`,
+      await keysOf("copper_bulb", { lit, powered }),
+      `minecraft:block/${expected}`,
+    );
+  }
+  equal(
+    "a waxed oxidized bulb borrows the unwaxed lit texture",
+    await keysOf("waxed_oxidized_copper_bulb", { lit: "true", powered: "true" }),
+    "minecraft:block/oxidized_copper_bulb_lit_powered",
+  );
+}
+
 console.log("\n--- animated textures ---");
 if (pack === null) {
   console.log("  SKIP: no bundled resource pack");

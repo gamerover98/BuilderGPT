@@ -3836,6 +3836,54 @@ knowing:
   would have been a dark smudge in a sealed room; it is the game's `3 per
   candle` now, which is the second block after `minecraft:light` whose level
   lives in its state and the only one where that state is a *count*.
+- **`lit` chose the light and never the texture, and eleven blocks were drawn
+  in the wrong state.** `lighting.ts` has kept two default tables for that
+  property since it was written -- a bare campfire is burning, a bare furnace
+  is not -- while `model_baker.ts` read it in exactly one place, the `_front_on`
+  arm of the `facing` branch. So a **redstone torch switched off emitted zero
+  and was drawn burning**: the two halves of one block contradicting each other
+  on screen, with `block/redstone_torch_off.png` sitting in the pack reachable
+  from no code path in the repo.
+
+  The walk is what turned one report into a finite list. Of the **52** ids that
+  carry `lit`, **thirteen** baked identically at both values: the two torches,
+  `redstone_lamp` -- whose `_on` was unreachable in the mirror direction -- the
+  eight copper bulbs, and `redstone_ore` with `deepslate_redstone_ore`. The
+  last two are **right**: vanilla ships one texture for each and `lit` there
+  moves the light and nothing else. Eleven wrong, two correct, and nothing but
+  a walk separates them.
+
+  It is a **table** because vanilla's naming runs in three directions at once
+  and no derivation covers them: a torch's bare name is the *lit* one and
+  `_off` is dark, a lamp's bare name is *dark* and `_on` is lit, and a bulb is
+  `<name>[_lit][_powered]` -- four textures for two booleans. It is in
+  `candidatesForName` and **not** in a shape function, which would see the
+  property just as well: here the swap is of the whole block, and two of the
+  three families are `kind: "cube"` with no `ShapeBox` to hang a `texture` on.
+  The campfire went the other way because it needed control per *face*, tied to
+  geometry. That is the whole of the difference between the two.
+
+  **Which value a bare block takes is asked of the registry**, not written into
+  the table, because it is not one answer for all of them: a bare
+  `redstone_torch` is lit and a bare `redstone_lamp` is not. That matters
+  because a schematic may legally carry a partial state and the block-icon walk
+  bakes with none at all, so the default is the commonest case rather than an
+  edge one -- and `tests/blocks.ts` therefore bakes the two bare, which is the
+  only shape of check that can see it.
+
+  The `lit` table sits **above** the `facing` branch and the order changes
+  nothing today, which is written down rather than left to be rediscovered. A
+  wall torch reaches that branch carrying a `facing`, and for the face it
+  points at the branch answers the bare name -- the lit texture. The collision
+  is real and unreachable: a wall torch is a `boxes` shape, so every face takes
+  the primary key and the per-face map is never consulted. Verified by moving
+  the table below and watching nothing fail. It stays above for the day a block
+  in it is a cube with a `facing`.
+
+  The pre-Flattening era is covered by the same fix and needed none of its own:
+  `legacy_blocks.json` maps `75:5` to `redstone_torch[lit=false]` and `76:5` to
+  `[lit=true]`, so a 1.12 document arrives at the baker already holding the
+  right state. Only the drawing was wrong, in both eras, for the same reason.
 - **A property may choose the texture, and a candidate list cannot.**
   `SPECIAL_FACE_RULES` is keyed on the block, so the campfire's row put
   `campfire_log_lit` first *because the default state is lit* — and a cold

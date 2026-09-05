@@ -30,6 +30,7 @@ import { createHash } from "node:crypto";
 import AdmZip from "adm-zip";
 import { PNG } from "pngjs";
 
+import { defaultStateFor } from "../../shared/block_states.js";
 import { DEFAULT_BIOME_COLOR, DEFAULT_WATER_COLOR } from "../../shared/settings.js";
 import { shapeFor, type BlockShape, type BoxRotation, type UvWindow } from "./block_shapes.js";
 import type { BakedFace, CellFace, PaletteEntry, RgbaImage } from "./types.js";
@@ -101,6 +102,66 @@ export interface SpecialFaceRule {
  * about, and `tests/blocks.ts` re-checks all 920 ids on every run -- which is
  * how the 162 that reached the hashed-colour cube were found in the first place.
  */
+/**
+ * Blocks whose texture is chosen by `lit`, and the naming that makes it a
+ * table rather than a rule.
+ *
+ * `lit` was honoured for **light** -- `lighting.ts` has kept two default
+ * tables for it since it was written -- and nowhere else, so every redstone
+ * torch in every schematic was drawn burning while emitting nothing.
+ * `block/redstone_torch_off.png` is in the pack and was reachable from no
+ * code path at all. Walking the 52 blocks that carry the property found ten
+ * more in exactly that position: the redstone lamp, whose `_on` was equally
+ * unreachable, and the eight copper bulbs.
+ *
+ * A table, because vanilla's naming runs in three directions at once and no
+ * derivation covers them. The **torch**'s bare name is the lit one and `_off`
+ * is dark. The **lamp**'s bare name is dark and `_on` is lit. A **bulb** is
+ * `<name>[_lit][_powered]`, four textures for two booleans.
+ *
+ * Not in a shape function, which would see the property just as well. Here the
+ * swap is of the *whole block*, and two of the three families are
+ * `kind: "cube"` with no `ShapeBox` to hang a `texture` on. The campfire went
+ * into its shape function because it needed control per **face**, tied to
+ * geometry; this does not, and that is the whole of the difference.
+ *
+ * **`redstone_ore` and `deepslate_redstone_ore` are deliberately absent.**
+ * Vanilla ships one texture for each and `lit` there changes the light and
+ * nothing else, so they are two of the thirteen the walk found and two that
+ * were already right. `tests/blocks.ts` names them as the exception rather
+ * than skipping them quietly.
+ *
+ * The plain name rides along behind the chosen one, so a pack shipping only
+ * half of a pair is no worse off than it was.
+ */
+const LIT_TEXTURES: Readonly<Record<string, readonly [string, string]>> = {
+  // [unlit, lit]
+  redstone_torch: ["redstone_torch_off", "redstone_torch"],
+  redstone_lamp: ["redstone_lamp", "redstone_lamp_on"],
+};
+
+/** The four oxidation stages; the waxed eight reach these through the alias. */
+const COPPER_BULBS: ReadonlySet<string> = new Set([
+  "copper_bulb",
+  "exposed_copper_bulb",
+  "weathered_copper_bulb",
+  "oxidized_copper_bulb",
+]);
+
+/**
+ * A boolean property, falling back to the **block's own** default.
+ *
+ * Which is not one answer for all of them, and is the trap: a bare
+ * `redstone_torch` is lit and a bare `redstone_lamp` is not. Asking the
+ * registry rather than writing the flag into the table above is what stops
+ * this becoming a second copy of a fact `block_states.ts` already holds --
+ * `lighting.ts` keeps two sets for the identical reason and says so.
+ */
+function flagOf(entry: PaletteEntry, property: string): boolean {
+  const stated = entry.properties[property];
+  return (stated ?? defaultStateFor(entry.namespacedName)[property]) === "true";
+}
+
 const NAME_ALIASES: ReadonlyArray<(name: string) => string | null> = [
   // Waxing changes nothing you can see: the whole copper family shares its
   // unwaxed textures. 40 of the ids this fixes are these.
@@ -1865,6 +1926,33 @@ export class ModelBaker {
     if (normalized === "pitcher_plant") {
       const half = entry.properties.half === "upper" ? "top" : "bottom";
       return [`pitcher_crop_${half}_stage_4`, `pitcher_crop_${half}`];
+    }
+
+    /*
+     * `lit` before `facing`, and **the order changes nothing today** -- which
+     * is worth writing down rather than leaving to be rediscovered, because
+     * the argument for putting it here is a good one and is not load-bearing.
+     *
+     * A `redstone_wall_torch` reaches here twice, once under its own name and
+     * once as `redstone_torch` through the `_wall_` alias, and it carries a
+     * `facing` -- so on the second pass the branch below answers `${normalized}`
+     * for the face the block points at, and for a torch the bare name is the
+     * **lit** texture. That collision is real and unreachable: a wall torch is
+     * a `boxes` shape, so every one of its faces takes the block's primary key
+     * and the per-face map is never consulted. Verified by moving this below
+     * the branch and watching nothing fail.
+     *
+     * It stays above because the day a block in this table is a cube with a
+     * `facing`, the collision stops being unreachable and nothing would say so.
+     */
+    const swap = LIT_TEXTURES[normalized];
+    if (swap !== undefined) {
+      return [swap[flagOf(entry, "lit") ? 1 : 0], normalized];
+    }
+    if (COPPER_BULBS.has(normalized)) {
+      const lit = flagOf(entry, "lit") ? `${normalized}_lit` : normalized;
+      const powered = flagOf(entry, "powered") ? `${lit}_powered` : lit;
+      return [powered, lit, normalized];
     }
 
     /*

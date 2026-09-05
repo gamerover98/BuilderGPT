@@ -3173,6 +3173,126 @@ if (pack === null) {
 // Both halves are needed and neither is enough on its own. With no texture rule
 // these were hashed-colour cubes; with the texture alone they became a cube
 // wearing a poppy, which looks like a decision rather than a gap.
+// --- a lectern with a desk on it ---------------------------------------------
+//
+// It was two of vanilla's three elements, and the missing one is the block:
+// the sloping desk you put a book on. What was left read as a plinth with a
+// post standing on it.
+//
+// The texture was worse. The generic candidate list asks for `<name>_side`,
+// singular; vanilla's file is `lectern_sides`, plural; `_front` is the next
+// candidate and it exists -- so ten of the twelve faces came out wearing the
+// book graphic, and `lectern_base` and `lectern_sides` were reachable from
+// nothing. And `facing` did nothing at all: the entry took no parameter, so
+// all four directions baked byte for byte identically.
+console.log("\n--- a lectern with a desk on it ---");
+if (pack === null) {
+  console.log("  SKIP: no bundled resource pack");
+} else {
+  const faced = async (facing: string) => (await baker.bakeBlockstate(block("lectern", { facing }))).extraFaces;
+  const north = await faced("north");
+
+  equal("a lectern is three elements, not two", north.length, 16);
+  equal(
+    "...and reaches all five of its textures",
+    [...new Set(north.map((f) => f.textureKey))].sort(),
+    [
+      "minecraft:block/lectern_base",
+      "minecraft:block/lectern_front",
+      "minecraft:block/lectern_sides",
+      "minecraft:block/lectern_top",
+      "minecraft:block/oak_planks",
+    ],
+  );
+
+  /*
+   * The one that says the plural name is reached. `lectern_front` belongs to
+   * two faces of the post and nowhere else; it used to be on ten of twelve,
+   * the base slab included, which is the book graphic wrapped round a plinth.
+   */
+  const front = north.filter((f) => f.textureKey.endsWith("lectern_front"));
+  equal("the book graphic is on two faces", front.length, 2);
+  const onTheBase = north.filter(
+    (f) =>
+      Math.max(f.positions[1], f.positions[4], f.positions[7], f.positions[10]) <= 2 / 16 &&
+      f.textureKey.endsWith("lectern_front"),
+  );
+  equal("...and none of them on the base", onTheBase.length, 0);
+
+  /*
+   * `facing` reaches the geometry. Four identical bakes was the whole of the
+   * second half of the report, and the blockstate gives `facing=north` no `y`,
+   * so the model is north-authored and `northFacingSteps` is what turns it.
+   */
+  const shapes = new Set<string>();
+  for (const facing of ["north", "east", "south", "west"]) {
+    const faces = await faced(facing);
+    shapes.add(faces.map((f) => f.positions.join()).join("|"));
+  }
+  equal("all four facings are different blocks", shapes.size, 4);
+
+  /*
+   * And turned the right way round rather than merely turned. The desk slopes
+   * **up away from the reader**, so its highest point is on the far side from
+   * `facing` -- which is the half a count of four distinct shapes cannot see.
+   */
+  const AWAY: Readonly<Record<string, readonly [number, number]>> = {
+    north: [2, 1],
+    south: [2, -1],
+    east: [0, -1],
+    west: [0, 1],
+  };
+  for (const [facing, [axis, sign]] of Object.entries(AWAY)) {
+    let highest: readonly number[] = [0, -1, 0];
+    for (const face of await faced(facing)) {
+      for (let i = 0; i < 4; i += 1) {
+        const at = [0, 1, 2].map((a) => face.positions[i * 3 + a]);
+        if (at[1] > highest[1]) highest = at;
+      }
+    }
+    check(
+      `a lectern facing ${facing} slopes up away from you`,
+      (highest[axis] - 0.5) * sign > 0,
+      highest.map((n) => (n * 16).toFixed(2)).join(","),
+    );
+  }
+
+  /*
+   * `uvRotation` on the post's two sides, which is the only thing in this
+   * block that a correct window cannot do on its own: vanilla states a 13-wide
+   * by 8-tall region on a face 8 wide and 13 tall, so without the quarter turn
+   * the right pixels are laid across the face sideways.
+   *
+   * Read as a transposition rather than as a picture: on the post's side the
+   * tile's `u` runs up the **world's y**, and on the desk's side -- same
+   * texture, no rotation -- it runs along the world instead. One number apart,
+   * and the contrast is what makes a failure legible.
+   */
+  const runsUp = (face: BakedFace): boolean => {
+    const dy = face.positions[10] - face.positions[1];
+    const du = face.uvs[6] - face.uvs[0];
+    const dv = face.uvs[7] - face.uvs[1];
+    return Math.abs(dy) > 1e-6 && Math.abs(du) > Math.abs(dv);
+  };
+  const postSide = north.find(
+    (f) =>
+      f.textureKey.endsWith("lectern_sides") &&
+      Math.abs(f.normal[0]) > 0.99 &&
+      f.positions[1] < 3 / 16,
+  );
+  const deskSide = north.find(
+    (f) =>
+      f.textureKey.endsWith("lectern_sides") &&
+      Math.abs(f.normal[0]) > 0.99 &&
+      f.positions[1] > 8 / 16,
+  );
+  check("the post's side wears its window turned", postSide !== undefined && runsUp(postSide));
+  check(
+    "...and the desk's side, same texture, does not",
+    deskSide !== undefined && !runsUp(deskSide),
+  );
+}
+
 console.log("\n--- potted plants ---");
 if (pack === null) {
   console.log("  SKIP: no bundled resource pack");

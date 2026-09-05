@@ -4257,10 +4257,12 @@ knowing:
   the per-face `rotation`s `template_glazed_terracotta` states and this app has
   no entry for). And a shape whose *geometry* is rotation-invariant tends to have
   been written without passing the steps to `transform` at all — closed
-  trapdoors, wall hanging signs, campfires, the stonecutter, the lectern, the
-  decorated pot, the hopper, the bell. Each of those needs its own check against
-  its vanilla blockstate for the authored direction, which `trapdoor`'s own
-  comment shows is easy to get a quarter-turn wrong.
+  trapdoors, wall hanging signs, campfires, the stonecutter, the decorated pot,
+  the hopper, the bell. Each of those needs its own check against its vanilla
+  blockstate for the authored direction, which `trapdoor`'s own comment shows is
+  easy to get a quarter-turn wrong. **The lectern was on that list and has come
+  off it**, which is what one of them costs: its blockstate read, its three
+  elements transcribed, and four bakes that are no longer identical.
 - **A texture that lands outside its tile is clamped, not refused.** The atlas
   smears the edge pixels across the face, which reads as a badly drawn texture
   rather than as a window that missed — so `tests/blocks.ts` walks every offered
@@ -4294,6 +4296,49 @@ knowing:
   `rotateWindowUvs` is a cyclic shift of four pairs and touches no coordinate.
   Its signature is what `tests/blocks.ts` checks: rotated, two vertices at the
   same height no longer share a `v`; unrotated they always do.
+
+  **The number is copied verbatim, and that is the whole rule.**
+  `template_anvil.json` writes `west: 90` and `east: 270` on all four of its
+  elements and `ANVIL_PARTS` writes the same two numbers, which settles it for
+  every transcription after it.
+
+  The *direction* was written down wrong here and in the field's own comment,
+  and it cost nothing until a second block needed a `90`. Both said the
+  picture turns **clockwise**; it does not. Measured off the baked anvil rather
+  than argued: on its base box the window's `v` runs from `z = 2` to `z = 14`,
+  and seen from outside a west face `+z` is to the viewer's right — so the
+  picture's downward direction points right, its top points left, and a
+  positive value turns it **anticlockwise**. The sentence was wrong while every
+  number was right, which is exactly why nothing anywhere failed.
+- **A lectern was two of vanilla's three elements, and the third one is the
+  block.** `lectern.json` has a base, a post and the sloping desk you put a
+  book on, tilted 22.5° back about x; the app had the base and the post, so it
+  drew a plinth with a stick on it.
+
+  The texture was worse than the shape, and the cause is one letter. The
+  generic candidate list asks for `<name>_side`, singular; vanilla's file is
+  `lectern_sides`, plural; `_front` is the next candidate and *that* one
+  exists — so **ten of the twelve faces came out wearing `lectern_front`**, the
+  book graphic wrapped round the plinth and up the post, while `lectern_base`
+  and `lectern_sides` were reachable from nothing. It is `hopper_side.png`
+  again: a name vanilla has never had, asked for by a list that cannot know.
+  Naming the textures per box is what reaches them; adding `_sides` to the
+  generic list is a separate one-line change across all 1197 ids and has a
+  blast radius of its own.
+
+  And `facing` did nothing at all — the entry was `() => boxes(...)`, with no
+  parameter to read — so all four directions baked **byte for byte**
+  identically. It is one of the family `CLAUDE.md` already lists under "a shape
+  whose geometry is rotation-invariant tends to have been written without
+  passing the steps to `transform`", and it is the first of them to be done.
+  The blockstate gives `facing=north` no `y`, so it is north-authored.
+
+  Two faces are omitted rather than drawn, and neither leaves a hole. The
+  post's underside is coincident with the base's top; its top square
+  (`x 4..12, z 4..12`) lies inside the tilted desk, which at `y = 15` covers
+  everything from `z = 3.99` inward — worked out rather than assumed, because
+  "the desk is above the post" is not true: it cuts through it, and its back
+  corner reaches `y = 18.45`, above the block. That overhang is vanilla's.
 - **The chest's two strips are fifteen rows in a block fourteen tall, and the
   fifteenth is the seam.** The body's last row and the lid's first are
   byte-identical — `46 48 48 46 46 36 36 36 48 46 46 48 48 59` across the whole

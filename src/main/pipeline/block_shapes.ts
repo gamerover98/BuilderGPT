@@ -76,12 +76,23 @@ export interface ShapeBox {
    */
   readonly uv?: Readonly<Record<string, UvWindow>>;
   /**
-   * A vanilla face's `rotation`: the texture turned clockwise within the face,
-   * in whole quarter-turns. It is a property of the *window*, not of the box —
-   * the anvil states its foot's west face as `[0, 2, 4, 14]` rotated 90°, a
-   * window that is 4 wide and 12 tall wrapped onto a face that is 12 wide and
-   * 4 tall — so a window without its rotation addresses the right pixels and
-   * lays them across the face sideways.
+   * A vanilla face's `rotation`, in whole quarter-turns. It is a property of
+   * the *window*, not of the box — the anvil states its foot's west face as
+   * `[0, 2, 4, 14]` rotated 90°, a window 4 wide and 12 tall wrapped onto a
+   * face 12 wide and 4 tall — so a window without its rotation addresses the
+   * right pixels and lays them across the face sideways.
+   *
+   * **Vanilla's number is copied verbatim**, which is the only rule a
+   * transcription needs and is the one worth stating: `template_anvil.json`
+   * writes `west: 90` and `east: 270` on every one of its four elements, and
+   * `ANVIL_PARTS` writes the same two numbers.
+   *
+   * This used to say the turn was *clockwise* and it is not. Measured off the
+   * baked anvil rather than argued: on its base box the window's `v` axis runs
+   * from `z = 2` to `z = 14`, and seen from outside a west face `+z` is to the
+   * viewer's right — so the picture's downward direction points right, its top
+   * points left, and a positive value turns it **anticlockwise**. The sentence
+   * was wrong and the numbers were right, which is why nothing ever failed.
    */
   readonly uvRotation?: Readonly<Record<string, number>>;
   /**
@@ -2338,6 +2349,91 @@ function amethystBud(entry: PaletteEntry): BlockShape {
 }
 
 /**
+ * A lectern, from `lectern.json`: a base, a post, and the sloping desk.
+ *
+ * It was two boxes of the three, and the missing one is the whole block --
+ * the desk you put a book on, tilted 22.5° back. What was left read as a
+ * plinth with a post standing on it.
+ *
+ * The **texture** was worse than the shape and for a reason worth keeping:
+ * the generic candidate list asks for `<name>_side`, singular, and vanilla's
+ * file is `lectern_sides`, plural. `_front` is the next candidate and that one
+ * exists, so **ten of the twelve faces came out wearing `lectern_front`** --
+ * the book graphic wrapped round the plinth and up the post -- while
+ * `lectern_base` and `lectern_sides` were reachable from nothing. It is the
+ * `hopper_side.png` case again: a name vanilla has never had, asked for by a
+ * list that cannot know.
+ *
+ * Naming the textures per box is what fixes that, and it is also why the
+ * plural is not added to the generic list here: that would be a one-line
+ * change across all 1197 ids with a blast radius of its own.
+ *
+ * And `facing` did nothing at all -- the entry was `() => boxes(...)`, with no
+ * parameter to read -- so all four directions baked byte for byte identically.
+ * The blockstate gives `facing=north` no `y`, so it is **north-authored**.
+ *
+ * Two faces are omitted rather than drawn. The post has no `up` or `down` in
+ * vanilla, and neither is a hole: its underside is coincident with the base's
+ * top, and its top square (`x 4..12, z 4..12`) lies inside the tilted desk,
+ * which at `y = 15` covers everything from `z = 3.99` inward. Drawing them
+ * would be the chest-lid z-fight in a smaller place.
+ */
+const LECTERN_PARTS: readonly ShapeBox[] = [
+  {
+    box: [0, 0, 0, 16, 2, 16],
+    texture: "lectern_base",
+    // `#bottom` is `oak_planks`, which is a texture and not an indirection:
+    // this file has no `#name` references, and `resolveBoxTexture` would read
+    // a leading `#` as a hex tint and fall back in silence.
+    textures: { down: "oak_planks" },
+    uv: {
+      north: [0, 14, 16, 16],
+      east: [0, 6, 16, 8],
+      south: [0, 6, 16, 8],
+      west: [0, 6, 16, 8],
+      up: [0, 0, 16, 16],
+      down: [0, 0, 16, 16],
+    },
+    uvRotation: { up: 180 },
+  },
+  {
+    box: [4, 2, 4, 12, 15, 12],
+    texture: "lectern_sides",
+    textures: { north: "lectern_front", south: "lectern_front" },
+    uv: {
+      north: [0, 0, 8, 13],
+      east: [2, 16, 15, 8],
+      south: [8, 3, 16, 16],
+      west: [2, 8, 15, 16],
+    },
+    uvRotation: { east: 90, west: 90 },
+    omit: ["up", "down"],
+  },
+  {
+    // The fractional ends are vanilla's, to the ten-thousandth, and are kept:
+    // `6.5` is `6.5` here and so is `0.0125`. They stop the desk's sides being
+    // exactly coplanar with the cell boundary.
+    box: [0.0125, 12, 3, 15.9875, 16, 16],
+    rotation: { origin: [8, 8, 8], axis: "x", angle: -22.5 },
+    texture: "lectern_sides",
+    textures: { up: "lectern_top", down: "oak_planks" },
+    uv: {
+      north: [0, 0, 16, 4],
+      east: [0, 4, 13, 8],
+      south: [0, 4, 16, 8],
+      west: [0, 4, 13, 8],
+      up: [0, 1, 16, 14],
+      down: [0, 0, 16, 13],
+    },
+    uvRotation: { up: 180 },
+  },
+];
+
+function lectern(entry: PaletteEntry): BlockShape {
+  return transform(LECTERN_PARTS, northFacingSteps(entry), false);
+}
+
+/**
  * A brewing stand: the rod and its three-lobed base, from `brewing_stand.json`.
  *
  * The base plates carry explicit UVs because `brewing_stand_base.png` is a
@@ -3056,7 +3152,7 @@ const EXACT_SHAPES: Readonly<Record<string, (entry: PaletteEntry) => BlockShape>
   azalea,
   flowering_azalea: azalea,
   vine,
-  lectern: () => boxes([0, 0, 0, 16, 2, 16], [4, 2, 4, 12, 15, 12]),
+  lectern,
   chest,
   trapped_chest: chest,
   ender_chest: chest,
